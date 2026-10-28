@@ -92,10 +92,10 @@
 ;;; twice is `defeffect: 'Ask' is already defined`, and a declaration with no result
 ;;; type is `defeffect requires (defeffect Name [params...] result-type)`.
 ;;;
-;;; Three markers adjust it. `^private`, before the name, keeps the effect inside
-;;; its module. `^extends Parent`, after the result type, makes it a kind of `Parent`: a
-;;; function declared `#fx{IO}` may perform `(defeffect Say [s : cstr] : nil ^extends
-;;; IO)`. `^capability` makes it a tag for authority rather than an operation: a
+;;; Three markers adjust it, all written before the name. `^private` keeps the
+;;; effect inside its module. `^extends Parent` makes it a kind of `Parent`: a
+;;; function declared `#fx{IO}` may perform `(defeffect ^extends IO Say [s : cstr]
+;;; : nil)`. `^capability` makes it a tag for authority rather than an operation: a
 ;;; `#fx{FS}` annotation says a function touches the file system, nothing performs
 ;;; or handles it, and a pure caller of such a function is TUR-E0009. `IO`, `FS`,
 ;;; `Net`, `Proc` and `Rand` are capability tags the compiler knows already
@@ -107,8 +107,8 @@
 ;;;   Name   -- the effect
 ;;;   params -- `[name : Type ...]`, possibly empty
 ;;;   Ret    -- the type `perform` evaluates to
-;;;   marks  -- optional: `^private` before the name, `^extends Parent` and
-;;;             `^capability` after the result type
+;;;   marks  -- optional, before the name: `^private`, `^extends Parent` and
+;;;             `^capability`
 ;;;
 ;;; Example:
 ;;;   (defeffect Ask [] : int)
@@ -120,5 +120,5 @@
 ;;;     (Ask [] k) (resume k 41)
 ;;;     (Emit [m n] k) (do (println m) (println n) (resume k nil))))  ; prints got, 1, then 42
 ;;@form (defeffect Name [param : Type ...] : Ret)
-;;@form (defeffect Name [param : Type ...] : Ret ^extends Parent)
-;;@form (defeffect Name [] : nil ^capability)
+;;@form (defeffect ^extends Parent Name [param : Type ...] : Ret)
+;;@form (defeffect ^capability Name [] : nil)

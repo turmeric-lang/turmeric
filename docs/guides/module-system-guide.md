@@ -346,19 +346,19 @@ mangled module name to prevent linker collisions:
 If two exported symbols mangle to the same C name (e.g. module `my-lib` and
 module `my_lib` both exporting `foo`), the compiler emits a hard error at
 elaboration time and tells you which two definitions collide. Rename one or
-use `(export-as ...)` to override the C name (see below).
+use `^export-as "..."` to override the C name (see below).
 
-### `(export-as "c_name")` -- explicit C name override
+### `^export-as "c_name"` -- explicit C name override
 
 For FFI scenarios where you need a specific C symbol name (matching a C
-header, registering with a runtime, etc.), use `(export-as "...")` before
+header, registering with a runtime, etc.), use `^export-as "..."` before
 the function name:
 
 ```turmeric
 (defmodule plugin
   (export init)
 
-  (defn (export-as "plugin_init_v2") init [] : int
+  (defn ^export-as "plugin_init_v2" init [] : int
     (...)))
 ```
 
@@ -366,7 +366,7 @@ the function name:
 defmodule plugin
   export init
 
-  defn (export-as "plugin_init_v2") init [] :int
+  defn ^export-as "plugin_init_v2" init [] : int
     (...)
 ```
 
@@ -497,7 +497,7 @@ into a third module.
 ### `exported symbol 'foo' from module 'X' mangles to the same C name 'Y' as 'bar' from module 'Z'`
 
 The mangling rules produced identical C names. Rename one of the symbols
-or use `(export-as "...")` to override the C name explicitly.
+or use `^export-as "..."` to override the C name explicitly.
 
 ---
 

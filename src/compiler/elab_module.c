@@ -32,7 +32,7 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
         if (h->tag == F_SYM && h->as.sym == e->sym_def) { elab_pre_declare_any_mut_def(e, f); continue; }
         if (h->tag != F_SYM || h->as.sym != e->sym_defn) continue;
         if (f->as.list.len < 3) continue;
-        /* Skip every pre-name attribute -- #[no-unwind]/#[used], export-as,
+        /* Skip every pre-name attribute -- ^no-unwind/^used, export-as,
          * and the ^attrs (^construct, ^deprecated, ^reflect, ...). */
         uint32_t name_idx = elab_defn_name_index(e, f);
         if ((uint32_t)f->as.list.len <= name_idx) continue;
@@ -2255,7 +2255,7 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
 }
 
 /* used-attr-whole-program: force a module to be loaded (and thus emitted)
- * even though no `(import)` reaches it.  This retains a `#[used]` defn that is
+ * even though no `(import)` reaches it.  This retains a `^used` defn that is
  * reached only through its raw mangled C symbol -- a hand-written cross-module
  * inline-C bridge or by-address C-ABI callback -- on the single-file /
  * whole-program build path (`tur build <file>`, `tur run <file>`, `tur test`),

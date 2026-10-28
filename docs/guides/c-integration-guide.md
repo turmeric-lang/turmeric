@@ -449,7 +449,7 @@ The source name between `__TUR_CNAME_` and the trailing `__` may contain sigils
 The splice resolves to the callee's **exact emitted C name**. When the name
 resolves to a binding visible in scope, the expansion matches that binding's
 full C identifier -- including the module prefix a global defined inside a named
-module carries (`geom__helper_qu`), and any `(export-as "...")` C alias. So a
+module carries (`geom__helper_qu`), and any `^export-as "..."` C alias. So a
 sibling `defn` inside `(defmodule geom ...)` is spliced correctly:
 
 ```turmeric
@@ -634,7 +634,7 @@ for the full table and the demangler. **Inside an inline-C body, prefer the
 mangled name; the splice tracks the live mangler so a future scheme change
 does not silently break your code.
 
-### `#[used]` -- retaining a symbol reached only from C
+### `^used` -- retaining a symbol reached only from C
 
 The compiler keeps a definition with external C linkage when it is reachable
 through the Turmeric export/import + call graph. A defn whose mangled symbol is
@@ -649,25 +649,25 @@ reached **only** through a raw `extern` reference is invisible to that analysis:
 Such a defn is demoted to `static` under separate compilation (and dropped
 entirely by the single-main whole-program build shortcut, which inlines only
 the entry module's transitive Turmeric imports), so the `extern` reference
-dangles at link time. Mark it `#[used]` to force external linkage and keep its
+dangles at link time. Mark it `^used` to force external linkage and keep its
 module in the build:
 
 ```turmeric
 ;; sort.tur -- unexported helper reached by a bridge in group.tur
-(defn #[used] __so-take [col : int perm : int n : int] : int
+(defn ^used __so-take [col : int perm : int n : int] : int
   ```c
   ... ```)
 
 ;; interop.tur -- C-ABI callback stored by address, never called from Turmeric
-(defn #[used] ip-release-schema [schema : int] : void
+(defn ^used ip-release-schema [schema : int] : void
   ```c
   ... ```)
 ```
 
-`#[used]` goes before the name, like `#[no-unwind]`, and the two compose in
-either order: `(defn #[used] #[no-unwind] name [...] ...)`. Prefer the
+`^used` goes before the name, like `^no-unwind`, and the two compose in
+either order: `(defn ^used ^no-unwind name [...] ...)`. Prefer the
 `__TUR_CNAME_<source-name>__` splice (above) over hand-spelling the mangled
-name in the `extern` declaration that reaches a `#[used]` symbol.
+name in the `extern` declaration that reaches a `^used` symbol.
 
 ### Subprocess / build-step integration
 

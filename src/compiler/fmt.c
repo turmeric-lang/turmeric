@@ -724,19 +724,31 @@ static void fmt_param_vec(FmtState *s, const Form *vec) {
  * params assumed at index 2, the real parameter vector and the return
  * annotation of a `(defn f [A] [params] : ret ...)` fell past the header and
  * were laid out as body forms, one per line. */
-static uint32_t defn_params_index(const Form *f, uint32_t name_idx) {
+static bool is_caret_attr(const Form *f);
+static uint32_t defn_params_index(const Form *f) {
     uint32_t n = f->as.list.len;
     Form *const *it = f->as.list.items;
-    uint32_t p = name_idx + 1;        /* where the params sit with no type vector */
 
-    if (!(n > p + 1 && it[p]->tag == F_VEC && it[p + 1]->tag == F_VEC))
-        return p;                     /* no type-parameter vector */
+    /* The name sits past the `^attr`s a defn takes before it -- `^no-unwind`,
+     * `^export-as "c_name"`, `^deprecated "msg"` (caret-type-attributes-plan
+     * P5) -- so every index below is relative to it. */
+    uint32_t nm = 1;
+    while (nm < n && is_caret_attr(it[nm])) {
+        bool takes_str = sym_eq(it[nm]->as.sym, "^deprecated") ||
+                         sym_eq(it[nm]->as.sym, "^export-as");
+        nm++;
+        if (takes_str && nm < n && it[nm]->tag == F_STR) nm++;
+    }
+    if (nm >= n) return 2;
 
-    /* items[p] is the type-parameter vector; params are at p + 1 unless a
-     * constraint vector sits between them. A constraint vector is non-empty
+    if (!(n > nm + 2 && it[nm + 1]->tag == F_VEC && it[nm + 2]->tag == F_VEC))
+        return nm + 1;                /* no type-parameter vector */
+
+    /* items[nm + 1] is the type-parameter vector; params are at nm + 2 unless
+     * a constraint vector sits between them. A constraint vector is non-empty
      * and every element is `(ClassName TyVar ...)`. */
-    if (n > p + 2 && it[p + 2]->tag == F_VEC) {
-        const Form *maybe = it[p + 1];
+    if (n > nm + 3 && it[nm + 3]->tag == F_VEC) {
+        const Form *maybe = it[nm + 2];
         bool looks_like_constraints = (maybe->as.list.len > 0);
         for (uint32_t i = 0; looks_like_constraints && i < maybe->as.list.len; i++) {
             const Form *cf = maybe->as.list.items[i];
@@ -744,30 +756,9 @@ static uint32_t defn_params_index(const Form *f, uint32_t name_idx) {
                 cf->as.list.items[0]->tag != F_SYM)
                 looks_like_constraints = false;
         }
-        if (looks_like_constraints) return p + 2;
+        if (looks_like_constraints) return nm + 3;
     }
-    return p + 1;
-}
-
-/* Index of a defn's name: the `#[used]` / `#[no-unwind]` attributes (read as
- * `#used`) and a `(export-as "c_name")` list may precede it, as in
- * elab_fns.c.  Taking index 1 for the name made
- * `(defn #[used] (export-as "x") f [a] : T ...)` read the attribute as the name
- * and lay the real header out one item per line.  The `^attr` spellings are
- * left alone: stdlib's `^deprecated "msg"` layout is established. */
-static uint32_t defn_name_index(const Form *f) {
-    uint32_t n = f->as.list.len;
-    uint32_t i = 1;
-    while (i + 1 < n) {
-        const Form *it = f->as.list.items[i];
-        if (it->tag == F_SYM && sym_is_hash_attr(it->as.sym)) { i++; continue; }
-        if (it->tag == F_LIST && it->as.list.len == 2) {
-            const Symbol *h = list_head_sym(it);
-            if (h && sym_eq(h, "export-as")) { i++; continue; }
-        }
-        break;
-    }
-    return i;
+    return nm + 2;
 }
 
 /* fmt-drops-comments-in-handle-and-binding-modifier-gaps: emit header items
@@ -806,7 +797,7 @@ static void fmt_defn(FmtState *s, const Form *f) {
 
     /* Header items: defn/defmacro, name, any type-parameter and constraint
      * vectors, params, optional :ret keyword or type annotation */
-    uint32_t params_idx = defn_params_index(f, defn_name_index(f));
+    uint32_t params_idx = defn_params_index(f);
     uint32_t header_end = params_idx + 1;
     if (n > header_end && (f->as.list.items[header_end]->tag == F_KEYWORD
                         || f->as.list.items[header_end]->tag == F_TYPE_ANN))
@@ -1170,6 +1161,25 @@ static bool is_type_decl_head(const Form *f) {
                  sym_eq(h, "defdata")   || sym_eq(h, "defgadt"));
 }
 
+/* defeffect: `^private`, `^capability` and `^extends Parent` go before the
+ * name (caret-type-attributes-plan P5). */
+static bool is_defeffect_head(const Form *f) {
+    const Symbol *h = list_head_sym(f);
+    return h && sym_eq(h, "defeffect");
+}
+
+/* Index of a defeffect's name: past its `^attr`s, `^extends` taking the parent
+ * effect that follows it. */
+static uint32_t defeffect_name_index(const Form *f) {
+    uint32_t n = f->as.list.len, i = 1;
+    while (i < n && is_caret_attr(f->as.list.items[i])) {
+        bool extends = sym_eq(f->as.list.items[i]->as.sym, "^extends");
+        i++;
+        if (extends && i < n) i++;
+    }
+    return i;
+}
+
 /* Generic function call:
  *   (f a b c)          — if inline fits
  *   (f a               — if not: head+first-arg on same line,
@@ -1196,6 +1206,10 @@ static void fmt_call(FmtState *s, const Form *f) {
     if (is_type_decl_head(f)) {
         uint32_t name_at = 1;
         while (name_at < n && is_caret_attr(f->as.list.items[name_at])) name_at++;
+        on_first_line = (name_at + 1 < n) ? name_at + 1 : n;
+    } else if (is_defeffect_head(f)) {
+        /* The same for a defeffect, whose `^extends Parent` takes an argument. */
+        uint32_t name_at = defeffect_name_index(f);
         on_first_line = (name_at + 1 < n) ? name_at + 1 : n;
     }
     uint32_t prev_end = 0;
@@ -2022,7 +2036,8 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts) {
  *   (defopaque Chan :ptr<void> :linear)    -> (defopaque ^linear Chan :ptr<void>)
  *   (exists :linear [a] a)                 -> (exists ^linear [a] a)
  *
- * The compiler rejects the keyword spelling (TUR-E0717); this is the
+ * The compiler rejects the keyword spelling (TUR-E0717) and warns about the
+ * attribute ones below (TUR-D0008); this is the
  * one-command fix for a file.  It edits the parsed forms before they are
  * printed, so the layout is the formatter's own.  A declaration whose source
  * holds a comment is left as written: the printer re-emits comments from the
@@ -2057,11 +2072,91 @@ static bool migrate_has_comment(const char *src, size_t len, const Form *f) {
     return false;
 }
 
+/* caret-type-attributes-plan P5.  A defn's `#[no-unwind]` / `#[used]` become
+ * `^no-unwind` / `^used` in place, and its `(export-as "c")` becomes
+ * `^export-as "c"`; a defeffect's trailing `^extends Parent` / `^capability`
+ * move before the name.  The in-place swaps leave every comment where it is.
+ * The two that change the number or the order of forms are skipped, as the
+ * type declarations are, when the declaration's source holds a comment. */
+static void migrate_defn(Arena *a, SymbolTable *st, const char *src, size_t len, Form *f) {
+    uint32_t n = f->as.list.len;
+    Form **it = f->as.list.items;
+    for (uint32_t i = 1; i < n; i++) {
+        Form *x = it[i];
+        if (x->tag == F_SYM && (strcmp(x->as.sym->name, "#no-unwind") == 0 ||
+                                strcmp(x->as.sym->name, "#used") == 0)) {
+            bool nu = strcmp(x->as.sym->name, "#no-unwind") == 0;
+            it[i] = form_sym(a, x->span, symtab_intern(st, nu ? strslice("^no-unwind", 10)
+                                                              : strslice("^used", 5)));
+        } else if (x->tag == F_LIST && x->as.list.len == 2 &&
+                   x->as.list.items[0]->tag == F_SYM &&
+                   sym_eq(x->as.list.items[0]->as.sym, "export-as") &&
+                   x->as.list.items[1]->tag == F_STR) {
+            if (migrate_has_comment(src, len, f)) return;
+            const Symbol *c = symtab_intern(st, strslice("^export-as", 10));
+            Form **out = (Form **)arena_alloc(a, (n + 1) * sizeof(Form *));
+            for (uint32_t k = 0; k < i; k++) out[k] = it[k];
+            out[i]     = form_sym(a, x->span, c);
+            out[i + 1] = x->as.list.items[1];
+            for (uint32_t k = i + 1; k < n; k++) out[k + 1] = it[k];
+            f->as.list.items = out;
+            f->as.list.len = n + 1;
+            n++; it = out;
+            i++;
+        } else if (x->tag == F_SYM && is_caret_attr(x)) {
+            if ((sym_eq(x->as.sym, "^deprecated") || sym_eq(x->as.sym, "^export-as")) &&
+                i + 1 < n && it[i + 1]->tag == F_STR) i++;
+        } else {
+            break;
+        }
+    }
+}
+
+static void migrate_defeffect(Arena *a, SymbolTable *st, const char *src, size_t len, Form *f) {
+    uint32_t n = f->as.list.len;
+    Form **it = f->as.list.items;
+    uint32_t name_at = defeffect_name_index(f);
+    uint32_t tail = name_at + 3;                 /* past the name, parameters, result type */
+    if (tail >= n || it[name_at]->tag != F_SYM) return;
+    bool capability = false, lead_extends = false;
+    for (uint32_t i = 1; i < name_at; i++)
+        if (sym_eq(it[i]->as.sym, "^extends")) lead_extends = true;
+    const Form *parent = NULL;
+    for (uint32_t i = tail; i < n; i++) {
+        if (it[i]->tag == F_SYM && sym_eq(it[i]->as.sym, "^capability")) {
+            capability = true;
+        } else if (it[i]->tag == F_SYM && sym_eq(it[i]->as.sym, "^extends") &&
+                   i + 1 < n && it[i + 1]->tag == F_SYM && !parent && !lead_extends) {
+            parent = it[++i];
+        } else {
+            return;                              /* something else trails: leave it */
+        }
+    }
+    if ((!capability && !parent) || migrate_has_comment(src, len, f)) return;
+
+    Form **out = (Form **)arena_alloc(a, n * sizeof(Form *));
+    uint32_t o = 0;
+    for (uint32_t i = 0; i < name_at; i++) out[o++] = it[i];     /* head, existing ^attrs */
+    Span sp = it[0]->span;                                        /* zero-width, after the head */
+    sp.off_start = sp.off_end = it[0]->span.off_end;
+    if (capability) out[o++] = form_sym(a, sp, symtab_intern(st, strslice("^capability", 11)));
+    if (parent) {
+        out[o++] = form_sym(a, sp, symtab_intern(st, strslice("^extends", 8)));
+        out[o++] = (Form *)parent;
+    }
+    for (uint32_t i = name_at; i < tail; i++) out[o++] = it[i];  /* name, parameters, result type */
+    f->as.list.items = out;
+    f->as.list.len = o;
+}
+
 static void migrate_decl(Arena *a, SymbolTable *st, const char *src, size_t len, Form *f) {
     uint32_t n = f->as.list.len;
     Form **it = f->as.list.items;
     if (n < 2 || it[0]->tag != F_SYM) return;
     const Symbol *h = it[0]->as.sym;
+
+    if (sym_eq(h, "defn"))      { migrate_defn(a, st, src, len, f);      return; }
+    if (sym_eq(h, "defeffect")) { migrate_defeffect(a, st, src, len, f); return; }
 
     if (sym_eq(h, "exists")) {
         if (migrate_flag_kw(it[1]) && sym_eq(it[1]->as.sym, "linear")) {

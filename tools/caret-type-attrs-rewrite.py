@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """
-caret-type-attrs-rewrite.py -- move the flags of a type declaration from
-trailing `:keyword`s to leading `^attr`s.
+caret-type-attrs-rewrite.py -- spell the attributes of a declaration as `^attr`s
+before its name.
 
     (defstruct Point :copy [x : int])        -> (defstruct ^copy Point [x : int])
     (defopaque Chan :ptr<void> :linear)      -> (defopaque ^linear Chan :ptr<void>)
     (defdata Tree [a] :heap (Leaf) ...)      -> (defdata ^heap Tree [a] (Leaf) ...)
     (exists :linear [a] ...)                 -> (exists ^linear [a] ...)
+
+P5 of the plan adds `defeffect` and `defn`:
+
+    (defeffect FS [] :nil ^extends IO ^capability)
+                                  -> (defeffect ^capability ^extends IO FS [] :nil)
+    (defn #[no-unwind] #[used] f ...)   -> (defn ^no-unwind ^used f ...)
+    (defn (export-as "c_name") f ...)   -> (defn ^export-as "c_name" f ...)
 
 Applies to `defopaque`, `defstruct`, `defdata` and `defgadt`, for the flags
 copy, move, linear, affine, heap, sealed, non-null and no-auto-ctor, and to the
@@ -55,7 +62,8 @@ tokenize = _st.tokenize
 FLAGS = {"copy", "move", "linear", "affine", "heap", "sealed", "non-null",
          "no-auto-ctor"}
 DECL_HEADS = {"defopaque", "defstruct", "defdata", "defgadt"}
-HEADS = DECL_HEADS | {"exists"}
+HEADS = DECL_HEADS | {"exists", "defeffect", "defn"}
+DEFN_HASH_FLAGS = {"no-unwind", "used"}
 
 PREFIX_KINDS = {_st.TK_QUOTE, _st.TK_QUASIQUOTE, _st.TK_UNQUOTE,
                 _st.TK_UNQUOTE_SPLICE}
@@ -131,6 +139,85 @@ def rewrite_source(text: str, sweet: bool = False) -> str:
             elif i + 1 < n and not (p >= 1 and toks[p - 1].kind == _st.TK_COMMENT):
                 texts[p] = ""                # `:linear)` -> join the `)` upward
 
+    def rewrite_defn_attrs(j: int) -> None:
+        """`j` is the first token after `defn`.  Walk the attributes before the
+        name; spell `#[no-unwind]`, `#[used]` and `(export-as "c")` as `^attr`s
+        in place, so the order they were written in is kept."""
+        while j < n:
+            t = toks[j]
+            if (t.kind == _st.TK_HASH_ATOM and t.text == "#" and j + 3 < n
+                    and toks[j + 1].kind == _st.TK_LBRACKET
+                    and toks[j + 2].kind == _st.TK_SYMBOL
+                    and toks[j + 2].text in DEFN_HASH_FLAGS
+                    and toks[j + 3].kind == _st.TK_RBRACKET):
+                texts[j] = "^" + toks[j + 2].text
+                texts[j + 1] = texts[j + 2] = texts[j + 3] = ""
+                j = next_code(j + 3)
+            elif (t.kind == _st.TK_LPAREN and j + 4 < n
+                  and toks[j + 1].kind == _st.TK_SYMBOL and toks[j + 1].text == "export-as"
+                  and toks[j + 2].kind == _st.TK_WS
+                  and toks[j + 3].kind == _st.TK_STRING
+                  and toks[j + 4].kind == _st.TK_RPAREN):
+                texts[j] = "^export-as"
+                texts[j + 1] = ""
+                texts[j + 4] = ""
+                j = next_code(j + 4)
+            elif t.kind == _st.TK_SYMBOL and t.text.startswith("^"):
+                j = next_code(j)
+                if t.text in ("^deprecated", "^export-as") and j < n \
+                        and toks[j].kind == _st.TK_STRING:
+                    j = next_code(j)
+            else:
+                break
+
+    def rewrite_defeffect_attrs(j: int) -> None:
+        """`j` is the first token after `defeffect`.  Move a trailing
+        `^extends Parent` / `^capability` to just before the name, as
+        `^capability ^extends Parent`."""
+        while j < n and toks[j].kind == _st.TK_SYMBOL and toks[j].text.startswith("^"):
+            j = next_code(j)
+            if toks[j - 1].text == "^extends":
+                j = next_code(j)
+        ins = j
+        if j >= n or toks[j].kind != _st.TK_SYMBOL:
+            return
+        k = next_code(j)
+        if k >= n or toks[k].kind != _st.TK_LBRACKET:
+            return
+        k = after_group(k)
+        # The result type: `:nil`, `nil`, `: nil`, or `: (type ...)`.
+        if k < n and toks[k].kind == _st.TK_SYMBOL and toks[k].text == ":":
+            k = next_code(k)
+            k = after_group(k) if k < n and toks[k].kind in OPENERS else next_code(k)
+        elif k < n and toks[k].kind in (_st.TK_KEYWORD, _st.TK_SYMBOL):
+            k = next_code(k)
+        else:
+            return
+        capability = False
+        parent = None
+        drops: list[int] = []
+        while k < n and toks[k].kind == _st.TK_SYMBOL:
+            if toks[k].text == "^capability":
+                capability = True
+                drops.append(k)
+                k = next_code(k)
+            elif toks[k].text == "^extends":
+                p = next_code(k)
+                if p >= n or toks[p].kind != _st.TK_SYMBOL:
+                    return
+                parent = toks[p].text
+                drops += [k, p]
+                k = next_code(p)
+            else:
+                break
+        if not drops:
+            return
+        attrs = ("^capability " if capability else "") + \
+                (f"^extends {parent} " if parent else "")
+        for d in drops:
+            drop(d)
+        texts[ins] = attrs + texts[ins]
+
     for h, tok in enumerate(toks):
         if tok.kind != _st.TK_SYMBOL or tok.text not in HEADS:
             continue
@@ -147,6 +234,14 @@ def rewrite_source(text: str, sweet: bool = False) -> str:
         if tok.text == "exists":
             if is_flag_kw(j) and toks[j].text == ":linear":
                 texts[j] = "^linear"
+            continue
+
+        if tok.text == "defn":
+            rewrite_defn_attrs(j)
+            continue
+
+        if tok.text == "defeffect":
+            rewrite_defeffect_attrs(j)
             continue
 
         # Attributes already before the name (a half-migrated form) stay put;
@@ -207,7 +302,7 @@ def rewrite_source(text: str, sweet: bool = False) -> str:
 
 # ---------------------------------------------------------------- Markdown
 
-_SPAN = re.compile(r"`([^`\n]*\((?:defopaque|defstruct|defdata|defgadt|exists)\b[^`\n]*)`")
+_SPAN = re.compile(r"`([^`\n]*\((?:defopaque|defstruct|defdata|defgadt|exists|defeffect|defn)\b[^`\n]*)`")
 
 
 def rewrite_markdown(text: str) -> str:

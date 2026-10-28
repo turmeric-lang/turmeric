@@ -183,7 +183,8 @@ src/
 | Target | What it is |
 |---|---|
 | `tur_core` | OBJECT library: every source in `TUR_CORE_SOURCES`, shared by `tur`, `libturi` and many unit tests |
-| `tur` | `main.c` + `driver/*.c` (`TUR_DRIVER_SOURCES`) + `lsp/mcp.c` + `tur_core` (+ `tur_jit_obj` under `TUR_JIT`) |
+| `tur_front` | OBJECT library: the driver's in-memory front half (`pipeline.c`, `preamble_split.c`, `cc.c`, `paths.c`, `spice.c`), which compiles Turmeric to C with `tur_core` alone; `tur_front_link_unit` checks that it does |
+| `tur` | `main.c` + the rest of `driver/*.c` (`TUR_DRIVER_SOURCES`) + `lsp/mcp.c` + `tur_front` + `tur_core` (+ `tur_jit_obj` under `TUR_JIT`) |
 | `libturi.a` | `tur_core` as a static library, for C embedders and programs that autolink `-lturi` |
 | `libturt_runtime.a` | a lean, unsanitized archive of the runtime TUs programs link (`hamt`, `rc`, `gc`, `region`, ...) |
 | `libturt_preamble.a` | the generated preamble runtime (`tur_rt_split.c`), linked by `--runtime=split` |

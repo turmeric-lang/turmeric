@@ -229,9 +229,9 @@ struct Binding {
     bool          shared_view;
     /* Phase 11: span of first move for note chaining diagnostics */
     Span          moved_at;
-    /* Phase R5: #[no-unwind] attribute on defn */
+    /* Phase R5: ^no-unwind attribute on defn */
     bool          no_unwind;
-    /* #[used]: retain this defn with external C linkage under separate
+    /* ^used: retain this defn with external C linkage under separate
      * compilation, even when it is unexported and unreachable through the
      * Turmeric call graph. Needed for defns reached only via their mangled C
      * symbol -- hand-written cross-module inline-C bridges and C-ABI callbacks

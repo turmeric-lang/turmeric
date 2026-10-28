@@ -10543,7 +10543,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *msg_val = emit_value(ctx, body, payload);
             indent_buf(body, ctx->indent);
             if (ctx->no_unwind) {
-                /* Phase R5: #[no-unwind] — abort directly; skip defer chain */
+                /* Phase R5: ^no-unwind — abort directly; skip defer chain */
                 if (payload->type.kind == TY_CSTR) {
                     buf_printf(body, "tur_panic_abort(%s);\n", msg_val);
                 } else {
@@ -10569,7 +10569,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *payload_val = emit_value(ctx, body, payload);
             indent_buf(body, ctx->indent);
             if (ctx->no_unwind) {
-                /* Phase R5: #[no-unwind] — abort directly; skip defer chain */
+                /* Phase R5: ^no-unwind — abort directly; skip defer chain */
                 buf_puts(body, "tur_panic_abort(\"(panic-with)\");\n");
             } else {
                 /* Set the current frame for panic to fire defers */

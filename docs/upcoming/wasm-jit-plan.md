@@ -1,10 +1,17 @@
 # Plan: the JIT engine in the browser (c2mir + MIR on wasm32)
 
-> **Status:** P0 and P1 done 2026-10-23; the section 6 fork fixes merged
-> 2026-10-27 as turmeric-lang/mir#15 and are vendored (`a6e75113`), so the
-> spike builds `external/mir` with no scratch patches. Next: P2 (`tur_front`).
-> The engine itself lives only in `tools/wasm-jit-spike/`; nothing in
-> `tur_wasm` or on the page yet.
+> **Status:** P0, P1 and P2 done; P3 done 2026-10-28 except its gate,
+> which needs one fork change (below). The engine builds from CMake as a
+> second module, `turmeric-jit.{js,wasm}` (9.5 MB, `tur_wasm_jit`), and
+> `tests/run-jit-wasm.sh` runs the corpus through it against
+> `tests/jit-wasm-baseline.txt`: 1,712 fixtures compiled, 643 fell back to the
+> interpreter with the right answer, 574 failed, 236 skipped (section 7, P3).
+> **The gate fails on one example**: `closure` traps, because host C cannot
+> call a function MIR interprets once its address is stored
+> ([wasm-mir-thunk-address-is-not-callable-by-host-code](../reported/wasm-mir-thunk-address-is-not-callable-by-host-code.md)).
+> The fix is a turmeric-lang/mir change: thunks as real table entries. It is
+> first in section 6's next fork PR. Next: that fork PR, then P4, which
+> also moves the stdlib into one package both modules share (5.11).
 > **P0 run 2026-10-23** (section 7): the corpus under `TUR_JIT_GEN=interp`
 > on a Release build is 3853/113/70; every interpreter-only failure is in
 > one of three families (threads 82, continuations 10, deep recursion 2),
@@ -245,29 +252,38 @@ that plan measured is a bonus, not the reason.
 
 ### 5.1 Build shape
 
-- `cmake/mir.cmake` gains an Emscripten arm: `mir.c` and `c2mir/c2mir.c`
-  only (no `mir-gen.c`), mirroring the fork's own `if(EMSCRIPTEN)` block.
-  **Verified 2026-10-23:** the vendored `mir.c` selects the target with
-  `#elif defined(__wasm32__) || defined(__EMSCRIPTEN__)` (`mir.c:6996`,
-  including `mir-wasm.c`) and the code allocator the same way
-  (`mir.c:731`, `mir-code-alloc-wasm.c`); `c2mir.c` does likewise at
-  `:41`, `:369` and `:12749` for `c2mir/wasm32/`. No `sed` step: c2mp's
-  `scripts/emcc-setup.sh` was the pre-merge relic, deleted in c2mp#3
-  (section 6.1).
-- A `TUR_WASM_JIT` option (default ON when `TUR_WASM`) adds `jit_engine.c`,
-  `turi/jit_ffi.c`, and the MIR TUs to the `tur_wasm` emcc command, with
-  `TUR_HAVE_JIT=1`. Link flags added: `-sWASM_BIGINT`, and
-  `wasmTable,addFunction,stackAlloc,stackSave,stackRestore` in
-  `EXPORTED_RUNTIME_METHODS`. `ALLOW_TABLE_GROWTH` is already set.
-- `jit_engine.c` grows an `__EMSCRIPTEN__` arm, kept small: no `dlopen`
-  autolink (the autolink markers become a hard `TUR_JIT_ERR_LINK` with the
-  library named), `g_jit_interp_mode` forced on, `MIR_gen_*` calls compiled
-  out, the import resolver of section 5.3, and `main` run on the calling
-  thread rather than a fresh pthread (the calling thread is the eval worker,
-  which already has the 16 MB stack).
-- `src/web/wasm_glue.c` exports `turi_wasm_jit_run(src)` beside
-  `turi_wasm_eval`, returning output and a status the page can show as the
-  engine line ("compiled" / "fell back: reason").
+As built in P3 (2026-10-28). The design originally added the engine to the
+`tur_wasm` link. P1 measured the cost, so it became a second module instead:
+
+- `TUR_WASM_JIT` (default ON under `TUR_WASM`) adds the `tur_wasm_jit`
+  target, which builds `build-wasm/wasm-jit/turmeric-jit.{js,wasm}` beside
+  the playground's `turmeric.{js,wasm}`. Only a page that asks for the Compile
+  engine loads it, so the Interpret page pays nothing. The module contains
+  the whole interpreter anyway, as its fallback (5.7).
+- The target runs `tools/wasm-jit/build-module.sh` over a source list CMake
+  writes. Three groups go through a generated Makefile with `-MMD` and
+  per-group response files: `tur_core` plus `tur_front` (5.2) plus the web
+  glue; the engine (`jit_engine.c`, `turi/jit_ffi.c`,
+  `src/web/wasm_jit_glue.c`); and MIR's `mir.c` and `c2mir/c2mir.c`, with no
+  `mir-gen.c`. The script then generates the import table (5.3), collects the
+  headers (5.4) and links.
+- `mir.c` and `c2mir.c` select the wasm32 target on `__EMSCRIPTEN__` by
+  themselves (verified 2026-10-23: `mir.c:6996` and `:731`, `c2mir.c:41`,
+  `:369` and `:12749`), so there is no `sed` step. `mir-wasm.c` defines no
+  `MIR_gen*`, and Emscripten declares ucontext without defining it, so
+  `src/web/wasm_jit_stubs.c` stubs both to abort loudly. That belongs in the
+  fork (section 6).
+- `jit_engine.c`'s `__EMSCRIPTEN__` arm stays small. It has no `dlopen`
+  autolink (a marker is a link error that names the library), runs `main` on
+  the calling thread, refuses thread creation (`JIT_WASM_REFUSED`), owns the
+  landing for `exit`/`_exit`/`abort` (5.7), and puts the single-thread atomics
+  in its prelude (section 7, P3).
+- `turi_wasm_jit_run(src, args)` (`src/web/wasm_jit_glue.c`) answers with the
+  engine line as JSON:
+  `{"engine":"compiled"|"interpreted"|"error","exit":N,"reason":...}`.
+- Size, measured: 9.54 MB (2.94 MB gzipped). Of that, 3.67 MB is code and
+  5.86 MB is data, and 4.30 MB of the data is the embedded stdlib. The stock
+  module embeds the same stdlib, which is what 5.11 is about.
 
 ### 5.2 The front half moves into a library
 
@@ -283,6 +299,41 @@ hoist, split, prune) that `tur` and `libturi_wasm` both consume, leaving
 `tests/check-driver-headers.py` already polices which file defines what, so
 the move is checkable. This is the one change that touches the native `tur`
 and it is a move, not a rewrite.
+
+**Measured 2026-10-28: no file needs splitting.** An `nm` walk over the
+native driver objects found that `pipeline.c` and `preamble_split.c` reach
+four other driver files directly -- `cc.c` (three flags and
+`locate_runtime_lib`; the hoist, quoting and temp-path helpers), `paths.c`
+(file reads, the stdlib root, `cc_system`), `spice.c` (spice and
+reader-macro discovery) -- and those reach each other and nothing more.
+What dragged the whole driver in was two flags defined in `cli.c`,
+`g_no_auto_stdlib` and `g_no_auto_spice`: `cli.c` is the command table, so
+one `bool` pulled every `cmd_*.c` along. With the flags defined beside their
+readers (`pipeline.c`, `spice.c`), the closure is exactly those five files
+plus `tur_core`. A program linked from them alone emitted C byte-identical
+to `tur emit-c` on 119 sampled fixtures, and all five compile warning-free
+under emcc with `tur_wasm`'s flags. So `tur_front` takes `cc.c` whole; its
+link and autolink code is dead weight on the page, not a blocker.
+
+Two things the plan did not foresee:
+
+- **`tur_core` depends on its host for `tur_collect_symbols`.** `lsp/lsp.c`
+  (in `tur_core`) calls it; `tur` supplies the driver's, the browser module
+  `web/wasm_lsp.c`'s cheaper elaboration-only one, and each `tur_core` unit
+  test a stub. The driver's lived in `pipeline.c`, which is why P1 had to
+  leave `wasm_lsp.c` out. P2 moves it and `tur_check_only` to
+  `driver/lsp_backend.c`, which stays in `tur`, so `tur_front` carries no
+  LSP entry point and the module keeps its own.
+- **The boundary needs a guard, not only the header check.**
+  `check-driver-headers.py` checks which file declares what, not what a file
+  references, so one new `cli.c` reference would silently re-close the
+  front half over the whole driver. `tur_front_link_unit` links `tur_front`
+  and `tur_core` alone and compiles two fixtures; a reference across the
+  line fails its link with the symbol named (checked by adding one).
+
+`tur_front` still calls `system()` through `cc_system`, for the prelude and
+library caches. Emscripten's `system()` returns -1, so P3's glue keeps the
+runtime host-resident and declines those paths, as P1's glue already does.
 
 ### 5.3 Symbols: a generated table instead of `dlsym`
 
@@ -471,6 +522,83 @@ the reference for the parts C2 has not specified, and its measured cost
 - **`tur jit` natively:** unchanged. `TUR_JIT_GEN=interp` stays the
   diagnostic it is.
 
+### 5.11 The stdlib as one package both modules share
+
+Looked into 2026-10-28, prototyped on the JIT module; P4 builds it.
+
+**The problem.** Both modules embed `stdlib/` (`--embed-file stdlib@/stdlib`)
+in their wasm data segment. It is 4.30 MB of the JIT module's 9.54 MB and of
+the stock module's 6.85 MB. A page that loads both downloads it twice, and
+it is the same 4.30 MB in each.
+
+**The change.** Package the stdlib once, with Emscripten's own tool, and link
+the package's loader into both modules instead of the files:
+
+```sh
+python3 $EMSDK/upstream/emscripten/tools/file_packager.py stdlib.data \
+    --preload stdlib@/stdlib --js-output=stdlib.data.js
+emcc ... --pre-js stdlib.data.js        # in place of --embed-file stdlib@/stdlib
+```
+
+`stdlib.data.js` holds the file list and offsets. Under `-sMODULARIZE` a
+`--pre-js` runs inside the module factory, so the loader sees the instance's
+`Module`. It finds `stdlib.data` through `Module.locateFile`, the same
+mechanism that finds the `.wasm`. It also holds a run dependency, so
+`turi_wasm_init` does not run until `/stdlib` is mounted. Under node it reads
+the file from disk, so `tools/wasm-jit/run.js` and `tests/run-jit-wasm.sh`
+need no change.
+
+**Measured** (prototype relink of the P3 objects, emcc 6.0):
+
+| | today | with the package |
+|---|---|---|
+| `turmeric-jit.wasm` | 9.54 MB (2.94 gz) | 5.23 MB (1.83 gz) |
+| `turmeric.wasm` | 6.85 MB (2.06 gz) | about 2.55 MB (about 0.95 gz), by subtraction, not relinked |
+| `stdlib.data` | (inside both) | 4.30 MB (1.10 gz), fetched once |
+
+The prototype ran the smoke programs compiled and the `scheme-sweet` example
+on the interpreter fallback, with the stdlib arriving from the package.
+
+**What it buys.** On the Interpret page a first visit downloads the same
+bytes as before: module plus package. A visitor who then picks Compile
+downloads 1.83 MB gzipped instead of 2.94, because the stdlib is already
+cached. The playground, `eval-worker.js` and `lsp-worker.js` each
+instantiate `turmeric.js`, and all three read the package from the cache.
+
+**What P4 has to get right:**
+
+- **One package, built once.** The file list is baked into each module's JS
+  at link time. If two links read different `stdlib.data.js` files, a module
+  reads the wrong offsets from a package that does not match it. So
+  `stdlib.data{,.js}` is its own CMake target, and both `tur_wasm` and
+  `tur_wasm_jit` depend on it and link the same file.
+- **Deploy coherence.** `web/public/sw.js` precaches `/turmeric.js` and
+  `/turmeric.wasm` under a `CACHE_VERSION` that every build stamps
+  (`web/vite.config.js`, `injectSwVersion`). `/stdlib.data` joins
+  `PRECACHE_URLS`, and the JIT module's two files join it once the page loads
+  the module. A deploy then replaces modules and package together, and a
+  returning visitor cannot pair a new module with an old package. The `wasm`
+  recipe copies `stdlib.data` into `web/public/` next to `turmeric.wasm`.
+- **No new filesystem surface.** The package mounts at the same `/stdlib` the
+  embed did, so `_turi_wasm_read_file`'s stdlib-only rule (go-to-definition,
+  `wasm_lsp.c`) is unchanged.
+
+**Left out, on purpose:**
+
+- `docstrings.tur` is 1.10 MB of the 4.30. Only `(doc ...)` loads it, and
+  the docs panel already has its own pack (`web/public/docs-pack/`).
+  Splitting it into a second, lazily fetched package would save another
+  quarter. That is a separate decision about how `(doc ...)` finds its table,
+  not part of this change.
+- The c2mir headers (0.35 MB) stay embedded in the JIT module, the only
+  module that reads them.
+- Splitting the code itself (`-sMAIN_MODULE`/`SIDE_MODULE`, or `wasm-split`)
+  is not worth it. MIR and c2mir are about 1.3 MB of objects, and everything
+  else is runtime and interpreter that both modules need. The import table
+  (5.3) takes the address of every runtime function, which assumes one link.
+  And dynamic linking under `-pthread` is the least reliable corner of
+  Emscripten.
+
 ## 6. Fork changes (one PR, batched)
 
 The MIR-fork rule in CLAUDE.md allows one open PR at a time, so fixes ride
@@ -526,8 +654,19 @@ symbol table needs those three if a pruned unit ever keeps `math.h`.
 Still to batch into the next fork PR:
 
 - Exact-signature stub registry in `mir-wasm.c` (5.5).
-- Whatever P3 finds in `wasm_ff_dispatch` for our carrier-word signatures
-  (`int64_t` everywhere, by-value aggregates through `BLK`).
+- **Thunks as real table entries** (found in P3, the largest failure family:
+  [wasm-mir-thunk-address-is-not-callable-by-host-code](../reported/wasm-mir-thunk-address-is-not-callable-by-host-code.md)).
+  A thunk address is a slot in a memory array, so host C that
+  `call_indirect`s it traps with `table index is out of bounds`.
+  `wasm_ff_dispatch` substitutes a real entry only for an i32 call argument.
+  An address stored in a closure, a `DK` frame or a callback slot, or passed as
+  an `int64_t` carrier, reaches host code raw. `_MIR_get_thunk` should reserve
+  a table slot, and `_MIR_redirect_thunk` should fill it.
+- **`MIR_gen` and ucontext stubs.** `mir-wasm.c` defines no `MIR_gen_init`,
+  `MIR_gen_set_optimize_level` or `MIR_gen`, and Emscripten declares
+  `getcontext`/`makecontext`/`swapcontext` without defining them. Every
+  embedder links its own aborting stubs (`src/web/wasm_jit_stubs.c`), and
+  the fork should carry them instead.
 - If 5.8's option 3 is taken, the interpreter frame change.
 - c2mir applies the integer promotions to a `_Generic` controlling
   expression, on every target: `_Generic ((short) 0, short: 1, int: 2)` is
@@ -715,24 +854,99 @@ a 422 KB full unit, and the retry path was never needed for these three.
 - **Bare-module scale**: the loop's first run is 3x its steady state
   while V8 tiers the interpreter up, as in the bare spike.
 
-### P2 -- `tur_front`
+### P2 -- `tur_front`: DONE 2026-10-28
 
 The driver split of 5.2, landed on its own: `tur` links the same objects
 and `tests/check-driver-headers.py` passes. No wasm in this PR.
 
-### P3 -- the engine in `tur_wasm`
+Scoped 2026-10-28 (5.2): a `tur_front` OBJECT library of `pipeline.c`,
+`preamble_split.c`, `cc.c`, `paths.c` and `spice.c` as they are; the two
+`cli.c` flags defined beside their readers; `tur_collect_symbols` and
+`tur_check_only` moved to `driver/lsp_backend.c`; and
+`tur_front_link_unit` guarding the boundary.
 
-5.1, 5.3, 5.4, and `turi_wasm_jit_run`. A node-driven twin of
-`tests/run-jit.sh` (`tests/run-jit-wasm.sh`) runs the corpus through the
-module with its own baseline file for fallbacks, the way
-`tests/jit-fallback-baseline.txt` works today. Gate: the Try Turmeric
-examples all run compiled or fall back loudly, none wrong.
+### P3 -- the engine in the wasm build: DONE 2026-10-28, gate open
+
+5.1, 5.3, 5.4 and `turi_wasm_jit_run`, as built (5.1). `tests/run-jit-wasm.sh`
+runs every fixture through the module under node and ratchets against
+`tests/jit-wasm-baseline.txt`. Each fixture's outcome is `compiled`,
+`interpreted` (the engine refused it and the interpreter gave the right
+answer) or `fail`. A worse outcome than the baseline fails the run, and a
+better one is reported so its line can go.
+
+**The corpus, 2026-10-28** (emcc 6.0.13, node 22, three resumable shards):
+
+| Outcome | Fixtures |
+|---|---|
+| compiled | 1,712 |
+| interpreted, right answer | 643 |
+| failed | 574 |
+| skipped (markers, `flags` files, multi-file fixtures) | 236 |
+
+What the fallbacks and failures are, by reason (a fixture counts once):
+
+| Family | Fixtures | Owner |
+|---|---|---|
+| `setjmp` not importable (the effect and panic landings) | 642 fell back right; 98 fell back and the interpreter got it wrong too | P5 (5.6) |
+| `table index is out of bounds`: an interpreted function's address called by host C | 202 | next fork PR ([report](../reported/wasm-mir-thunk-address-is-not-callable-by-host-code.md)) |
+| Asyncify: `emscripten_fiber_swap` in a module built without it | 106 | P5 (5.5) |
+| The program starts threads (refused by design) | 60 | stays a fallback (risk 7) |
+| Wrong answer on the compiled path: 64-bit carriers in pointer-width slots | 44 | [report](../reported/ilp32-word-slots-truncate-64-bit-carriers.md); `tur build --target wasm` has it too |
+| Other traps: `exit` reaching the JS caller (17), `Aborted()` (13), null function (12), BigInt conversion (5), out-of-bounds memory (4), JS stack (2) | 53 | unsorted; the `exit` ones mean some path to `exit` misses 5.7's landing |
+| Imports the module has no host for (`fork`, `socket`, `popen`, `symlink`, `getgid`, `fnmatch`) | 12 | stay fallbacks |
+
+The in-module interpreter got the 98 "got it wrong too" fixtures wrong as
+well. P3 did not sort them. P0's native families (threads, continuations,
+deep recursion) are the likely bulk, but that is unchecked.
+
+**Fixed while running it:** c2mir rejected 208 fixtures because musl has no
+`stdatomic.h` (it is the compiler's header) and c2mir lacks the GCC
+`__atomic_*`/`__sync_*` builtins and `__thread`. On this engine, and only
+here, they are plain operations: it refuses every way a program starts a
+thread, so the program runs on one thread, where they are sound. The C11
+spelling is `tools/wasm-jit/stdatomic.h`, and the builtins are an
+`__EMSCRIPTEN__` block of `JIT_PRELUDE`. c2mir reserves `typeof` without
+parsing it, so a macro that returns the old value holds it in a `long long`.
+Also fixed: the interpreter fallback now picks the program's `#lang` before
+loading it (`turi_wasm_run_program`), as the page does. Before that, a saffron
+or r7rs program fell back into a Turmeric session and failed. Rerunning the
+217 `#lang` fixtures in the baseline moved 105 out of `fail`: 101 now fall
+back right and 4 compile.
+
+**The gate** (`bash tools/wasm-jit/check-examples.sh`: every Try Turmeric
+example compiles or falls back, and none is wrong). 17 of the 18 examples
+pass: 8 compiled, 9 fell back on `setjmp`. **`closure` traps**: its
+`TUR_CLOSURE_DROP` calls the resident `tur_closure_drop`, which calls the
+closure's drop function through a pointer the program stored, and that
+pointer is a thunk address. This is the 202-fixture family above. Nothing in
+this repo can fix it, because the thunk layout is `mir-wasm.c`'s. The gate
+closes with the fork PR, and P4 must not offer the Compile engine before then.
+
+**What P3 leaves:**
+
+- For the fork PR (section 6): thunks as table entries, the `MIR_gen` stubs,
+  and the `_Generic` fix. Then re-run the harness: the 202 should move to
+  `compiled` or into another family.
+- For P5: `setjmp` (740) and Asyncify (106) are 846 fixtures between them,
+  by far the largest share of what is left.
+- For P4: 5.11, and the page's handling of a trap (5.8). After a trap the
+  module instance is not reusable, so the page reloads it.
+- The full-unit retry (TUR-W0071) is still not wired on wasm. The glue takes
+  the split TU or falls back. `stdatomic.h` was what made the retry fail in
+  P1, and it now resolves, so wiring the retry is possible if a family needs
+  it.
+- Latency, measured on the smoke programs: a compiled run spends 125-180 ms
+  in the front half and 110-170 ms in c2mir before `main` starts (the engine
+  line's `front_ms` and `compile_ms`). The page shows these numbers. Cutting
+  them for short programs is P6's business (C1's images), not P3's.
 
 ### P4 -- the page
 
 The engine toggle, the console's engine line, `RangeError` as a stack
-overflow message, Stop still working (worker teardown). Playwright covers
-one inline-C example end to end.
+overflow message, Stop still working (worker teardown), a fresh module
+instance after a trap (5.8), and the shared stdlib package (5.11). Playwright
+covers one inline-C example end to end. Waits on the fork PR that closes P3's
+gate.
 
 ### P5 -- stubs and `setjmp`
 

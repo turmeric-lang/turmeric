@@ -11,6 +11,12 @@
 #include "global.h"   /* tur_installed_spice_dir */
 #include "spice_search.h"  /* find_spice_root / auto_append_spice_includes */
 
+/* SC4: --no-auto-spice disables the per-file subcommand walk-up that
+ * adds the enclosing spice's `src/` to the include path.  Inspected by
+ * auto_append_spice_includes().  cli.c sets it; it lives here so the front
+ * half (tur_front) does not need the command table. */
+bool g_no_auto_spice = false;
+
 /* RM4: collect the manifest's `:reader-macros [...]` entries as absolute
  * paths suitable for compile_to_c. `root_dir` is the spice root (where
  * build.tur lives); each manifest entry is joined onto it unless it is

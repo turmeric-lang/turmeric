@@ -147,9 +147,9 @@ If you see one of these in a link error under separate compilation (see the
   the wrong C types
   ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/forced-spec-loses-aggregate-type.md)), shows up here. `<build-dir>/.tur-abi-cache/index` lists
   which owner each borrowed clone was forced onto.
-- **`#[used]` defn reached only by mangled symbol.** A pure-Turmeric
+- **`^used` defn reached only by mangled symbol.** A pure-Turmeric
   defn called only via a hand-written inline-C bridge or a C-ABI
-  callback is emitted `static`. Add `#[used]` to the defn so the compiler
+  callback is emitted `static`. Add `^used` to the defn so the compiler
   keeps external linkage.
 
 ## The residual carrier bridge -- what it does, why it stays
@@ -213,11 +213,11 @@ typechecker probably wants a real type.
 When you hand a Turmeric function pointer to a C library (`qsort`
 comparators, Arrow release callbacks, signal handlers, raylib draw
 callbacks), the mangled spec symbol is what the C side takes. Mark the
-defn `#[used]` so the compiler keeps external linkage and doesn't DCE
+defn `^used` so the compiler keeps external linkage and doesn't DCE
 the body:
 
 ```turmeric
-(defn #[used] compare-ints [a : ptr<void> b : ptr<void>] : int
+(defn ^used compare-ints [a : ptr<void> b : ptr<void>] : int
   ```c
   int ai = *(const int*)a;
   int bi = *(const int*)b;
@@ -225,7 +225,7 @@ the body:
   ```)
 ```
 
-Without `#[used]`, the symbol is `static` in the emitted C and the
+Without `^used`, the symbol is `static` in the emitted C and the
 extern C reference fails at link. With it, external linkage is
 preserved and every project module compiles and links.
 
@@ -268,7 +268,7 @@ module is whoever declared the originating defn/instance.
   in the constructor lowering.
 - **Dead-spec elimination.** A spec referenced by no module gets
   pruned. If a spec mysteriously vanishes, check whether the only
-  references were behind a mangled C symbol (needs `#[used]`) or were
+  references were behind a mangled C symbol (needs `^used`) or were
   themselves DCE'd.
 - **Bare generic ADT rides the carrier; only concrete gets a struct.**
   An unparameterized `Result`/`Option` with no type args pinned lowers
@@ -307,5 +307,5 @@ module is whoever declared the originating defn/instance.
   guide is the ABI underneath it.
 - `docs/guides/name-mangling-guide.md` -- the full mangler rules, of
   which the spec-suffix rules in this guide are one piece.
-- `docs/guides/c-integration-guide.md` -- inline-C, `#[used]`, FFI
+- `docs/guides/c-integration-guide.md` -- inline-C, `^used`, FFI
   patterns; this guide is the type story behind it.

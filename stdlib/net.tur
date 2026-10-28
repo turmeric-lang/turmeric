@@ -166,9 +166,7 @@ static void __tur_net_prepare(int64_t fd) {
 ;;;
 ;;; Since: LT4
 
-(defn ^deprecated "use net/close, which returns (Result nil IoError)"
-  socket-close
-  [s : Socket]
+(defn ^deprecated "use net/close, which returns (Result nil IoError)" socket-close [s : Socket]
   #fx{Net}
   : int
   ```c

@@ -11391,7 +11391,7 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
          * Result/Option/Pair/Tuple* work.  Force them to `static` even
          * though they are marked exported -- otherwise every spice .c
          * emits external symbols and the linker rejects the duplicates. */
-        /* #[used] (retain_c_linkage): keep external linkage so a raw
+        /* ^used (retain_c_linkage): keep external linkage so a raw
          * `extern <mangled>` reference from another TU resolves -- mirror the
          * definition's linkage in emit_fns.c so the forward decl agrees. */
         /* definstance-not-dispatchable-across-modules: mirror the definition's
@@ -16873,7 +16873,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * (emit_panic_site_slot) -- a thread-local in this region is reached
      * through a host accessor call in a hosted build. */
 
-    /* Phase R5: tur_panic_abort for #[no-unwind] */
+    /* Phase R5: tur_panic_abort for ^no-unwind */
     buf_puts(out, "/* Phase R5: tur_panic_abort - no unwinding, immediate abort */\n");
     buf_puts(out, "static void tur_panic_abort(const char *msg) {\n");
     buf_puts(out, "    fprintf(stderr, \"panic (no unwind): %s\\n\", msg ? msg : \"(no message)\");\n");

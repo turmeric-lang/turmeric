@@ -85,7 +85,7 @@ static int cmd_build_once(const char *input, const char *out_path,
     Buf csrc;
     buf_init(&csrc);
     /* used-attr-whole-program: this single-file/whole-program path inlines only
-     * the entry's Turmeric import closure, so a #[used] defn in a sibling
+     * the entry's Turmeric import closure, so a ^used defn in a sibling
      * module reached only via a raw mangled C symbol (no `(import)`) would be
      * dropped and dangle at link time -- unlike `tur build <project>`, which
      * falls back to separate compilation.  Scan the -I search dirs for such

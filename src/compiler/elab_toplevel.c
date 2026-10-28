@@ -1221,7 +1221,7 @@ const Ls2ResolverCtx *ls2_resolver_ctx_active(void) {
 
 /* used-attr-whole-program: file-scope holder for the active force-load list,
  * mirroring the LS2 context above.  Set by the driver around compile_to_c; read
- * after the main elaboration pass to retain unimported #[used] modules.
+ * after the main elaboration pass to retain unimported ^used modules.
  * Single-threaded usage. */
 static const UsedModulesCtx *g_used_modules_ctx;
 
@@ -2452,9 +2452,12 @@ static const Symbol *fgo_defn_name(const Elab *e, const Form *f, bool *lossy) {
         const Form *a = f->as.list.items[k];
         if (a->tag == F_SYM && (a->as.sym == e->sym_no_unwind_attr ||
                                 a->as.sym == e->sym_used_attr ||
+                                a->as.sym == e->sym_caret_no_unwind ||
+                                a->as.sym == e->sym_caret_used ||
                                 a->as.sym == e->sym_caret_reflect)) {
             k++;
-        } else if (a->tag == F_SYM && a->as.sym == e->sym_caret_deprecated) {
+        } else if (a->tag == F_SYM && (a->as.sym == e->sym_caret_deprecated ||
+                                       a->as.sym == e->sym_caret_export_as)) {
             k++;
             if (k < n && f->as.list.items[k]->tag == F_STR) k++;
         } else if (a->tag == F_LIST && a->as.list.len == 2 &&
@@ -2757,9 +2760,10 @@ void elab_pre_declare_any_mut_def(Elab *ep, const Form *f) {
 }
 
 /* The index of a `(defn ...)` form's name: past the bare attribute symbols
- * (#[no-unwind] / #[used]), an `(export-as "c_name")`, and the `^attr`s
- * elab_defn takes before the name (^construct, ^byval, ^deprecated
- * ["message"], ^reflect), in any order.  Every scanner that wants a defn's
+ * (#[no-unwind] / #[used], the earlier spelling), an `(export-as "c_name")`
+ * (likewise), and the `^attr`s elab_defn takes before the name (^construct,
+ * ^byval, ^deprecated ["message"], ^reflect, ^no-unwind, ^used, ^export-as
+ * "c_name"), in any order.  Every scanner that wants a defn's
  * name before elab_defn runs goes through this, so a new pre-name attribute
  * is taught in one place -- the module pre-declare scan used to skip none of
  * the `^` ones.  Unknown `^attr`s are skipped too: elab_defn reports them.
@@ -2782,7 +2786,8 @@ uint32_t elab_defn_name_index(const Elab *ep, const Form *f) {
         }
         if (it->tag == F_SYM && it->as.sym->len > 1 && it->as.sym->name[0] == '^') {
             i++;
-            if (it->as.sym == ep->sym_caret_deprecated && i < n &&
+            if ((it->as.sym == ep->sym_caret_deprecated ||
+                 it->as.sym == ep->sym_caret_export_as) && i < n &&
                 f->as.list.items[i]->tag == F_STR)
                 i++;
             continue;
@@ -3633,10 +3638,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
                     }
                 }
                 if (hs == e.sym_defn) {
-                    uint32_t ni = 1;   /* skip ^attr / (export-as ..) prefix syms */
-                    while (ni < f->as.list.len && f->as.list.items[ni]->tag == F_SYM
-                           && f->as.list.items[ni]->as.sym->name
-                           && f->as.list.items[ni]->as.sym->name[0] == '^') ni++;
+                    uint32_t ni = elab_defn_name_index(&e, f);   /* past the pre-name attrs */
                     if (ni < f->as.list.len && f->as.list.items[ni]->tag == F_SYM
                         && f->as.list.items[ni]->as.sym->len == 4
                         && memcmp(f->as.list.items[ni]->as.sym->name, "main", 4) == 0)
@@ -3948,7 +3950,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * codegen byte-for-byte unchanged. */
     elab_wrap_resets_for_crossfn_resume(&e);
 
-    /* used-attr-whole-program: force-load any #[used]-bearing modules that the
+    /* used-attr-whole-program: force-load any ^used-bearing modules that the
      * entry reaches only via a raw mangled C symbol (no `(import)`), so their
      * defns are emitted into this single TU and the extern resolves at link
      * time.  Runs after the main pass (an already-imported module is deduped)

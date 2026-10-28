@@ -2179,6 +2179,15 @@ add_test(
 # the in-tree stdlib.  It normally only executes inside a wasm module, where a
 # mistake surfaces months later as "completion in the browser is empty";
 # nothing in it is actually wasm-specific, so it runs here instead.
+# The driver's front half (tur_front, wasm-jit-plan P2) compiles to C when
+# linked with tur_core alone.  The link is most of the test.
+add_test(
+  NAME tur_front_link_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_front_link_unit" "${CMAKE_SOURCE_DIR}/stdlib"
+          "${CMAKE_SOURCE_DIR}/tests/fixtures/hello/input.tur"
+          "${CMAKE_SOURCE_DIR}/tests/fixtures/defstruct-inline-c-byvalue/input.tur"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME tur_lsp_wasm_backend_unit
   COMMAND "${CMAKE_BINARY_DIR}/tur_lsp_wasm_backend_unit" "${CMAKE_SOURCE_DIR}/stdlib"

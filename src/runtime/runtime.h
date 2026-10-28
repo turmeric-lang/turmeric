@@ -246,7 +246,7 @@ void tur_cloneable_cont_drop(tur_cloneable_cont *cont);
 extern int tur_panic_in_progress;
 void tur_panic(const char *msg);
 
-/* Phase R5: Panic strategy - ABORT variant for #[no-unwind] */
+/* Phase R5: Panic strategy - ABORT variant for ^no-unwind */
 void tur_panic_abort(const char *msg);
 
 /* CT4: Contract handler API -- override the handler called on contract failure. */

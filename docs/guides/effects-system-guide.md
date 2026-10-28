@@ -584,12 +584,12 @@ opening a socket, reading the clock). To bring those under effect-row
 discipline, declare a **capability effect** with `^capability`:
 
 ```turmeric
-(defeffect IO [] : nil ^capability)
-(defeffect FS [] : nil ^extends IO ^capability)
+(defeffect ^capability IO [] : nil)
+(defeffect ^capability ^extends IO FS [] : nil)
 ```
 ```sweet-exp
-defeffect IO [] : nil ^capability
-defeffect FS [] : nil ^extends IO ^capability
+defeffect ^capability IO [] : nil
+defeffect ^capability ^extends IO FS [] : nil
 ```
 
 A capability effect is a coarse *authority* tag rather than something you
@@ -608,8 +608,8 @@ Five capability tags are **compiler-known**, like `Unsafe`: they resolve in
 every program, with nothing loaded, and are used to annotate the I/O-touching
 modules. [`stdlib/effects.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/effects.tur)
 re-declares them, which is where their docs live; a declaration of one of these
-names is accepted only when it matches the built-in exactly (`(defeffect FS []
-:nil ^extends IO ^capability)`), and anything else is an error.
+names is accepted only when it matches the built-in exactly (`(defeffect
+^capability ^extends IO FS [] :nil)`), and anything else is an error.
 
 | Tag       | Used by                                     |
 |-----------|---------------------------------------------|
