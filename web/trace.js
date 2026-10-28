@@ -19,7 +19,6 @@ let deps = {
     isReady: () => false,                        // the session can take a call
     workerCall: () => Promise.resolve(null),     // one trace-* request
     resetSession: () => Promise.resolve(false),  // a fresh env to record in
-    setLangMode: () => {},
     getConsoleLog: () => [],
     setConsoleLog: () => {},
     showStatus: () => {},
@@ -89,7 +88,6 @@ export async function traceCode() {
     // inline #lang itself, but set_lang is what puts the session in the
     // program's base dialect.
     const { lang } = deps.parseLangDirective(code);
-    if (lang !== null) deps.setLangMode(lang);
 
     // hasMain is the page's existing Run rule, not a second one: a program with
     // a top-level `main` loads its forms and then runs `(main)`, and the
