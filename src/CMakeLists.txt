@@ -2099,6 +2099,46 @@ if(TUR_WASM)
                 ${CMAKE_SOURCE_DIR}/web/public/turmeric.wasm
             COMMENT "Copying WASM module to web/public"
         )
+
+        # wasm-jit-plan P3: the browser JIT, turmeric-jit.{js,wasm} -- the
+        # stock module's sources plus the driver's front half (tur_front),
+        # the MIR engine in interpreter mode, and an import table generated
+        # from the runtime's declarations region.  A second module, not a
+        # bigger tur_wasm: only a page that asks for the Compile engine loads
+        # it.  tools/wasm-jit/build-module.sh does the work (objects through a
+        # generated Makefile, the table, the embedded headers, the link).
+        option(TUR_WASM_JIT "Build the browser JIT module (turmeric-jit.wasm)" ON)
+        if(TUR_WASM_JIT)
+            set(_jit_list "")
+            foreach(_s ${WASM_SOURCES} ${TUR_FRONT_SOURCES})
+                if(_s MATCHES "\\.c$")
+                    if(IS_ABSOLUTE "${_s}")
+                        string(APPEND _jit_list "rt ${_s}\n")
+                    else()
+                        string(APPEND _jit_list "rt ${CMAKE_CURRENT_SOURCE_DIR}/${_s}\n")
+                    endif()
+                endif()
+            endforeach()
+            foreach(_s jit_engine.c turi/jit_ffi.c web/wasm_jit_glue.c)
+                string(APPEND _jit_list "engine ${CMAKE_CURRENT_SOURCE_DIR}/${_s}\n")
+            endforeach()
+            foreach(_s mir.c c2mir/c2mir.c)
+                string(APPEND _jit_list "mir ${CMAKE_SOURCE_DIR}/external/mir/${_s}\n")
+            endforeach()
+            string(APPEND _jit_list "mir ${CMAKE_CURRENT_SOURCE_DIR}/web/wasm_jit_stubs.c\n")
+            file(WRITE ${CMAKE_BINARY_DIR}/wasm-jit/sources.txt "${_jit_list}")
+
+            add_custom_target(tur_wasm_jit
+                COMMAND bash ${CMAKE_SOURCE_DIR}/tools/wasm-jit/build-module.sh
+                        ${CMAKE_BINARY_DIR}/wasm-jit
+                        ${CMAKE_BINARY_DIR}/wasm-jit/sources.txt
+                        ${_TUR_VERSION_STR}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                DEPENDS ${TUR_REGION_EMBED_C}
+                COMMENT "Building the Turmeric browser JIT module (turmeric-jit.wasm)"
+                VERBATIM
+            )
+        endif()
     endif()
 endif()
 

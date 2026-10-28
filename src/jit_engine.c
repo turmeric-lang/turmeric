@@ -346,6 +346,38 @@ static uint64_t jit_osswap64 (uint64_t x) {
 static int jit_pthread_create (pthread_t *tid, const pthread_attr_t *attr,
                                void *(*fn) (void *), void *arg);
 
+#ifdef __EMSCRIPTEN__
+/* wasm-jit-plan 5.7: a program's exit, _exit or abort ends the program, not
+ * the page.  Under Emscripten, libc's exit throws out through the JS caller
+ * and the module is not usable afterwards; these unwind to the landing
+ * tur_jit_execute sets before entering main (a direct setjmp in compiled
+ * code, which longjmp reaches across interpreter frames and the JS
+ * trampoline -- tools/wasm-jit-spike/sjlj.c).  exit drains the program's
+ * atexit list there; _exit and abort do not.  abort reports 134, the status
+ * a shell sees for SIGABRT, which is what the fixtures expect natively. */
+static jmp_buf g_jit_exit_jb;
+static volatile int g_jit_exit_active;
+static volatile int g_jit_exit_code;
+static volatile int g_jit_exit_drain;
+
+static void MIR_NO_RETURN jit_wasm_unwind (int code, int drain) {
+  if (!g_jit_exit_active) {
+    if (drain) exit (code);
+    _Exit (code);
+  }
+  g_jit_exit_code = code;
+  g_jit_exit_drain = drain;
+  longjmp (g_jit_exit_jb, 1);
+}
+static void jit_wasm_exit (int code) { jit_wasm_unwind (code, 1); }
+static void jit_wasm__exit (int code) { jit_wasm_unwind (code, 0); }
+static void jit_wasm_abort (void) {
+  fflush (stdout);
+  fputs ("Aborted\n", stderr);
+  jit_wasm_unwind (134, 0);
+}
+#endif
+
 static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"__builtin_pow", (void *) jit_builtin_pow},
   {"__builtin_sqrt", (void *) jit_builtin_sqrt},
@@ -448,6 +480,12 @@ static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"pthread_setspecific", (void *) pthread_setspecific},
   {"clock_gettime", (void *) clock_gettime},
   {"nanosleep", (void *) nanosleep},
+#endif
+#ifdef __EMSCRIPTEN__
+  {"exit", (void *) jit_wasm_exit},
+  {"_exit", (void *) jit_wasm__exit},
+  {"_Exit", (void *) jit_wasm__exit},
+  {"abort", (void *) jit_wasm_abort},
 #endif
 };
 
@@ -587,11 +625,30 @@ static int jit_pthread_create (pthread_t *tid, const pthread_attr_t *attr,
 static jmp_buf g_jit_err_jb;
 static volatile int g_jit_err_active = 0;
 
+/* tur_jit_last_error: the most recent MIR error, or an import this target
+ * refused (which wins: the refusal says why, the MIR error after it only
+ * repeats the name). */
+static char g_jit_last_error[512];
+static bool g_jit_refused;
+
+const char *tur_jit_last_error (void) { return g_jit_last_error; }
+
+static void jit_last_error_clear (void) {
+  g_jit_last_error[0] = '\0';
+  g_jit_refused = false;
+}
+
 static void MIR_NO_RETURN jit_mir_error (MIR_error_type_t type, const char *fmt, ...)
     TUR_PRINTF_FMT(2, 3);
 static void MIR_NO_RETURN jit_mir_error (MIR_error_type_t type, const char *fmt, ...) {
   va_list ap;
   va_start (ap, fmt);
+  if (!g_jit_refused) {
+    va_list cp;
+    va_copy (cp, ap);
+    vsnprintf (g_jit_last_error, sizeof g_jit_last_error, fmt, cp);
+    va_end (cp);
+  }
   fprintf (stderr, "tur: jit: ");
   vfprintf (stderr, fmt, ap);
   fputc ('\n', stderr);
@@ -601,14 +658,41 @@ static void MIR_NO_RETURN jit_mir_error (MIR_error_type_t type, const char *fmt,
   exit (1);
 }
 
+#ifdef __EMSCRIPTEN__
+/* wasm-jit-plan 5.7: imports the browser engine refuses, so the program
+ * fails at MIR_link -- before main, before any output -- and the page falls
+ * back to the interpreter.  Each starts a thread that would run interpreted
+ * code: the program's own spawn, the multi-threaded scheduler's workers, the
+ * timer wheel's callbacks.  The MIR interpreter keeps its state per context,
+ * not per thread, so a second thread in it races the first (the threads
+ * family of the P0 corpus run). */
+static const char *const JIT_WASM_REFUSED[] = {
+  "pthread_create", "tur_scheduler_mt_new", "tur_timer_wheel_new",
+};
+
+static bool jit_wasm_refuses (const char *name) {
+  for (size_t i = 0; i < sizeof JIT_WASM_REFUSED / sizeof JIT_WASM_REFUSED[0]; i++)
+    if (strcmp (name, JIT_WASM_REFUSED[i]) == 0) {
+      snprintf (g_jit_last_error, sizeof g_jit_last_error,
+                "the program starts threads (%s), which this engine cannot run", name);
+      g_jit_refused = true;
+      return true;
+    }
+  return false;
+}
+#endif
+
 static void *jit_import_resolver (const char *name) {
+#ifdef __EMSCRIPTEN__
+  if (jit_wasm_refuses (name)) return NULL;
+#endif
   for (size_t i = 0; i < sizeof JIT_SHIMS / sizeof JIT_SHIMS[0]; i++)
     if (strcmp (name, JIT_SHIMS[i].name) == 0) return JIT_SHIMS[i].addr;
 #ifdef __EMSCRIPTEN__
   /* wasm-jit-plan 5.3: a plain Emscripten module has no dlsym, so the
    * program's imports resolve against a table generated at build time from
    * the runtime's declarations region plus the libc names the emitted C
-   * uses (tools/wasm-jit-spike/gen-symtab.py). */
+   * uses (tools/wasm-jit/gen-symtab.py). */
   extern void *tur_wasm_jit_symtab_lookup (const char *);
   return tur_wasm_jit_symtab_lookup (name);
 #else
@@ -715,6 +799,8 @@ static int jit_load_autolink (const char *flags) {
           if (h == NULL) {
             fprintf (stderr, "tur: jit: cannot load lib%s: %s\n", name,
                      dlerror ());
+            snprintf (g_jit_last_error, sizeof g_jit_last_error,
+                      "cannot load lib%s", name);
             return -1;
           }
         }
@@ -752,8 +838,10 @@ struct jit_entry_box {
  * action, so the exit status is what it was.  Any other fault is handed back
  * to whatever handled the signal before (the default, or ASan's) and repeats
  * there, so a wild pointer in JIT'd code behaves exactly as it did.  The
- * handlers are installed for the run and restored after the join. */
-#ifndef _WIN32
+ * handlers are installed for the run and restored after the join.  The
+ * browser engine has no entry thread (it runs main on the caller's), so none
+ * of this is compiled there. */
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
 #  include <signal.h>
 #  include <unistd.h>
 #  include "runtime/stack_overflow.h"
@@ -841,6 +929,7 @@ static void jit_entry_guard_leave (void *alt, const stack_t *old) {
 }
 #endif
 
+#ifndef __EMSCRIPTEN__
 static void *jit_run_entry (void *p) {
   struct jit_entry_box *box = (struct jit_entry_box *) p;
   char *fake_envp[] = {NULL};
@@ -856,6 +945,7 @@ static void *jit_run_entry (void *p) {
 #endif
   return NULL;
 }
+#endif /* !__EMSCRIPTEN__ */
 
 #ifdef _WIN32
 /* ------------------------------------------------------------------ */
@@ -997,6 +1087,7 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
                                  const char **include_dirs, int n_include_dirs,
                                  MIR_context_t *out_ctx) {
   *out_ctx = NULL;
+  jit_last_error_clear ();
   if (jit_load_autolink (autolink) != 0) return TUR_JIT_ERR_LINK;
 
   /* Prepend the builtin prototypes.  A memory concat beats teaching c2mir
@@ -1269,10 +1360,18 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
     args[0].i = box.argc;
     args[1].a = box.argv;
     args[2].a = fake_envp;
-    MIR_interp_arr (ctx, main_item, &res, 3, args);
-    box.rc = (int) res.i;
-    jit_atexit_drain ();
+    g_jit_exit_active = 1;
+    if (setjmp (g_jit_exit_jb) == 0) {
+      MIR_interp_arr (ctx, main_item, &res, 3, args);
+      box.rc = (int) res.i;
+      jit_atexit_drain ();
+    } else {
+      box.rc = g_jit_exit_code;
+      if (g_jit_exit_drain) jit_atexit_drain ();
+    }
+    g_jit_exit_active = 0;
     fflush (stdout);
+    fflush (stderr);
   }
   prof_exit (PROF_RUN);
   g_jit_stat_run_ms = jit_now_ms () - t_run;

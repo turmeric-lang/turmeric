@@ -71,6 +71,14 @@ int tur_jit_execute(const char *csrc, size_t csrc_len, const char *autolink,
  * first-call code generation.  Backs `tur jit --timing-json`. */
 void tur_jit_last_timings(double *compile_ms, double *run_ms);
 
+/* Why the most recent tur_jit_execute (or image compile) in this process did
+ * not run, in one line: an unresolved import, an import this target refuses,
+ * a library it could not load.  Empty after a run that got to main, and for a
+ * c2mir COMPILE failure, whose diagnostics went to stderr.  Static storage; do
+ * not free.  The browser engine shows it as the reason it fell back
+ * (wasm-jit-plan 5.7). */
+const char *tur_jit_last_error(void);
+
 /* ------------------------------------------------------------------ */
 /* J2 (plan section 3.3): persistent image mode for the REPL.          */
 /* ------------------------------------------------------------------ */
