@@ -118,14 +118,16 @@ void lsp_scan_docs(const char *text, size_t len, LspDocTable *out) {
             if (name_start) {
                 /* Step over the `^attr`s that precede the name --
                  * `(defstruct ^copy Point ...)`, `(defn ^construct some ...)` --
-                 * and the message a `^deprecated` takes.  Without this the
+                 * and the message a `^deprecated` or the C name an `^export-as` takes.  Without this the
                  * entry was keyed `^copy`. */
                 for (;;) {
                     while (name_start < lend && (*name_start == ' ' || *name_start == '\t'))
                         name_start++;
                     if (name_start >= lend || *name_start != '^') break;
-                    bool deprecated = (size_t)(lend - name_start) >= 11 &&
-                                      memcmp(name_start, "^deprecated", 11) == 0;
+                    bool deprecated = ((size_t)(lend - name_start) >= 11 &&
+                                       memcmp(name_start, "^deprecated", 11) == 0) ||
+                                      ((size_t)(lend - name_start) >= 10 &&
+                                       memcmp(name_start, "^export-as", 10) == 0);
                     while (name_start < lend && *name_start != ' ' && *name_start != '\t')
                         name_start++;
                     if (!deprecated) continue;

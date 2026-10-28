@@ -1,7 +1,7 @@
 ;; ET4: Write ^extends IO. A function performing Write has row
 ;; #{Write} which is a subset of #{IO}.  `IO` is compiler-known
 ;; (effect-row-honesty-plan W2), so it needs no declaration here.
-(defeffect Write [s :cstr] :nil ^extends IO)
+(defeffect ^extends IO Write [s :cstr] :nil)
 (defn log-io [] #fx{IO} : nil
   (perform (Write "via hierarchy")))
 (defn main [] : int

@@ -469,6 +469,65 @@ fi
 rm -f "$OLD_F" "$NEW_F"
 
 # ---------------------------------------------------------------------------
+# caret-type-attributes-plan P5: a defeffect's trailing `^extends Parent` /
+# `^capability` move before the name, a defn's `#[no-unwind]` / `#[used]` /
+# `(export-as "c")` become `^no-unwind` / `^used` / `^export-as "c"` (the
+# compiler warns, TUR-D0008).  A defeffect with a comment in it is left alone.
+# ---------------------------------------------------------------------------
+NAME="fmt-migrates-defeffect-and-defn-attributes"
+P5_IN='(defeffect FS [] :nil ^extends IO ^capability)
+(defeffect Write [s : cstr] : nil ^extends IO)
+(defeffect ^private Hidden [] : nil ^capability)
+(defn #[no-unwind] #[used] f [] : int 7)
+(defn (export-as "my_g") g [] : int 8)
+(defn ^deprecated "old" (export-as "my_h") h [] : int 9)'
+P5_WANT='(defeffect ^capability ^extends IO FS [] :nil)
+
+(defeffect ^extends IO Write [s : cstr] : nil)
+
+(defeffect ^private ^capability Hidden [] : nil)
+
+(defn ^no-unwind ^used f [] : int 7)
+
+(defn ^export-as "my_g" g [] : int 8)
+
+(defn ^deprecated "old" ^export-as "my_h" h [] : int 9)'
+ACTUAL=$(printf '%s\n' "$P5_IN" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+if [ "$ACTUAL" = "$P5_WANT" ] && [ "$ACTUAL" = "$ROUNDTRIP" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "attributes not moved before the name, or not idempotent; got: $ACTUAL"
+fi
+
+NAME="fmt-keeps-commented-defeffect-trailing-attrs"
+P5C_IN='(defeffect Commented [] : nil ; keep this comment with the attribute
+  ^extends IO)'
+ACTUAL=$(printf '%s\n' "$P5C_IN" | "$TUR" fmt --stdin 2>/dev/null)
+if printf '%s\n' "$ACTUAL" | grep -qF "; keep this comment with the attribute" \
+   && printf '%s\n' "$ACTUAL" | head -1 | grep -qF "(defeffect Commented" \
+   && printf '%s\n' "$ACTUAL" | grep -qF "^extends"; then
+    pass "$NAME"
+else
+    fail "$NAME" "a defeffect with a comment was rewritten or lost its comment; got: $ACTUAL"
+fi
+
+NAME="fmt-defn-header-skips-pre-name-attrs"
+# A defn too long for one line keeps its name, parameters and result type in
+# the header when it carries pre-name attributes; the parameter vector used to
+# fall to a line of its own because the attributes shifted every index.
+P5L_IN='(defn ^no-unwind ^export-as "c_long" long-name-function-here [alpha : int beta : int gamma : int delta : int epsilon : int] : int (+ alpha beta gamma delta epsilon 1 2 3))'
+ACTUAL=$(printf '%s\n' "$P5L_IN" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+if printf '%s\n' "$ACTUAL" | head -1 | grep -qF '(defn ^no-unwind ^export-as "c_long" long-name-function-here [alpha : int' \
+   && printf '%s\n' "$ACTUAL" | grep -qF "] : int" \
+   && [ "$ACTUAL" = "$ROUNDTRIP" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "pre-name attributes split the header or not idempotent; got: $ACTUAL"
+fi
+
+# ---------------------------------------------------------------------------
 # FT7: bootstrap -- every hand-authored stdlib file is already self-formatted.
 # docstrings.tur is excluded: it is an auto-generated artifact (gendocs.py
 # --emit-tur) whose inline-C literal bodies the formatter does not round-trip,

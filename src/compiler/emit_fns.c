@@ -6271,7 +6271,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* spice-defn-return-result-kind-mismatch: stdlib defns preloaded into
      * every project-mode TU stay `static` -- otherwise every TU emits an
      * external copy of e.g. `ok-val` and the linker rejects the duplicates. */
-    /* #[used]: a defn reachable only via its mangled C symbol (cross-module
+    /* ^used: a defn reachable only via its mangled C symbol (cross-module
      * inline-C bridge or by-address C-ABI callback) must keep external linkage
      * so the raw `extern <mangled>` reference in another TU resolves. */
     /* definstance-not-dispatchable-across-modules: an instance METHOD is never

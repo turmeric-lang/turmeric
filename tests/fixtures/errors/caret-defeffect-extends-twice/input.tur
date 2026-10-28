@@ -1,0 +1,2 @@
+(defeffect ^extends IO ^extends IO Bad [] : nil)
+(defn main [] : int 0)

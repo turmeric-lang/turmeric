@@ -83,7 +83,7 @@ at call sites and gives you one place to evolve the shape.
 
 For raw C-ABI callbacks (`qsort` comparators, signal handlers, audio
 streams) the type is `c-fn` with the literal C signature; the body
-must be `#fx{Unsafe}` and the defn `#[used]` so the symbol survives
+must be `#fx{Unsafe}` and the defn `^used` so the symbol survives
 DCE. See [c-integration-guide.md](c-integration-guide.md) for the
 inline-C side.
 
@@ -300,6 +300,6 @@ unions, cons cells, struct handles -- gets a real type.
 - [`error-handling-guide.md`](error-handling-guide.md) -- `Result` /
   `Option` patterns at the API boundary.
 - [`c-integration-guide.md`](c-integration-guide.md) -- inline-C,
-  `#[used]`, and FFI bridging.
+  `^used`, and FFI bridging.
 - [`docs/archive/spices-int-stand-in-audit-2026-06-14.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/spices-int-stand-in-audit-2026-06-14.md)
   -- the original ecosystem-wide audit with per-spice findings.

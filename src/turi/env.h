@@ -441,7 +441,7 @@ typedef struct TuriEnv {
     uint64_t    step_fuel_limit;  /* initial limit set by turi_env_set_fuel */
     /* Panic state: set by EX_PANIC before firing defers; detects double-panic */
     bool        panicking;
-    /* Set when currently inside a #[no-unwind] function call */
+    /* Set when currently inside a ^no-unwind function call */
     bool        in_no_unwind;
     /* Phase S7: cooperative async scheduler */
     TuriFiber  *sched_ready_head;   /* ready queue head (FIFO) */

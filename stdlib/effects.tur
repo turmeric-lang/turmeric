@@ -28,10 +28,10 @@
 ;;;   nil
 ;;;
 ;;; Example:
-;;;   (defeffect Write [s : cstr] : nil ^extends IO)
+;;;   (defeffect ^extends IO Write [s : cstr] : nil)
 ;;;
 ;;; Since: ET4
-(defeffect IO [] :nil ^capability)
+(defeffect ^capability IO [] :nil)
 ;; -- Capability tags (stdlib-effect-rows) -----------------------------------
 ;; Coarse capability tags for I/O-touching stdlib modules.  Unlike the
 ;; algebraic effects above (Write/Read/Log/...), these are never `perform`ed
@@ -62,7 +62,7 @@
 ;;;
 ;;; Since: stdlib-effect-rows
 
-(defeffect FS [] :nil ^extends IO ^capability)
+(defeffect ^capability ^extends IO FS [] :nil)
 ;;; Net -- capability tag for network access (net, async_socket, httpd).
 ;;;
 ;;; Returns:
@@ -73,7 +73,7 @@
 ;;;
 ;;; Since: stdlib-effect-rows
 
-(defeffect Net [] :nil ^extends IO ^capability)
+(defeffect ^capability ^extends IO Net [] :nil)
 ;;; Proc -- capability tag for process/environment access (process, env).
 ;;;
 ;;; Returns:
@@ -84,7 +84,7 @@
 ;;;
 ;;; Since: stdlib-effect-rows
 
-(defeffect Proc [] :nil ^extends IO ^capability)
+(defeffect ^capability ^extends IO Proc [] :nil)
 ;;; Rand -- capability tag for non-deterministic randomness (random).
 ;;;
 ;;; Returns:
@@ -95,7 +95,7 @@
 ;;;
 ;;; Since: stdlib-effect-rows
 
-(defeffect Rand [] :nil ^extends IO ^capability)
+(defeffect ^capability ^extends IO Rand [] :nil)
 ;; -- Write ------------------------------------------------------------------
 ;; Perform a string write operation.
 ;;; Write -- declare an effect that writes a string to the environment.
@@ -111,7 +111,7 @@
 ;;;
 ;;; Since: Phase 19
 
-(defeffect Write [s :cstr] :nil ^extends IO)
+(defeffect ^extends IO Write [s :cstr] :nil)
 ;; -- Fail -------------------------------------------------------------------
 ;; Signal a failure with a message string.  A handler may recover or abort.
 ;;; Fail -- declare an effect that signals a failure with a message string.
@@ -140,7 +140,7 @@
 ;;;
 ;;; Since: Phase 19
 
-(defeffect Read [] :int ^extends IO)
+(defeffect ^extends IO Read [] :int)
 ;; -- GetEnv -----------------------------------------------------------------
 ;; Look up a named environment variable; returns a cstr (or nil if absent).
 ;;; GetEnv -- declare an effect that looks up a named environment variable.

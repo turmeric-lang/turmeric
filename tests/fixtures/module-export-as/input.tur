@@ -1,6 +1,6 @@
 (defmodule myapp
   (export compute)
-  (defn (export-as "myapp_compute") compute [x] : int (* x x))
+  (defn ^export-as "myapp_compute" compute [x] : int (* x x))
   (defn main [] : int
     (println (compute 7))
     0))

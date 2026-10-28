@@ -9,7 +9,7 @@
 ;; A #[no-unwind] function: any panic inside it must emit tur_panic_abort.
 ;; This function is never actually called on the panic path in this fixture,
 ;; but the emitted C must contain tur_panic_abort for its body.
-(defn #[no-unwind] unsafe-op [x] :int
+(defn ^no-unwind unsafe-op [x] :int
   (do
     (panic "abort!")
     x))

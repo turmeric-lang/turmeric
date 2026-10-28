@@ -1,0 +1,12 @@
+;; defeffect: a trailing ^extends / ^capability moves before the name.
+(defeffect IO [] :nil ^capability)
+(defeffect FS [] :nil ^extends IO ^capability)
+(defeffect Write [s :cstr] :nil ^extends IO)
+(defeffect Read [] : int ^extends IO)
+(defeffect ^private Hidden [] :nil ^extends IO) ; kept after ^private
+(defeffect Plain [x : int] : int)
+(defeffect Wide [x : int] : (Option int)
+  ^extends IO
+  ^capability)
+;; Already migrated: left alone.
+(defeffect ^capability ^extends IO Net [] : nil)
