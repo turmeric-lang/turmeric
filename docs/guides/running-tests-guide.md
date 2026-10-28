@@ -229,7 +229,7 @@ tur run wasm       # `just wasm`: regenerates the docs, then builds build-wasm/
 The compile takes about three minutes and copies the bundle into `web/public/`.
 `tur run wasm` also regenerates `stdlib/docstrings.tur`; if you only want the
 bundle, `cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5`
-followed by `cmake --build build-wasm -j --target tur_wasm` does the same without
+followed by `cmake --build build-wasm -j --target tur_wasm tur_wasm_jit` does the same without
 touching tracked files.
 
 Two more prerequisites that are not the bundle:

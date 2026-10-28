@@ -7,10 +7,13 @@ Reports, raw and compressed (gzip -9 always; brotli -q 11 when the `brotli`
 module or CLI is available):
 
   - turmeric.wasm and turmeric.js, the module both page workers load;
-  - turmeric.wasm by section: code, data (the embedded stdlib lands here) and
-    the rest -- so the embed's share of the download is a number, not a guess;
-  - the embedded stdlib tree (what `--embed-file stdlib@/stdlib` copies in),
-    and stdlib/docstrings.tur on its own (W-1: it is read only on a doc lookup);
+  - turmeric-jit.wasm and turmeric-jit.js, the browser JIT module the page
+    loads only for the Compile engine (wasm-jit-plan P4);
+  - stdlib.data, the stdlib package both modules fetch (wasm-jit-plan 5.11:
+    it used to be embedded in each module's data section);
+  - turmeric.wasm by section: code, data and the rest;
+  - the stdlib tree the package is made from, and stdlib/docstrings.tur on its
+    own (W-1: it is read only on a doc lookup);
   - web/dist/client, the whole production build, and its largest files.
 
 Usage:
@@ -108,19 +111,20 @@ def main():
     args = ap.parse_args()
 
     report = {"files": {}, "wasm_sections": {}, "dist": {}}
-    for name in ("turmeric.wasm", "turmeric.js"):
+    for name in ("turmeric.wasm", "turmeric.js", "turmeric-jit.wasm", "turmeric-jit.js",
+                 "stdlib.data"):
         p = os.path.join(args.web, "public", name)
         if os.path.isfile(p):
             data = open(p, "rb").read()
             report["files"][name] = sizes(data)
-            if name.endswith(".wasm"):
+            if name == "turmeric.wasm":
                 report["wasm_sections"] = wasm_sections(data)
         else:
             report["files"][name] = None
 
     if os.path.isdir(args.stdlib):
         total, count, blob = tree_bytes(args.stdlib)
-        report["files"]["stdlib/ (embedded)"] = dict(sizes(blob), files=count)
+        report["files"]["stdlib/ (packaged as stdlib.data)"] = dict(sizes(blob), files=count)
         doc = os.path.join(args.stdlib, "docstrings.tur")
         if os.path.isfile(doc):
             report["files"]["stdlib/docstrings.tur"] = sizes(open(doc, "rb").read())

@@ -426,10 +426,12 @@ configure-wasm:
 
 alias build-wasm := wasm
 
-# Build WASM module (requires Emscripten).
+# Build the WASM modules (requires Emscripten): the interpreter's
+# turmeric.{js,wasm}, the browser JIT's turmeric-jit.{js,wasm} (the page's
+# Compile engine), and stdlib.data, the stdlib package both load.
 # Runs `tur run docs` first so stdlib/docstrings.tur is up-to-date.
 wasm: docs configure-wasm
-    cmake --build build-wasm -j --target tur_wasm
+    cmake --build build-wasm -j --target tur_wasm tur_wasm_jit
 
 # Set up web dependencies (Monaco Editor, etc.)
 web-deps:

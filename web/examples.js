@@ -82,6 +82,25 @@ println $ sum-squares 3 4
   (println (map-get m :name))
   (println (set-count s)))   ; duplicates collapse
 `,
+    // Runs on the Compile engine (wasm-jit-plan P4); the interpreter cannot
+    // call C, and says so -- with a pointer to Compile -- when asked to.
+    'inline-c': `;; Inline C -- pick Compile in the language menu's Engine section.
+;; Compile turns the whole program into C, so a C body is just more of it.
+(defn popcount [x : int] : int
+  \`\`\`c
+  int n = 0;
+  for (unsigned long long v = (unsigned long long)x; v; v &= v - 1) n++;
+  return n;
+  \`\`\`)
+
+(defn hypot [a : float b : float] : float
+  \`\`\`c
+  #include <math.h>
+  return sqrt(a * a + b * b);
+  \`\`\`)
+
+(println (popcount 255))
+(println (hypot 3.0 4.25))`,
     'saffron': `#lang saffron
 ;; Saffron: Turmeric with the types made optional.
 ;; Unannotated parameters and returns are any.

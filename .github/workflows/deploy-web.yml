@@ -112,7 +112,7 @@ jobs:
       - name: Configure + build WASM
         run: |
           cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-          cmake --build build-wasm -j --target tur_wasm
+          cmake --build build-wasm -j --target tur_wasm tur_wasm_jit
 
       - name: Install web deps
         working-directory: web

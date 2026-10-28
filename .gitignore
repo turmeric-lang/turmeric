@@ -126,6 +126,11 @@ web/.dev.vars
 # `tur run wasm`) to produce them; `tur run web` / `tur run deploy-web` do it for you.
 web/public/turmeric.js
 web/public/turmeric.wasm
+# The browser JIT module and the stdlib package both modules load
+# (wasm-jit-plan P4, 5.11).
+web/public/turmeric-jit.js
+web/public/turmeric-jit.wasm
+web/public/stdlib.data
 
 # Doc-name index behind the web REPL's doc panel, emitted by `tur run docs`
 # (tools/gendocs.py --emit-json). Same story as the wasm pair above: tracking
