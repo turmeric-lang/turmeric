@@ -30,6 +30,7 @@
  * then failed reports its exit status like any other.
  */
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,9 +46,12 @@
 #include "buf.h"
 #include "driver/driver.h"
 #include "jit_engine.h"
+#include "compiler/diag.h"     /* the turn's diagnostic state, saved around C1 */
+#include "compiler/emit.h"     /* g_emit_ffi_export_shims */
 #include "compiler/jit_prune.h"
 #include "compiler/refine_discharge.h"
 #include "runtime/globals.h"   /* g_interpret_mode */
+#include "turi/inline_c_jit.h"
 #include "wasm_glue.h"
 
 /* Where c2mir finds headers: the musl subset (tools/wasm-jit/headers.txt and
@@ -220,4 +224,143 @@ char *turi_wasm_jit_run(const char *src, const char *args) {
     else
         snprintf(reason, sizeof reason, "the engine could not start the program");
     return run_interpreted(path, reason);
+}
+
+/* ------------------------------------------------------------------------
+ * wasm-jit-plan P6 (5.9): C1 at the page's prompt.
+ *
+ * aot-compiled-repl-plan C1 compiles each inline-C `defn` the interpreter
+ * cannot run into a resident image and calls it as a native.  `tur` installs
+ * the compiler from its driver (repl_inline_c_jit_build, src/driver/jit.c);
+ * this module carries the interpreter and the engine both, so it installs its
+ * own, and a prompt session in it (turi_wasm_eval, which the Compile engine's
+ * worker calls) compiles such a defn on first call instead of answering
+ * "inline-C not supported".
+ *
+ * The same steps as the driver's: the defn's program through compile_to_c
+ * with the export shims on, the S2 split and the pruner, then an image on
+ * MIR's interpreter.  It runs in the middle of a turn, so the turn's
+ * diagnostic registry, its had-error flag and the emission flags are put back
+ * afterwards.  Two differences: the scratch file is MEMFS's /tmp, and there
+ * is no full-preamble retry (as in turi_wasm_jit_run above).  An image is
+ * never freed: the interpreter calls into it for the rest of the session.
+ * ---------------------------------------------------------------------- */
+static int wasm_inline_c_jit_build(const char *name, const char *src, size_t len,
+                                   void **out_image, char **out_manifest) {
+    *out_image = NULL;
+    *out_manifest = NULL;
+
+    mkdir("/tmp", 0777);
+    char path[256];
+    size_t o = (size_t)snprintf(path, sizeof path, "/tmp/tur-repl-jit-");
+    for (const char *p = name; *p && o + 5 < sizeof path; p++)
+        path[o++] = (isalnum((unsigned char)*p) || *p == '-' || *p == '_') ? *p : '_';
+    snprintf(path + o, sizeof path - o, ".tur");
+    FILE *f = fopen(path, "wb");
+    if (!f || fwrite(src, 1, len, f) != len) {
+        if (f) fclose(f);
+        fprintf(stderr, "tur: repl-jit-inline-c: cannot write %s\n", path);
+        return -1;
+    }
+    fclose(f);
+
+    size_t cap = diag_files_capacity();
+    const SourceFile **saved_files =
+        (const SourceFile **)calloc(cap ? cap : 1, sizeof *saved_files);
+    if (!saved_files) { remove(path); return -1; }
+    size_t n_saved = diag_files_save(saved_files, cap);
+    bool had_error = diag_had_error();
+
+    bool saved_efl = g_emit_for_link;
+    bool saved_wasm = g_emit_for_wasm;
+    bool saved_interp = g_interpret_mode;
+    bool saved_shims = g_emit_ffi_export_shims;
+    Buf *saved_sink = g_manifest_sink;
+    Buf csrc, manifest;
+    buf_init(&csrc);
+    buf_init(&manifest);
+    g_emit_for_link = true;
+    g_emit_for_wasm = false;   /* the runtime is resident in this module */
+    g_interpret_mode = false;
+    g_emit_ffi_export_shims = true;
+    g_manifest_sink = &manifest;
+    int rc = compile_to_c(path, &csrc, NULL, 0, NULL, 0);
+    g_manifest_sink = saved_sink;
+    g_emit_ffi_export_shims = saved_shims;
+    g_interpret_mode = saved_interp;
+    g_emit_for_wasm = saved_wasm;
+    g_emit_for_link = saved_efl;
+    remove(path);
+
+    TurJitImage *img = NULL;
+    if (rc == 0) {
+        hoist_tur_include_directives(&csrc);
+        /* __tur_static_init is static and nothing in a TU with no main calls
+         * it, so the prune would drop it; one non-static caller keeps it. */
+        buf_puts(&csrc, "\nvoid __tur_repl_jit_keep_init(void) "
+                        "{ __tur_static_init(); }\n");
+        Buf autolink, reduced;
+        buf_init(&autolink);
+        buf_init(&reduced);
+        JitPruneStats ps;
+        memset(&ps, 0, sizeof ps);
+        bool was_quiet = tur_jit_set_quiet_warnings(true);
+        if (!scan_autolink_markers(&csrc, &autolink)) {
+            rc = -1;
+        } else {
+            if (jit_try_split_preamble(&csrc, &reduced)) {
+                jit_prune_split_source(&reduced, &ps);
+            } else {
+                buf_write(&reduced, csrc.data, csrc.len);
+                if (!jit_prune_full_source(&reduced, &ps)) {
+                    buf_free(&reduced);
+                    buf_init(&reduced);
+                    buf_write(&reduced, csrc.data, csrc.len);
+                }
+            }
+            if (tur_jit_compile_image(reduced.data, reduced.len,
+                                      autolink.len ? autolink.data : NULL,
+                                      (const char **)k_include_dirs,
+                                      (int)(sizeof k_include_dirs / sizeof k_include_dirs[0]),
+                                      &img) != TUR_JIT_OK) {
+                const char *why = tur_jit_last_error();
+                if (why && *why) fprintf(stderr, "tur: jit: %s\n", why);
+                rc = -1;
+            }
+        }
+        tur_jit_set_quiet_warnings(was_quiet);
+        buf_free(&reduced);
+        buf_free(&autolink);
+    }
+    buf_free(&csrc);
+
+    diag_reset();
+    diag_files_replace(saved_files, n_saved);
+    free(saved_files);
+    if (had_error) diag_force_had_error();
+
+    if (rc != 0 || !img) {
+        buf_free(&manifest);
+        return -1;
+    }
+    buf_putc(&manifest, '\0');
+    *out_manifest = strdup(manifest.data);
+    buf_free(&manifest);
+    if (!*out_manifest) return -1;
+    *out_image = img;
+    return 0;
+}
+
+static void *wasm_inline_c_jit_sym(void *image, const char *cname) {
+    return tur_jit_image_sym((TurJitImage *)image, cname);
+}
+
+static const TuriInlineCJitHook k_wasm_inline_c_jit_hook = {
+    wasm_inline_c_jit_build, wasm_inline_c_jit_sym,
+};
+
+/* Installed before anything can evaluate: only this module links this file,
+ * and the playground's interpreter module has no engine to compile with. */
+__attribute__((constructor)) static void wasm_install_inline_c_jit_hook(void) {
+    turi_set_inline_c_jit_hook(&k_wasm_inline_c_jit_hook);
 }

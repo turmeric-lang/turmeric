@@ -2,11 +2,13 @@
 // one way to ask it to run a program (wasm-jit-plan P4).
 //
 // The worker is started on first use, not at boot: its module is 5 MB the
-// page needs only once someone picks Compile.  It runs one program at a time.
-// Unlike the interpreter's worker it holds no session -- each Run compiles
-// and runs the whole buffer, as `tur run` does -- so stopping it loses
-// nothing, and an instance that trapped (the answer carries `trapped`) is
-// terminated and replaced by a fresh one on the next Run (wasm-jit-plan 5.8).
+// page needs only once someone picks Compile.  It answers one request at a
+// time.  A Run compiles and runs the whole buffer, as `tur run` does; the
+// prompt's turns (evalCompiled, wasm-jit-plan P6) go to a session of the
+// module's own, where an inline-C defn compiles on its first call.  Stopping
+// the worker, or an instance that trapped (the answer carries `trapped`),
+// loses that session: the worker is terminated and the next request boots a
+// fresh one (wasm-jit-plan 5.8).
 
 let worker = null;
 let readyPromise = null;
@@ -42,6 +44,18 @@ function start() {
                 hooks.onPrint(msg.text);
             } else if (msg.type === 'printErr') {
                 hooks.onPrintErr(msg.text);
+            } else if (msg.type === 'eval-result') {
+                const call = pending.get(msg.id);
+                if (!call) return;
+                pending.delete(msg.id);
+                if (msg.trapped) retire();
+                const result = msg.result || '';
+                call.resolve({
+                    result,
+                    isError: result.startsWith('Error:') || result.includes('error'),
+                    trapped: !!msg.trapped,
+                    execTime: performance.now() - call.startTime,
+                });
             } else if (msg.type === 'jit-result') {
                 const call = pending.get(msg.id);
                 if (!call) return;
@@ -67,11 +81,7 @@ function retire() {
     readyPromise = null;
 }
 
-/**
- * Compile and run `source` as a whole program.  Resolves with the engine
- * line (see jit-worker.js), plus `wallMs`, the time the page waited.
- */
-export async function runCompiled(source) {
+async function request(type, source) {
     if (!worker) {
         hooks.onLoading(true);
         try { await start(); } finally { hooks.onLoading(false); }
@@ -82,8 +92,25 @@ export async function runCompiled(source) {
         const id = ++callId;
         pending.set(id, { resolve, reject, startTime: performance.now() });
         hooks.onPending();
-        worker.postMessage({ type: 'jit-run', id, input: source });
+        worker.postMessage({ type, id, input: source });
     });
+}
+
+/**
+ * Compile and run `source` as a whole program.  Resolves with the engine
+ * line (see jit-worker.js), plus `wallMs`, the time the page waited.
+ */
+export function runCompiled(source) {
+    return request('jit-run', source);
+}
+
+/**
+ * Evaluate one prompt turn in the Compile engine's session.  Resolves with
+ * {result, isError, trapped, execTime}, the shape eval-client.js gives an
+ * interpreter turn.
+ */
+export function evalCompiled(source) {
+    return request('eval', source);
 }
 
 /** How many runs are outstanding, and when the oldest was sent. */
@@ -94,8 +121,9 @@ export function jitPendingStats() {
 }
 
 /**
- * Stop: terminate the worker and fail the run it owed with `reason`.  Nothing
- * else is lost -- the Compile engine keeps no session.
+ * Stop: terminate the worker and fail the request it owed with `reason`.  The
+ * interpreter's session is untouched; the Compile engine's prompt session is
+ * gone, and the next request starts a fresh one.
  */
 export function stopCompiled(reason) {
     const owed = [...pending.values()];

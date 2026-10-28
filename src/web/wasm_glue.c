@@ -378,15 +378,35 @@ int turi_wasm_eval_ex(const char *input, char **out_result, char **out_error) {
     return 0;
 }
 
+static int wasm_run_program_here(const char *path);
+
 /* Run the program in the file at `path` the way `tur --interpret` does
  * (cmd_interpret_main, src/driver/cmd_eval.c), on a fresh environment:
  * `(load "path")`, then `main` if the file defines one, then the pending
  * defers.  Returns the exit status: main's int result, or 1 when loading or
  * main reported an error (printed to stderr).  The browser JIT's fallback
- * (web/wasm_jit_glue.c): a program, unlike a REPL line, runs its main. */
+ * (web/wasm_jit_glue.c): a program, unlike a REPL line, runs its main.
+ *
+ * The fresh environment is the program's own.  The session's -- in the
+ * browser JIT, the Compile engine's prompt (wasm-jit-plan P6) -- is set aside
+ * and put back afterwards, so a Run that fell back does not take the prompt's
+ * definitions with it. */
 int turi_wasm_run_program(const char *path) {
     if (turi_wasm_init() != 0) return 1;
-    turi_wasm_reset();
+    TuriEnv *session = g_env;
+    const char *session_prelude = g_lang_prelude;
+    g_env = NULL;
+    int rc = 1;
+    if (turi_wasm_init() == 0) {
+        rc = wasm_run_program_here(path);
+        turi_env_free(g_env);
+    }
+    g_env = session;
+    g_lang_prelude = session_prelude;
+    return rc;
+}
+
+static int wasm_run_program_here(const char *path) {
     if (!g_env || !path) return 1;
     /* The program's #lang picks the session's language first, as the page
      * does before an Interpret run: a language with its own prelude (r7rs) or

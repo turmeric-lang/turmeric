@@ -28,7 +28,7 @@ import { maybeShowDoc } from './doc-panel.js';
 import { tabs, activeId, lastRunByTab } from './tabs.js';
 import { promptSetEnabled, replSessionReset, replSessionAccept } from './repl.js';
 import { getEngine } from './engine.js';
-import { configureJitClient, runCompiled, jitPendingStats, stopCompiled } from './jit-client.js';
+import { configureJitClient, runCompiled, evalCompiled, jitPendingStats, stopCompiled } from './jit-client.js';
 
 // The eval Worker, its state and its outstanding requests live in
 // eval-client.js; these are its hooks back into the console and the Run queue.
@@ -97,6 +97,22 @@ function processQueue() {
     // for runtimes that export _turi_wasm_set_lang. The base IS the whole
     // directive tail now -- set_lang rejects anything after it.
     const { lang } = parseLangDirective(code);
+
+    // wasm-jit-plan P6: with the Compile engine picked, a prompt turn goes to
+    // that engine's own session, where an inline-C defn compiles on its first
+    // call.  (Only the prompt reaches here then: a Compile Run is
+    // runCompiledProgram.)
+    if (getEngine() === 'compile') {
+        const next = () => setTimeout(processQueue, 0);
+        evalCompiled(code).then((r) => {
+            if (r.trapped) {
+                r.result += '\nthe Compile engine\'s session is gone; the next turn starts a fresh one';
+            }
+            resolve(r);
+            next();
+        }, (err) => { reject(err); next(); });
+        return;
+    }
 
     send({ type: 'eval', input: code, lang, quiet }, { resolve, reject, isEval: true });
 }

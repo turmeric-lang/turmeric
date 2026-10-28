@@ -6,10 +6,14 @@
 // beside the interpreter's (eval-worker.js), loaded only when someone picks
 // Compile.  Both fetch the same stdlib.data (wasm-jit-plan 5.11).
 //
-// One request: 'jit-run' {input}.  It answers 'jit-result' with the module's
-// engine line -- {engine: 'compiled'|'interpreted'|'error', exit, reason,
-// front_ms, compile_ms, run_ms} -- after the program's output has been posted
-// as 'print'/'printErr' lines, the same way eval-worker.js posts them.
+// Two requests.  'jit-run' {input} runs a whole program and answers
+// 'jit-result' with the module's engine line -- {engine: 'compiled'|
+// 'interpreted'|'error', exit, reason, front_ms, compile_ms, run_ms}.  'eval'
+// {input} is a prompt turn (wasm-jit-plan P6): it goes to this module's own
+// interpreter session, turi_wasm_eval, where an inline-C defn the interpreter
+// cannot run is compiled on its first call (aot-compiled-repl-plan C1), and
+// answers 'eval-result' {result} as eval-worker.js does.  Either posts the
+// program's output as 'print'/'printErr' lines first.
 //
 // A JavaScript exception out of the module means the instance is done for
 // (wasm-jit-plan 5.8): a wasm trap leaves its state wherever the trap
@@ -81,8 +85,26 @@ function runProgram(msg) {
     }
 }
 
+function evalTurn(msg) {
+    const id = msg.id;
+    try {
+        const resultPtr = withString(msg.input, (srcPtr) => jitModule._turi_wasm_eval(srcPtr));
+        flushStreams();
+        const result = resultPtr ? jitModule.UTF8ToString(resultPtr) : '';
+        if (resultPtr) jitModule._turi_wasm_free_string(resultPtr);
+        self.postMessage({ type: 'eval-result', id, result });
+    } catch (err) {
+        flushStreams();
+        const reason = err instanceof RangeError
+            ? 'stack overflow: recursion too deep'
+            : `the compiled code trapped: ${String(err && err.message ? err.message : err).split('\n')[0]}`;
+        self.postMessage({ type: 'eval-result', id, result: `Error: ${reason}`, trapped: true });
+    }
+}
+
 function handleMessage(msg) {
     if (msg.type === 'jit-run') runProgram(msg);
+    else if (msg.type === 'eval') evalTurn(msg);
 }
 
 self.addEventListener('message', function (e) {

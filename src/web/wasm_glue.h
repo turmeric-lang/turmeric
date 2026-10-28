@@ -75,8 +75,9 @@ char *turi_wasm_eval(const char *input);
 int turi_wasm_eval_ex(const char *input, char **out_result, char **out_error);
 
 /* Run the program in the file at `path` as `tur --interpret` does, on a
- * fresh environment: load it, then call its main if it has one.  Returns
- * the exit status (main's int result; 1 after an error, printed to stderr). */
+ * fresh environment of its own (the session's is set aside and restored):
+ * load it, then call its main if it has one.  Returns the exit status
+ * (main's int result; 1 after an error, printed to stderr). */
 int turi_wasm_run_program(const char *path);
 
 /* Evaluate multiple expressions in sequence.

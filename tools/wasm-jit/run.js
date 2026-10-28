@@ -3,7 +3,7 @@
 // (wasm-jit-plan P3).
 //
 //   node tools/wasm-jit/run.js [--module DIR] [--result FILE] [--repeat N]
-//                              [--dump-c FILE] program.tur [arg ...]
+//                              [--dump-c FILE] [--turns] program.tur [arg ...]
 //
 // The program's stdout and stderr bytes go to this process's stdout and
 // stderr unchanged; its stdin is this process's stdin.  The module's answer
@@ -16,6 +16,12 @@
 // the page reuses it; every run's answer is reported, the last one decides
 // the exit status.  --dump-c writes the text c2mir was handed (prelude and
 // all), where a <tur-jit>:LINE diagnostic points.
+//
+// --turns runs the file as prompt turns instead (wasm-jit-plan P6): each chunk
+// between lines of `---` goes to turi_wasm_eval, the call the Compile
+// engine's worker makes for a prompt submission, and its result is printed
+// as `=> RESULT`.  One session, as at the page's prompt, so a defn in one
+// turn is there in the next; C1 compiles an inline-C defn on its first call.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -25,16 +31,18 @@ let moduleDir = path.resolve(__dirname, '../../build-wasm/wasm-jit');
 let resultFile = null;
 let repeat = 1;
 let dumpC = null;
+let turns = false;
 while (argv.length && argv[0].startsWith('--')) {
   const flag = argv.shift();
   if (flag === '--module') moduleDir = path.resolve(argv.shift());
   else if (flag === '--result') resultFile = argv.shift();
   else if (flag === '--repeat') repeat = parseInt(argv.shift(), 10);
   else if (flag === '--dump-c') dumpC = argv.shift();
+  else if (flag === '--turns') turns = true;
   else { console.error(`run.js: unknown flag ${flag}`); process.exit(2); }
 }
 if (!argv.length) {
-  console.error('usage: node run.js [--module DIR] [--result FILE] [--repeat N] [--dump-c FILE] program.tur [arg ...]');
+  console.error('usage: node run.js [--module DIR] [--result FILE] [--repeat N] [--dump-c FILE] [--turns] program.tur [arg ...]');
   process.exit(2);
 }
 const programPath = argv.shift();
@@ -79,6 +87,26 @@ factory({
       (c) => err.put(c));
   }],
 }).then((mod) => {
+  if (turns) {
+    if (mod._turi_wasm_init() !== 0) { console.error('run.js: turi_wasm_init failed'); process.exit(1); }
+    const evalTurn = mod.cwrap('turi_wasm_eval', 'number', ['string']);
+    for (const turn of source.split(/^---$/m)) {
+      if (!turn.trim()) continue;
+      let ptr = 0, text;
+      try {
+        ptr = evalTurn(turn);
+        text = ptr ? mod.UTF8ToString(ptr) : '';
+      } catch (e) {
+        text = `the module threw: ${String(e && e.message ? e.message : e).split('\n')[0]}`;
+      } finally {
+        if (ptr) mod._free(ptr);
+      }
+      out.flush();
+      err.flush();
+      fs.writeSync(1, `=> ${text}\n`);
+    }
+    process.exit(0);
+  }
   const run = mod.cwrap('turi_wasm_jit_run', 'number', ['string', 'string']);
   const free = mod.cwrap('turi_wasm_free_string', null, ['number']);
   let answer = { engine: 'error', exit: 1, reason: 'not run' };

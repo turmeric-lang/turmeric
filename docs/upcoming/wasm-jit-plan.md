@@ -1,6 +1,6 @@
 # Plan: the JIT engine in the browser (c2mir + MIR on wasm32)
 
-> **Status:** P0 to P5 done 2026-10-28. Try Turmeric has a Compile engine
+> **Status:** P0 to P5 done 2026-10-28, and P6's C1. Try Turmeric has a Compile engine
 > (the language menu's Engine section): Run compiles the program to C and
 > runs it on MIR's interpreter in the page, so inline C works there. It is a
 > second module, `turmeric-jit.{js,wasm}` (5.3 MB, `tur_wasm_jit`), loaded on
@@ -11,8 +11,11 @@
 > `tests/run-jit-wasm.sh` against `tests/jit-wasm-baseline.txt`: 2,488
 > fixtures compiled, 191 fell back right, 254 failed, 241 skipped (section
 > 7, P5). Every Try Turmeric example compiles or falls back with a reason.
-> Next: P6 (the REPL session); Asyncify (49 fixtures) and the threads family
-> (260, a fallback by design) are most of what is left.
+> **P6's C1 done 2026-10-28:** with Compile picked, the prompt is a session
+> in the JIT module, where an inline-C defn compiles on its first call. C2
+> waits on [aot-compiled-repl-plan](aot-compiled-repl-plan.md). Asyncify
+> (49 fixtures) and the threads family (260, a fallback by design) are most
+> of what is left of the corpus.
 > **P0 run 2026-10-23** (section 7): the corpus under `TUR_JIT_GEN=interp`
 > on a Release build is 3853/113/70; every interpreter-only failure is in
 > one of three families (threads 82, continuations 10, deep recursion 2),
@@ -1086,6 +1089,37 @@ What is left in the baseline, by reason (a fixture counts once):
 ### P6 -- REPL session
 
 5.9: C1's images on the page, then C2 as its plan specifies.
+
+**C1 done 2026-10-28.** With Compile picked, the page's prompt goes to a
+session in the browser JIT module (`jit-worker.js` answers `eval` with
+`turi_wasm_eval`), and that module installs its own C1 hook
+(`src/web/wasm_jit_glue.c`, `wasm_inline_c_jit_build`): the defn's program
+through `compile_to_c` with the export shims, the S2 split and the pruner, then
+`tur_jit_compile_image`, which on this target links with MIR's interpreter.
+The image stays for the session; the interpreter calls its `__ffi` shim as it
+does natively. Under Interpret the prompt is the interpreter module's session,
+as before, so the two sessions are separate.
+
+- **Cost.** A defn's first call compiles in 100-270 ms in node (native C1:
+  ~135 ms); later calls take under a millisecond.
+- **A Run that falls back no longer resets the session.**
+  `turi_wasm_run_program` ran the program in the session's env after a
+  `turi_wasm_reset`, which would have taken the prompt's definitions with it.
+  It now runs the program in an env of its own and puts the session back.
+- **Tests.** `jit-engine.spec.js` defines a loop-bearing inline-C defn at the
+  prompt under both engines: Interpret refuses it and points at Compile, and
+  Compile answers 128 and keeps it across a Run. `run.js --turns
+  tools/wasm-jit/smoke/turns.tur` does the same under node.
+- **Limits, as C1's.** Only a defn whose whole body is inline C, with a scalar
+  signature, that calls no other Turmeric definition; a refusal is an error
+  value and the session carries on. The prompt is one line, so the fence is
+  too: ``(defn seven [] : int ```c return 7; ```)``.
+
+**C2 is not started**, natively or here: [aot-compiled-repl-plan](aot-compiled-repl-plan.md)
+records it as designed and investigated, with open questions it needs settled
+before it lands (C2, point 5). It stays this plan's next step once that plan
+starts it, and the page should get it the way it got C1 -- the module's own
+hook over the same driver code.
 
 ## 8. T2, scoped but not scheduled
 

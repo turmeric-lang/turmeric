@@ -154,7 +154,9 @@ and only the inline-C bodies it refuses get compiled. It was experiment
 `expires_at` 0.65.0) and is now always on; it applies wherever turi runs with
 the inline-C capability, so `tur repl` and `tur --interpret` alike. The
 `c-mix` example above prints `97` at the prompt and under `--interpret`. Try
-Turmeric has no JIT and is unchanged.
+Turmeric's prompt has it too, under the Compile engine, since 2026-10-28: the
+browser JIT module installs its own hook (wasm-jit-plan P6,
+`src/web/wasm_jit_glue.c`), and images run on MIR's interpreter.
 
 **Graduation (2026-10-17).** The row left `EXPERIMENTS[]` for `GRADUATED[]`,
 so a lingering `--enable=repl-jit-inline-c` was a `TUR-W0063` no-op for one

@@ -29,9 +29,9 @@ it into `build-wasm/wasm-jit/` too, so `run.js` finds it there under node.
 | `gen-symtab.py` | the import table that stands in for `dlsym` (plan 5.3): the runtime's declarations region, `hamt.h`, the TLS accessors and a libc list at their real types, and the rest of the resident runtime at the wasm signatures its objects record; with `--stubs`, one exact-signature call stub per wasm signature the runtime defines plus every small libc shape (plan 5.5), which `tur_jit_execute` registers with MIR so a call into the runtime skips the JS trampoline |
 | `headers.txt` | the system headers c2mir may open, embedded at `/sysinclude` as their closure inside Emscripten's musl (plan 5.4) |
 | `stdatomic.h` | C11 atomics for c2mir, embedded beside them: musl has none, and on this single-threaded engine each operation is a plain access (its header says why that is sound here only) |
-| `run.js` | runs one program through the module under node, as the page will; `--dump-c FILE` writes the text c2mir was handed |
+| `run.js` | runs one program through the module under node, as the page will; `--dump-c FILE` writes the text c2mir was handed; `--turns` runs the file as prompt turns (chunks between `---` lines) in one session, as the Compile engine's prompt does |
 | `check-examples.sh` | P3's gate: every Try Turmeric example compiles or falls back, and none differs from `tur interpret` |
-| `smoke/` | four programs from P1: inline C (`cmix`), effects (`eff`, which runs since P5's `setjmp`), a loop and hello |
+| `smoke/` | four programs from P1: inline C (`cmix`), effects (`eff`, which runs since P5's `setjmp`), a loop and hello; and `turns.tur`, prompt turns whose inline-C defns C1 compiles (`run.js --turns`, P6) |
 
 The sources that are not scripts live in `src/`: `src/web/wasm_jit_glue.c`
 (`turi_wasm_jit_run`, the page's entry point) and `src/web/wasm_jit_stubs.c`
