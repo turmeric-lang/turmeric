@@ -89,8 +89,9 @@ PARTS = {
         # 240 s.  Running the matrix in r7rs brings the two jobs to roughly
         # 765 s and 800 s instead of 1329 s and 240 s.
         "r7rs":     ("include", r"r7rs|^tur_generic_spec_matrix$"),
-        # tur_shard_partition is excluded outright -- see LEG_INVARIANT, it
-        # cannot answer differently here.
+        # tur_span_coverage also runs a quarter here (TUR_SPAN_SHARD); see
+        # SAMPLED.  tur_shard_partition is excluded outright -- see
+        # LEG_INVARIANT, it cannot answer differently here.
         "aux":      ("exclude", r"^tur_tests$|r7rs|^tur_generic_spec_matrix$|^tur_emitted_float_conversions$|^tur_shard_partition$|^tur_jit_fixture_tests$|^tur_repl_spice_jit$"),
     },
 }
@@ -133,6 +134,16 @@ SAMPLED = {
             "corpus in full on both legs, so the marginal per-PR value of a "
             "second macOS engine pass over it is low.  A quarter per PR, all of "
             "it nightly.",
+        ),
+        "tur_span_coverage": (
+            "1/4",
+            "`tur audit-spans` over every fixture: 431s on macOS on 2026-10-28, "
+            "the longest suite in the aux part's parallel phase once the matrix "
+            "moved to r7rs, so it set that phase's length.  It elaborates and "
+            "never compiles or runs, so the platform can only reach it through "
+            "platform-conditional source -- not enough to call it LEG_INVARIANT, "
+            "little enough that a quarter per PR is a fair sample.  Linux runs "
+            "it in full per PR; all of it nightly on arm64.",
         ),
     },
     "linux": {},
@@ -207,6 +218,7 @@ CI_WORKFLOW = os.path.join(".github", "workflows", "ci.yml")
 SAMPLE_VARS = {
     "tur_generic_spec_matrix": "TUR_GSM_SHARD",
     "turi_fixture_tests": "TUR_TURI_SHARD",
+    "tur_span_coverage": "TUR_SPAN_SHARD",
 }
 
 

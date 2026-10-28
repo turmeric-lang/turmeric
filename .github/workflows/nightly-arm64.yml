@@ -52,10 +52,13 @@ jobs:
     name: Full representation suites (arm64)
     runs-on: macos-latest
     # The two suites measured 2050s and 688s on this runner, unsharded and
-    # serial against each other, plus a cold build.  60 is roughly 1.5x that,
-    # and a number here at all is the point: ci.yml's `test` job has none, which
-    # is how a 67-minute job passed quietly rather than saying so.
-    timeout-minutes: 60
+    # serial against each other, plus a cold build, and 60 was roughly 1.5x
+    # that.  turi_fixture_tests (440s) joined them since, and on 2026-10-27 the
+    # job took 58.5 of its 60 minutes, so tur_span_coverage joining as well
+    # (~3-4 min) would have tipped it over.  90 is roughly 1.5x the ~62 min
+    # that makes.  A number here at all is the point: ci.yml's `test` job had
+    # none, which is how a 67-minute job passed quietly rather than saying so.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -91,16 +94,16 @@ jobs:
       - name: Smoke check (tur --version must not hang)
         run: timeout 60 ./build/tur --version || gtimeout 60 ./build/tur --version
 
-      # No TUR_GSM_SHARD / TUR_FCONV_SHARD anywhere in this job: unset means
-      # "run everything", which is the entire point of this workflow.  If either
-      # ever appears here, this leg silently stops being the full run and the
-      # quarter the PR skips is covered by nobody.
+      # No TUR_GSM_SHARD / TUR_TURI_SHARD / TUR_SPAN_SHARD anywhere in this
+      # job: unset means "run everything", which is the entire point of this
+      # workflow.  If one ever appears here, this leg silently stops being the
+      # full run and the three quarters the PR skips are covered by nobody.
       - name: Run both suites in full
         id: run
         run: |
           set +e
-          # CLAUDE.md: every suite run carries the 12-minute timeout.  These two
-          # are ~46 min together, so the budget is the job's timeout-minutes
+          # CLAUDE.md: every suite run carries the 12-minute timeout.  These
+          # are ~57 min together, so the budget is the job's timeout-minutes
           # above and ctest's own per-test TIMEOUT properties, not a wrapper
           # here -- a `timeout 720` would kill the matrix at 40% done.
           # DERIVED from tests/ctest-parts.py, not listed here: the pattern is

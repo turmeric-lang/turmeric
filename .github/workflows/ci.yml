@@ -257,6 +257,12 @@ jobs:
       # deliberately ignores TUR_TEST_SHARD (tests/run-shard-partition.sh
       # asserts that), so sampling it cannot touch the 160 other aux suites.
       TUR_TURI_SHARD: ${{ (startsWith(matrix.os, 'macos') && matrix.part == 'aux') && '1/4' || '' }}
+      # And for tur_span_coverage, which then set the length of aux's parallel
+      # phase on macOS (431s of it, the longest suite there).  It elaborates
+      # every fixture and never runs one; Linux audits all of them per PR, the
+      # nightly arm64 leg all of them on arm64.  tests/check-span-coverage.sh
+      # reads only this variable, like run-turi.sh above.
+      TUR_SPAN_SHARD: ${{ (startsWith(matrix.os, 'macos') && matrix.part == 'aux') && '1/4' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -740,9 +746,10 @@ jobs:
           # literal pattern is passed, the collector warns once, and the
           # empty-file check below reports it.
           # The macOS r7rs part runs a QUARTER of tur_generic_spec_matrix beside
-          # suites that run whole, and the macOS aux part a quarter of
-          # turi_fixture_tests beside 160 of them, so each shard belongs to
-          # that one row and not to the job.  $TUR_TEST_SHARD would tag all of
+          # suites that run whole, and the macOS aux part a quarter each of
+          # turi_fixture_tests and tur_span_coverage beside 160 others, so each
+          # shard belongs to that one row and not to the job.  $TUR_TEST_SHARD
+          # would tag all of
           # them; leaving it off entirely would drop each series ~4x with
           # nothing in the data explaining it.  --suite-shard labels exactly the row that sliced.
           # A plain string, not an array: macOS ships bash 3.2, where an empty
@@ -756,6 +763,9 @@ jobs:
           fi
           if [ "${{ matrix.part }}" = aux ] && [ -n "${TUR_TURI_SHARD:-}" ]; then
             suite_shard="$suite_shard --suite-shard turi_fixture_tests=$TUR_TURI_SHARD"
+          fi
+          if [ "${{ matrix.part }}" = aux ] && [ -n "${TUR_SPAN_SHARD:-}" ]; then
+            suite_shard="$suite_shard --suite-shard tur_span_coverage=$TUR_SPAN_SHARD"
           fi
           python3 tools/ci/collect-suite-timings.py --build-dir build \
             $suite_shard build/results-*.xml > timings.jsonl || true
