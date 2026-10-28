@@ -476,7 +476,9 @@ except the lint.
   changed. `benchmarks/bench-refined-fn-result-check.sh` times the hot loop as
   emitted plus the isolated check sequence
   (`benchmarks/refined-fn-result-check-isolated.c`). Results and reasoning are
-  in `benchmarks/refined-fn-result-check-results.md`.
+  in `benchmarks/refined-fn-result-check-results.md`. Its finding that the
+  call costs far more than the check is followed up in
+  [refined-fn-types-optimization-scan-plan](refined-fn-types-optimization-scan-plan.md).
 - **F5.** The guide's "Limits" bullet, the internals guide's RT1 list and codes
   table, the `TUR-E0378` explain text and the rationale's "Subtyping" row are
   updated. `--warn-unrefined-fn-slot` / `TUR-W0388` is in, off by default and
