@@ -1,0 +1,12 @@
+;; numvec-for-length-mismatch-panics: `-for` over two arrays checks their
+;; lengths once, before the first pass -- no element is visited -- and a
+;; mismatch panics at the line of the loop.
+(load "stdlib/numvec.tur")
+
+(defn main [] : int
+  (let [a (u8vec-of (as uint8 1) (as uint8 2))
+        b (u8vec-of (as uint8 3))]
+    (println "before")
+    (u8vec-for [x a y b] (println x))
+    (println "unreachable")
+    0))

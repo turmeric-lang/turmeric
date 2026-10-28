@@ -23,10 +23,22 @@
 ;;; | I32Vec | `int32`   | `(i32vec-new n init)`     |
 ;;; | U8Vec  | `uint8`   | `(u8vec-new n init)`      |
 ;;;
-;;; Every type has the same nine operations, named by its prefix `P` (`f64vec`,
+;;; Every type has these operations, named by its prefix `P` (`f64vec`,
 ;;; `f32vec`, `i64vec`, `i32vec`, `u8vec`):
-;;; `P-new`, `P-of`, `P-len`, `P-ref`, `P-set!`, `P-copy`, `P->vec`,
-;;; `vec->P`, `P-show`.
+;;;
+;;; - access: `P-new`, `P-of`, `P-len`, `P-ref`, `P-set!`, `P-copy`, `P->vec`,
+;;;   `vec->P`, `P-show`;
+;;; - bulk kernels (phase N1), each one C loop gcc vectorizes at -O3:
+;;;   `P-fill!`, `P-copy!`, `P-add!`, `P-sum`, `P-min`, `P-max`, and except on
+;;;   U8Vec `P-scale!`, `P-axpy!`, `P-dot`; the float types add
+;;;   `P-sum-ordered`.  A float reduction uses a fixed eight-lane order, so it
+;;;   is vectorized without -ffast-math and is bit-identical on every engine;
+;;;   integer arithmetic wraps;
+;;; - loops (phase N2): `P-for`, `P-for-index`, `P-fold`, `P-build`, which
+;;;   bind elements, never an index the program could get wrong, and read
+;;;   through the unchecked `P-ref-unchecked` / `P-set-unchecked!`
+;;;   (`#fx{Unsafe}`).  A loop that only reads an array vectorizes; one that
+;;;   stores into one does not yet (see the plan's N2 notes).
 ;;;
 ;;; Ownership: each type is `^affine` with a `Drop` instance, so a let-bound
 ;;; array is freed at scope exit, exactly once, and moving it (returning it,
@@ -342,6 +354,537 @@
       (f64vec-show-loop__ v 0 (f64vec-len v) b)
       (builder/push-cstr! b "]")
       (builder/finish b))))
+;; --- N1 bulk kernels, N2 unchecked access and loops (tools/gen-numvec.py) ---
+;;; f64vec-fill! -- store x in every slot.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   x -- the value
+;;;
+;;; Example:
+;;;   (f64vec-fill! v 1.5)
+;;;
+;;; Since: Phase N1
+
+(defn f64vec-fill! [^borrow v : F64Vec x : float]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  double *d = a->data;
+  for (int64_t i = 0; i < n; i++) d[i] = x;
+  ```)
+;;; f64vec-copy! -- copy src's elements into dst (same length, or a panic).
+;;;
+;;; Parameters:
+;;;   dst -- the array written (borrowed)
+;;;   src -- the array read (borrowed)
+;;;
+;;; Example:
+;;;   (f64vec-copy! dst src)
+;;;
+;;; Since: Phase N1
+
+(defn f64vec-copy! [^borrow dst : F64Vec ^borrow src : F64Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; double *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; double *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("f64vec-copy!: length mismatch");
+      return;
+    }
+  if (y->len > 0) memmove(y->data, x->data, (size_t)y->len * sizeof(double));
+  ```)
+;;; f64vec-scale! -- multiply every element by s, in place.
+;;;
+;;; Integer arithmetic wraps.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   s -- the factor
+;;;
+;;; Example:
+;;;   (f64vec-scale! v 2.5)
+;;;
+;;; Since: Phase N1
+
+(defn f64vec-scale! [^borrow v : F64Vec s : float]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  double *d = a->data;
+  for (int64_t i = 0; i < n; i++) d[i] = d[i] * s;
+  ```)
+;;; f64vec-add! -- dst[i] += src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; dst and src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array added (borrowed)
+;;;
+;;; Example:
+;;;   (f64vec-add! y x)
+;;;
+;;; Since: Phase N1
+
+(defn f64vec-add! [^borrow dst : F64Vec ^borrow src : F64Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; double *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; double *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("f64vec-add!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  double *yd = y->data;
+  const double *xd = x->data;
+  for (int64_t i = 0; i < n; i++) yd[i] = yd[i] + xd[i];
+  ```)
+;;; f64vec-axpy! -- dst[i] += s * src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; the multiply and the add are not fused.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   s -- the factor
+;;;   src -- the array scaled and added (borrowed)
+;;;
+;;; Example:
+;;;   (f64vec-axpy! y 2.5 x)
+;;;
+;;; Since: Phase N1
+
+(defn f64vec-axpy! [^borrow dst : F64Vec s : float ^borrow src : F64Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; double *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; double *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("f64vec-axpy!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  double *yd = y->data;
+  const double *xd = x->data;
+  for (int64_t i = 0; i < n; i++) { double m = s * xd[i]; yd[i] = yd[i] + m; }
+  ```)
+;;; f64vec-sum -- the sum of the elements.
+;;;
+;;; A float sum is computed in eight interleaved partial sums (lane k
+;;; takes the elements i with i mod 8 = k), combined in one fixed tree:
+;;; the same answer on every engine and machine, and vectorizable without
+;;; -ffast-math.  It can differ in the last bits from `-sum-ordered`, the
+;;; left-to-right sum.  An integer sum wraps modulo 2^64; a narrow element
+;;; is widened to `int` first.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A float.
+;;;
+;;; Example:
+;;;   (let [v (f64vec-of 1.5 2.5)] (f64vec-sum v))
+;;;
+;;; Since: Phase N1
+
+(defn f64vec-sum [^borrow v : F64Vec]
+  #fx{}
+  #reads v
+  : float
+  ```c
+  struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  const double *d = a->data;
+  double s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8)
+    for (int k = 0; k < 8; k++) s[k] = s[k] + d[i + k];
+  for (; i < n; i++) s[i & 7] = s[i & 7] + d[i];
+  return ((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7]));
+  ```)
+;;; f64vec-sum-ordered -- the strict left-to-right sum of the elements.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A float.
+;;;
+;;; Example:
+;;;   (let [v (f64vec-of 1.5 2.5)] (f64vec-sum-ordered v))
+;;;
+;;; Since: Phase N1
+
+(defn f64vec-sum-ordered [^borrow v : F64Vec]
+  #fx{}
+  #reads v
+  : float
+  ```c
+  struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  const double *d = a->data;
+  double s = 0;
+  for (int64_t i = 0; i < n; i++) s = s + d[i];
+  return s;
+  ```)
+;;; f64vec-dot -- the dot product of two arrays (same length, or a panic).
+;;;
+;;; Floats use the same eight-lane order as `-sum`.  Integers wrap modulo
+;;; 2^64; an `int32` product is formed in 64 bits.
+;;;
+;;; Parameters:
+;;;   a -- the first array (borrowed)
+;;;   b -- the second array (borrowed)
+;;;
+;;; Returns:
+;;;   A float.
+;;;
+;;; Example:
+;;;   (let [a (f64vec-of 1.5 2.5) b (f64vec-of 2.5 1.5)] (f64vec-dot a b))
+;;;
+;;; Since: Phase N1
+
+(defn f64vec-dot [^borrow a : F64Vec ^borrow b : F64Vec]
+  #fx{}
+  #reads [a b]
+  : float
+  ```c
+  struct { int64_t len; double *data; void *raw; } *y = (void*)(intptr_t)a;
+  struct { int64_t len; double *data; void *raw; } *x = (void*)(intptr_t)b;
+  if (y->len != x->len) {
+      tur_panic("f64vec-dot: length mismatch");
+      return 0;
+    }
+  int64_t n = y->len;
+  const double *yd = y->data;
+  const double *xd = x->data;
+  double s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8)
+    for (int k = 0; k < 8; k++) { double m = yd[i + k] * xd[i + k]; s[k] = s[k] + m; }
+  for (; i < n; i++) { double m = yd[i] * xd[i]; s[i & 7] = s[i & 7] + m; }
+  return ((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7]));
+  ```)
+;;; f64vec-min -- the smallest element (an empty array panics).
+;;;
+;;; A NaN element makes the result NaN.  Which of two equal elements
+;;; (0.0 and -0.0) is returned is fixed by the reduction order, the same
+;;; on every engine.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A float.
+;;;
+;;; Example:
+;;;   (let [v (f64vec-of 1.5 2.5)] (f64vec-min v))   ; => 1.5
+;;;
+;;; Since: Phase N1
+
+(defn f64vec-min [^borrow v : F64Vec]
+  #fx{}
+  #reads v
+  : float
+  ```c
+  struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  if (n == 0) {
+      tur_panic("f64vec-min: empty array");
+      return 0;
+    }
+  const double *d = a->data;
+  double m[8];
+  for (int k = 0; k < 8; k++) m[k] = d[0];
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8)
+    for (int k = 0; k < 8; k++) {
+      double x = d[i + k];
+      m[k] = (x < m[k] || x != x) ? x : m[k];
+    }
+  for (; i < n; i++) {
+    double x = d[i];
+    m[i & 7] = (x < m[i & 7] || x != x) ? x : m[i & 7];
+  }
+  for (int w = 4; w >= 1; w /= 2)
+    for (int k = 0; k < w; k++)
+      m[k] = (m[k + w] < m[k] || m[k + w] != m[k + w]) ? m[k + w] : m[k];
+  return m[0];
+  ```)
+;;; f64vec-max -- the largest element (an empty array panics).
+;;;
+;;; A NaN element makes the result NaN.  Which of two equal elements
+;;; (0.0 and -0.0) is returned is fixed by the reduction order, the same
+;;; on every engine.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A float.
+;;;
+;;; Example:
+;;;   (let [v (f64vec-of 1.5 2.5)] (f64vec-max v))   ; => 2.5
+;;;
+;;; Since: Phase N1
+
+(defn f64vec-max [^borrow v : F64Vec]
+  #fx{}
+  #reads v
+  : float
+  ```c
+  struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  if (n == 0) {
+      tur_panic("f64vec-max: empty array");
+      return 0;
+    }
+  const double *d = a->data;
+  double m[8];
+  for (int k = 0; k < 8; k++) m[k] = d[0];
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8)
+    for (int k = 0; k < 8; k++) {
+      double x = d[i + k];
+      m[k] = (x > m[k] || x != x) ? x : m[k];
+    }
+  for (; i < n; i++) {
+    double x = d[i];
+    m[i & 7] = (x > m[i & 7] || x != x) ? x : m[i & 7];
+  }
+  for (int w = 4; w >= 1; w /= 2)
+    for (int k = 0; k < w; k++)
+      m[k] = (m[k + w] > m[k] || m[k + w] != m[k + w]) ? m[k + w] : m[k];
+  return m[0];
+  ```)
+;;; f64vec-ref-unchecked -- the element at index i, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  The loop macros
+;;; (`-for`, `-fold`, ...) use it where they have already checked the index.
+;;; Its body calls nothing, so a call to it carries no panic check, and a
+;;; loop of such calls can vectorize.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;
+;;; Returns:
+;;;   A float.
+;;;
+;;; Example:
+;;;   (unsafe (f64vec-ref-unchecked v 0))
+;;;
+;;; Since: Phase N2
+
+(defn f64vec-ref-unchecked [^borrow v : F64Vec i : int]
+  #fx{Unsafe}
+  #reads v
+  : float
+  ```c
+  struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
+  return a->data[i];
+  ```)
+;;; f64vec-set-unchecked! -- store x at index i, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no
+;;; TUR_REGION_NOTE (see the module header).
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;   x -- the new element
+;;;
+;;; Example:
+;;;   (unsafe (f64vec-set-unchecked! v 0 1.5))
+;;;
+;;; Since: Phase N2
+
+(defn f64vec-set-unchecked! [^borrow v : F64Vec i : int x : float]
+  #fx{Unsafe}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
+  a->data[i] = x;
+  ```)
+;;; f64vec-for -- run body once per element of one or two F64Vecs.
+;;;
+;;; `(for [x v] body...)` binds x to each element of v in order;
+;;; `(for [x v y w] body...)` walks v and w together (same length, or a panic
+;;; before the first pass).  No index is in scope, so none can be wrong: the
+;;; reads are `f64vec-ref-unchecked`, the body sees plain elements, and the loop
+;;; carries no bounds check or panic test -- gcc can vectorize it at -O3.  An
+;;; array argument that is not a name is evaluated once, and freed after.
+;;;
+;;; Parameters:
+;;;   bindings -- `[x v]` or `[x v y w]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (let [v (f64vec-of 1.5 2.5)] (f64vec-for [x v] (println x)))
+;;;
+;;; Since: Phase N2
+
+(defmacro f64vec-for [bv & body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        x    (first bv)
+        v    (second bv)
+        more (rest (rest bv))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (f64vec-for [~x ~t ~@more] ~@body)))
+      (if (empty? more)
+        `(let [^mut ~i 0
+               ~n      (f64vec-len ~v)]
+           (while (< ~i ~n)
+             (let [~x (unsafe (f64vec-ref-unchecked ~v ~i))]
+               ~@body)
+             (set! ~i (+ ~i 1))))
+        (let [y (first more)
+              w (second more)]
+          (if (list? w)
+            (let [t (gensym "nv")]
+              `(let [~t ~w] (f64vec-for [~x ~v ~y ~t] ~@body)))
+            `(let [^mut ~i 0
+                   ~n      (f64vec-same-len__ ~v ~w)]
+               (while (< ~i ~n)
+                 (let [~x (unsafe (f64vec-ref-unchecked ~v ~i))
+                       ~y (unsafe (f64vec-ref-unchecked ~w ~i))]
+                   ~@body)
+                 (set! ~i (+ ~i 1))))))))))
+;;; f64vec-for-index -- run body once per element, with its index.
+;;;
+;;; `(for-index [i x v] body...)` binds i (read-only) and x = v[i].
+;;;
+;;; Parameters:
+;;;   bindings -- `[i x v]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (let [v (f64vec-of 1.5 2.5)] (f64vec-for-index [i x v] (println i)))
+;;;
+;;; Since: Phase N2
+
+(defmacro f64vec-for-index [bv & body]
+  (let [i  (gensym "i")
+        n  (gensym "n")
+        iv (first bv)
+        x  (second bv)
+        v  (first (rest (rest bv)))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (f64vec-for-index [~iv ~x ~t] ~@body)))
+      `(let [^mut ~i 0
+             ~n      (f64vec-len ~v)]
+         (while (< ~i ~n)
+           (let [~iv ~i
+                 ~x  (unsafe (f64vec-ref-unchecked ~v ~i))]
+             ~@body)
+           (set! ~i (+ ~i 1)))))))
+;;; f64vec-fold -- fold the elements of a F64Vec into an accumulator.
+;;;
+;;; `(fold [acc init x v] body)`: acc starts at init, and for each element x
+;;; in order becomes the value of body (which sees acc and x).  The result is
+;;; the final acc.  A float sum written this way is the strict left fold, so
+;;; gcc keeps it scalar; `f64vec-sum` is the vectorized one.
+;;;
+;;; Parameters:
+;;;   bindings -- `[acc init x v]`
+;;;   body     -- the new accumulator
+;;;
+;;; Returns:
+;;;   The final accumulator.
+;;;
+;;; Example:
+;;;   (let [v (f64vec-of 1.5 2.5)] (f64vec-fold [n 0 x v] (+ n 1)))   ; => 2
+;;;
+;;; Since: Phase N2
+
+(defmacro f64vec-fold [bv body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        acc  (first bv)
+        init (second bv)
+        x    (first (rest (rest bv)))
+        v    (second (rest (rest bv)))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (f64vec-fold [~acc ~init ~x ~t] ~body)))
+      `(let [^mut ~i   0
+             ~n        (f64vec-len ~v)
+             ^mut ~acc ~init]
+         (while (< ~i ~n)
+           (let [~x (unsafe (f64vec-ref-unchecked ~v ~i))]
+             (set! ~acc ~body))
+           (set! ~i (+ ~i 1)))
+         ~acc))))
+;;; f64vec-build -- a fresh F64Vec of n elements, element i the value of expr.
+;;;
+;;; `(build n [i] expr)`, after Racket's `for/flvector`: i is bound to each
+;;; index in turn, and expr runs outside any `unsafe`.
+;;;
+;;; Parameters:
+;;;   n    -- the length (evaluated once)
+;;;   i    -- the index name, in a vector
+;;;   expr -- the element at i, of type float
+;;;
+;;; Returns:
+;;;   A fresh F64Vec, owned by the caller.
+;;;
+;;; Example:
+;;;   (let [v (f64vec-build 3 [i] 1.5)] (f64vec-len v))   ; => 3
+;;;
+;;; Since: Phase N2
+
+(defmacro f64vec-build [n bv expr]
+  (let [i   (gensym "i")
+        m   (gensym "n")
+        e   (gensym "e")
+        out (gensym "out")
+        iv  (first bv)]
+    `(let [~m      ~n
+           ~out    (f64vec-new ~m 0.0)
+           ^mut ~i 0]
+       (while (< ~i ~m)
+         (let [~iv ~i
+               ~e  ~expr]
+           (unsafe (f64vec-set-unchecked! ~out ~i ~e)))
+         (set! ~i (+ ~i 1)))
+       ~out)))
+;;; f64vec-same-len__ -- internal: the common length of two arrays, or a panic.
+
+(defn f64vec-same-len__ [^borrow a : F64Vec ^borrow b : F64Vec]
+  #fx{}
+  #reads [a b]
+  : int
+  ```c
+  struct { int64_t len; double *data; void *raw; } *x = (void*)(intptr_t)a;
+  struct { int64_t len; double *data; void *raw; } *y = (void*)(intptr_t)b;
+  if (x->len != y->len) {
+    tur_panic("f64vec-for: length mismatch");
+    return 0;
+  }
+  return x->len;
+  ```)
 ;; ===== F32Vec: 32-bit floats =====
 ;;; F32Vec -- a fixed-length, unboxed array of 32-bit floats (float32).
 ;;;
@@ -608,6 +1151,537 @@
       (f32vec-show-loop__ v 0 (f32vec-len v) b)
       (builder/push-cstr! b "]")
       (builder/finish b))))
+;; --- N1 bulk kernels, N2 unchecked access and loops (tools/gen-numvec.py) ---
+;;; f32vec-fill! -- store x in every slot.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   x -- the value
+;;;
+;;; Example:
+;;;   (f32vec-fill! v (:: 1.5 float32))
+;;;
+;;; Since: Phase N1
+
+(defn f32vec-fill! [^borrow v : F32Vec x : float32]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  float *d = a->data;
+  for (int64_t i = 0; i < n; i++) d[i] = x;
+  ```)
+;;; f32vec-copy! -- copy src's elements into dst (same length, or a panic).
+;;;
+;;; Parameters:
+;;;   dst -- the array written (borrowed)
+;;;   src -- the array read (borrowed)
+;;;
+;;; Example:
+;;;   (f32vec-copy! dst src)
+;;;
+;;; Since: Phase N1
+
+(defn f32vec-copy! [^borrow dst : F32Vec ^borrow src : F32Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; float *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; float *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("f32vec-copy!: length mismatch");
+      return;
+    }
+  if (y->len > 0) memmove(y->data, x->data, (size_t)y->len * sizeof(float));
+  ```)
+;;; f32vec-scale! -- multiply every element by s, in place.
+;;;
+;;; Integer arithmetic wraps.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   s -- the factor
+;;;
+;;; Example:
+;;;   (f32vec-scale! v (:: 2.5 float32))
+;;;
+;;; Since: Phase N1
+
+(defn f32vec-scale! [^borrow v : F32Vec s : float32]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  float *d = a->data;
+  for (int64_t i = 0; i < n; i++) d[i] = d[i] * s;
+  ```)
+;;; f32vec-add! -- dst[i] += src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; dst and src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array added (borrowed)
+;;;
+;;; Example:
+;;;   (f32vec-add! y x)
+;;;
+;;; Since: Phase N1
+
+(defn f32vec-add! [^borrow dst : F32Vec ^borrow src : F32Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; float *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; float *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("f32vec-add!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  float *yd = y->data;
+  const float *xd = x->data;
+  for (int64_t i = 0; i < n; i++) yd[i] = yd[i] + xd[i];
+  ```)
+;;; f32vec-axpy! -- dst[i] += s * src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; the multiply and the add are not fused.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   s -- the factor
+;;;   src -- the array scaled and added (borrowed)
+;;;
+;;; Example:
+;;;   (f32vec-axpy! y (:: 2.5 float32) x)
+;;;
+;;; Since: Phase N1
+
+(defn f32vec-axpy! [^borrow dst : F32Vec s : float32 ^borrow src : F32Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; float *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; float *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("f32vec-axpy!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  float *yd = y->data;
+  const float *xd = x->data;
+  for (int64_t i = 0; i < n; i++) { float m = s * xd[i]; yd[i] = yd[i] + m; }
+  ```)
+;;; f32vec-sum -- the sum of the elements.
+;;;
+;;; A float sum is computed in eight interleaved partial sums (lane k
+;;; takes the elements i with i mod 8 = k), combined in one fixed tree:
+;;; the same answer on every engine and machine, and vectorizable without
+;;; -ffast-math.  It can differ in the last bits from `-sum-ordered`, the
+;;; left-to-right sum.  An integer sum wraps modulo 2^64; a narrow element
+;;; is widened to `int` first.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A float32.
+;;;
+;;; Example:
+;;;   (let [v (f32vec-of (:: 1.5 float32) (:: 2.5 float32))] (f32vec-sum v))
+;;;
+;;; Since: Phase N1
+
+(defn f32vec-sum [^borrow v : F32Vec]
+  #fx{}
+  #reads v
+  : float32
+  ```c
+  struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  const float *d = a->data;
+  float s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8)
+    for (int k = 0; k < 8; k++) s[k] = s[k] + d[i + k];
+  for (; i < n; i++) s[i & 7] = s[i & 7] + d[i];
+  return ((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7]));
+  ```)
+;;; f32vec-sum-ordered -- the strict left-to-right sum of the elements.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A float32.
+;;;
+;;; Example:
+;;;   (let [v (f32vec-of (:: 1.5 float32) (:: 2.5 float32))] (f32vec-sum-ordered v))
+;;;
+;;; Since: Phase N1
+
+(defn f32vec-sum-ordered [^borrow v : F32Vec]
+  #fx{}
+  #reads v
+  : float32
+  ```c
+  struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  const float *d = a->data;
+  float s = 0;
+  for (int64_t i = 0; i < n; i++) s = s + d[i];
+  return s;
+  ```)
+;;; f32vec-dot -- the dot product of two arrays (same length, or a panic).
+;;;
+;;; Floats use the same eight-lane order as `-sum`.  Integers wrap modulo
+;;; 2^64; an `int32` product is formed in 64 bits.
+;;;
+;;; Parameters:
+;;;   a -- the first array (borrowed)
+;;;   b -- the second array (borrowed)
+;;;
+;;; Returns:
+;;;   A float32.
+;;;
+;;; Example:
+;;;   (let [a (f32vec-of (:: 1.5 float32) (:: 2.5 float32)) b (f32vec-of (:: 2.5 float32) (:: 1.5 float32))] (f32vec-dot a b))
+;;;
+;;; Since: Phase N1
+
+(defn f32vec-dot [^borrow a : F32Vec ^borrow b : F32Vec]
+  #fx{}
+  #reads [a b]
+  : float32
+  ```c
+  struct { int64_t len; float *data; void *raw; } *y = (void*)(intptr_t)a;
+  struct { int64_t len; float *data; void *raw; } *x = (void*)(intptr_t)b;
+  if (y->len != x->len) {
+      tur_panic("f32vec-dot: length mismatch");
+      return 0;
+    }
+  int64_t n = y->len;
+  const float *yd = y->data;
+  const float *xd = x->data;
+  float s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8)
+    for (int k = 0; k < 8; k++) { float m = yd[i + k] * xd[i + k]; s[k] = s[k] + m; }
+  for (; i < n; i++) { float m = yd[i] * xd[i]; s[i & 7] = s[i & 7] + m; }
+  return ((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7]));
+  ```)
+;;; f32vec-min -- the smallest element (an empty array panics).
+;;;
+;;; A NaN element makes the result NaN.  Which of two equal elements
+;;; (0.0 and -0.0) is returned is fixed by the reduction order, the same
+;;; on every engine.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A float32.
+;;;
+;;; Example:
+;;;   (let [v (f32vec-of (:: 1.5 float32) (:: 2.5 float32))] (f32vec-min v))   ; => (:: 1.5 float32)
+;;;
+;;; Since: Phase N1
+
+(defn f32vec-min [^borrow v : F32Vec]
+  #fx{}
+  #reads v
+  : float32
+  ```c
+  struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  if (n == 0) {
+      tur_panic("f32vec-min: empty array");
+      return 0;
+    }
+  const float *d = a->data;
+  float m[8];
+  for (int k = 0; k < 8; k++) m[k] = d[0];
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8)
+    for (int k = 0; k < 8; k++) {
+      float x = d[i + k];
+      m[k] = (x < m[k] || x != x) ? x : m[k];
+    }
+  for (; i < n; i++) {
+    float x = d[i];
+    m[i & 7] = (x < m[i & 7] || x != x) ? x : m[i & 7];
+  }
+  for (int w = 4; w >= 1; w /= 2)
+    for (int k = 0; k < w; k++)
+      m[k] = (m[k + w] < m[k] || m[k + w] != m[k + w]) ? m[k + w] : m[k];
+  return m[0];
+  ```)
+;;; f32vec-max -- the largest element (an empty array panics).
+;;;
+;;; A NaN element makes the result NaN.  Which of two equal elements
+;;; (0.0 and -0.0) is returned is fixed by the reduction order, the same
+;;; on every engine.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A float32.
+;;;
+;;; Example:
+;;;   (let [v (f32vec-of (:: 1.5 float32) (:: 2.5 float32))] (f32vec-max v))   ; => (:: 2.5 float32)
+;;;
+;;; Since: Phase N1
+
+(defn f32vec-max [^borrow v : F32Vec]
+  #fx{}
+  #reads v
+  : float32
+  ```c
+  struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  if (n == 0) {
+      tur_panic("f32vec-max: empty array");
+      return 0;
+    }
+  const float *d = a->data;
+  float m[8];
+  for (int k = 0; k < 8; k++) m[k] = d[0];
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8)
+    for (int k = 0; k < 8; k++) {
+      float x = d[i + k];
+      m[k] = (x > m[k] || x != x) ? x : m[k];
+    }
+  for (; i < n; i++) {
+    float x = d[i];
+    m[i & 7] = (x > m[i & 7] || x != x) ? x : m[i & 7];
+  }
+  for (int w = 4; w >= 1; w /= 2)
+    for (int k = 0; k < w; k++)
+      m[k] = (m[k + w] > m[k] || m[k + w] != m[k + w]) ? m[k + w] : m[k];
+  return m[0];
+  ```)
+;;; f32vec-ref-unchecked -- the element at index i, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  The loop macros
+;;; (`-for`, `-fold`, ...) use it where they have already checked the index.
+;;; Its body calls nothing, so a call to it carries no panic check, and a
+;;; loop of such calls can vectorize.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;
+;;; Returns:
+;;;   A float32.
+;;;
+;;; Example:
+;;;   (unsafe (f32vec-ref-unchecked v 0))
+;;;
+;;; Since: Phase N2
+
+(defn f32vec-ref-unchecked [^borrow v : F32Vec i : int]
+  #fx{Unsafe}
+  #reads v
+  : float32
+  ```c
+  struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
+  return a->data[i];
+  ```)
+;;; f32vec-set-unchecked! -- store x at index i, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no
+;;; TUR_REGION_NOTE (see the module header).
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;   x -- the new element
+;;;
+;;; Example:
+;;;   (unsafe (f32vec-set-unchecked! v 0 (:: 1.5 float32)))
+;;;
+;;; Since: Phase N2
+
+(defn f32vec-set-unchecked! [^borrow v : F32Vec i : int x : float32]
+  #fx{Unsafe}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
+  a->data[i] = x;
+  ```)
+;;; f32vec-for -- run body once per element of one or two F32Vecs.
+;;;
+;;; `(for [x v] body...)` binds x to each element of v in order;
+;;; `(for [x v y w] body...)` walks v and w together (same length, or a panic
+;;; before the first pass).  No index is in scope, so none can be wrong: the
+;;; reads are `f32vec-ref-unchecked`, the body sees plain elements, and the loop
+;;; carries no bounds check or panic test -- gcc can vectorize it at -O3.  An
+;;; array argument that is not a name is evaluated once, and freed after.
+;;;
+;;; Parameters:
+;;;   bindings -- `[x v]` or `[x v y w]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (let [v (f32vec-of (:: 1.5 float32) (:: 2.5 float32))] (f32vec-for [x v] (println x)))
+;;;
+;;; Since: Phase N2
+
+(defmacro f32vec-for [bv & body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        x    (first bv)
+        v    (second bv)
+        more (rest (rest bv))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (f32vec-for [~x ~t ~@more] ~@body)))
+      (if (empty? more)
+        `(let [^mut ~i 0
+               ~n      (f32vec-len ~v)]
+           (while (< ~i ~n)
+             (let [~x (unsafe (f32vec-ref-unchecked ~v ~i))]
+               ~@body)
+             (set! ~i (+ ~i 1))))
+        (let [y (first more)
+              w (second more)]
+          (if (list? w)
+            (let [t (gensym "nv")]
+              `(let [~t ~w] (f32vec-for [~x ~v ~y ~t] ~@body)))
+            `(let [^mut ~i 0
+                   ~n      (f32vec-same-len__ ~v ~w)]
+               (while (< ~i ~n)
+                 (let [~x (unsafe (f32vec-ref-unchecked ~v ~i))
+                       ~y (unsafe (f32vec-ref-unchecked ~w ~i))]
+                   ~@body)
+                 (set! ~i (+ ~i 1))))))))))
+;;; f32vec-for-index -- run body once per element, with its index.
+;;;
+;;; `(for-index [i x v] body...)` binds i (read-only) and x = v[i].
+;;;
+;;; Parameters:
+;;;   bindings -- `[i x v]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (let [v (f32vec-of (:: 1.5 float32) (:: 2.5 float32))] (f32vec-for-index [i x v] (println i)))
+;;;
+;;; Since: Phase N2
+
+(defmacro f32vec-for-index [bv & body]
+  (let [i  (gensym "i")
+        n  (gensym "n")
+        iv (first bv)
+        x  (second bv)
+        v  (first (rest (rest bv)))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (f32vec-for-index [~iv ~x ~t] ~@body)))
+      `(let [^mut ~i 0
+             ~n      (f32vec-len ~v)]
+         (while (< ~i ~n)
+           (let [~iv ~i
+                 ~x  (unsafe (f32vec-ref-unchecked ~v ~i))]
+             ~@body)
+           (set! ~i (+ ~i 1)))))))
+;;; f32vec-fold -- fold the elements of a F32Vec into an accumulator.
+;;;
+;;; `(fold [acc init x v] body)`: acc starts at init, and for each element x
+;;; in order becomes the value of body (which sees acc and x).  The result is
+;;; the final acc.  A float sum written this way is the strict left fold, so
+;;; gcc keeps it scalar; `f32vec-sum` is the vectorized one.
+;;;
+;;; Parameters:
+;;;   bindings -- `[acc init x v]`
+;;;   body     -- the new accumulator
+;;;
+;;; Returns:
+;;;   The final accumulator.
+;;;
+;;; Example:
+;;;   (let [v (f32vec-of (:: 1.5 float32) (:: 2.5 float32))] (f32vec-fold [n 0 x v] (+ n 1)))   ; => 2
+;;;
+;;; Since: Phase N2
+
+(defmacro f32vec-fold [bv body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        acc  (first bv)
+        init (second bv)
+        x    (first (rest (rest bv)))
+        v    (second (rest (rest bv)))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (f32vec-fold [~acc ~init ~x ~t] ~body)))
+      `(let [^mut ~i   0
+             ~n        (f32vec-len ~v)
+             ^mut ~acc ~init]
+         (while (< ~i ~n)
+           (let [~x (unsafe (f32vec-ref-unchecked ~v ~i))]
+             (set! ~acc ~body))
+           (set! ~i (+ ~i 1)))
+         ~acc))))
+;;; f32vec-build -- a fresh F32Vec of n elements, element i the value of expr.
+;;;
+;;; `(build n [i] expr)`, after Racket's `for/flvector`: i is bound to each
+;;; index in turn, and expr runs outside any `unsafe`.
+;;;
+;;; Parameters:
+;;;   n    -- the length (evaluated once)
+;;;   i    -- the index name, in a vector
+;;;   expr -- the element at i, of type float32
+;;;
+;;; Returns:
+;;;   A fresh F32Vec, owned by the caller.
+;;;
+;;; Example:
+;;;   (let [v (f32vec-build 3 [i] (:: 1.5 float32))] (f32vec-len v))   ; => 3
+;;;
+;;; Since: Phase N2
+
+(defmacro f32vec-build [n bv expr]
+  (let [i   (gensym "i")
+        m   (gensym "n")
+        e   (gensym "e")
+        out (gensym "out")
+        iv  (first bv)]
+    `(let [~m      ~n
+           ~out    (f32vec-new ~m (as float32 0.0))
+           ^mut ~i 0]
+       (while (< ~i ~m)
+         (let [~iv ~i
+               ~e  ~expr]
+           (unsafe (f32vec-set-unchecked! ~out ~i ~e)))
+         (set! ~i (+ ~i 1)))
+       ~out)))
+;;; f32vec-same-len__ -- internal: the common length of two arrays, or a panic.
+
+(defn f32vec-same-len__ [^borrow a : F32Vec ^borrow b : F32Vec]
+  #fx{}
+  #reads [a b]
+  : int
+  ```c
+  struct { int64_t len; float *data; void *raw; } *x = (void*)(intptr_t)a;
+  struct { int64_t len; float *data; void *raw; } *y = (void*)(intptr_t)b;
+  if (x->len != y->len) {
+    tur_panic("f32vec-for: length mismatch");
+    return 0;
+  }
+  return x->len;
+  ```)
 ;; ===== I64Vec: 64-bit integers =====
 ;;; I64Vec -- a fixed-length, unboxed array of 64-bit integers (int).
 ;;;
@@ -874,6 +1948,480 @@
       (i64vec-show-loop__ v 0 (i64vec-len v) b)
       (builder/push-cstr! b "]")
       (builder/finish b))))
+;; --- N1 bulk kernels, N2 unchecked access and loops (tools/gen-numvec.py) ---
+;;; i64vec-fill! -- store x in every slot.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   x -- the value
+;;;
+;;; Example:
+;;;   (i64vec-fill! v 1)
+;;;
+;;; Since: Phase N1
+
+(defn i64vec-fill! [^borrow v : I64Vec x : int]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  int64_t *d = a->data;
+  for (int64_t i = 0; i < n; i++) d[i] = x;
+  ```)
+;;; i64vec-copy! -- copy src's elements into dst (same length, or a panic).
+;;;
+;;; Parameters:
+;;;   dst -- the array written (borrowed)
+;;;   src -- the array read (borrowed)
+;;;
+;;; Example:
+;;;   (i64vec-copy! dst src)
+;;;
+;;; Since: Phase N1
+
+(defn i64vec-copy! [^borrow dst : I64Vec ^borrow src : I64Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; int64_t *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("i64vec-copy!: length mismatch");
+      return;
+    }
+  if (y->len > 0) memmove(y->data, x->data, (size_t)y->len * sizeof(int64_t));
+  ```)
+;;; i64vec-scale! -- multiply every element by s, in place.
+;;;
+;;; Integer arithmetic wraps.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   s -- the factor
+;;;
+;;; Example:
+;;;   (i64vec-scale! v 2)
+;;;
+;;; Since: Phase N1
+
+(defn i64vec-scale! [^borrow v : I64Vec s : int]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  int64_t *d = a->data;
+  for (int64_t i = 0; i < n; i++) d[i] = (int64_t)((uint64_t)d[i] * (uint64_t)s);
+  ```)
+;;; i64vec-add! -- dst[i] += src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; dst and src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array added (borrowed)
+;;;
+;;; Example:
+;;;   (i64vec-add! y x)
+;;;
+;;; Since: Phase N1
+
+(defn i64vec-add! [^borrow dst : I64Vec ^borrow src : I64Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; int64_t *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("i64vec-add!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  int64_t *yd = y->data;
+  const int64_t *xd = x->data;
+  for (int64_t i = 0; i < n; i++) yd[i] = (int64_t)((uint64_t)yd[i] + (uint64_t)xd[i]);
+  ```)
+;;; i64vec-axpy! -- dst[i] += s * src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; the multiply and the add are not fused.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   s -- the factor
+;;;   src -- the array scaled and added (borrowed)
+;;;
+;;; Example:
+;;;   (i64vec-axpy! y 2 x)
+;;;
+;;; Since: Phase N1
+
+(defn i64vec-axpy! [^borrow dst : I64Vec s : int ^borrow src : I64Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; int64_t *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("i64vec-axpy!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  int64_t *yd = y->data;
+  const int64_t *xd = x->data;
+  for (int64_t i = 0; i < n; i++) { uint64_t m = (uint64_t)s * (uint64_t)xd[i]; yd[i] = (int64_t)((uint64_t)yd[i] + m); }
+  ```)
+;;; i64vec-sum -- the sum of the elements.
+;;;
+;;; A float sum is computed in eight interleaved partial sums (lane k
+;;; takes the elements i with i mod 8 = k), combined in one fixed tree:
+;;; the same answer on every engine and machine, and vectorizable without
+;;; -ffast-math.  It can differ in the last bits from `-sum-ordered`, the
+;;; left-to-right sum.  An integer sum wraps modulo 2^64; a narrow element
+;;; is widened to `int` first.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A int.
+;;;
+;;; Example:
+;;;   (let [v (i64vec-of 1 2)] (i64vec-sum v))
+;;;
+;;; Since: Phase N1
+
+(defn i64vec-sum [^borrow v : I64Vec]
+  #fx{}
+  #reads v
+  : int
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  const int64_t *d = a->data;
+  uint64_t s = 0;
+  for (int64_t i = 0; i < n; i++) s = s + (uint64_t)d[i];
+  return (int64_t)s;
+  ```)
+;;; i64vec-dot -- the dot product of two arrays (same length, or a panic).
+;;;
+;;; Floats use the same eight-lane order as `-sum`.  Integers wrap modulo
+;;; 2^64; an `int32` product is formed in 64 bits.
+;;;
+;;; Parameters:
+;;;   a -- the first array (borrowed)
+;;;   b -- the second array (borrowed)
+;;;
+;;; Returns:
+;;;   A int.
+;;;
+;;; Example:
+;;;   (let [a (i64vec-of 1 2) b (i64vec-of 2 1)] (i64vec-dot a b))
+;;;
+;;; Since: Phase N1
+
+(defn i64vec-dot [^borrow a : I64Vec ^borrow b : I64Vec]
+  #fx{}
+  #reads [a b]
+  : int
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *y = (void*)(intptr_t)a;
+  struct { int64_t len; int64_t *data; void *raw; } *x = (void*)(intptr_t)b;
+  if (y->len != x->len) {
+      tur_panic("i64vec-dot: length mismatch");
+      return 0;
+    }
+  int64_t n = y->len;
+  const int64_t *yd = y->data;
+  const int64_t *xd = x->data;
+  uint64_t s = 0;
+  for (int64_t i = 0; i < n; i++) s = s + (uint64_t)yd[i] * (uint64_t)xd[i];
+  return (int64_t)s;
+  ```)
+;;; i64vec-min -- the smallest element (an empty array panics).
+;;;
+;;; A NaN element makes the result NaN.  Which of two equal elements
+;;; (0.0 and -0.0) is returned is fixed by the reduction order, the same
+;;; on every engine.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A int.
+;;;
+;;; Example:
+;;;   (let [v (i64vec-of 1 2)] (i64vec-min v))   ; => 1
+;;;
+;;; Since: Phase N1
+
+(defn i64vec-min [^borrow v : I64Vec]
+  #fx{}
+  #reads v
+  : int
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  if (n == 0) {
+      tur_panic("i64vec-min: empty array");
+      return 0;
+    }
+  const int64_t *d = a->data;
+  int64_t m = d[0];
+  for (int64_t i = 1; i < n; i++) m = d[i] < m ? d[i] : m;
+  return m;
+  ```)
+;;; i64vec-max -- the largest element (an empty array panics).
+;;;
+;;; A NaN element makes the result NaN.  Which of two equal elements
+;;; (0.0 and -0.0) is returned is fixed by the reduction order, the same
+;;; on every engine.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A int.
+;;;
+;;; Example:
+;;;   (let [v (i64vec-of 1 2)] (i64vec-max v))   ; => 2
+;;;
+;;; Since: Phase N1
+
+(defn i64vec-max [^borrow v : I64Vec]
+  #fx{}
+  #reads v
+  : int
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  if (n == 0) {
+      tur_panic("i64vec-max: empty array");
+      return 0;
+    }
+  const int64_t *d = a->data;
+  int64_t m = d[0];
+  for (int64_t i = 1; i < n; i++) m = d[i] > m ? d[i] : m;
+  return m;
+  ```)
+;;; i64vec-ref-unchecked -- the element at index i, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  The loop macros
+;;; (`-for`, `-fold`, ...) use it where they have already checked the index.
+;;; Its body calls nothing, so a call to it carries no panic check, and a
+;;; loop of such calls can vectorize.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;
+;;; Returns:
+;;;   A int.
+;;;
+;;; Example:
+;;;   (unsafe (i64vec-ref-unchecked v 0))
+;;;
+;;; Since: Phase N2
+
+(defn i64vec-ref-unchecked [^borrow v : I64Vec i : int]
+  #fx{Unsafe}
+  #reads v
+  : int
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  return a->data[i];
+  ```)
+;;; i64vec-set-unchecked! -- store x at index i, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no
+;;; TUR_REGION_NOTE (see the module header).
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;   x -- the new element
+;;;
+;;; Example:
+;;;   (unsafe (i64vec-set-unchecked! v 0 1))
+;;;
+;;; Since: Phase N2
+
+(defn i64vec-set-unchecked! [^borrow v : I64Vec i : int x : int]
+  #fx{Unsafe}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  a->data[i] = x;
+  ```)
+;;; i64vec-for -- run body once per element of one or two I64Vecs.
+;;;
+;;; `(for [x v] body...)` binds x to each element of v in order;
+;;; `(for [x v y w] body...)` walks v and w together (same length, or a panic
+;;; before the first pass).  No index is in scope, so none can be wrong: the
+;;; reads are `i64vec-ref-unchecked`, the body sees plain elements, and the loop
+;;; carries no bounds check or panic test -- gcc can vectorize it at -O3.  An
+;;; array argument that is not a name is evaluated once, and freed after.
+;;;
+;;; Parameters:
+;;;   bindings -- `[x v]` or `[x v y w]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (let [v (i64vec-of 1 2)] (i64vec-for [x v] (println x)))
+;;;
+;;; Since: Phase N2
+
+(defmacro i64vec-for [bv & body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        x    (first bv)
+        v    (second bv)
+        more (rest (rest bv))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (i64vec-for [~x ~t ~@more] ~@body)))
+      (if (empty? more)
+        `(let [^mut ~i 0
+               ~n      (i64vec-len ~v)]
+           (while (< ~i ~n)
+             (let [~x (unsafe (i64vec-ref-unchecked ~v ~i))]
+               ~@body)
+             (set! ~i (+ ~i 1))))
+        (let [y (first more)
+              w (second more)]
+          (if (list? w)
+            (let [t (gensym "nv")]
+              `(let [~t ~w] (i64vec-for [~x ~v ~y ~t] ~@body)))
+            `(let [^mut ~i 0
+                   ~n      (i64vec-same-len__ ~v ~w)]
+               (while (< ~i ~n)
+                 (let [~x (unsafe (i64vec-ref-unchecked ~v ~i))
+                       ~y (unsafe (i64vec-ref-unchecked ~w ~i))]
+                   ~@body)
+                 (set! ~i (+ ~i 1))))))))))
+;;; i64vec-for-index -- run body once per element, with its index.
+;;;
+;;; `(for-index [i x v] body...)` binds i (read-only) and x = v[i].
+;;;
+;;; Parameters:
+;;;   bindings -- `[i x v]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (let [v (i64vec-of 1 2)] (i64vec-for-index [i x v] (println i)))
+;;;
+;;; Since: Phase N2
+
+(defmacro i64vec-for-index [bv & body]
+  (let [i  (gensym "i")
+        n  (gensym "n")
+        iv (first bv)
+        x  (second bv)
+        v  (first (rest (rest bv)))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (i64vec-for-index [~iv ~x ~t] ~@body)))
+      `(let [^mut ~i 0
+             ~n      (i64vec-len ~v)]
+         (while (< ~i ~n)
+           (let [~iv ~i
+                 ~x  (unsafe (i64vec-ref-unchecked ~v ~i))]
+             ~@body)
+           (set! ~i (+ ~i 1)))))))
+;;; i64vec-fold -- fold the elements of a I64Vec into an accumulator.
+;;;
+;;; `(fold [acc init x v] body)`: acc starts at init, and for each element x
+;;; in order becomes the value of body (which sees acc and x).  The result is
+;;; the final acc.  A float sum written this way is the strict left fold, so
+;;; gcc keeps it scalar; `i64vec-sum` is the vectorized one.
+;;;
+;;; Parameters:
+;;;   bindings -- `[acc init x v]`
+;;;   body     -- the new accumulator
+;;;
+;;; Returns:
+;;;   The final accumulator.
+;;;
+;;; Example:
+;;;   (let [v (i64vec-of 1 2)] (i64vec-fold [n 0 x v] (+ n 1)))   ; => 2
+;;;
+;;; Since: Phase N2
+
+(defmacro i64vec-fold [bv body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        acc  (first bv)
+        init (second bv)
+        x    (first (rest (rest bv)))
+        v    (second (rest (rest bv)))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (i64vec-fold [~acc ~init ~x ~t] ~body)))
+      `(let [^mut ~i   0
+             ~n        (i64vec-len ~v)
+             ^mut ~acc ~init]
+         (while (< ~i ~n)
+           (let [~x (unsafe (i64vec-ref-unchecked ~v ~i))]
+             (set! ~acc ~body))
+           (set! ~i (+ ~i 1)))
+         ~acc))))
+;;; i64vec-build -- a fresh I64Vec of n elements, element i the value of expr.
+;;;
+;;; `(build n [i] expr)`, after Racket's `for/flvector`: i is bound to each
+;;; index in turn, and expr runs outside any `unsafe`.
+;;;
+;;; Parameters:
+;;;   n    -- the length (evaluated once)
+;;;   i    -- the index name, in a vector
+;;;   expr -- the element at i, of type int
+;;;
+;;; Returns:
+;;;   A fresh I64Vec, owned by the caller.
+;;;
+;;; Example:
+;;;   (let [v (i64vec-build 3 [i] 1)] (i64vec-len v))   ; => 3
+;;;
+;;; Since: Phase N2
+
+(defmacro i64vec-build [n bv expr]
+  (let [i   (gensym "i")
+        m   (gensym "n")
+        e   (gensym "e")
+        out (gensym "out")
+        iv  (first bv)]
+    `(let [~m      ~n
+           ~out    (i64vec-new ~m 0)
+           ^mut ~i 0]
+       (while (< ~i ~m)
+         (let [~iv ~i
+               ~e  ~expr]
+           (unsafe (i64vec-set-unchecked! ~out ~i ~e)))
+         (set! ~i (+ ~i 1)))
+       ~out)))
+;;; i64vec-same-len__ -- internal: the common length of two arrays, or a panic.
+
+(defn i64vec-same-len__ [^borrow a : I64Vec ^borrow b : I64Vec]
+  #fx{}
+  #reads [a b]
+  : int
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *x = (void*)(intptr_t)a;
+  struct { int64_t len; int64_t *data; void *raw; } *y = (void*)(intptr_t)b;
+  if (x->len != y->len) {
+    tur_panic("i64vec-for: length mismatch");
+    return 0;
+  }
+  return x->len;
+  ```)
 ;; ===== I32Vec: 32-bit integers =====
 ;;; I32Vec -- a fixed-length, unboxed array of 32-bit integers (int32).
 ;;;
@@ -1140,6 +2688,480 @@
       (i32vec-show-loop__ v 0 (i32vec-len v) b)
       (builder/push-cstr! b "]")
       (builder/finish b))))
+;; --- N1 bulk kernels, N2 unchecked access and loops (tools/gen-numvec.py) ---
+;;; i32vec-fill! -- store x in every slot.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   x -- the value
+;;;
+;;; Example:
+;;;   (i32vec-fill! v (as int32 1))
+;;;
+;;; Since: Phase N1
+
+(defn i32vec-fill! [^borrow v : I32Vec x : int32]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  int32_t *d = a->data;
+  for (int64_t i = 0; i < n; i++) d[i] = x;
+  ```)
+;;; i32vec-copy! -- copy src's elements into dst (same length, or a panic).
+;;;
+;;; Parameters:
+;;;   dst -- the array written (borrowed)
+;;;   src -- the array read (borrowed)
+;;;
+;;; Example:
+;;;   (i32vec-copy! dst src)
+;;;
+;;; Since: Phase N1
+
+(defn i32vec-copy! [^borrow dst : I32Vec ^borrow src : I32Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; int32_t *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("i32vec-copy!: length mismatch");
+      return;
+    }
+  if (y->len > 0) memmove(y->data, x->data, (size_t)y->len * sizeof(int32_t));
+  ```)
+;;; i32vec-scale! -- multiply every element by s, in place.
+;;;
+;;; Integer arithmetic wraps.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   s -- the factor
+;;;
+;;; Example:
+;;;   (i32vec-scale! v (as int32 2))
+;;;
+;;; Since: Phase N1
+
+(defn i32vec-scale! [^borrow v : I32Vec s : int32]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  int32_t *d = a->data;
+  for (int64_t i = 0; i < n; i++) d[i] = (int32_t)((uint32_t)d[i] * (uint32_t)s);
+  ```)
+;;; i32vec-add! -- dst[i] += src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; dst and src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array added (borrowed)
+;;;
+;;; Example:
+;;;   (i32vec-add! y x)
+;;;
+;;; Since: Phase N1
+
+(defn i32vec-add! [^borrow dst : I32Vec ^borrow src : I32Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; int32_t *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("i32vec-add!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  int32_t *yd = y->data;
+  const int32_t *xd = x->data;
+  for (int64_t i = 0; i < n; i++) yd[i] = (int32_t)((uint32_t)yd[i] + (uint32_t)xd[i]);
+  ```)
+;;; i32vec-axpy! -- dst[i] += s * src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; the multiply and the add are not fused.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   s -- the factor
+;;;   src -- the array scaled and added (borrowed)
+;;;
+;;; Example:
+;;;   (i32vec-axpy! y (as int32 2) x)
+;;;
+;;; Since: Phase N1
+
+(defn i32vec-axpy! [^borrow dst : I32Vec s : int32 ^borrow src : I32Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; int32_t *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("i32vec-axpy!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  int32_t *yd = y->data;
+  const int32_t *xd = x->data;
+  for (int64_t i = 0; i < n; i++) { uint32_t m = (uint32_t)s * (uint32_t)xd[i]; yd[i] = (int32_t)((uint32_t)yd[i] + m); }
+  ```)
+;;; i32vec-sum -- the sum of the elements.
+;;;
+;;; A float sum is computed in eight interleaved partial sums (lane k
+;;; takes the elements i with i mod 8 = k), combined in one fixed tree:
+;;; the same answer on every engine and machine, and vectorizable without
+;;; -ffast-math.  It can differ in the last bits from `-sum-ordered`, the
+;;; left-to-right sum.  An integer sum wraps modulo 2^64; a narrow element
+;;; is widened to `int` first.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A int.
+;;;
+;;; Example:
+;;;   (let [v (i32vec-of (as int32 1) (as int32 2))] (i32vec-sum v))
+;;;
+;;; Since: Phase N1
+
+(defn i32vec-sum [^borrow v : I32Vec]
+  #fx{}
+  #reads v
+  : int
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  const int32_t *d = a->data;
+  uint64_t s = 0;
+  for (int64_t i = 0; i < n; i++) s = s + (uint64_t)(int64_t)d[i];
+  return (int64_t)s;
+  ```)
+;;; i32vec-dot -- the dot product of two arrays (same length, or a panic).
+;;;
+;;; Floats use the same eight-lane order as `-sum`.  Integers wrap modulo
+;;; 2^64; an `int32` product is formed in 64 bits.
+;;;
+;;; Parameters:
+;;;   a -- the first array (borrowed)
+;;;   b -- the second array (borrowed)
+;;;
+;;; Returns:
+;;;   A int.
+;;;
+;;; Example:
+;;;   (let [a (i32vec-of (as int32 1) (as int32 2)) b (i32vec-of (as int32 2) (as int32 1))] (i32vec-dot a b))
+;;;
+;;; Since: Phase N1
+
+(defn i32vec-dot [^borrow a : I32Vec ^borrow b : I32Vec]
+  #fx{}
+  #reads [a b]
+  : int
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *y = (void*)(intptr_t)a;
+  struct { int64_t len; int32_t *data; void *raw; } *x = (void*)(intptr_t)b;
+  if (y->len != x->len) {
+      tur_panic("i32vec-dot: length mismatch");
+      return 0;
+    }
+  int64_t n = y->len;
+  const int32_t *yd = y->data;
+  const int32_t *xd = x->data;
+  uint64_t s = 0;
+  for (int64_t i = 0; i < n; i++) s = s + (uint64_t)((int64_t)yd[i] * (int64_t)xd[i]);
+  return (int64_t)s;
+  ```)
+;;; i32vec-min -- the smallest element (an empty array panics).
+;;;
+;;; A NaN element makes the result NaN.  Which of two equal elements
+;;; (0.0 and -0.0) is returned is fixed by the reduction order, the same
+;;; on every engine.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A int32.
+;;;
+;;; Example:
+;;;   (let [v (i32vec-of (as int32 1) (as int32 2))] (i32vec-min v))   ; => (as int32 1)
+;;;
+;;; Since: Phase N1
+
+(defn i32vec-min [^borrow v : I32Vec]
+  #fx{}
+  #reads v
+  : int32
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  if (n == 0) {
+      tur_panic("i32vec-min: empty array");
+      return 0;
+    }
+  const int32_t *d = a->data;
+  int32_t m = d[0];
+  for (int64_t i = 1; i < n; i++) m = d[i] < m ? d[i] : m;
+  return m;
+  ```)
+;;; i32vec-max -- the largest element (an empty array panics).
+;;;
+;;; A NaN element makes the result NaN.  Which of two equal elements
+;;; (0.0 and -0.0) is returned is fixed by the reduction order, the same
+;;; on every engine.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A int32.
+;;;
+;;; Example:
+;;;   (let [v (i32vec-of (as int32 1) (as int32 2))] (i32vec-max v))   ; => (as int32 2)
+;;;
+;;; Since: Phase N1
+
+(defn i32vec-max [^borrow v : I32Vec]
+  #fx{}
+  #reads v
+  : int32
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  if (n == 0) {
+      tur_panic("i32vec-max: empty array");
+      return 0;
+    }
+  const int32_t *d = a->data;
+  int32_t m = d[0];
+  for (int64_t i = 1; i < n; i++) m = d[i] > m ? d[i] : m;
+  return m;
+  ```)
+;;; i32vec-ref-unchecked -- the element at index i, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  The loop macros
+;;; (`-for`, `-fold`, ...) use it where they have already checked the index.
+;;; Its body calls nothing, so a call to it carries no panic check, and a
+;;; loop of such calls can vectorize.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;
+;;; Returns:
+;;;   A int32.
+;;;
+;;; Example:
+;;;   (unsafe (i32vec-ref-unchecked v 0))
+;;;
+;;; Since: Phase N2
+
+(defn i32vec-ref-unchecked [^borrow v : I32Vec i : int]
+  #fx{Unsafe}
+  #reads v
+  : int32
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  return a->data[i];
+  ```)
+;;; i32vec-set-unchecked! -- store x at index i, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no
+;;; TUR_REGION_NOTE (see the module header).
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;   x -- the new element
+;;;
+;;; Example:
+;;;   (unsafe (i32vec-set-unchecked! v 0 (as int32 1)))
+;;;
+;;; Since: Phase N2
+
+(defn i32vec-set-unchecked! [^borrow v : I32Vec i : int x : int32]
+  #fx{Unsafe}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  a->data[i] = x;
+  ```)
+;;; i32vec-for -- run body once per element of one or two I32Vecs.
+;;;
+;;; `(for [x v] body...)` binds x to each element of v in order;
+;;; `(for [x v y w] body...)` walks v and w together (same length, or a panic
+;;; before the first pass).  No index is in scope, so none can be wrong: the
+;;; reads are `i32vec-ref-unchecked`, the body sees plain elements, and the loop
+;;; carries no bounds check or panic test -- gcc can vectorize it at -O3.  An
+;;; array argument that is not a name is evaluated once, and freed after.
+;;;
+;;; Parameters:
+;;;   bindings -- `[x v]` or `[x v y w]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (let [v (i32vec-of (as int32 1) (as int32 2))] (i32vec-for [x v] (println x)))
+;;;
+;;; Since: Phase N2
+
+(defmacro i32vec-for [bv & body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        x    (first bv)
+        v    (second bv)
+        more (rest (rest bv))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (i32vec-for [~x ~t ~@more] ~@body)))
+      (if (empty? more)
+        `(let [^mut ~i 0
+               ~n      (i32vec-len ~v)]
+           (while (< ~i ~n)
+             (let [~x (unsafe (i32vec-ref-unchecked ~v ~i))]
+               ~@body)
+             (set! ~i (+ ~i 1))))
+        (let [y (first more)
+              w (second more)]
+          (if (list? w)
+            (let [t (gensym "nv")]
+              `(let [~t ~w] (i32vec-for [~x ~v ~y ~t] ~@body)))
+            `(let [^mut ~i 0
+                   ~n      (i32vec-same-len__ ~v ~w)]
+               (while (< ~i ~n)
+                 (let [~x (unsafe (i32vec-ref-unchecked ~v ~i))
+                       ~y (unsafe (i32vec-ref-unchecked ~w ~i))]
+                   ~@body)
+                 (set! ~i (+ ~i 1))))))))))
+;;; i32vec-for-index -- run body once per element, with its index.
+;;;
+;;; `(for-index [i x v] body...)` binds i (read-only) and x = v[i].
+;;;
+;;; Parameters:
+;;;   bindings -- `[i x v]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (let [v (i32vec-of (as int32 1) (as int32 2))] (i32vec-for-index [i x v] (println i)))
+;;;
+;;; Since: Phase N2
+
+(defmacro i32vec-for-index [bv & body]
+  (let [i  (gensym "i")
+        n  (gensym "n")
+        iv (first bv)
+        x  (second bv)
+        v  (first (rest (rest bv)))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (i32vec-for-index [~iv ~x ~t] ~@body)))
+      `(let [^mut ~i 0
+             ~n      (i32vec-len ~v)]
+         (while (< ~i ~n)
+           (let [~iv ~i
+                 ~x  (unsafe (i32vec-ref-unchecked ~v ~i))]
+             ~@body)
+           (set! ~i (+ ~i 1)))))))
+;;; i32vec-fold -- fold the elements of a I32Vec into an accumulator.
+;;;
+;;; `(fold [acc init x v] body)`: acc starts at init, and for each element x
+;;; in order becomes the value of body (which sees acc and x).  The result is
+;;; the final acc.  A float sum written this way is the strict left fold, so
+;;; gcc keeps it scalar; `i32vec-sum` is the vectorized one.
+;;;
+;;; Parameters:
+;;;   bindings -- `[acc init x v]`
+;;;   body     -- the new accumulator
+;;;
+;;; Returns:
+;;;   The final accumulator.
+;;;
+;;; Example:
+;;;   (let [v (i32vec-of (as int32 1) (as int32 2))] (i32vec-fold [n 0 x v] (+ n 1)))   ; => 2
+;;;
+;;; Since: Phase N2
+
+(defmacro i32vec-fold [bv body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        acc  (first bv)
+        init (second bv)
+        x    (first (rest (rest bv)))
+        v    (second (rest (rest bv)))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (i32vec-fold [~acc ~init ~x ~t] ~body)))
+      `(let [^mut ~i   0
+             ~n        (i32vec-len ~v)
+             ^mut ~acc ~init]
+         (while (< ~i ~n)
+           (let [~x (unsafe (i32vec-ref-unchecked ~v ~i))]
+             (set! ~acc ~body))
+           (set! ~i (+ ~i 1)))
+         ~acc))))
+;;; i32vec-build -- a fresh I32Vec of n elements, element i the value of expr.
+;;;
+;;; `(build n [i] expr)`, after Racket's `for/flvector`: i is bound to each
+;;; index in turn, and expr runs outside any `unsafe`.
+;;;
+;;; Parameters:
+;;;   n    -- the length (evaluated once)
+;;;   i    -- the index name, in a vector
+;;;   expr -- the element at i, of type int32
+;;;
+;;; Returns:
+;;;   A fresh I32Vec, owned by the caller.
+;;;
+;;; Example:
+;;;   (let [v (i32vec-build 3 [i] (as int32 1))] (i32vec-len v))   ; => 3
+;;;
+;;; Since: Phase N2
+
+(defmacro i32vec-build [n bv expr]
+  (let [i   (gensym "i")
+        m   (gensym "n")
+        e   (gensym "e")
+        out (gensym "out")
+        iv  (first bv)]
+    `(let [~m      ~n
+           ~out    (i32vec-new ~m (as int32 0))
+           ^mut ~i 0]
+       (while (< ~i ~m)
+         (let [~iv ~i
+               ~e  ~expr]
+           (unsafe (i32vec-set-unchecked! ~out ~i ~e)))
+         (set! ~i (+ ~i 1)))
+       ~out)))
+;;; i32vec-same-len__ -- internal: the common length of two arrays, or a panic.
+
+(defn i32vec-same-len__ [^borrow a : I32Vec ^borrow b : I32Vec]
+  #fx{}
+  #reads [a b]
+  : int
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *x = (void*)(intptr_t)a;
+  struct { int64_t len; int32_t *data; void *raw; } *y = (void*)(intptr_t)b;
+  if (x->len != y->len) {
+    tur_panic("i32vec-for: length mismatch");
+    return 0;
+  }
+  return x->len;
+  ```)
 ;; ===== U8Vec: bytes =====
 ;;; U8Vec -- a fixed-length, unboxed array of bytes (uint8).
 ;;;
@@ -1406,3 +3428,388 @@
       (u8vec-show-loop__ v 0 (u8vec-len v) b)
       (builder/push-cstr! b "]")
       (builder/finish b))))
+;; --- N1 bulk kernels, N2 unchecked access and loops (tools/gen-numvec.py) ---
+;;; u8vec-fill! -- store x in every slot.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   x -- the value
+;;;
+;;; Example:
+;;;   (u8vec-fill! v (as uint8 1))
+;;;
+;;; Since: Phase N1
+
+(defn u8vec-fill! [^borrow v : U8Vec x : uint8]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  uint8_t *d = a->data;
+  for (int64_t i = 0; i < n; i++) d[i] = x;
+  ```)
+;;; u8vec-copy! -- copy src's elements into dst (same length, or a panic).
+;;;
+;;; Parameters:
+;;;   dst -- the array written (borrowed)
+;;;   src -- the array read (borrowed)
+;;;
+;;; Example:
+;;;   (u8vec-copy! dst src)
+;;;
+;;; Since: Phase N1
+
+(defn u8vec-copy! [^borrow dst : U8Vec ^borrow src : U8Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; uint8_t *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("u8vec-copy!: length mismatch");
+      return;
+    }
+  if (y->len > 0) memmove(y->data, x->data, (size_t)y->len * sizeof(uint8_t));
+  ```)
+;;; u8vec-add! -- dst[i] += src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; dst and src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array added (borrowed)
+;;;
+;;; Example:
+;;;   (u8vec-add! y x)
+;;;
+;;; Since: Phase N1
+
+(defn u8vec-add! [^borrow dst : U8Vec ^borrow src : U8Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; uint8_t *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("u8vec-add!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  uint8_t *yd = y->data;
+  const uint8_t *xd = x->data;
+  for (int64_t i = 0; i < n; i++) yd[i] = (uint8_t)((uint8_t)yd[i] + (uint8_t)xd[i]);
+  ```)
+;;; u8vec-sum -- the sum of the elements.
+;;;
+;;; A float sum is computed in eight interleaved partial sums (lane k
+;;; takes the elements i with i mod 8 = k), combined in one fixed tree:
+;;; the same answer on every engine and machine, and vectorizable without
+;;; -ffast-math.  It can differ in the last bits from `-sum-ordered`, the
+;;; left-to-right sum.  An integer sum wraps modulo 2^64; a narrow element
+;;; is widened to `int` first.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A int.
+;;;
+;;; Example:
+;;;   (let [v (u8vec-of (as uint8 1) (as uint8 2))] (u8vec-sum v))
+;;;
+;;; Since: Phase N1
+
+(defn u8vec-sum [^borrow v : U8Vec]
+  #fx{}
+  #reads v
+  : int
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  const uint8_t *d = a->data;
+  uint64_t s = 0;
+  for (int64_t i = 0; i < n; i++) s = s + (uint64_t)d[i];
+  return (int64_t)s;
+  ```)
+;;; u8vec-min -- the smallest element (an empty array panics).
+;;;
+;;; A NaN element makes the result NaN.  Which of two equal elements
+;;; (0.0 and -0.0) is returned is fixed by the reduction order, the same
+;;; on every engine.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A uint8.
+;;;
+;;; Example:
+;;;   (let [v (u8vec-of (as uint8 1) (as uint8 2))] (u8vec-min v))   ; => (as uint8 1)
+;;;
+;;; Since: Phase N1
+
+(defn u8vec-min [^borrow v : U8Vec]
+  #fx{}
+  #reads v
+  : uint8
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  if (n == 0) {
+      tur_panic("u8vec-min: empty array");
+      return 0;
+    }
+  const uint8_t *d = a->data;
+  uint8_t m = d[0];
+  for (int64_t i = 1; i < n; i++) m = d[i] < m ? d[i] : m;
+  return m;
+  ```)
+;;; u8vec-max -- the largest element (an empty array panics).
+;;;
+;;; A NaN element makes the result NaN.  Which of two equal elements
+;;; (0.0 and -0.0) is returned is fixed by the reduction order, the same
+;;; on every engine.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;
+;;; Returns:
+;;;   A uint8.
+;;;
+;;; Example:
+;;;   (let [v (u8vec-of (as uint8 1) (as uint8 2))] (u8vec-max v))   ; => (as uint8 2)
+;;;
+;;; Since: Phase N1
+
+(defn u8vec-max [^borrow v : U8Vec]
+  #fx{}
+  #reads v
+  : uint8
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  if (n == 0) {
+      tur_panic("u8vec-max: empty array");
+      return 0;
+    }
+  const uint8_t *d = a->data;
+  uint8_t m = d[0];
+  for (int64_t i = 1; i < n; i++) m = d[i] > m ? d[i] : m;
+  return m;
+  ```)
+;;; u8vec-ref-unchecked -- the element at index i, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  The loop macros
+;;; (`-for`, `-fold`, ...) use it where they have already checked the index.
+;;; Its body calls nothing, so a call to it carries no panic check, and a
+;;; loop of such calls can vectorize.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;
+;;; Returns:
+;;;   A uint8.
+;;;
+;;; Example:
+;;;   (unsafe (u8vec-ref-unchecked v 0))
+;;;
+;;; Since: Phase N2
+
+(defn u8vec-ref-unchecked [^borrow v : U8Vec i : int]
+  #fx{Unsafe}
+  #reads v
+  : uint8
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  return a->data[i];
+  ```)
+;;; u8vec-set-unchecked! -- store x at index i, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no
+;;; TUR_REGION_NOTE (see the module header).
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;   x -- the new element
+;;;
+;;; Example:
+;;;   (unsafe (u8vec-set-unchecked! v 0 (as uint8 1)))
+;;;
+;;; Since: Phase N2
+
+(defn u8vec-set-unchecked! [^borrow v : U8Vec i : int x : uint8]
+  #fx{Unsafe}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  a->data[i] = x;
+  ```)
+;;; u8vec-for -- run body once per element of one or two U8Vecs.
+;;;
+;;; `(for [x v] body...)` binds x to each element of v in order;
+;;; `(for [x v y w] body...)` walks v and w together (same length, or a panic
+;;; before the first pass).  No index is in scope, so none can be wrong: the
+;;; reads are `u8vec-ref-unchecked`, the body sees plain elements, and the loop
+;;; carries no bounds check or panic test -- gcc can vectorize it at -O3.  An
+;;; array argument that is not a name is evaluated once, and freed after.
+;;;
+;;; Parameters:
+;;;   bindings -- `[x v]` or `[x v y w]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (let [v (u8vec-of (as uint8 1) (as uint8 2))] (u8vec-for [x v] (println x)))
+;;;
+;;; Since: Phase N2
+
+(defmacro u8vec-for [bv & body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        x    (first bv)
+        v    (second bv)
+        more (rest (rest bv))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (u8vec-for [~x ~t ~@more] ~@body)))
+      (if (empty? more)
+        `(let [^mut ~i 0
+               ~n      (u8vec-len ~v)]
+           (while (< ~i ~n)
+             (let [~x (unsafe (u8vec-ref-unchecked ~v ~i))]
+               ~@body)
+             (set! ~i (+ ~i 1))))
+        (let [y (first more)
+              w (second more)]
+          (if (list? w)
+            (let [t (gensym "nv")]
+              `(let [~t ~w] (u8vec-for [~x ~v ~y ~t] ~@body)))
+            `(let [^mut ~i 0
+                   ~n      (u8vec-same-len__ ~v ~w)]
+               (while (< ~i ~n)
+                 (let [~x (unsafe (u8vec-ref-unchecked ~v ~i))
+                       ~y (unsafe (u8vec-ref-unchecked ~w ~i))]
+                   ~@body)
+                 (set! ~i (+ ~i 1))))))))))
+;;; u8vec-for-index -- run body once per element, with its index.
+;;;
+;;; `(for-index [i x v] body...)` binds i (read-only) and x = v[i].
+;;;
+;;; Parameters:
+;;;   bindings -- `[i x v]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (let [v (u8vec-of (as uint8 1) (as uint8 2))] (u8vec-for-index [i x v] (println i)))
+;;;
+;;; Since: Phase N2
+
+(defmacro u8vec-for-index [bv & body]
+  (let [i  (gensym "i")
+        n  (gensym "n")
+        iv (first bv)
+        x  (second bv)
+        v  (first (rest (rest bv)))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (u8vec-for-index [~iv ~x ~t] ~@body)))
+      `(let [^mut ~i 0
+             ~n      (u8vec-len ~v)]
+         (while (< ~i ~n)
+           (let [~iv ~i
+                 ~x  (unsafe (u8vec-ref-unchecked ~v ~i))]
+             ~@body)
+           (set! ~i (+ ~i 1)))))))
+;;; u8vec-fold -- fold the elements of a U8Vec into an accumulator.
+;;;
+;;; `(fold [acc init x v] body)`: acc starts at init, and for each element x
+;;; in order becomes the value of body (which sees acc and x).  The result is
+;;; the final acc.  A float sum written this way is the strict left fold, so
+;;; gcc keeps it scalar; `u8vec-sum` is the vectorized one.
+;;;
+;;; Parameters:
+;;;   bindings -- `[acc init x v]`
+;;;   body     -- the new accumulator
+;;;
+;;; Returns:
+;;;   The final accumulator.
+;;;
+;;; Example:
+;;;   (let [v (u8vec-of (as uint8 1) (as uint8 2))] (u8vec-fold [n 0 x v] (+ n 1)))   ; => 2
+;;;
+;;; Since: Phase N2
+
+(defmacro u8vec-fold [bv body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        acc  (first bv)
+        init (second bv)
+        x    (first (rest (rest bv)))
+        v    (second (rest (rest bv)))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] (u8vec-fold [~acc ~init ~x ~t] ~body)))
+      `(let [^mut ~i   0
+             ~n        (u8vec-len ~v)
+             ^mut ~acc ~init]
+         (while (< ~i ~n)
+           (let [~x (unsafe (u8vec-ref-unchecked ~v ~i))]
+             (set! ~acc ~body))
+           (set! ~i (+ ~i 1)))
+         ~acc))))
+;;; u8vec-build -- a fresh U8Vec of n elements, element i the value of expr.
+;;;
+;;; `(build n [i] expr)`, after Racket's `for/flvector`: i is bound to each
+;;; index in turn, and expr runs outside any `unsafe`.
+;;;
+;;; Parameters:
+;;;   n    -- the length (evaluated once)
+;;;   i    -- the index name, in a vector
+;;;   expr -- the element at i, of type uint8
+;;;
+;;; Returns:
+;;;   A fresh U8Vec, owned by the caller.
+;;;
+;;; Example:
+;;;   (let [v (u8vec-build 3 [i] (as uint8 1))] (u8vec-len v))   ; => 3
+;;;
+;;; Since: Phase N2
+
+(defmacro u8vec-build [n bv expr]
+  (let [i   (gensym "i")
+        m   (gensym "n")
+        e   (gensym "e")
+        out (gensym "out")
+        iv  (first bv)]
+    `(let [~m      ~n
+           ~out    (u8vec-new ~m (as uint8 0))
+           ^mut ~i 0]
+       (while (< ~i ~m)
+         (let [~iv ~i
+               ~e  ~expr]
+           (unsafe (u8vec-set-unchecked! ~out ~i ~e)))
+         (set! ~i (+ ~i 1)))
+       ~out)))
+;;; u8vec-same-len__ -- internal: the common length of two arrays, or a panic.
+
+(defn u8vec-same-len__ [^borrow a : U8Vec ^borrow b : U8Vec]
+  #fx{}
+  #reads [a b]
+  : int
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *x = (void*)(intptr_t)a;
+  struct { int64_t len; uint8_t *data; void *raw; } *y = (void*)(intptr_t)b;
+  if (x->len != y->len) {
+    tur_panic("u8vec-for: length mismatch");
+    return 0;
+  }
+  return x->len;
+  ```)

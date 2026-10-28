@@ -253,6 +253,7 @@ fixture_has_inline_c() {
 # entry belongs here only if it is verified to interpret correctly.
 TURI_INLINEC_RUN="
 inline-c-binop
+numvec-kernels
 map-multiword-struct-key
 set-multiword-struct-element
 clone-list
@@ -292,6 +293,7 @@ fixture_inline_c_runs() {
 # (closure-drop-affine-chain-autodrop, httpd-mw-fold-many), passes by luck.
 TURI_INLINEC_JIT_RUN="
 async-sleep
+numvec-loops
 backtrack-depth
 backtrack-depth-exceeded
 backtrack-interleave

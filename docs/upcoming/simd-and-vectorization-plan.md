@@ -1,7 +1,8 @@
 # SIMD and vectorization -- typed numeric arrays, then explicit vector types
 
-> **Status: N0 LANDED 2026-10-28** (`stdlib/numvec.tur`, section 3 N0 "As built");
-> N1, N2, S0 and S1 not started. Proposed 2026-10-24. Written in response to
+> **Status: N0, N1 and N2 (approaches A + B) LANDED 2026-10-28** (`stdlib/numvec.tur`;
+> each phase's "As built" note in section 3). N2's `-fvect-cost-model=cheap`
+> decision, N2 approaches D/E, S0 and S1 not started. Proposed 2026-10-24. Written in response to
 > "are (1) SIMD functions for manual calling and (2) vectorization
 > optimizations, likely in MIR, useful or viable for Turmeric?", with Racket's
 > `flvector` raised as a related idea. Short answer: (1) yes, as an
@@ -334,6 +335,41 @@ gcc vectorizes them at `-O3` without help:
 - **Benchmark.** `benchmarks/bench-f64vec-dot.tur` beside a C baseline, in the
   style of `fmap-vec.tur` / `fmap-vec-baseline.c`.
 
+**As built: N1 (2026-10-28).** Every kernel above exists for each type it
+makes sense for: `fill!`, `copy!`, `add!`, `sum`, `min`, `max` everywhere;
+`scale!`, `axpy!`, `dot` except on `U8Vec`; `sum-ordered` on the float types.
+Choices made on the way:
+
+- **The kernel C is written once**, in `tools/gen-numvec.py`, and becomes
+  both the stdlib inline-C body and the interpreter's native
+  (`src/turi/numvec_kernels.inc`, generated), so the engines run the same
+  arithmetic in the same order. `numvec-kernels` prints every float result's
+  bit pattern; cc, `tur jit` and turi agree bit for bit.
+- **Eight lanes for every element width** (open question 4). It is the plan's
+  own number, covers AVX2 for `float32` and AVX-512 for `float64`, and does
+  not depend on the build machine. Sixteen for `float32` would only help
+  AVX-512, which tur never targets without `-march`.
+- **No FMA contraction.** A multiply and the add consuming it are separate
+  statements (clang contracts within one expression), the emitted C is ISO
+  `-std=c99` (gcc does not contract there), and the generated `.inc` turns
+  contraction off for the interpreter's own build.
+- **Integer arithmetic wraps**, computed in the unsigned type; `int32` and
+  `uint8` sums widen to `int`, and an `int32` product is formed in 64 bits.
+- **`min` / `max` propagate NaN**, and are eight-lane too, so they vectorize.
+- **The vectorization check** is `tests/check-numvec-vectorized.py` (ctest
+  `tur_numvec_vectorized`), over `tests/vectorize/numvec-probe.tur`: 34 loops
+  must report `loop vectorized` at `-O3`, x86-64 with gcc only (it skips
+  elsewhere). Not on the list, because SSE2 has no instruction for them:
+  64-bit integer multiply and min/max (`i64vec-scale!`, `-dot`, `-min`,
+  `-max`) and `i32vec-dot`'s widening multiply; nor `-copy!` (a `memmove`).
+  Two traps the probe has to avoid, both recorded in it: a constant length
+  lets gcc unroll instead of vectorize, and code it estimates runs once (only
+  from `main`) is optimized for size, which skips vectorization entirely.
+- **Benchmark:** `benchmarks/f64vec-dot-results.md`. `f64vec-dot` over 4096
+  doubles x 200,000 takes 0.20s at `--release` against 2.19s for the same
+  dot product over `(Vec float)`: 11x, within 25% of the same loop in C,
+  and faster than a plain C loop without `-ffast-math`.
+
 ### N2 -- a loop-friendly element access path
 
 N1 covers the common kernels; N2 is for the loop someone writes themselves.
@@ -409,6 +445,35 @@ Acceptance: the probe from 1.1 rewritten over `F64Vec` reports
 `loop vectorized` under `gcc -O3 -fopt-info-vec-optimized` for an integer
 sum, and for a float sum written with explicit partial sums. Add it to the
 N1 vectorization check.
+
+**As built: N2 (2026-10-28), approaches A and B.**
+
+- **A:** `P-ref-unchecked` and `P-set-unchecked!`, `#fx{Unsafe}`, with no
+  bounds check in the compiled body. Their interpreter twins keep one, so a
+  wrong index in an interpreted (possibly sandboxed) program panics instead
+  of reading past the block; a correct program cannot tell.
+- **B:** `P-for` (one array, or two walked together after one length check),
+  `P-for-index`, `P-fold` (added to the plan's list: a reduction needs an
+  accumulator) and `P-build`. They expand to a `while` loop over `^mut`
+  counters with gensym'd names; the body runs outside `unsafe`. An array
+  argument that is not a name is bound once and freed after the loop.
+- **Acceptance met:** an integer sum through `i64vec-fold`, an `int32` sum
+  through `i32vec-for`, and a float sum with two explicit partial sums over
+  `f64vec-ref-unchecked` all report `loop vectorized`; they are in the
+  vectorization check.
+- **Not needed after all: an emitter change.** The post-call
+  `if (tur_panicking) return` the emitter writes after every call does not
+  stop these loops vectorizing -- gcc inlines the leaf accessor, sees
+  nothing in a read-only loop that writes the flag, and hoists the test.
+  (A first probe that suggested otherwise was misread; an emitter change to
+  drop the test after leaf inline-C calls was written, measured to buy
+  nothing, and reverted.)
+- **Known limit: a loop that STORES into an array does not vectorize** --
+  `P-build`, or `P-for-index` with `P-set-unchecked!`. The emitted C is
+  compiled `-fno-strict-aliasing`, so gcc must assume a stored element may
+  be the array's own header, and reloads the data pointer every iteration.
+  Fix directions: an N1 kernel for the common shape, or a way to hand a loop
+  the data pointer once (a borrowed view type) so the header is not re-read.
 
 Also in N2, as a separate small decision: whether `tur build` (not only
 `--release`) should pass `-fvect-cost-model=cheap`, so unknown-trip-count
@@ -528,11 +593,13 @@ Results identical in every cell.
    open: the generic type's own name, and whether per-type function names
    (`f64vec-new`) survive for constructors (3.1, item 3).
 3. Which N2 approaches (A-G in N2)? Recommended: A + B first, D or E later,
-   G separately. Note D changes `NumVec`'s type, so it has to be decided
-   before N0 ships.
+   G separately. **A + B landed 2026-10-28.** D would change `NumVec`'s type
+   (a phantom length), which N0 shipped without; it can still be added as a
+   separate branded type.
 4. Is eight the right partial-sum count for N1 reductions on every target,
    or should it be fixed per element width (8 for `float64`, 16 for
    `float32`)? Either way it must not depend on the build machine.
+   **Decided 2026-10-28: eight for every width** (N1 "As built").
 5. wasm: turn on `-msimd128` always (every current browser supports it) or
    only when the program uses S1 types? **Undecided**; it does not block
    anything before S1.

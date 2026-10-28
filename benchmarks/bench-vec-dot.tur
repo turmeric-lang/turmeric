@@ -1,0 +1,36 @@
+;;; bench-vec-dot -- bench-f64vec-dot's workload over `(Vec float)`.
+;;
+;; The section 1.1 shape of simd-and-vectorization-plan: a tail-recursive dot
+;; product reading each element through `vec-get` (a site push/pop, a bounds
+;; check, a panic test and a union reinterpret per element), which gcc cannot
+;; vectorize.  The comparison point for bench-f64vec-dot.tur.  Its sum is the
+;; strict left fold, so its total can differ from the kernel's in the last
+;; digits.
+(load "stdlib/math.tur")
+
+(defn fill [v : (Vec float) i : int n : int base : float m : int sign : float] : nil
+  (if (= i n)
+    nil
+    (do
+      (vec-push! v {base + {sign * (int->float (mod i m))}})
+      (fill v {i + 1} n base m sign))))
+
+(defn vdot [a : (Vec float) b : (Vec float) i : int n : int acc : float] : float
+  (if (= i n)
+    acc
+    (vdot a b {i + 1} n {acc + {(:: (vec-get a i) float) * (:: (vec-get b i) float)}})))
+
+(defn reps [a : (Vec float) b : (Vec float) k : int acc : float] : float
+  (if (= k 0)
+    acc
+    (reps a b {k - 1} {acc + (vdot a b 0 4096 0.0)})))
+
+(defn main [] : int
+  (let [a (:: (vec-new) (Vec float))
+        b (:: (vec-new) (Vec float))]
+    (fill a 0 4096 7.1 13 1.0)
+    (fill b 0 4096 3.25 7 -1.0)
+    (println (reps a b 200000 0.0))
+    (vec-free a)
+    (vec-free b)
+    0))

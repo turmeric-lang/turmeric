@@ -3,11 +3,10 @@
 
 The five typed numeric arrays of docs/upcoming/simd-and-vectorization-plan.md
 (phase N0) are the same code five times over a different C element type, so
-the module is generated from one template.  Edit the template here, then:
-
-    python3 tools/gen-numvec.py > stdlib/numvec.tur
-
-`python3 tools/gen-numvec.py --check` exits 1 if stdlib/numvec.tur is stale.
+the module is generated from one template.  Edit the template here, then run
+`python3 tools/gen-numvec.py`, which rewrites stdlib/numvec.tur and
+src/turi/numvec_kernels.inc (the interpreter twins of the N1 kernels, built
+from the same C bodies).  `--check` exits 1 if either is stale.
 Every inline-C body -- `<p>-new`, `-free`, `-copy`, `-len`, `-ref`, `-set!` --
 has an interpreter twin of the same name in src/turi/interpreter_natives.c
 (NUMVEC_NATIVES) and rows in src/turi/native_caps.c; keep all three in step.
@@ -63,10 +62,22 @@ HDR = """;;; tur/numvec -- typed numeric arrays: F64Vec, F32Vec, I64Vec, I32Vec,
 ;;; | I32Vec | `int32`   | `(i32vec-new n init)`     |
 ;;; | U8Vec  | `uint8`   | `(u8vec-new n init)`      |
 ;;;
-;;; Every type has the same nine operations, named by its prefix `P` (`f64vec`,
+;;; Every type has these operations, named by its prefix `P` (`f64vec`,
 ;;; `f32vec`, `i64vec`, `i32vec`, `u8vec`):
-;;; `P-new`, `P-of`, `P-len`, `P-ref`, `P-set!`, `P-copy`, `P->vec`,
-;;; `vec->P`, `P-show`.
+;;;
+;;; - access: `P-new`, `P-of`, `P-len`, `P-ref`, `P-set!`, `P-copy`, `P->vec`,
+;;;   `vec->P`, `P-show`;
+;;; - bulk kernels (phase N1), each one C loop gcc vectorizes at -O3:
+;;;   `P-fill!`, `P-copy!`, `P-add!`, `P-sum`, `P-min`, `P-max`, and except on
+;;;   U8Vec `P-scale!`, `P-axpy!`, `P-dot`; the float types add
+;;;   `P-sum-ordered`.  A float reduction uses a fixed eight-lane order, so it
+;;;   is vectorized without -ffast-math and is bit-identical on every engine;
+;;;   integer arithmetic wraps;
+;;; - loops (phase N2): `P-for`, `P-for-index`, `P-fold`, `P-build`, which
+;;;   bind elements, never an index the program could get wrong, and read
+;;;   through the unchecked `P-ref-unchecked` / `P-set-unchecked!`
+;;;   (`#fx{Unsafe}`).  A loop that only reads an array vectorizes; one that
+;;;   stores into one does not yet (see the plan's N2 notes).
 ;;;
 ;;; Ownership: each type is `^affine` with a `Drop` instance, so a let-bound
 ;;; array is freed at scope exit, exactly once, and moving it (returning it,
@@ -387,6 +398,524 @@ TEMPLATE = r""";; ===== {T}: {what} =====
 """
 
 
+# ---------------------------------------------------------------------------
+# N1 -- bulk kernels, and N2 -- the unchecked accessors.
+#
+# Each kernel's C body is written ONCE, here.  It becomes the inline-C body of
+# the stdlib function, and the same text is compiled into the interpreter's
+# native for it (src/turi/numvec_kernels.inc), so the two engines run the same
+# arithmetic in the same order and agree bit for bit.
+#
+# Rules every body keeps (simd-and-vectorization-plan N1):
+#   - any panic (a length mismatch, an empty min/max) comes before the loop, so
+#     the loop has no control flow and gcc vectorizes it at -O3;
+#   - a float reduction accumulates into EIGHT interleaved partial results
+#     (lane k takes the elements i with i mod 8 = k) and combines them in one
+#     fixed tree -- the reassociation -ffast-math would make, chosen here, the
+#     same on every engine and ISA.  `-sum-ordered` is the strict left fold;
+#   - a multiply and the add that consumes it are separate statements, so no
+#     compiler contracts them into an FMA (clang contracts within one
+#     expression; gcc does not in the ISO mode tur compiles in);
+#   - integer arithmetic wraps (it is done in the unsigned type), never UB.
+# ---------------------------------------------------------------------------
+
+HDRV = "struct {{ int64_t len; {C} *data; void *raw; }} *{n} = (void*)(intptr_t){v};"
+
+
+def hdr(t, n, v):
+    return HDRV.format(C=t["C"], n=n, v=v)
+
+
+IS_FLOAT = {"f64vec": True, "f32vec": True, "i64vec": False, "i32vec": False,
+            "u8vec": False}
+# the unsigned type integer arithmetic wraps in
+UNS = {"i64vec": "uint64_t", "i32vec": "uint32_t", "u8vec": "uint8_t"}
+
+
+def same_len(t, name, ret):
+    return ("if (y->len != x->len) {\n"
+            "    tur_panic(\"%s-%s: length mismatch\");\n"
+            "    return%s;\n"
+            "  }") % (t["p"], name, ret)
+
+
+def k_fill(t):
+    return "\n".join([hdr(t, "a", "v"),
+                      "int64_t n = a->len;",
+                      "%s *d = a->data;" % t["C"],
+                      "for (int64_t i = 0; i < n; i++) d[i] = x;"])
+
+
+def k_copy(t):
+    return "\n".join([hdr(t, "y", "dst"), hdr(t, "x", "src"),
+                      same_len(t, "copy!", ""),
+                      "if (y->len > 0) memmove(y->data, x->data, (size_t)y->len * sizeof(%s));" % t["C"]])
+
+
+def k_scale(t):
+    C = t["C"]
+    if IS_FLOAT[t["p"]]:
+        op = "d[i] = d[i] * s;"
+    else:
+        op = "d[i] = (%s)((%s)d[i] * (%s)s);" % (C, UNS[t["p"]], UNS[t["p"]])
+    return "\n".join([hdr(t, "a", "v"), "int64_t n = a->len;",
+                      "%s *d = a->data;" % C,
+                      "for (int64_t i = 0; i < n; i++) " + op])
+
+
+def k_add(t):
+    C = t["C"]
+    if IS_FLOAT[t["p"]]:
+        op = "yd[i] = yd[i] + xd[i];"
+    else:
+        op = "yd[i] = (%s)((%s)yd[i] + (%s)xd[i]);" % (C, UNS[t["p"]], UNS[t["p"]])
+    return "\n".join([hdr(t, "y", "dst"), hdr(t, "x", "src"),
+                      same_len(t, "add!", ""),
+                      "int64_t n = y->len;",
+                      "%s *yd = y->data;" % C, "const %s *xd = x->data;" % C,
+                      "for (int64_t i = 0; i < n; i++) " + op])
+
+
+def k_axpy(t):
+    C = t["C"]
+    if IS_FLOAT[t["p"]]:
+        op = "{ %s m = s * xd[i]; yd[i] = yd[i] + m; }" % C
+    else:
+        U = UNS[t["p"]]
+        op = "{ %s m = (%s)s * (%s)xd[i]; yd[i] = (%s)((%s)yd[i] + m); }" % (U, U, U, C, U)
+    return "\n".join([hdr(t, "y", "dst"), hdr(t, "x", "src"),
+                      same_len(t, "axpy!", ""),
+                      "int64_t n = y->len;",
+                      "%s *yd = y->data;" % C, "const %s *xd = x->data;" % C,
+                      "for (int64_t i = 0; i < n; i++) " + op])
+
+
+TREE = "((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7]))"
+
+
+def k_sum(t):
+    C = t["C"]
+    if IS_FLOAT[t["p"]]:
+        return "\n".join([
+            hdr(t, "a", "v"), "int64_t n = a->len;",
+            "const %s *d = a->data;" % C,
+            "%s s[8] = {0, 0, 0, 0, 0, 0, 0, 0};" % C,
+            "int64_t i = 0;",
+            "for (; i + 8 <= n; i += 8)",
+            "  for (int k = 0; k < 8; k++) s[k] = s[k] + d[i + k];",
+            "for (; i < n; i++) s[i & 7] = s[i & 7] + d[i];",
+            "return %s;" % TREE])
+    # exact modulo 2^64, so any order gives the same answer
+    if t["p"] == "i32vec":
+        add = "s = s + (uint64_t)(int64_t)d[i];"
+    else:
+        add = "s = s + (uint64_t)d[i];"
+    return "\n".join([hdr(t, "a", "v"), "int64_t n = a->len;",
+                      "const %s *d = a->data;" % C, "uint64_t s = 0;",
+                      "for (int64_t i = 0; i < n; i++) " + add,
+                      "return (int64_t)s;"])
+
+
+def k_sum_ordered(t):
+    C = t["C"]
+    return "\n".join([hdr(t, "a", "v"), "int64_t n = a->len;",
+                      "const %s *d = a->data;" % C, "%s s = 0;" % C,
+                      "for (int64_t i = 0; i < n; i++) s = s + d[i];",
+                      "return s;"])
+
+
+def k_dot(t):
+    C = t["C"]
+    pre = [hdr(t, "y", "a"), hdr(t, "x", "b"),
+           same_len(t, "dot", " 0"),
+           "int64_t n = y->len;",
+           "const %s *yd = y->data;" % C, "const %s *xd = x->data;" % C]
+    if IS_FLOAT[t["p"]]:
+        return "\n".join(pre + [
+            "%s s[8] = {0, 0, 0, 0, 0, 0, 0, 0};" % C,
+            "int64_t i = 0;",
+            "for (; i + 8 <= n; i += 8)",
+            "  for (int k = 0; k < 8; k++) { %s m = yd[i + k] * xd[i + k]; s[k] = s[k] + m; }" % C,
+            "for (; i < n; i++) { %s m = yd[i] * xd[i]; s[i & 7] = s[i & 7] + m; }" % C,
+            "return %s;" % TREE])
+    if t["p"] == "i32vec":
+        prod = "(uint64_t)((int64_t)yd[i] * (int64_t)xd[i])"
+    else:
+        prod = "(uint64_t)yd[i] * (uint64_t)xd[i]"
+    return "\n".join(pre + ["uint64_t s = 0;",
+                            "for (int64_t i = 0; i < n; i++) s = s + %s;" % prod,
+                            "return (int64_t)s;"])
+
+
+def k_minmax(t, which):
+    C = t["C"]
+    lt = "<" if which == "min" else ">"
+    pre = [hdr(t, "a", "v"), "int64_t n = a->len;",
+           "if (n == 0) {",
+           '    tur_panic("%s-%s: empty array");' % (t["p"], which),
+           "    return 0;", "  }",
+           "const %s *d = a->data;" % C]
+    if IS_FLOAT[t["p"]]:
+        # NaN-propagating: once a lane holds NaN it keeps it (x OP NaN is
+        # false and NaN != NaN is never asked of x); a NaN element replaces
+        # whatever the lane held.
+        return "\n".join(pre + [
+            "%s m[8];" % C,
+            "for (int k = 0; k < 8; k++) m[k] = d[0];",
+            "int64_t i = 0;",
+            "for (; i + 8 <= n; i += 8)",
+            "  for (int k = 0; k < 8; k++) {",
+            "    %s x = d[i + k];" % C,
+            "    m[k] = (x %s m[k] || x != x) ? x : m[k];" % lt,
+            "  }",
+            "for (; i < n; i++) {",
+            "  %s x = d[i];" % C,
+            "  m[i & 7] = (x %s m[i & 7] || x != x) ? x : m[i & 7];" % lt,
+            "}",
+            "for (int w = 4; w >= 1; w /= 2)",
+            "  for (int k = 0; k < w; k++)",
+            "    m[k] = (m[k + w] %s m[k] || m[k + w] != m[k + w]) ? m[k + w] : m[k];" % lt,
+            "return m[0];"])
+    return "\n".join(pre + ["%s m = d[0];" % C,
+                            "for (int64_t i = 1; i < n; i++) m = d[i] %s m ? d[i] : m;" % lt,
+                            "return m;"])
+
+
+def k_ref_unchecked(t):
+    return "\n".join([hdr(t, "a", "v"), "return a->data[i];"])
+
+
+def k_set_unchecked(t):
+    return "\n".join([hdr(t, "a", "v"), "a->data[i] = x;"])
+
+
+ALL = ("f64vec", "f32vec", "i64vec", "i32vec", "u8vec")
+FI = ("f64vec", "f32vec", "i64vec", "i32vec")
+FL = ("f64vec", "f32vec")
+
+# Each kernel: name, the element types it exists for, params [(name, kind)]
+# with kind T (the array), E (an element) or int, ret (nil / E / int / sum:
+# the sum type), the C body, and its docstring parts.  `native=False` marks a
+# body whose interpreter twin is hand-written (the unchecked accessors keep a
+# bounds check there -- see NUMVEC_NATIVES in interpreter_natives.c).
+KERNELS = [
+    dict(name="fill!", types=ALL, params=[("v", "T"), ("x", "E")], ret="nil",
+         body=k_fill, summary="store x in every slot.",
+         doc=["v -- the array (borrowed)", "x -- the value"],
+         ex="({p}-fill! v {e0})"),
+    dict(name="copy!", types=ALL, params=[("dst", "T"), ("src", "T")], ret="nil",
+         body=k_copy, summary="copy src's elements into dst (same length, or a panic).",
+         doc=["dst -- the array written (borrowed)", "src -- the array read (borrowed)"],
+         ex="({p}-copy! dst src)"),
+    dict(name="scale!", types=FI, params=[("v", "T"), ("s", "E")], ret="nil",
+         body=k_scale, summary="multiply every element by s, in place.",
+         doc=["v -- the array (borrowed)", "s -- the factor"],
+         ex="({p}-scale! v {e1})"),
+    dict(name="add!", types=ALL, params=[("dst", "T"), ("src", "T")], ret="nil",
+         body=k_add, summary="dst[i] += src[i] for every i (same length, or a panic).",
+         doc=["dst -- the array updated (borrowed)", "src -- the array added (borrowed)"],
+         ex="({p}-add! y x)"),
+    dict(name="axpy!", types=FI, params=[("dst", "T"), ("s", "E"), ("src", "T")], ret="nil",
+         body=k_axpy, summary="dst[i] += s * src[i] for every i (same length, or a panic).",
+         doc=["dst -- the array updated (borrowed)", "s -- the factor",
+              "src -- the array scaled and added (borrowed)"],
+         ex="({p}-axpy! y {e1} x)"),
+    dict(name="sum", types=ALL, params=[("v", "T")], ret="sum",
+         body=k_sum, summary="the sum of the elements.",
+         doc=["v -- the array (borrowed)"],
+         ex="(let [v ({p}-of {e0} {e1})] ({p}-sum v))"),
+    dict(name="sum-ordered", types=FL, params=[("v", "T")], ret="E",
+         body=k_sum_ordered, summary="the strict left-to-right sum of the elements.",
+         doc=["v -- the array (borrowed)"],
+         ex="(let [v ({p}-of {e0} {e1})] ({p}-sum-ordered v))"),
+    dict(name="dot", types=FI, params=[("a", "T"), ("b", "T")], ret="sum",
+         body=k_dot, summary="the dot product of two arrays (same length, or a panic).",
+         doc=["a -- the first array (borrowed)", "b -- the second array (borrowed)"],
+         ex="(let [a ({p}-of {e0} {e1}) b ({p}-of {e1} {e0})] ({p}-dot a b))"),
+    dict(name="min", types=ALL, params=[("v", "T")], ret="E",
+         body=lambda t: k_minmax(t, "min"), summary="the smallest element (an empty array panics).",
+         doc=["v -- the array (borrowed)"],
+         ex="(let [v ({p}-of {e0} {e1})] ({p}-min v))   ; => {e0}"),
+    dict(name="max", types=ALL, params=[("v", "T")], ret="E",
+         body=lambda t: k_minmax(t, "max"), summary="the largest element (an empty array panics).",
+         doc=["v -- the array (borrowed)"],
+         ex="(let [v ({p}-of {e0} {e1})] ({p}-max v))   ; => {e1}"),
+    dict(name="ref-unchecked", types=ALL, params=[("v", "T"), ("i", "int")], ret="E",
+         body=k_ref_unchecked, unsafe=True, native=False,
+         summary="the element at index i, NOT bounds-checked.",
+         doc=["v -- the array (borrowed)",
+              "i -- zero-based index; the caller proves 0 <= i < len"],
+         ex="(unsafe ({p}-ref-unchecked v 0))"),
+    dict(name="set-unchecked!", types=ALL, params=[("v", "T"), ("i", "int"), ("x", "E")], ret="nil",
+         body=k_set_unchecked, unsafe=True, native=False,
+         summary="store x at index i, NOT bounds-checked.",
+         doc=["v -- the array (borrowed)",
+              "i -- zero-based index; the caller proves 0 <= i < len",
+              "x -- the new element"],
+         ex="(unsafe ({p}-set-unchecked! v 0 {e0}))"),
+]
+
+SUM_RET = {"f64vec": "float", "f32vec": "float32", "i64vec": "int",
+           "i32vec": "int", "u8vec": "int"}
+
+KERNEL_NOTES = {
+    "sum": [
+        "A float sum is computed in eight interleaved partial sums (lane k",
+        "takes the elements i with i mod 8 = k), combined in one fixed tree:",
+        "the same answer on every engine and machine, and vectorizable without",
+        "-ffast-math.  It can differ in the last bits from `-sum-ordered`, the",
+        "left-to-right sum.  An integer sum wraps modulo 2^64; a narrow element",
+        "is widened to `int` first.",
+    ],
+    "dot": [
+        "Floats use the same eight-lane order as `-sum`.  Integers wrap modulo",
+        "2^64; an `int32` product is formed in 64 bits.",
+    ],
+    "min": [
+        "A NaN element makes the result NaN.  Which of two equal elements",
+        "(0.0 and -0.0) is returned is fixed by the reduction order, the same",
+        "on every engine.",
+    ],
+    "max": [
+        "A NaN element makes the result NaN.  Which of two equal elements",
+        "(0.0 and -0.0) is returned is fixed by the reduction order, the same",
+        "on every engine.",
+    ],
+    "scale!": ["Integer arithmetic wraps."],
+    "add!": ["Integer arithmetic wraps; dst and src may be the same array."],
+    "axpy!": ["Integer arithmetic wraps; the multiply and the add are not fused."],
+    "ref-unchecked": [
+        "`#fx{Unsafe}`: call it inside `(unsafe ...)`.  The loop macros",
+        "(`-for`, `-fold`, ...) use it where they have already checked the index.",
+        "Its body calls nothing, so a call to it carries no panic check, and a",
+        "loop of such calls can vectorize.",
+    ],
+    "set-unchecked!": [
+        "`#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no",
+        "TUR_REGION_NOTE (see the module header).",
+    ],
+}
+
+
+def kernel_types(k, t):
+    """(turmeric type, C type) of a param / return kind."""
+    if k == "sum":
+        return (SUM_RET[t["p"]], t["C"] if IS_FLOAT[t["p"]] else "int64_t")
+    if k == "nil":
+        return ("nil", "void")
+    return {"T": (t["T"], "int64_t"), "int": ("int", "int64_t"),
+            "E": (t["E"], t["C"])}[k]
+
+
+def render_kernel(k, t, d):
+    lines = [";;; %s-%s -- %s" % (t["p"], k["name"], k["summary"]), ";;;"]
+    if k["name"] in KERNEL_NOTES:
+        lines += [";;; " + note for note in KERNEL_NOTES[k["name"]]]
+        lines.append(";;;")
+    lines.append(";;; Parameters:")
+    lines += [";;;   " + dl for dl in k["doc"]]
+    lines.append(";;;")
+    rt = kernel_types(k["ret"], t)[0]
+    if rt != "nil":
+        lines += [";;; Returns:", ";;;   A %s." % rt, ";;;"]
+    lines += [";;; Example:", ";;;   " + k["ex"].format(**d), ";;;",
+              ";;; Since: Phase N2" if k.get("unsafe") else ";;; Since: Phase N1",
+              ""]
+    ps = []
+    for (n, kind) in k["params"]:
+        tt = kernel_types(kind, t)[0]
+        ps.append(("^borrow %s : %s" if kind == "T" else "%s : %s") % (n, tt))
+    attrs = ["  #fx{Unsafe}" if k.get("unsafe") else "  #fx{}"]
+    arrays = [n for (n, kind) in k["params"] if kind == "T"]
+    writes = [n for n in arrays if k["name"].endswith("!") and n in ("v", "dst")]
+    reads = [n for n in arrays if n not in writes]
+    for tag, names in (("writes", writes), ("reads", reads)):
+        if len(names) == 1:
+            attrs.append("  #%s %s" % (tag, names[0]))
+        elif names:
+            attrs.append("  #%s [%s]" % (tag, " ".join(names)))
+    lines.append("(defn %s-%s [%s]" % (t["p"], k["name"], " ".join(ps)))
+    lines += attrs
+    lines.append("  : %s" % rt)
+    lines.append("  ```c")
+    lines += ["  " + bl for bl in k["body"](t).split("\n")]
+    lines.append("  ```)")
+    return "\n".join(lines) + "\n"
+
+
+# ---- N2: the element-iteration macros (plan approach B) ----
+MACROS = r''';;; {p}-for -- run body once per element of one or two {T}s.
+;;;
+;;; `(for [x v] body...)` binds x to each element of v in order;
+;;; `(for [x v y w] body...)` walks v and w together (same length, or a panic
+;;; before the first pass).  No index is in scope, so none can be wrong: the
+;;; reads are `{p}-ref-unchecked`, the body sees plain elements, and the loop
+;;; carries no bounds check or panic test -- gcc can vectorize it at -O3.  An
+;;; array argument that is not a name is evaluated once, and freed after.
+;;;
+;;; Parameters:
+;;;   bindings -- `[x v]` or `[x v y w]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (let [v ({p}-of {e0} {e1})] ({p}-for [x v] (println x)))
+;;;
+;;; Since: Phase N2
+
+(defmacro {p}-for [bv & body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        x    (first bv)
+        v    (second bv)
+        more (rest (rest bv))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] ({p}-for [~x ~t ~@more] ~@body)))
+      (if (empty? more)
+        `(let [^mut ~i 0
+               ~n      ({p}-len ~v)]
+           (while (< ~i ~n)
+             (let [~x (unsafe ({p}-ref-unchecked ~v ~i))]
+               ~@body)
+             (set! ~i (+ ~i 1))))
+        (let [y (first more)
+              w (second more)]
+          (if (list? w)
+            (let [t (gensym "nv")]
+              `(let [~t ~w] ({p}-for [~x ~v ~y ~t] ~@body)))
+            `(let [^mut ~i 0
+                   ~n      ({p}-same-len__ ~v ~w)]
+               (while (< ~i ~n)
+                 (let [~x (unsafe ({p}-ref-unchecked ~v ~i))
+                       ~y (unsafe ({p}-ref-unchecked ~w ~i))]
+                   ~@body)
+                 (set! ~i (+ ~i 1))))))))))
+;;; {p}-for-index -- run body once per element, with its index.
+;;;
+;;; `(for-index [i x v] body...)` binds i (read-only) and x = v[i].
+;;;
+;;; Parameters:
+;;;   bindings -- `[i x v]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (let [v ({p}-of {e0} {e1})] ({p}-for-index [i x v] (println i)))
+;;;
+;;; Since: Phase N2
+
+(defmacro {p}-for-index [bv & body]
+  (let [i  (gensym "i")
+        n  (gensym "n")
+        iv (first bv)
+        x  (second bv)
+        v  (first (rest (rest bv)))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] ({p}-for-index [~iv ~x ~t] ~@body)))
+      `(let [^mut ~i 0
+             ~n      ({p}-len ~v)]
+         (while (< ~i ~n)
+           (let [~iv ~i
+                 ~x  (unsafe ({p}-ref-unchecked ~v ~i))]
+             ~@body)
+           (set! ~i (+ ~i 1)))))))
+;;; {p}-fold -- fold the elements of a {T} into an accumulator.
+;;;
+;;; `(fold [acc init x v] body)`: acc starts at init, and for each element x
+;;; in order becomes the value of body (which sees acc and x).  The result is
+;;; the final acc.  A float sum written this way is the strict left fold, so
+;;; gcc keeps it scalar; `{p}-sum` is the vectorized one.
+;;;
+;;; Parameters:
+;;;   bindings -- `[acc init x v]`
+;;;   body     -- the new accumulator
+;;;
+;;; Returns:
+;;;   The final accumulator.
+;;;
+;;; Example:
+;;;   (let [v ({p}-of {e0} {e1})] ({p}-fold [n 0 x v] (+ n 1)))   ; => 2
+;;;
+;;; Since: Phase N2
+
+(defmacro {p}-fold [bv body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        acc  (first bv)
+        init (second bv)
+        x    (first (rest (rest bv)))
+        v    (second (rest (rest bv)))]
+    (if (list? v)
+      (let [t (gensym "nv")]
+        `(let [~t ~v] ({p}-fold [~acc ~init ~x ~t] ~body)))
+      `(let [^mut ~i   0
+             ~n        ({p}-len ~v)
+             ^mut ~acc ~init]
+         (while (< ~i ~n)
+           (let [~x (unsafe ({p}-ref-unchecked ~v ~i))]
+             (set! ~acc ~body))
+           (set! ~i (+ ~i 1)))
+         ~acc))))
+;;; {p}-build -- a fresh {T} of n elements, element i the value of expr.
+;;;
+;;; `(build n [i] expr)`, after Racket's `for/flvector`: i is bound to each
+;;; index in turn, and expr runs outside any `unsafe`.
+;;;
+;;; Parameters:
+;;;   n    -- the length (evaluated once)
+;;;   i    -- the index name, in a vector
+;;;   expr -- the element at i, of type {E}
+;;;
+;;; Returns:
+;;;   A fresh {T}, owned by the caller.
+;;;
+;;; Example:
+;;;   (let [v ({p}-build 3 [i] {e0})] ({p}-len v))   ; => 3
+;;;
+;;; Since: Phase N2
+
+(defmacro {p}-build [n bv expr]
+  (let [i   (gensym "i")
+        m   (gensym "n")
+        e   (gensym "e")
+        out (gensym "out")
+        iv  (first bv)]
+    `(let [~m      ~n
+           ~out    ({p}-new ~m %ZERO%)
+           ^mut ~i 0]
+       (while (< ~i ~m)
+         (let [~iv ~i
+               ~e  ~expr]
+           (unsafe ({p}-set-unchecked! ~out ~i ~e)))
+         (set! ~i (+ ~i 1)))
+       ~out)))
+;;; {p}-same-len__ -- internal: the common length of two arrays, or a panic.
+
+(defn {p}-same-len__ [^borrow a : {T} ^borrow b : {T}]
+  #fx{{}}
+  #reads [a b]
+  : int
+  ```c
+  struct {{ int64_t len; {C} *data; void *raw; }} *x = (void*)(intptr_t)a;
+  struct {{ int64_t len; {C} *data; void *raw; }} *y = (void*)(intptr_t)b;
+  if (x->len != y->len) {{
+    tur_panic("{p}-for: length mismatch");
+    return 0;
+  }}
+  return x->len;
+  ```)
+'''
+
+
+def render_kernels(t, d):
+    out = [";; --- N1 bulk kernels, N2 unchecked access and loops (tools/gen-numvec.py) ---\n"]
+    for k in KERNELS:
+        if t["p"] in k["types"]:
+            out.append(render_kernel(k, t, d))
+    out.append(MACROS.format(**d).replace("%ZERO%", t["zero"]))
+    return "".join(out)
+
+
 def render():
     out = [HDR]
     for t in TYPES:
@@ -397,21 +926,122 @@ def render():
             "i64vec": ("1", "2"), "i32vec": ("1", "2"),
             "u8vec": ("1", "2")}[t["p"]]
         out.append(TEMPLATE.format(**d))
+        out.append(render_kernels(t, d))
     return "".join(out)
 
 
+# ---- the interpreter twins: src/turi/numvec_kernels.inc ----
+def c_arg(kind, t, idx):
+    if kind in ("T", "int"):
+        return "a[%d].as_int" % idx
+    if IS_FLOAT[t["p"]]:
+        return "(%s)nv_dbl(a[%d])" % (t["C"], idx)
+    return "(%s)a[%d].as_int" % (t["C"], idx)
+
+
+def c_wrap(rk, t, expr):
+    if rk == "nil":
+        return "%s; return turi_nil();" % expr
+    ct = kernel_types(rk, t)[1]
+    if ct in ("double", "float"):
+        return "return turi_float((double)%s);" % expr
+    return "return turi_int((int64_t)%s);" % expr
+
+
+def native_name(t, k):
+    return "%s-%s" % (t["p"], k["name"])
+
+
+def c_ident(name):
+    return name.replace("-", "_").replace("!", "_x")
+
+
+def render_inc():
+    out = ["/* numvec_kernels.inc -- GENERATED by tools/gen-numvec.py; do not edit.",
+           " *",
+           " * The interpreter twins of stdlib/numvec.tur's N1 kernels: each nvk_*",
+           " * function has, verbatim, the C body of the stdlib function of the same",
+           " * name, so --interpret runs the same arithmetic in the same order as a",
+           " * compiled program (simd-and-vectorization-plan N1, goal 3).  Included by",
+           " * interpreter_natives.c, after nv_dbl.  FP contraction is off here as it",
+           " * is in the ISO-C mode a program is compiled in. */",
+           "",
+           "#if defined(__GNUC__) && !defined(__clang__)",
+           "#pragma GCC push_options",
+           "#pragma GCC optimize (\"fp-contract=off\")",
+           "#endif",
+           "#define tur_panic(m) turi_runtime_panic(nvk_env, (m))",
+           ""]
+    regs = []
+    for t in TYPES:
+        for k in KERNELS:
+            if t["p"] not in k["types"] or k.get("native") is False:
+                continue
+            nm = native_name(t, k)
+            cid = "nvk_" + c_ident(nm)
+            rct = kernel_types(k["ret"], t)[1]
+            params = ["TuriEnv *nvk_env"] + ["%s %s" % (kernel_types(kind, t)[1], n)
+                                            for (n, kind) in k["params"]]
+            out.append("static %s %s(%s) {" % (rct, cid, ", ".join(params)))
+            out.append("    (void)nvk_env;")
+            out += ["    " + bl for bl in k["body"](t).split("\n")]
+            out.append("}")
+            args = ["env"] + [c_arg(kind, t, i) for i, (n, kind) in enumerate(k["params"])]
+            out.append("static TuriValue native_%s(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {" % cid)
+            out.append("    (void)ud;")
+            out.append("    if (n < %d) return turi_nil();" % len(k["params"]))
+            # a NULL handle is tolerated, as by every native (the sandbox sweep
+            # passes 0 for the arguments it does not forge)
+            nulls = ["!a[%d].as_int" % i for i, (_, kind) in enumerate(k["params"]) if kind == "T"]
+            if nulls:
+                out.append("    if (%s) return %s;" % (" || ".join(nulls),
+                           "turi_nil()" if k["ret"] == "nil" else "turi_int(0)"))
+            out.append("    " + c_wrap(k["ret"], t, "%s(%s)" % (cid, ", ".join(args))))
+            out.append("}")
+            out.append("")
+            regs.append((nm, "native_" + cid))
+    out += ["#undef tur_panic",
+            "#if defined(__GNUC__) && !defined(__clang__)",
+            "#pragma GCC pop_options",
+            "#endif",
+            "",
+            "static void numvec_kernels_register(TuriEnv *env) {"]
+    out += ['    turi_env_register_native(env, "%s", %s, NULL);' % r for r in regs]
+    out.append("}")
+    return "\n".join(out) + "\n"
+
+
+def kernel_natives():
+    """(native name, element prefix, [param kinds]) of every kernel native,
+    the hand-written unchecked twins included -- for native_caps.c rows."""
+    rows = []
+    for t in TYPES:
+        for k in KERNELS:
+            if t["p"] in k["types"]:
+                rows.append((native_name(t, k), t["p"], [kind for (_, kind) in k["params"]]))
+        rows.append(("%s-same-len__" % t["p"], t["p"], ["T", "T"]))
+    return rows
+
+
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+OUTPUTS = [("stdlib/numvec.tur", render), ("src/turi/numvec_kernels.inc", render_inc)]
+
+
 def main():
-    text = render()
-    if "--check" in sys.argv:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "..", "stdlib", "numvec.tur")
+    stale = []
+    for rel, fn in OUTPUTS:
+        path = os.path.join(ROOT, rel)
+        text = fn()
         cur = open(path).read() if os.path.exists(path) else ""
-        if cur != text:
-            sys.stderr.write("stdlib/numvec.tur is stale: run "
-                             "python3 tools/gen-numvec.py > stdlib/numvec.tur\n")
-            return 1
-        return 0
-    sys.stdout.write(text)
+        if cur == text:
+            continue
+        if "--check" in sys.argv:
+            stale.append(rel)
+        else:
+            open(path, "w").write(text)
+    if stale:
+        sys.stderr.write("stale: %s -- run python3 tools/gen-numvec.py\n" % ", ".join(stale))
+        return 1
     return 0
 
 

@@ -2676,6 +2676,34 @@ static TuriValue native_##P##_copy(TuriEnv *env, TuriValue *a, uint32_t n, void 
     if (!c) return turi_error(#P "-copy: out of memory");                             \
     if (v->len > 0) memcpy(c->data, v->data, (size_t)v->len * sizeof(CT));            \
     return turi_int((int64_t)(intptr_t)c);                                            \
+}                                                                                     \
+/* N2's unchecked accessors.  The compiled bodies trust the index (the loop    */ \
+/* macros checked it); here they check anyway, so a wrong index in an          */ \
+/* interpreted -- possibly sandboxed -- program panics instead of reading      */ \
+/* past the block.  A correct program cannot tell the difference.              */ \
+static TuriValue native_##P##_ref_unchecked(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) { \
+    (void)ud;                                                                         \
+    if (n < 2) return turi_int(0);                                                    \
+    TuriNumVecRep *b = nv_of(a[0]); int64_t i = a[1].as_int;                          \
+    if (b && i >= 0 && i < b->len) { CT x = ((CT *)b->data)[i]; return NV_OUT(x); }   \
+    turi_runtime_panic(env, #P "-ref-unchecked: index out of bounds");                \
+    return turi_int(0);                                                               \
+}                                                                                     \
+static TuriValue native_##P##_set_unchecked(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) { \
+    (void)ud;                                                                         \
+    if (n < 3) return turi_nil();                                                     \
+    TuriNumVecRep *b = nv_of(a[0]); int64_t i = a[1].as_int;                          \
+    if (b && i >= 0 && i < b->len) { ((CT *)b->data)[i] = (CT)NV_IN(a[2]); return turi_nil(); } \
+    turi_runtime_panic(env, #P "-set-unchecked!: index out of bounds");               \
+    return turi_nil();                                                                \
+}                                                                                     \
+static TuriValue native_##P##_same_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) { \
+    (void)ud;                                                                         \
+    if (n < 2) return turi_int(0);                                                    \
+    TuriNumVecRep *x = nv_of(a[0]), *y = nv_of(a[1]);                                 \
+    if (x && y && x->len == y->len) return turi_int(x->len);                          \
+    turi_runtime_panic(env, #P "-for: length mismatch");                              \
+    return turi_int(0);                                                               \
 }
 
 #define NV_IN_DBL(v)  nv_dbl(v)
@@ -2687,6 +2715,9 @@ NUMVEC_NATIVES(f32vec, float,    NV_IN_DBL, NV_OUT_DBL)
 NUMVEC_NATIVES(i64vec, int64_t,  NV_IN_INT, NV_OUT_INT)
 NUMVEC_NATIVES(i32vec, int32_t,  NV_IN_INT, NV_OUT_INT)
 NUMVEC_NATIVES(u8vec,  uint8_t,  NV_IN_INT, NV_OUT_INT)
+
+/* The N1 kernels, generated from the stdlib bodies themselves. */
+#include "numvec_kernels.inc"
 
 /* -------------------------------------------------------------------------
  * MutableMap (stdlib/mutmap.tur) -- open-addressing hash table.  The module's
@@ -5334,6 +5365,22 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "u8vec-len", native_u8vec_len, NULL);
     turi_env_register_native(env, "u8vec-ref", native_u8vec_ref, NULL);
     turi_env_register_native(env, "u8vec-set!", native_u8vec_set, NULL);
+    turi_env_register_native(env, "f64vec-ref-unchecked", native_f64vec_ref_unchecked, NULL);
+    turi_env_register_native(env, "f64vec-set-unchecked!", native_f64vec_set_unchecked, NULL);
+    turi_env_register_native(env, "f64vec-same-len__", native_f64vec_same_len, NULL);
+    turi_env_register_native(env, "f32vec-ref-unchecked", native_f32vec_ref_unchecked, NULL);
+    turi_env_register_native(env, "f32vec-set-unchecked!", native_f32vec_set_unchecked, NULL);
+    turi_env_register_native(env, "f32vec-same-len__", native_f32vec_same_len, NULL);
+    turi_env_register_native(env, "i64vec-ref-unchecked", native_i64vec_ref_unchecked, NULL);
+    turi_env_register_native(env, "i64vec-set-unchecked!", native_i64vec_set_unchecked, NULL);
+    turi_env_register_native(env, "i64vec-same-len__", native_i64vec_same_len, NULL);
+    turi_env_register_native(env, "i32vec-ref-unchecked", native_i32vec_ref_unchecked, NULL);
+    turi_env_register_native(env, "i32vec-set-unchecked!", native_i32vec_set_unchecked, NULL);
+    turi_env_register_native(env, "i32vec-same-len__", native_i32vec_same_len, NULL);
+    turi_env_register_native(env, "u8vec-ref-unchecked", native_u8vec_ref_unchecked, NULL);
+    turi_env_register_native(env, "u8vec-set-unchecked!", native_u8vec_set_unchecked, NULL);
+    turi_env_register_native(env, "u8vec-same-len__", native_u8vec_same_len, NULL);
+    numvec_kernels_register(env);
     turi_env_register_native(env, "mutmap-new",      native_mutmap_new,      NULL);
     turi_env_register_native(env, "mutmap-len",      native_mutmap_len,      NULL);
     turi_env_register_native(env, "mutmap-set!",     native_mutmap_set,      NULL);
