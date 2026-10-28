@@ -59,7 +59,7 @@
   /* Syntax highlight */
   --syn-kw:        #EFA030;
   --syn-str:       #D9735A;
-  --syn-cmt:       #3E3B35;
+  --syn-cmt:       #48433D;   /* = editor-palette.json dark.comment */
   --syn-type:      #7AC4B8;
   --syn-num:       #A8C98A;
   --syn-fn:        #C4A0E8;

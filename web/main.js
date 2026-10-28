@@ -2356,8 +2356,8 @@ const MONACO_THEMES = {
             'editor.background':                    '#0C0A08',
             'editor.foreground':                    '#EAE0D2',
             'editorGutter.background':              '#0C0A08',
-            'editorLineNumber.foreground':          '#453F39',
-            'editorLineNumber.activeForeground':    '#88796C',
+            'editorLineNumber.foreground':          '#4A4438',
+            'editorLineNumber.activeForeground':    '#8A7D6E',
 
             // Cursor & selection -- neutral medium gray, never a warning color.
             // Selection/bracket-match/scrollbar are structural chrome; red is
@@ -2374,8 +2374,8 @@ const MONACO_THEMES = {
             'editor.lineHighlightBorder':           '#00000000',
 
             // Indent guides
-            'editorIndentGuide.background1':        '#252119',
-            'editorIndentGuide.activeBackground1':  '#3E3830',
+            'editorIndentGuide.background1':        '#222018',
+            'editorIndentGuide.activeBackground1':  '#3D3A2F',
 
             // Bracket matching — medium gray, so a matched delimiter never
             // reads as an error highlight
@@ -2388,17 +2388,17 @@ const MONACO_THEMES = {
             'editorFindMatchHighlight.background':  '#D48B1C1F',
 
             // Autocomplete / hover / suggest widgets
-            'editorWidget.background':                       '#181512',
-            'editorWidget.border':                           '#302B24',
+            'editorWidget.background':                       '#161411',
+            'editorWidget.border':                           '#2E2B22',
             'editorWidget.foreground':                       '#EAE0D2',
-            'editorSuggestWidget.background':                '#181512',
-            'editorSuggestWidget.border':                    '#302B24',
+            'editorSuggestWidget.background':                '#161411',
+            'editorSuggestWidget.border':                    '#2E2B22',
             'editorSuggestWidget.foreground':                '#EAE0D2',
             'editorSuggestWidget.selectedBackground':        '#D48B1C26',
             'editorSuggestWidget.selectedForeground':        '#EAE0D2',
             'editorSuggestWidget.highlightForeground':       '#EFA030',
-            'editorHoverWidget.background':                  '#181512',
-            'editorHoverWidget.border':                      '#302B24',
+            'editorHoverWidget.background':                  '#161411',
+            'editorHoverWidget.border':                      '#2E2B22',
             'editorHoverWidget.foreground':                  '#EAE0D2',
 
             // Scrollbars — medium gray, brightening on hover/drag
@@ -2411,7 +2411,7 @@ const MONACO_THEMES = {
             'focusBorder':                          '#D48B1C66',
         },
         fallback: {
-            bgBase: '#0C0A08', textDim: '#453F39', textSec: '#88796C', gold: '#D48B1C',
+            bgBase: '#0C0A08', textDim: '#4A4438', textSec: '#8A7D6E', gold: '#D48B1C',
             error: '#D9735A', warning: '#EFA030', info: '#7AC4B8', success: '#A8C98A',
         },
     },
