@@ -1,0 +1,3 @@
+TUR-W0372
+could not decide whether 'neg' delivers the result the function type of argument 1 of 'twice' requires
+Result contract violated by the call through 'g' in twice: (> r 0)

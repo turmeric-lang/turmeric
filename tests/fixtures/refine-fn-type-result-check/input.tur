@@ -1,0 +1,15 @@
+;; refined-function-types-plan F2 (D4b): the result of a call through a refined
+;; function type is checked after the call -- never elided in v1 (F4 measures
+;; first) -- because the static coercion check cannot always prove a function
+;; delivers it.  `neg` states no result refinement, so passing it is TUR-W0372
+;; at the coercion (F3), and the call through `g` panics at run time.
+(defn sq1 [x : int] : int (+ (* x x) 1))
+(defn neg [x : int] : int (- 0 x))
+
+(defn twice [g : (fn [int] #refine{ r : int | (> r 0) }) x : int] : int
+  (* 2 (g x)))
+
+(defn main [] : int
+  (println (twice sq1 3))
+  (println (twice neg 3))
+  0)

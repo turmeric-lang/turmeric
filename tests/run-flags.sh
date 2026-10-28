@@ -2234,6 +2234,7 @@ golden completion-bash completion bash
 # flag before it has been stripped.
 golden flags-stripped --no-color --panic-abort --no-auto-spice --no-r7rs-gc \
     --no-saffron-gc --warn-unused-result --no-warn-unused-result \
+    --warn-unrefined-fn-slot \
     -Werror=deprecated --Werror=inline-c-narrow-params \
     --Werror=strict-effects --lint-panic --no-contracts --debug \
     --json-diagnostics --json --lint-unsafe --lint-unsafe-max-lines=9 \

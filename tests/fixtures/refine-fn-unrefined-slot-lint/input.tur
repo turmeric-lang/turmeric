@@ -1,0 +1,18 @@
+;; refined-function-types-plan F5 / open question 1: --warn-unrefined-fn-slot
+;; (TUR-W0388, off by default) flags a function with a refined parameter going
+;; into a function-typed slot that leaves that parameter unrefined.  Allowed --
+;; the slot is not checked (D2) and `pos-param`'s own entry check still runs --
+;; but the bad argument is then found only at run time.  A diagnostic-strictness
+;; knob, so it needs no --enable and fires with the gate off.  Only the
+;; parameter direction is linted: a refined RESULT going into an unrefined slot
+;; is lost information, not a possible panic, so `pos-result` is silent.
+(defn pos-param [x : #refine{ v : int | (> v 0) }] : int x)
+(defn pos-result [x : int] : #refine{ r : int | (> r 0) }
+  (if (> x 0) x (- 1 x)))
+
+(defn apply1 [f : (fn [int] int) x : int] : int (f x))
+
+(defn main [] : int
+  (println (apply1 pos-param 3))
+  (println (apply1 pos-result 3))
+  0)

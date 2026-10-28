@@ -1,10 +1,11 @@
 # Plan: Refinements in Function Types (Contravariant Subtyping)
 
-> **Status:** DRAFT (2026-10-27), lower priority -- not blocked, but not on
-> the v1 critical path (open question 6). Nothing from F0-F5 is implemented.
-> The instance-path warning from open question 2 has landed on its own. Would
-> ship behind `--enable=refined-fn-types` until graduation, per the
-> experimental-features rule in CLAUDE.md.
+> **Status:** PROTOTYPE (2026-10-28), behind `--enable=refined-fn-types` (an
+> `EXPERIMENTS[]` row, introduced 0.72.0). F0-F3 are implemented, and F5's
+> docs and its `--warn-unrefined-fn-slot` lint (`TUR-W0388`). Open: F4 (decide
+> the result-check elision by measurement) and graduation, which waits on a
+> named first consumer (open question 6) -- see "Implementation status" at the
+> end. Lower priority; not on the v1 critical path.
 > **Type:** Compiler / Type System (refinement types)
 > **Predecessors:** `docs/archive/refinement-types-plan.md` ("Indirect calls",
 > 2026-07-24 -- the function-typed parameter case was left open there)
@@ -399,3 +400,69 @@ Pick one with numbers, not by default.
    and decide whether this belongs on the v1 track or after it. The
    instance-path warning from question 2 does not depend on the rest and could
    land on its own first.
+
+## Implementation status (2026-10-28)
+
+What landed, phase by phase, and where it lives. Everything is behind the gate
+except the lint.
+
+- **F0.** The pinning fixture became a real one rather than an `expected.xfail`,
+  because F2 landed with it: `errors/refine-hof-param-crossing` (a closed
+  refutation through `f` is `TUR-E0371`). `errors/refine-in-fn-type` is
+  unchanged and still green with the gate off.
+- **F1.** `TY_FN` carries one `refine` pointer to an `FnRefinements`
+  (`types.h`: per-parameter predicates and variables, result predicate and
+  variable), read only through `type_fn_refinements_of`, the `type_fn_*`
+  accessors and, for a binding, `rt_binding_refined_fn_type`
+  (`elab_internal.h`). One pointer, not four inline fields, and `rest_kind`
+  narrowed to `uint8_t` so the small fields pack: `sizeof(Type)` stays at 128
+  bytes. At 160 the auxiliary CI leg's `tur_turi_callcc_reclaim` failed
+  ([turi-callcc-reclaim-depends-on-type-size](../reported/turi-callcc-reclaim-depends-on-type-size.md)) -- a plain `(fn ...)` parameter rides the typed `:fn`
+  carrier, so its signature is `poly_type`, not `type`. There is one parser for
+  `(fn ...)` types (`type_expr_from_form`; `fn_type_from_form_impl` routes the
+  head there), so one site fills them: `fn_type_slot_contract` in
+  `elab_types.c`, which also keeps `TUR-E0378` for `c-fn` and for a D3
+  violation. The "one erasure helper" turned out to be no helper at all: the
+  fields are a side-car that no identity function reads, so erasure is the
+  default and the accessor is the only reader.
+  `tests/check-refined-fn-types-erased.sh` (ctest
+  `tur_refined_fn_types_erased`) is the byte-identical exit test, run under
+  `--no-contracts` because with contracts on F2 is meant to change the C.
+  `type_name` does NOT show refinements: diagnostics name the slot instead
+  ("the function type of argument 1 of 'apply2'"), which reads better than a
+  printed type and keeps `type_name` out of the identity question entirely.
+- **F2.** `rt_elab_refined_fn_call` (`elab_fns.c`), hooked in `elab_call`
+  ahead of the alias fold and of every lowering path, and in
+  `elab_call_head_expr` for a call through an expression (`((.f h) 3)`).
+  Arguments at refined positions are checked at the call; a non-trivial one is
+  evaluated once into a temporary, with every non-trivial argument before it,
+  so evaluation order is unchanged. The crossing is a `RefineCallSite` with
+  `fn_type` set, decided by `rt_resolve_fn_type_crossing` under the D4a policy;
+  a proof nils the check. The result is checked after the call (never elided:
+  F4) and assumed through `rt_resolve_fn_with_locals`, for parameters the body
+  does not rebind. Under `--no-contracts` there are no checks and nothing is
+  assumed. The interpreter runs the same `Expr` tree, so `run-turi.sh` sees the
+  same panic text and location. Fixtures: `refine-fn-type-call-proved`
+  (including the result hypothesis proving a later crossing, under
+  `--strict-refine`), `refine-fn-type-call-unknown`,
+  `refine-fn-type-result-check`. Not covered: partial and over-application
+  through a refined binding, and a variadic one, which fall back to the
+  function's own entry checks.
+- **F3.** `rt_decide_entailment` (`elab_fns.c`) is the extracted helper; the
+  instance check in `elab_typeclasses.c` calls it for both directions, so
+  `TUR-E0374` and the `refine-instance-variance-*` fixtures are unchanged.
+  `rt_check_fn_coercion` runs it at every D4c site: call arguments and
+  constructor arguments (`elab_call`), annotated `let` (`elab_forms.c`), `def`
+  and `defn` results (`elab_fns.c`), `set!` into a field (`elab_set_field`),
+  and a lambda literal at any of them, checked against the expected type its
+  slot pushes. Codes `TUR-E0386` / `TUR-E0387`, with `tur explain` entries.
+  Fixtures: `refine-fn-variance-ok`, `errors/refine-fn-variance-param`,
+  `errors/refine-fn-variance-result`, `errors/refine-in-fn-type-scope` (D3,
+  D6).
+- **F4.** Not started; still "measure first".
+- **F5.** The guide's "Limits" bullet, the internals guide's RT1 list and codes
+  table, the `TUR-E0378` explain text and the rationale's "Subtyping" row are
+  updated. `--warn-unrefined-fn-slot` / `TUR-W0388` is in, off by default and
+  independent of the gate (fixture `refine-fn-unrefined-slot-lint`).
+  Graduation is not done: it waits on F4 and on a first consumer.
+

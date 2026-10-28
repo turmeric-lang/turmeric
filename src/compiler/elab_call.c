@@ -3451,7 +3451,32 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
         }
     }
 
-    Expr *call_expr = elab_call_fn(e, call, tmp_b);
+    Expr *call_expr = NULL;
+    if (rt_binding_refined_fn_type(tmp_b)) {
+        /* refined-function-types-plan F2: a call through an EXPRESSION of
+         * refined function type -- `((.f h) 3)` for a refined fn-typed field.
+         * The head is already bound to `tmp_b`; spell the call through it and
+         * let the refined-call wrapper check it like a call through a named
+         * binding. */
+        Scope hs;
+        scope_init(&hs, e->scope);
+        e->scope = &hs;
+        scope_add(e->scope, tmp_b);
+        uint32_t n = call->as.list.len;
+        Form **items = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+        items[0] = form_sym(e->arena, call->as.list.items[0]->span, tmp_sym);
+        for (uint32_t k = 1; k < n; k++) items[k] = call->as.list.items[k];
+        Buf hb; buf_init(&hb);
+        form_print(&hb, call->as.list.items[0]);
+        buf_putc(&hb, '\0');
+        const char *disp = arena_strdup(e->arena, hb.data, strlen(hb.data));
+        buf_free(&hb);
+        call_expr = rt_elab_refined_fn_call_at(e, form_list(e->arena, call->span, items, n),
+                                               tmp_b, call, disp);
+        e->scope = hs.parent;
+        scope_free(&hs);
+    }
+    if (!call_expr) call_expr = elab_call_fn(e, call, tmp_b);
     if (!call_expr) return NULL;
     /* pair-eq-macro-applies-comparator-directly: a lambda applied DIRECTLY has
      * no named callee to carry a convention, but it does not need one -- the
@@ -5562,6 +5587,21 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                                       call->as.list.len));
     }
 
+    /* refined-function-types-plan F2: a call THROUGH a binding of refined
+     * function type (a parameter, a let-bound value) is checked at the call,
+     * against the refinements its type carries.  Same place and same reason
+     * as the crossing hook below: one site, keyed on the source form, ahead
+     * of every lowering path.  A defn's own binding never carries type-level
+     * refinements (its parameters' are on its binding), so this only fires
+     * for values.  Ahead of the alias fold
+     * below, which would otherwise trade an annotated alias's type for the
+     * global's; the wrapper's inner call still folds. */
+    if (fn_binding && rt_binding_refined_fn_type(fn_binding) &&
+        call != e->rf_inner_call) {
+        Expr *rf = rt_elab_refined_fn_call(e, call, fn_binding);
+        if (rf) return rf;
+    }
+
     /* constrained-generic-as-value (docs/archive/history/constrained-generic-as-value-
      * bakes-representative.md): a call through an immutable let-bound alias of a
      * global function -- `(let [g count-it] (g box))` -- was elaborated as an
@@ -5616,6 +5656,45 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
      * of definition order.  A no-op for a callee with no refined parameters. */
     if (fn_binding && fn_binding->type.kind == TY_FN)
         (void)refine_note_call_site(e, fn_binding, call, 1);
+
+    /* refined-function-types-plan F3 (D4c): a constructor argument for a field
+     * of refined function type is a coercion site too. */
+    if ((g_opt_refined_fn_types || g_warn_unrefined_fn_slot) && (!fn_binding || fn_binding->is_global)) {
+        CtorDef *rcd = elab_lookup_ctor(e, name);
+        uint32_t na = call->as.list.len - 1;
+        if (rcd && na == rcd->n_fields) {
+            for (uint32_t fi = 0; fi < na; fi++) {
+                const Type *ft = rcd->fields[fi].full_type;
+                if (!ft || ft->kind != TY_FN) continue;
+                char slot[192];
+                if (rcd->fields[fi].name)
+                    snprintf(slot, sizeof slot, "the function type of field '%s' of '%s'",
+                             rcd->fields[fi].name, name->name);
+                else
+                    snprintf(slot, sizeof slot, "the function type of field %u of '%s'",
+                             fi + 1, name->name);
+                rt_check_fn_coercion(e, call->as.list.items[fi + 1], ft,
+                                     call->as.list.items[fi + 1]->span, slot);
+            }
+        }
+    }
+    /* refined-function-types-plan F3 (D4c): a function value passed to a
+     * parameter of refined function type is checked against it -- parameters
+     * contravariantly, the result covariantly.  A lambda literal is checked
+     * where it is elaborated, against the expected type this slot pushes. */
+    if ((g_opt_refined_fn_types || g_warn_unrefined_fn_slot) && fn_binding && fn_binding->type.kind == TY_FN &&
+        fn_binding->type.as.fn.arg_full_types) {
+        uint32_t na = call->as.list.len - 1;
+        for (uint32_t ai = 0; ai < na && ai < fn_binding->type.as.fn.arity; ai++) {
+            const Type *pt = fn_binding->type.as.fn.arg_full_types[ai];
+            if (!pt || pt->kind != TY_FN) continue;
+            char slot[192];
+            snprintf(slot, sizeof slot, "the function type of argument %u of '%s'",
+                     ai + 1, name->name);
+            rt_check_fn_coercion(e, call->as.list.items[ai + 1], pt,
+                                 call->as.list.items[ai + 1]->span, slot);
+        }
+    }
 
     /* Phase RT: return-type-directed dispatch for a typeclass method whose
      * dispatch variable appears only in its return type (e.g. (default-of),

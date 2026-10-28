@@ -1,0 +1,14 @@
+;; refined-function-types-plan F0/F2: a call THROUGH a binding of refined
+;; function type is a crossing.  `apply2` declares what it will pass `f` and then
+;; breaks its own promise with a literal zero -- a closed refutation, so the
+;; call is a compile-time TUR-E0371 rather than a run-time panic inside
+;; whichever function `f` turns out to be.
+;;
+;; Before the plan this annotation was TUR-E0378 (function types could not carry
+;; refinements); with the gate off it still is (errors/refine-in-fn-type).
+(defn safe-div [a : int b : #refine{ v : int | (not= v 0) }] : int (/ a b))
+
+(defn apply2 [f : (fn [int #refine{ v : int | (not= v 0) }] int)] : int
+  (f 10 0))
+
+(defn main [] : int (println (apply2 safe-div)) 0)

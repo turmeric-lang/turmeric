@@ -452,6 +452,22 @@ typedef enum DiagCode {
      *          principle).  --strict-refine promotes it. */
     TUR_E0384_REFLECT_NOT_TOTAL,
     TUR_W0385_REFLECT_FUEL_EXHAUSTED,
+    /* refined-function-types-plan F3 (--enable=refined-fn-types): a function
+     * value meets a refined function type -- a call argument, an annotated
+     * `let`, a `defn` result -- and the contravariant check refutes it.
+     * E0386 -- parameter direction: the function demands more of parameter N
+     *          than the type allows (`T.p |- S.p` refuted).
+     * E0387 -- result direction: the function promises less about its result
+     *          than the type requires (`S.r |- T.r` refuted).
+     * Declaration-versus-declaration, like TUR-E0374 for instances, so an
+     * error rather than a warning.  An undecided pair is TUR-W0372.
+     * W0388 -- opt-in lint (--warn-unrefined-fn-slot): a function whose
+     *          parameter is refined flows into a function-typed slot that
+     *          leaves that parameter unrefined, so the refinement is checked
+     *          only at run time, by the function's own entry check. */
+    TUR_E0386_REFINE_FN_PARAM_STRONGER,
+    TUR_E0387_REFINE_FN_RESULT_WEAKER,
+    TUR_W0388_REFINE_UNREFINED_FN_SLOT,
     /* class-superclasses (docs/archive/typeclass-superclasses-plan.md), the
      * `defclass` constraint preamble `[(Super var)...]`:
      * E0390 -- the preamble itself: empty, malformed (an element that is not

@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found landing refined-function-types-plan F1 (filed 2026-10-28)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [turi-callcc-reclaim-depends-on-type-size](turi-callcc-reclaim-depends-on-type-size.md) | low-medium (test fragility) | `tur_turi_callcc_reclaim` failed (+51 MB stored-continuation growth, bound 28) when only `sizeof(Type)` grew 128 -> 160 bytes, and passed again at 128. The sweep freed fewer images, which looks like a stale conservative stack root; unconfirmed |
+
 ## Found running the corpus through the browser JIT module (filed 2026-10-28)
 
 | Report | Severity | One line |

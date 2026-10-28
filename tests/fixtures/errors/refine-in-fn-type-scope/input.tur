@@ -1,0 +1,15 @@
+;; refined-function-types-plan D3 and D6, with the gate ON: what a refinement
+;; in a function type still may not do.
+;;
+;; D3 -- a `(fn ...)` type's parameters are unnamed, so a refinement in it may
+;; mention only its own variable.  Mentioning a sibling parameter of the
+;; enclosing `defn` is a dependent refinement; it needs named parameters in
+;; function types, which are deferred.  Rejected, not dropped.
+;;
+;; D6 -- a `(c-fn ...)` type is a bare C function pointer with no Turmeric entry
+;; checks to fall back on, so it keeps TUR-E0378 whatever the gate says.
+(defn bounded [n : int f : (fn [#refine{ v : int | (< v n) }] int)] : int (f 0))
+
+(defn raw [f : (c-fn [#refine{ v : int | (> v 0) }] int)] : int 0)
+
+(defn main [] : int 0)

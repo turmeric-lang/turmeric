@@ -1,0 +1,8 @@
+TUR-E0386
+'pos-param' demands more of parameter 1 than the function type of argument 1 of 'take-nz' allows
+the function demands more of parameter 1 than the function type expected here allows
+'pos-param' demands more of parameter 1 than its declared type allows
+'pos-param' demands more of parameter 1 than the declared result type of 'make' allows
+'pos-param' demands more of parameter 1 than the function type of field 'f' of 'Holder' allows
+'pos-param' demands more of parameter 1 than the function type of field 'f' allows
+counterexample: v = -
