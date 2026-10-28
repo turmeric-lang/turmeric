@@ -52,7 +52,7 @@ const PRECACHE_URLS = [
     '/turmeric.js',
     '/turmeric.wasm',
     // The REPL's own workers. Nothing else names them -- they are constructed
-    // from a string literal in main.js / lsp-client.js, so precacheShellAssets,
+    // from a string literal in eval-client.js / lsp-client.js, so precacheShellAssets,
     // which mines the shell's markup, cannot see them. Without these two rows
     // an offline visit loads the page and then cannot evaluate anything, which
     // makes "installed means you have the compiler" quietly untrue.
