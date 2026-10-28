@@ -32,14 +32,14 @@ import { appendToConsole } from './console.js';
 import { docNames, wasmDocLookup, wasmTypeOf, wasmExplain } from './doc-panel.js';
 import { loadDocsIndex, docsEntryFor, parseDocsRef, openDocsPane } from './docs-pane.js';
 import { traceCode } from './trace.js';
+import { lspClient } from './lsp-ref.js';
+import { startLspClient } from './lsp.js';
 
-// What the prompt borrows from main.js: running a line, resetting the session,
-// and the language server it boots lazily. Set by configureRepl() at load.
+// What the prompt borrows from main.js: running a line and resetting the
+// session. Set by configureRepl() at load.
 let deps = {
     executeCode: () => Promise.resolve(),
     resetWasm: () => {},
-    getLspClient: () => null,
-    startLspClient: () => {},
 };
 
 /** Hand the prompt what it borrows from main.js. Called once, at load. */
@@ -140,7 +140,6 @@ export async function promptSubmit() {
 }
 
 export function initReplInput() {
-    const lspClient = deps.getLspClient();
     const monaco = getMonaco();
     const host = document.getElementById('repl-input');
     if (!host) return;
@@ -364,7 +363,6 @@ export function initReplInput() {
         },
         completions: async (line) => {
             promptSetValue(line);
-            const lspClient = deps.getLspClient();
             if (!lspClient) return [];
             const r = await lspClient.completions(model, {
                 lineNumber: 1,
@@ -379,7 +377,6 @@ export function initReplInput() {
      * lsp_session_handle is already document-keyed and already holds several
      * documents at once. */
     const attachPromptDoc = () => {
-        const lspClient = deps.getLspClient();
         if (promptDoc || !lspClient) return;
         promptDoc = lspClient.attachDocument({
             model,
@@ -388,7 +385,7 @@ export function initReplInput() {
         });
     };
     promptEditor.onDidFocusEditorText(() => {
-        deps.startLspClient().then(attachPromptDoc).catch(() => {});
+        startLspClient().then(attachPromptDoc).catch(() => {});
     });
     if (lspClient) attachPromptDoc();
 }

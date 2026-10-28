@@ -10,14 +10,7 @@ import { showStatus } from './status.js';
 import { tabs, activeId, replaceTabs, tabsSnapshot, captureActiveTabState, currentTab, ensureModel,
          genTabId, sanitizeTabName, applyReadOnlyState, renderTabs, renderJumpBack,
          ensureAllTabModels } from './tabs.js';
-
-// The language-server client is booted and owned by main.js.
-let deps = { getLspClient: () => null };
-
-/** Hand the project code what it borrows from main.js. Called once, at load. */
-export function configureProject(d) {
-    deps = d;
-}
+import { lspClient } from './lsp-ref.js';
 
 // Slugify a tab name into something tur build will accept as a source
 // filename. Strips path separators and shell-unfriendly characters,
@@ -188,7 +181,6 @@ export function parseProjectZip(bytes) {
 // for the user confirmation step before invoking this.
 function applyProjectLoad(parsed) {
     const editor = getEditor();
-    const lspClient = deps.getLspClient();
     // Dispose old models so we don't leak them into Monaco's global model
     // store.
     for (const t of tabs) {

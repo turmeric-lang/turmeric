@@ -12,14 +12,7 @@
 import { STORAGE_KEYS, safeRead, safeWrite, debounce } from './storage.js';
 import { getEditor, getMonaco } from './editor-ref.js';
 import { reconcileLangPicker } from './lang-picker.js';
-
-// The language-server client is booted and owned by main.js.
-let deps = { getLspClient: () => null };
-
-/** Hand the tabs what they borrow from main.js. Called once, at load. */
-export function configureTabs(d) {
-    deps = d;
-}
+import { lspClient } from './lsp-ref.js';
 
 // Multi-tab editor state. Each tab carries its persisted record plus a
 // non-persisted Monaco ITextModel created on demand. The model holds the
@@ -242,7 +235,6 @@ function basenameFromUri(uri) {
  * than stacking copies of list.tur across a reading session.
  */
 export async function openReadOnlyTab(uri) {
-    const lspClient = deps.getLspClient();
     if (!lspClient || !lspClient.isAvailable()) return null;
 
     const existing = tabs.find(t => t.readOnly && t.sourceUri === uri);
@@ -344,7 +336,6 @@ export function ensureAllTabModels() {
  * desynchronised server.
  */
 export function notifyTabsChanged() {
-    const lspClient = deps.getLspClient();
     if (!lspClient || !lspClient.isAvailable()) return;
     ensureAllTabModels();
     lspClient.sync();
