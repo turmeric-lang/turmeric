@@ -5,7 +5,7 @@
 
 ;; The parsed result.  A `:heap` record rides the parser's one-word carrier;
 ;; see the guide for why a by-value Pair does not (yet).
-(defstruct Setting :heap [key : String value : String])
+(defstruct ^heap Setting [key : String value : String])
 
 (defn key-p [] : (Parser String)
   (fmap (many1 (satisfy alpha?)) list->string))

@@ -1,0 +1,3 @@
+warning [TUR-D0007]: 'defstruct': the trailing flag :copy is deprecated; write ^copy before the name
+warning [TUR-D0007]: 'defopaque': the trailing flag :affine is deprecated; write ^affine before the name
+warning [TUR-D0007]: 'defdata': the trailing flag :copy is deprecated; write ^copy before the name

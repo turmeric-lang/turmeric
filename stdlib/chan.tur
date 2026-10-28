@@ -42,9 +42,9 @@
 ;; count variants -- declare their handle parameter ^borrow, so sending and
 ;; receiving repeatedly reads the handle without consuming it; only the *-free
 ;; operation consumes. See docs/archive/history/stdlib-linear-handle-borrows.md.
-(defopaque Chan [A] :ptr<void> :linear)
+(defopaque ^linear Chan [A] :ptr<void>)
 
-(defopaque AsyncChan [A] :ptr<void> :linear)
+(defopaque ^linear AsyncChan [A] :ptr<void>)
 ;; ---- Chan (synchronous blocking) ----
 ;;; chan-new -- allocate a new synchronous blocking channel with the given capacity.
 ;;;

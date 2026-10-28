@@ -6,8 +6,8 @@
 ;; adapter its erased declaration suggested, so the double arrived in the
 ;; wrong register class and the program printed 0 or 1.2e-322 instead of 2.5.
 ;; By-value and `:heap` records, a nullary generic and one with an argument.
-(defstruct Fs :copy [A] (f (fn [A] (Cons A))))
-(defstruct Hs :heap :copy [A] (f (fn [A] (Cons A))) (g (fn [A A] A)))
+(defstruct ^copy Fs [A] (f (fn [A] (Cons A))))
+(defstruct ^heap ^copy Hs [A] (f (fn [A] (Cons A))) (g (fn [A A] A)))
 
 (defn mk-f [A] [x : A] : (Fs A)
   (make-struct Fs :f (fn [y : A] : (Cons A) (tcons-of y (tnil)))))

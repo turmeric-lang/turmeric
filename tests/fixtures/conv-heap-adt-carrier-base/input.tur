@@ -7,7 +7,7 @@
 ;; reinterpret-cast across the boundary, never spill+address-of (which would
 ;; pass a pointer-to-handle) and never read the handle uncast (garbage).
 ;; Flag-independent: this is a hand-written defadt, no experiment needed.
-(defdata Box :heap [A] (Box [val : A]))
+(defdata ^heap Box [A] (Box [val : A]))
 
 ;; inline-C carrier base: takes the int64 carrier, which for a :heap value IS
 ;; the typed-pointer handle.  Reads the boxed value back through it.

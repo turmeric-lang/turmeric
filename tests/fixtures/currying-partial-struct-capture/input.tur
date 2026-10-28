@@ -3,7 +3,7 @@
 ;; struct type, not a kind-erased int64_t.  Covers: small copy struct,
 ;; struct + primitive mixed capture, and a struct holding a cstr field.
 
-(defstruct Pt :copy
+(defstruct ^copy Pt
   [x :int
    y :int])
 

@@ -62,7 +62,7 @@ concurrency).
 | Uniqueness (`^unique`) | OK | OK | shared elaborator |
 | `rc` / `weak` / `box` | OK | OK | `EX_RC_*`, `EX_WEAK`, `EX_BOX` case arms in `eval.c` |
 | GC (`gc!`, enable/disable) | OK | OK | interpreter calls the linked `src/runtime/gc.c` directly |
-| Structs / ADTs | OK | OK | `make-struct` layout, field access, constructor dispatch. Includes by-value parameter passing: a struct argument is copied on bind, so a callee's `(set! (.f p) v)` is invisible to the caller in both backends; `rc<T>` and `:heap` structs stay shared in both, by design |
+| Structs / ADTs | OK | OK | `make-struct` layout, field access, constructor dispatch. Includes by-value parameter passing: a struct argument is copied on bind, so a callee's `(set! (.f p) v)` is invisible to the caller in both backends; `rc<T>` and `^heap` structs stay shared in both, by design |
 | GADTs | OK | OK | shared elaborator; runtime is ordinary ADT eval |
 | HKT (Functor/Monad/...) | OK | OK | stdlib instances preloaded (logic.tur's miniKanren engine is pure Turmeric and interprets) |
 | Refinement types | OK | OK | checked by the shared elaborator |

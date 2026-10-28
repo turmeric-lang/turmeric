@@ -4,7 +4,7 @@
 ;; construction (reorderable), positional construction, `with` update, `.field`
 ;; access, and `match` -- must behave exactly as it does for a struct.  The
 ;; `flags` file enables the experiment; output must match the struct path.
-(defstruct P :copy [a : int b : int])
+(defstruct ^copy P [a : int b : int])
 
 (defn sum [p : P] : int
   (match p (P x y) (+ x y)))

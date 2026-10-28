@@ -24,7 +24,7 @@
 ;; requires.leak-check: the assertion is about allocation, not output.  The
 ;; printed value is the same either way, which is why this leaked unnoticed.
 
-(defdata Pt :copy [] (P [x : int y : int]))
+(defdata ^copy Pt [] (P [x : int y : int]))
 (defdata Box [] (B [v : any]) (Nil))
 
 (defn main [] : int

@@ -10,10 +10,10 @@
 
 (definstance Show [int] (show [x] : cstr (int->str x)))
 
-(defstruct Inner :copy [n : int])
+(defstruct ^copy Inner [n : int])
 (derive-show-cstr Inner n)
 
-(defstruct Outer :copy [a : int inner : Inner])
+(defstruct ^copy Outer [a : int inner : Inner])
 (derive-show-cstr Outer a inner)
 
 (defn main [] : int

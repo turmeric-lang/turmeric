@@ -22,7 +22,7 @@ Turmeric provides two channel types in `stdlib/chan.tur`:
   plus non-blocking `try-send` / `try-recv` variants and a `count` accessor.
 
 Both share the same underlying ring-buffer struct (mutex, two condition
-variables, and a fixed-capacity `int64_t` array). Both are `:linear` opaque
+variables, and a fixed-capacity `int64_t` array). Both are `^linear` opaque
 handles: each owns a heap-allocated `ChanBlock` that must be freed exactly
 once with `chan-free` / `async-chan-free`.
 
@@ -291,7 +291,7 @@ language.
 
 ## Linearity and Ownership
 
-`Chan` and `AsyncChan` are `:linear` -- each owns a heap-allocated
+`Chan` and `AsyncChan` are `^linear` -- each owns a heap-allocated
 `ChanBlock` (mutex, condvars, ring buffer) that must be freed exactly once.
 Under `-Xlinear`, the checker rejects:
 
@@ -302,7 +302,7 @@ The `^borrow` annotation on `chan-send` / `chan-recv` (and the async
 variants) means the channel handle is read, not consumed, by those
 operations. Only `chan-free` / `async-chan-free` consumes it.
 
-`SChan<P>` is also `:linear`: each protocol step consumes the handle and
+`SChan<P>` is also `^linear`: each protocol step consumes the handle and
 returns the continuation, so the protocol cannot be replayed or skipped.
 
 ## What This Guide Does Not Cover

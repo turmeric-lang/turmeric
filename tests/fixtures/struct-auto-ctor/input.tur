@@ -3,7 +3,7 @@
 ;; The struct name still resolves as a type in annotations (value/type
 ;; namespaces are distinct).
 
-(defstruct Person :copy [name : cstr age : int])
+(defstruct ^copy Person [name : cstr age : int])
 
 (defn show-person [p : Person] : void
   (println (.name p))

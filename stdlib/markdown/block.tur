@@ -17,8 +17,7 @@
 ;; ---- Types -----------------------------------------------------------------------
 ;;; MdKind -- what a block is.
 
-(defdata MdKind
-  :copy
+(defdata ^copy MdKind
   (MdKDocument)
   (MdKBlockQuote)
   (MdKList)
@@ -34,8 +33,7 @@
   (MdKMathBlock))
 ;;; MdListData -- a list's or list item's marker: kind, bullet or delimiter byte, start number, tightness, and the item's content column.
 
-(defstruct MdListData
-  :copy
+(defstruct ^copy MdListData
   [ordered : bool
    bullet : int
    delim : int
@@ -45,7 +43,7 @@
    padding : int])
 ;;; MdFence -- a code block's fence: fenced?, the fence byte, its length and its indentation.
 
-(defstruct MdFence :copy [fenced : bool char : int len : int off : int])
+(defstruct ^copy MdFence [fenced : bool char : int len : int off : int])
 ;;; MdNode -- one block in the arena.
 ;;;
 ;;; parent, first-child, last-child, prev and next are arena indices, -1 for
@@ -63,8 +61,7 @@
 ;;; reads link reference definitions from, and 1 on a display formula that its
 ;;; closing $$ ended.
 
-(defstruct MdNode
-  :copy
+(defstruct ^copy MdNode
   [kind : MdKind
    parent : int
    first-child : int
@@ -84,11 +81,10 @@
    inl : int])
 ;;; MdRef -- a link reference definition: String-pool indices of its normalised label, destination and title (-1 for no title).
 
-(defstruct MdRef :copy [label : int dest : int title : int])
+(defstruct ^copy MdRef [label : int dest : int title : int])
 ;;; MdIKind -- what an inline is.  MdIRoot holds a paragraph's or heading's inlines.
 
-(defdata MdIKind
-  :copy
+(defdata ^copy MdIKind
   (MdIRoot)
   (MdIText)
   (MdISoftBreak)
@@ -109,8 +105,7 @@
 ;;; [start, end) of pool String str.  dest and title are a link's or image's
 ;;; pool Strings (title -1 for none).
 
-(defstruct MdInl
-  :copy
+(defstruct ^copy MdInl
   [kind : MdIKind
    parent : int
    first-child : int
@@ -128,8 +123,7 @@
 ;;; autolinks and task list items, as cmark-gfm 0.29 implements them -- and
 ;;; TeX math: $...$ and $$...$$ in text, and a $$ display block.
 
-(defstruct MdOpts
-  :copy
+(defstruct ^copy MdOpts
   [tables : bool
    strikethrough : bool
    autolinks : bool
@@ -137,8 +131,7 @@
    math : bool])
 ;;; MdDoc -- a parsed document: the block arena, its String pool, its link reference definitions, the inline arena and the options it was parsed with.
 
-(defstruct MdDoc
-  :copy
+(defstruct ^copy MdDoc
   [nodes : (Vec MdNode)
    strs : (Vec String)
    refs : (Vec MdRef)
@@ -166,10 +159,10 @@
    no-math : (Vec int)])
 ;;; MdCont -- a container's answer to a line: it continues, it does not, or it consumed the line.
 
-(defdata MdCont :copy (MdMatched) (MdUnmatched) (MdLineDone))
+(defdata ^copy MdCont (MdMatched) (MdUnmatched) (MdLineDone))
 ;;; MdStart -- a block start's answer: none, a container (keep looking), or a leaf (stop).
 
-(defdata MdStart :copy (MdNoStart) (MdContainerStart) (MdLeafStart))
+(defdata ^copy MdStart (MdNoStart) (MdContainerStart) (MdLeafStart))
 ;;; md/-new-nodes -- internal: an empty node Vec.
 
 (defn md/-new-nodes [] : (Vec MdNode) (vec-new))

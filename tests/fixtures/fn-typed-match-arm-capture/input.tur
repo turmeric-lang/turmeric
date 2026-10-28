@@ -8,7 +8,7 @@
 ; the captured binding's type, which is why the fn-typed case regressed.
 (load "stdlib/typeclass-functor.tur")
 
-(defdata ExprF :copy [a] (LitF :int) (AddF a a))
+(defdata ^copy ExprF [a] (LitF :int) (AddF a a))
 
 ; An algebra producing a per-node `(fn [int] int)`: each arm returns a closure
 ; that captures its (function-typed, for AddF) payload bindings.

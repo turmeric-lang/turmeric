@@ -1,0 +1,9 @@
+;; (defstruct Commented :copy [x : int]) stays: it is a comment.
+(def m #map{:copy 1 :linear 2})
+(def s "(defstruct InString :copy [x : int])")
+(defn f [x : int] : int (g :copy x :linear))
+(import tur/list :refer [map])
+(defstruct Fields [copy : int linear : int])
+(defn uses [] : int (let [defstruct 1] defstruct))
+(defopaque Plain :int)
+(defdata Opt [a] (None) (Some a))

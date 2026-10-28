@@ -58,7 +58,7 @@
 ;; it; only task-group-free consumes. TaskHandle stays a plain opaque handle:
 ;; a single group hands out many task handles (one per spawn) that are not
 ;; individually freed, so it is not linear.
-(defopaque TaskGroup :ptr<void> :linear)
+(defopaque ^linear TaskGroup :ptr<void>)
 
 (defopaque TaskHandle :ptr<void>)
 ;; ---- TaskGroup lifecycle ----

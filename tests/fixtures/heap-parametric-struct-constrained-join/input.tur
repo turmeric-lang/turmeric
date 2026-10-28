@@ -24,7 +24,7 @@
 (definstance JS [Lo] (j [x y] (if (< (:: x int) (:: y int)) x y)))    ;; min
 
 (defstruct Meta [tag : int])                 ;; a BY-VALUE struct field
-(defstruct Box :heap [V] [e : int m : Meta]) ;; :heap, parametric, phantom V
+(defstruct ^heap Box [V] [e : int m : Meta]) ;; :heap, parametric, phantom V
 
 (defn box-join [V] [(JS V)] [^borrow a : (Box V) ^borrow b : (Box V)] : (Box V)
   (Box (:: (j (:: (.e a) V) (:: (.e b) V)) int) (Meta 0)))

@@ -1,0 +1,8 @@
+(defstruct ^copy Point [x : int y : int])
+(defstruct ^linear Socket [fd : int])
+(defstruct ^heap ^linear Cell [n : int])
+(defstruct ^copy Pair [A B] (fst A) (snd B))
+(defstruct ^no-auto-ctor Hidden [n : int])
+(defstruct ^affine Lease [secs : int])
+(defstruct ^move Packet [id : int])
+(defstruct Plain [x : int])

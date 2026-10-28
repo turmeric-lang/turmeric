@@ -6,7 +6,7 @@
 ;; self-call in the recursive arm of the `if` came back typed `int`, giving a
 ;; spurious branch mismatch (then=Box else=int).  This is the letrec analogue of
 ;; the top-level-defn case fixed by #460's RR1 block.
-(defstruct Box :copy [lo : int  hi : int])
+(defstruct ^copy Box [lo : int  hi : int])
 
 (defn go-letrec [n : int] : Box
   (letrec [go (fn [i : int  acc : Box] : Box

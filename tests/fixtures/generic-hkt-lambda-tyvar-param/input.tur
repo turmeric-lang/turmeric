@@ -7,7 +7,7 @@
 ;; continuation from its own clone.  Each generic runs at several element
 ;; types, so a result that is right only by representation luck at `int`
 ;; shows up at the others.
-(defstruct Pt :copy [x : float y : float])
+(defstruct ^copy Pt [x : float y : float])
 
 (defn rebind [A] [o : (Option A)] : (Option A)
   (bind o (fn [v : A] : (Option A) (some v))))

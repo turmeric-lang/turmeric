@@ -1,7 +1,7 @@
 ;; CONV-S4N: an arm may narrow the scrutinee to a POSITIONAL variant, which has
 ;; no field names for `with` to reference.  `with` rejects with TUR-E0302 and
 ;; names the variant, pointing the user at record-style (named) fields.
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle [radius : int])
   (Line   int int))
 

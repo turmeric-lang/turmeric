@@ -14,7 +14,7 @@
 
 (load "stdlib/future.tur")
 
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata ^heap Link (Link [v : int nxt : int]))
 
 (defn link-v [l : Link] : int
   (match l (Link a b) a))

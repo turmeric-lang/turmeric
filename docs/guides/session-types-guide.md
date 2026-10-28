@@ -197,11 +197,11 @@ on a step the global protocol declares timed -- see
 
 A message crosses the channel as one machine word. `int`, `bool`, the sized
 integers, `float` (bit-preserved -- `7.25` arrives as `7.25`), `cstr`, pointer
-handles (`ptr<T>`, `rc<T>`, an opaque type over a pointer, a `:heap` record),
+handles (`ptr<T>`, `rc<T>`, an opaque type over a pointer, a `^heap` record),
 and session endpoints themselves (delegation: `(Send (Session P) ...)`) all
 travel intact on both backends. A by-value `defstruct` or ADT does not fit the
 word and is rejected at elaboration with `TUR-E0212` naming the type; send it
-behind `rc<T>` / `ref<T>`, or declare the record `:heap`.
+behind `rc<T>` / `ref<T>`, or declare the record `^heap`.
 
 ### Duality
 
@@ -632,7 +632,7 @@ error [TUR-E0001]: function 'schan-close' arg 1:
   got (SChan (SRecv int SClose))
 ```
 
-`SChan` is `:linear`, so the protocol additionally cannot be *replayed* --
+`SChan` is `^linear`, so the protocol additionally cannot be *replayed* --
 each step consumes its handle exactly once.
 
 Runnable examples: `tests/fixtures/schan-roundtrip` (single round trip),

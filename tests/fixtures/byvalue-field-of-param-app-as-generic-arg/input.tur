@@ -17,10 +17,10 @@
 ;; fractional float and cstr instantiations.  The let-bound, returned and
 ;; directly-matched reads took other paths and are kept as controls.
 
-(defstruct Fr :heap :copy [T] (x T))
-(defdata Sm :copy [T] (Hit T) (Miss))
-(defstruct Holder :heap :copy [T] (p (Option (Fr T))) (q (Option T)) (s (Sm T)))
-(defstruct Outer :heap :copy [T] (h (Holder T)))
+(defstruct ^heap ^copy Fr [T] (x T))
+(defdata ^copy Sm [T] (Hit T) (Miss))
+(defstruct ^heap ^copy Holder [T] (p (Option (Fr T))) (q (Option T)) (s (Sm T)))
+(defstruct ^heap ^copy Outer [T] (h (Holder T)))
 (defn peek [T] [o : (Option (Fr T))] : bool (match o (None) false (Some _) true))
 (defn get-or [T] [o : (Option (Fr T)) d : T] : T (match o (None) d (Some f) (.x f)))
 (defn opt-or [T] [o : (Option T) d : T] : T (match o (None) d (Some v) v))

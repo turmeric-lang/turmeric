@@ -1,8 +1,8 @@
 (load "stdlib/str-build.tur")
 (defclass Show [a] (show [x] : cstr))
 (definstance Show [int] (show [x] : cstr (int->str x)))
-(defstruct P1 :copy [x : int y : int])
-(defstruct P2 :copy [x : int y : int])
+(defstruct ^copy P1 [x : int y : int])
+(defstruct ^copy P2 [x : int y : int])
 
 ;; template path (stdlib)
 (derive-show-cstr P1 x y)

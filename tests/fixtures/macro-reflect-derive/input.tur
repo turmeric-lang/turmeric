@@ -4,7 +4,7 @@
 (load "stdlib/str-build.tur")
 (defclass Show [a] (show [x] : cstr))
 (definstance Show [int] (show [x] : cstr (int->str x)))
-(defstruct P3 :copy [x : int y : int z : int])
+(defstruct ^copy P3 [x : int y : int z : int])
 
 (defmacro* derive-show3 [TypeName]
   (letrec [fields   (syntax-struct-fields TypeName)

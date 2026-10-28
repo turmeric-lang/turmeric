@@ -16,7 +16,7 @@
 (load "stdlib/serial.tur")
 
 ;; NoSer has no Serializable instance.
-(defstruct NoSer :copy [x : int])
+(defstruct ^copy NoSer [x : int])
 
 ;; Receiver ignores the captured continuation and returns a constant.
 (defn k-const [k : ptr<void>] : int 42)

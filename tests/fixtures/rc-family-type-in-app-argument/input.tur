@@ -21,8 +21,8 @@
 ; Every assertion below is a strong count: the point is not that these forms
 ; parse, it is that the ascribed Vec is the SAME type the unascribed one infers,
 ; so item-2 element ownership applies identically through both.
-(defstruct S :move [tag : int])
-(defstruct N :move [kids : (Vec rc<S>)])
+(defstruct ^move S [tag : int])
+(defstruct ^move N [kids : (Vec rc<S>)])
 
 (defn main [] : int
   (let [a (rc/of (make-struct S 1))]

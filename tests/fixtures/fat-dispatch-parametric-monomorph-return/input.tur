@@ -22,13 +22,13 @@
 ;; cast that cc cannot see through.
 
 ;; 16 bytes, two ints -- returned in RAX:RDX.
-(defdata Box2 :copy [a] (Box2 [v : a w : a]))
+(defdata ^copy Box2 [a] (Box2 [v : a w : a]))
 
 ;; 16 bytes, two doubles -- returned in XMM0:XMM1.
-(defdata BoxF :copy [a] (BoxF [v : a w : a]))
+(defdata ^copy BoxF [a] (BoxF [v : a w : a]))
 
 ;; 24 bytes -- past the SysV threshold, returned via hidden pointer.
-(defdata Big3 :copy [a] (Big3 [x : a y : a z : a]))
+(defdata ^copy Big3 [a] (Big3 [x : a y : a z : a]))
 
 (defn mk [n : int] : (Box2 int) (Box2 n (* n 10)))
 

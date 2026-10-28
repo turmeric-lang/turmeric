@@ -405,7 +405,7 @@ A struct is *all of* several fields at once; an ADT is *one of* several
 shapes. `defdata` declares one, `match` takes it apart:
 
 ```turmeric
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle :float)
   (Rect   :float :float))
 
@@ -418,7 +418,7 @@ shapes. `defdata` declares one, `match` takes it apart:
 (area (Rect 3.5 4.0))  ; => 14
 ```
 ```sweet-exp
-defdata Shape :copy
+defdata ^copy Shape
   Circle(:float)
   Rect(:float :float)
 
@@ -438,10 +438,10 @@ so `match` narrows the box to that type before dispatching on the tag. A
 value of some other type panics at the narrow (`cast: any holds float, not
 Shape`) rather than taking a wrong arm.
 
-`:copy` after the name is the value discipline. Without it an ADT value is
+`^copy` before the name is the value discipline. Without it an ADT value is
 single-use -- passing it somewhere moves it, and a second use is a compile
 error -- which is the right default for a value owning a resource. `Shape` is
-immutable and owns nothing, so `:copy` lets it be used as many times as you
+immutable and owns nothing, so `^copy` lets it be used as many times as you
 like -- which the program at the end of this guide needs, since it asks each
 shape for both its name and its area.
 
@@ -703,7 +703,7 @@ One complete program using the pieces above:
 ```turmeric
 #lang saffron
 
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle :float)
   (Rect   :float :float))
 
@@ -734,7 +734,7 @@ One complete program using the pieces above:
 ```sweet-exp
 #lang saffron/sweet
 
-defdata Shape :copy
+defdata ^copy Shape
   Circle(:float)
   Rect(:float :float)
 

@@ -680,7 +680,7 @@ EOF
 cat > "$RCPROJ/src/foo/alloc.tur" <<'EOF'
 (defmodule foo/alloc
   (export alloc-and-count)
-  (defstruct Wrapper :move [val : rc<int>])
+  (defstruct ^move Wrapper [val : rc<int>])
   (defn alloc-and-count [] : int
     (let [inner (rc/of 10)]
       (let [w (rc/of (make-struct Wrapper inner))]
@@ -722,7 +722,7 @@ EOF
 cat > "$RCSO/src/widget/box.tur" <<'EOF'
 (defmodule widget/box
   (export alloc-box)
-  (defstruct Wrapper :move [val : rc<int>])
+  (defstruct ^move Wrapper [val : rc<int>])
   (defn alloc-box [] : int
     (let [inner (rc/of 10)]
       (let [w (rc/of (make-struct Wrapper inner))]

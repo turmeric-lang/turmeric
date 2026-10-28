@@ -8,7 +8,7 @@
 ;; `type_has_concrete_codegen_layout` guard the heap-struct path used does not
 ;; fire for an ADT app, so the cast is gated on the recovered spec's concrete
 ;; pointer c-name instead.  Flag-independent: hand-written defadt, no experiment.
-(defdata Box :heap [A] (Box [val : A nxt : int]))
+(defdata ^heap Box [A] (Box [val : A nxt : int]))
 
 (defn mk [A] [v : A nxt : int] : (Box A) (Box v nxt))
 

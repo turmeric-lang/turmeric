@@ -33,7 +33,7 @@
 ;; The inline-C case is not conservatism for its own sake: a C body can stash
 ;; the pointer where no AST walk can see it, so it must never be inferred
 ;; non-retaining.
-(defstruct Slot :move [held : cstr])
+(defstruct ^move Slot [held : cstr])
 
 (defn my-log [s : cstr] : nil (println s))
 (defn stash [s : cstr ^mut slot : Slot] : nil (set! (.held slot) s))

@@ -268,7 +268,7 @@ for `#\7`), not its character code.
 
 ;; The parsed result.  A `:heap` record rides the parser's one-word carrier;
 ;; a by-value Pair works too, at the cost of a heap copy (see the guide).
-(defstruct Setting :heap [key : String value : String])
+(defstruct ^heap Setting [key : String value : String])
 
 (defn key-p [] : (Parser String)
   (fmap (many1 (satisfy alpha?)) list->string))
@@ -306,9 +306,9 @@ line is settings separated by commas. `(sep-by p sep)` is one of the
 library's ready-made combinators, alongside `sep-by1`, `between`, `token`
 and `spaces`.
 
-The result is a `:heap` record. A parser's value travels through the
+The result is a `^heap` record. A parser's value travels through the
 library as a single machine word, so results that are one word wide -- a
-`:heap` struct, a `String`, a `(List A)`, a `Char`, an `int` -- cost nothing
+`^heap` struct, a `String`, a `(List A)`, a `Char`, an `int` -- cost nothing
 extra. A by-value `(Pair A B)` or plain `defstruct` returned through `pure`
 works too, but is copied to the heap on the way; the
 [reference guide](parsec-guide.md#what-a-parser-can-produce) has the details.

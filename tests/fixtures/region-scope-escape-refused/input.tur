@@ -31,7 +31,7 @@
 ;; (docs/archive/region-rewind-fixtures-never-rewind.md).  `run.env` sets
 ;; TUR_REGION_STATS=1 and expected.stderr pins `rewinds=1 retires=3`.
 
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata ^heap Link (Link [v : int nxt : int]))
 
 (defn build [n : int acc : int] : int
   (if (<= n 0)
@@ -41,7 +41,7 @@
 (defn link-v [l : Link] : int (.v l))
 
 ;; The control's spine: typed from construction to the sum, so no escape note.
-(defdata Chain :heap (CLink [v : int nxt : Chain]) (CEnd))
+(defdata ^heap Chain (CLink [v : int nxt : Chain]) (CEnd))
 
 (defn tbuild [n : int acc : Chain] : Chain
   (if (<= n 0)

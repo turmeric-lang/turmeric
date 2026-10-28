@@ -7,13 +7,13 @@
 ;; result.  Found by the type fuzzer's typed fn-field crossing over a Result.
 
 (defstruct P [x : int y : float])
-(defstruct F0 :copy [app : (fn [(Result float int)] (Result float int))])
-(defstruct F1 :copy [app : (fn [(Result float int)] float)])
-(defstruct F2 :copy [app : (fn [P] P)])
-(defstruct F3 :copy [app : (fn [(Result float int) int] (Result float int))])
-(defstruct F4 :copy [app : (fn [(Option int)] int)])
-(defstruct F5 :copy [app : (fn [float] (Option float))])
-(defstruct F6 :copy [app : (fn [(Result bool int)] (Result bool int))])
+(defstruct ^copy F0 [app : (fn [(Result float int)] (Result float int))])
+(defstruct ^copy F1 [app : (fn [(Result float int)] float)])
+(defstruct ^copy F2 [app : (fn [P] P)])
+(defstruct ^copy F3 [app : (fn [(Result float int) int] (Result float int))])
+(defstruct ^copy F4 [app : (fn [(Option int)] int)])
+(defstruct ^copy F5 [app : (fn [float] (Option float))])
+(defstruct ^copy F6 [app : (fn [(Result bool int)] (Result bool int))])
 (def k 2)
 
 (defn main [] : int

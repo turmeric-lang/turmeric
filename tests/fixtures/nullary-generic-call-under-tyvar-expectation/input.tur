@@ -7,13 +7,13 @@
 ;; it.  The parameter is now instantiated with the siblings' bindings and the
 ;; argument's tyvar unified against the grounded type, W2-style, so the
 ;; nullary call monomorphizes to the instantiation the context chose.
-(defstruct Box :heap [A] (val A))
+(defstruct ^heap Box [A] (val A))
 (defn box-nil [A] [] : (Box A) (:: 0 (Box A)))
 (defn wrap [A] [v : A b : (Box A)] : (Box A) (make-struct Box v))
 
-(defstruct W :heap [A] (val A) (opt (Option A)))
+(defstruct ^heap W [A] (val A) (opt (Option A)))
 
-(defstruct Node :heap [A] (val A) (next (Node A)))
+(defstruct ^heap Node [A] (val A) (next (Node A)))
 (defn node-nil [A] [] : (Node A) (:: 0 (Node A)))
 (defn node-nil? [A] [n : (Node A)] : bool (= (:: n int) 0))
 (defn push [A] [v : A n : (Node A)] : (Node A) (make-struct Node v n))

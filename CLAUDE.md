@@ -435,7 +435,7 @@ setters, `bt-set!`/`g-set!`, `atomic-store!/swap!/cas!`, `gen-arr-push!`,
 `set-deref!`, the closure-env fill, the malloc'd ctor boxes, the element-box
 helpers, `rc/of`, every erasing ascription (including one written as a call
 argument, and the implicit typed-node -> `:int` argument of an inline-C callee
-or -- for a `:heap` node, constructors excepted -- of a Turmeric-bodied one,
+or -- for a `^heap` node, constructors excepted -- of a Turmeric-bodied one,
 which the elaborator makes one), a node handed to an inline-C callee's
 type-variable parameter (noted at the call; `region-escape-via-wrapper`), and
 the `#lang r7rs` `call/cc`

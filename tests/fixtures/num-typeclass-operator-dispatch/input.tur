@@ -15,7 +15,7 @@
 (load "stdlib/typeclass.tur")
 
 ;; A 2-dimensional vector over floats, as an ordinary user type.
-(defstruct V2 :copy
+(defstruct ^copy V2
   [x : float
    y : float])
 

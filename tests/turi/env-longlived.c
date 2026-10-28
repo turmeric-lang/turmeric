@@ -560,7 +560,7 @@ static void test_vec_struct_cells_relocated(void) {
 
     TuriValue pr = turi_eval(env,
         "(load \"stdlib/str-build.tur\")\n"   /* a cstr-typed str-concat */
-        "(defstruct P :copy [x : int tag : cstr])\n"
+        "(defstruct ^copy P [x : int tag : cstr])\n"
         "(def ps (:: (vec-new) (Vec P)))\n"
         "(def ss (:: (vec-new) (Vec cstr)))\n0\n");
     CHECK(pr.tag != TURI_ERROR, "vec-cell prelude failed: %s",

@@ -17,13 +17,13 @@
 ;; order-independent assertion of the set resolution.
 
 ;; Identity a -- WIDE: a two-word `:copy` struct, not the one-int64 opaque.
-(defstruct Identity :copy [A] (wrapped : A) (tag : int))
+(defstruct ^copy Identity [A] (wrapped : A) (tag : int))
 (defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x :tag 0))
 (defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
 (definstance Functor [Identity]
   (fmap [i g] (mk-id (g (run-id i)))))
 
-(defstruct Point :copy :heap [x : int y : int])
+(defstruct ^copy ^heap Point [x : int y : int])
 
 ;; Two concrete lenses focusing distinct Point fields, each polymorphic over f.
 (defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)

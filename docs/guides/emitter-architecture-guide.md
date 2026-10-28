@@ -646,7 +646,7 @@ them. The skeleton:
    the bindings (`emit_abi_instantiate_type`, scratch from `ctx->type_arena`).
 4. **Decide.** `abi_changes` is set when an instantiated parameter or result
    c-names differently from the generic one (`type_c_name` strings differ),
-   plus forced cases: a phantom-hidden aggregate, a ground `:heap` sum, a
+   plus forced cases: a phantom-hidden aggregate, a ground `^heap` sum, a
    float element behind a closure parameter, a colored generic that needs a
    monomorph. `instance_changes` is set when the body dispatches on a type
    variable the bindings fix (`body_has_dispatch_on_app_tyvar`). Neither set:

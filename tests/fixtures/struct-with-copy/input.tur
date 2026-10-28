@@ -2,7 +2,7 @@
 ;; fields overridden and the rest copied from src.  Only valid on :copy
 ;; structs.  Multi-field override and free override order are exercised.
 
-(defstruct Person :copy [name : cstr age : int active : int])
+(defstruct ^copy Person [name : cstr age : int active : int])
 
 (defn show-person [p : Person] : void
   (println (.name p))

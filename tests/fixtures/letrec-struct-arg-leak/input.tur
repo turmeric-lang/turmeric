@@ -3,7 +3,7 @@
 ;; box used to be a heap allocation nobody freed -- one per outside call, and
 ;; one per iteration when the self-call is not a loop.  It lives in the
 ;; caller's frame now.  requires.leak-check runs this under LeakSanitizer.
-(defstruct Acc :copy [lo : float  hi : float])
+(defstruct ^copy Acc [lo : float  hi : float])
 (defn widen [a : Acc  x : float] : Acc
   (make-struct Acc (if (< x (.lo a)) x (.lo a)) (if (> x (.hi a)) x (.hi a))))
 (defn span-letrec [n : float] : Acc

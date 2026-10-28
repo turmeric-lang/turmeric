@@ -7,7 +7,7 @@
 (defmodule capexists
   (defclass Sz [a] (sz [x : a] : int))
   (defclass Sz2 [a] (cmp [x : a y : int] : int))
-  (defstruct Wm :copy [w : int])
+  (defstruct ^copy Wm [w : int])
   (definstance Sz [Wm] (sz [x] (.w x)))
   (definstance Sz2 [Wm] (cmp [x y] (+ (.w x) y)))
 

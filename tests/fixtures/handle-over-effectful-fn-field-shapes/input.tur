@@ -11,15 +11,15 @@
 ;;     atomizes anyway but refused up front.
 
 (defeffect Ef [x :int] :int)
-(defstruct FE :copy [run : (fn [int] int) #fx{Ef}])
+(defstruct ^copy FE [run : (fn [int] int) #fx{Ef}])
 (defn fe [v : int] : int (perform (Ef v)))
 
 (defeffect Eff [x :float] :float)
-(defstruct FF :copy [run : (fn [float] float) #fx{Eff}])
+(defstruct ^copy FF [run : (fn [float] float) #fx{Eff}])
 (defn ff [v : float] : float (perform (Eff v)))
 
 (defeffect Ec [x :cstr] :cstr)
-(defstruct FC :copy [run : (fn [cstr] cstr) #fx{Ec}])
+(defstruct ^copy FC [run : (fn [cstr] cstr) #fx{Ec}])
 (defn fc [v : cstr] : cstr (perform (Ec v)))
 (defclass Ps [a] (ps [self : a] : a))
 (definstance Ps [cstr] (ps [self : cstr] : cstr self))

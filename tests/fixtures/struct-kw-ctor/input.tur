@@ -2,7 +2,7 @@
 ;; constructor.  Keyword order is free; the elaborator reorders into the
 ;; declared field positions.
 
-(defstruct Person :copy [name : cstr age : int])
+(defstruct ^copy Person [name : cstr age : int])
 
 (defn show-person [p : Person] : void
   (println (.name p))

@@ -26,6 +26,7 @@ const SOURCE = [
     '(defn f [x :ptr<void> ^fat g :(fn [ptr<void>] nil)] :option<ptr<int>> x)',
     '(defn step [^state/GameState s ^&cols c ^f m ^^g n ^Monoid k] :ptr<ptr<ptr<void>>> s)',
     '(extern-c sqrt [^float ^ptr<void>] :float)',
+    '(defdata ^copy ^non-null Shape [^f a] (Circle int))',
     'def ^mut counter 0',
     '(< a b) ; a ^note and a :type in a comment',
     '"a ^str :int ptr<void>"',
@@ -63,7 +64,8 @@ test.describe(`editor highlighting (${scheme})`, () => {
         };
 
         // One token, caret and all. A modifier from the closed list is teal ...
-        for (const ann of ['^fat', '^mut']) {
+        // ... and so are the flags of a type declaration, written before its name.
+        for (const ann of ['^fat', '^mut', '^copy', '^non-null']) {
             expect(colourOf(ann), `${ann} is one modifier token`).toBe(rgb(colours.annotation));
         }
         // ... a kind or a constraint is the type violet, whatever follows the caret.

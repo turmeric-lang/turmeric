@@ -5,7 +5,7 @@
 ;; `(.field G)` and overriding the listed ones; it requires a :copy type, just
 ;; as it does for structs.
 
-(defdata Point :copy
+(defdata ^copy Point
   (Point [x : int y : int]))
 
 (defn sum [p : Point] : int

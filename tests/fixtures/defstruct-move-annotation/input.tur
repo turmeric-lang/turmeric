@@ -1,4 +1,4 @@
-(defstruct Packet :move [ptr : ptr<void>])
+(defstruct ^move Packet [ptr : ptr<void>])
 
 (defn main [] : int
   (println 0)

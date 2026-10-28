@@ -8,8 +8,8 @@
 ;; environment-passing interpreter as one cata; eval (var 0) under env 100 = 100.
 ;; See docs/archive/history/captureless-algebra-arm-thin-through-carrier.md.
 (load "stdlib/typeclass-functor.tur")
-(defdata ExprF :copy [a] (LitF :int) (VarF :int) (AddF a a))
-(defdata Expr  :copy (Roll (ExprF Expr)))
+(defdata ^copy ExprF [a] (LitF :int) (VarF :int) (AddF a a))
+(defdata ^copy Expr (Roll (ExprF Expr)))
 (definstance Functor [ExprF]
   (fmap [c g]
     (match c

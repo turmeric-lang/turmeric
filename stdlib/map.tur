@@ -36,7 +36,7 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defstruct Map :heap [K V] (hamt :ptr<void>))
+(defstruct ^heap Map [K V] (hamt :ptr<void>))
 ;;; map-new -- create a new empty typed map.
 ;;;
 ;;; map-new is generic and nullary, so its K/V cannot be inferred from

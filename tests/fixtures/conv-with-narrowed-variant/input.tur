@@ -6,7 +6,7 @@
 ;; when-guarded arm narrows the same way (the narrowing is in scope for the
 ;; whole arm body).
 
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle [radius : int])
   (Rect   [w : int h : int]))
 

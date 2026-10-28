@@ -881,7 +881,7 @@ static void sl_init(SL *sl, Arena *a, SymbolTable *st) {
     sl->t_import = I(sl, "import");          sl->t_defmodule = I(sl, "defmodule");
     sl->t_export = I(sl, "export");          sl->t_refer = I(sl, "refer");
     sl->t_as = I(sl, "as");                  sl->t_defstruct = I(sl, "defstruct");
-    sl->t_heap = I(sl, "heap");              sl->t_is = I(sl, "is?");
+    sl->t_heap = I(sl, "^heap");  /* the flag, before the name */              sl->t_is = I(sl, "is?");
     sl->t_nil_sym = I(sl, "nil");
 
     for (size_t i = 0; i < N_ONDEMAND; i++) {
@@ -5013,7 +5013,7 @@ static void lower_record_type(SL *sl, Form *f, FB *out, bool local) {
         fb_push(&fvec, Sym(sl, sp, I(sl, "r7rs-no-fields__")));
         fb_push(&fvec, AnyAnn(sl, sp));
     }
-    fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defstruct), Sym(sl, sp, sname), Kw(sl, sp, sl->t_heap),
+    fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defstruct), Sym(sl, sp, sl->t_heap), Sym(sl, sp, sname),
                     fb_vec(sl, &fvec, sp)));
     /* Constructor: its parameters name a subset of the fields, in any order;
      * an unmentioned field starts as nil. */

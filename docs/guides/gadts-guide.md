@@ -30,7 +30,7 @@ Before reaching for GADTs, get comfortable with plain sum types. Turmeric's
 `defdata` form declares a sum type; `match` dispatches on its constructors.
 
 ```turmeric
-(defdata Color :copy (Red) (Green) (Blue))
+(defdata ^copy Color (Red) (Green) (Blue))
 
 (defn color-to-int [c] : int
   (match c
@@ -40,7 +40,7 @@ Before reaching for GADTs, get comfortable with plain sum types. Turmeric's
 ```
 
 ```sweet-exp
-defdata Color :copy (Red) (Green) (Blue)
+defdata ^copy Color (Red) (Green) (Blue)
 
 defn color-to-int [c] : int
   match c
@@ -78,7 +78,7 @@ defn option-or [opt default] : int
     x
 ```
 
-The `:copy` modifier makes the type copyable (like `defstruct :copy`). Without
+The `^copy` modifier makes the type copyable (like `defstruct ^copy`). Without
 it the value follows move semantics.
 
 Constructors can carry typed fields:
@@ -192,28 +192,29 @@ returns -- is what a `defgadt` always got.
 
 ### Head keywords
 
-The head takes the same keywords as any `defdata` -- `:copy`, `:move`,
-`:linear`, `:affine`, `:heap` and `:no-auto-ctor` -- before or after the
-type-parameter vector: `(defdata Tag :copy [a] ...)` and
-`(defdata Tag [a] :copy ...)` are the same. (`:linear` with `:affine` is an
-error.) Without `:copy`, values follow move semantics (using one twice is a
+The head takes the same attributes as any `defdata` -- `^copy`, `^move`,
+`^linear`, `^affine`, `^heap` and `^no-auto-ctor` -- written before the name,
+ahead of the type-parameter vector: `(defdata ^copy Tag [a] ...)`. (`^linear`
+with `^affine` is an error, and so is `^copy` with `^move`. The older trailing
+`:copy` keyword, before or after the vector, still compiles but warns with
+`TUR-D0007`; `tur fmt` rewrites it.) Without `^copy`, values follow move semantics (using one twice is a
 `TUR-E0005` use-after-move); with it, they are plain, freely-readable values
 -- use it when the constructors carry only copyable payloads:
 
 ```turmeric
-(defdata Tag :copy [a]
+(defdata ^copy Tag [a]
   (IntTag  : (Tag int))
   (BoolTag : (Tag bool)))
 ```
 
 `stdlib/range.tur`'s `Bound` used to be the example here, spelled
-`(defgadt Bound [A] :copy ...)` with every constructor returning
+`(defgadt ^copy Bound [A] ...)` with every constructor returning
 `(Bound int)`. Those annotations refined nothing -- the parameter was pinned
-to `int` and never used -- so `Bound` is now a plain `:copy` sum with no
+to `int` and never used -- so `Bound` is now a plain `^copy` sum with no
 parameter, and goes by value:
 
 ```turmeric
-(defdata Bound :copy
+(defdata ^copy Bound
   (Inclusive int)
   (Exclusive int)
   (Unbounded))
@@ -236,8 +237,8 @@ where it needs to:
 
 This `Expr` is refined: `Lit` and `IsZero` return different instantiations.
 `(If (IsZero (Lit 0)) (Lit 7) (Lit 9))` is an `(Expr int)`: the unannotated
-`If` takes its index from its branches. Record constructors, `:heap`,
-`:linear` and `:affine` work on such a type exactly as on any `defdata` --
+`If` takes its index from its branches. Record constructors, `^heap`,
+`^linear` and `^affine` work on such a type exactly as on any `defdata` --
 `(Rect [w : int h : int] : (Shape int))`.
 
 ---
@@ -284,7 +285,7 @@ are invisible to the programmer. No casts, no `option` wrapper, and no runtime t
 A larger example combining a plain sum and an annotated one in one program:
 
 ```turmeric
-(defdata Color :copy (Red) (Green) (Blue))
+(defdata ^copy Color (Red) (Green) (Blue))
 
 (defdata Expr [a]
   (Lit int         : (Expr int))
@@ -309,7 +310,7 @@ A larger example combining a plain sum and an annotated one in one program:
 ```
 
 ```sweet-exp
-defdata Color :copy (Red) (Green) (Blue)
+defdata ^copy Color (Red) (Green) (Blue)
 
 defdata Expr [a]
   (Lit int         : (Expr int))
@@ -787,7 +788,7 @@ arm falls through to the next arm of the same group when it fails.
 
 ```turmeric
 ; Declare a plain ADT
-(defdata Color :copy (Red) (Green) (Blue))
+(defdata ^copy Color (Red) (Green) (Blue))
 
 ; Constructors with their own result type (defgadt is the deprecated spelling)
 (defdata Expr [a]
@@ -823,7 +824,7 @@ arm falls through to the next arm of the same group when it fails.
 
 ```sweet-exp
 ; Declare a plain ADT
-defdata Color :copy (Red) (Green) (Blue)
+defdata ^copy Color (Red) (Green) (Blue)
 
 ; Constructors with their own result type (defgadt is the deprecated spelling)
 defdata Expr [a]

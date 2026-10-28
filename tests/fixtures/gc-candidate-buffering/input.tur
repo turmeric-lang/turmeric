@@ -10,7 +10,7 @@
 ; This asserts the buffering happens. It does NOT assert collection -- the mark
 ; phase still treats every strong_count>0 block as a root, so candidates survive
 ; until CG2 replaces it with real trial deletion.
-(defstruct S :move [next : rc<S>])
+(defstruct ^move S [next : rc<S>])
 
 (defn null-rc-s [] : ptr<void>
   ```c

@@ -3,7 +3,7 @@
 ; ^non-exhaustive now (sum-either-nonexhaustive-opt-out), and the old spelling
 ; is still accepted -- it still opts out -- with TUR-D0004 pointing at the new
 ; one.
-(defdata Either :copy [L R]
+(defdata ^copy Either [L R]
   (Left L)
   (Right R))
 

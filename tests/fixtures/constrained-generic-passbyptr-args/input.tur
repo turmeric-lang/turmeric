@@ -12,8 +12,8 @@
 ;; them, a generic relaying to a generic through a `let`, and a wide sum type.
 ;; Every line matches `tur --interpret`.
 
-(defstruct Reg :copy [a : int b : int c : int])
-(defdata Shape :copy (Circ [r : int cx : int cy : int]) (Dot))
+(defstruct ^copy Reg [a : int b : int c : int])
+(defdata ^copy Shape (Circ [r : int cx : int cy : int]) (Dot))
 
 (defclass Join [t]
   (join [x : t y : t] : t)

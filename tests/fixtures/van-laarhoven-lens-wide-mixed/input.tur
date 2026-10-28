@@ -21,13 +21,13 @@
   (fmap [i g] (mk-oid (g (run-oid i)))))
 
 ;; WId a -- WIDE: a two-word `:copy` struct `Identity`.
-(defstruct WId :copy [A] (wrapped : A) (tag : int))
+(defstruct ^copy WId [A] (wrapped : A) (tag : int))
 (defn mk-wid  [A] [x : A]        : (WId A) (make-struct WId :wrapped x :tag 0))
 (defn run-wid [A] [i : (WId A)]  : A       (.wrapped i))
 (definstance Functor [WId]
   (fmap [i g] (mk-wid (g (run-wid i)))))
 
-(defstruct Point :copy :heap [x : int y : int])
+(defstruct ^copy ^heap Point [x : int y : int])
 
 (defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
   (fmap (g (.x s))

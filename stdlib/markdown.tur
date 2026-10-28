@@ -125,18 +125,17 @@
 ;; ---- Walking the tree ----------------------------------------------------------
 ;;; MdBlockId -- a block of a parsed document.  Valid only with the MdDoc it came from.
 
-(defstruct MdBlockId :copy [ix : int])
+(defstruct ^copy MdBlockId [ix : int])
 ;;; MdAlign -- a table column's alignment, from the colons of its delimiter cell.
 
-(defdata MdAlign
-  :copy
+(defdata ^copy MdAlign
   (MdAlignNone)
   (MdAlignLeft)
   (MdAlignCenter)
   (MdAlignRight))
 ;;; MdTask -- a list item's GFM task box: none, [ ], or [x].
 
-(defdata MdTask :copy (MdNotTask) (MdUnchecked) (MdChecked))
+(defdata ^copy MdTask (MdNotTask) (MdUnchecked) (MdChecked))
 ;;; MdBlock -- what a block is, with the facts that go with its kind.
 ;;;
 ;;; (MdList ordered start tight): start is the first item's number (1 for a
@@ -147,8 +146,7 @@
 ;;; (MdMathBlock) is a $$ display formula, with math on; markdown/block-text
 ;;; has its TeX.
 
-(defdata MdBlock
-  :copy
+(defdata ^copy MdBlock
   (MdDocument)
   (MdBlockQuote)
   (MdList bool int bool)
@@ -486,7 +484,7 @@
 ;; ---- Walking the inlines ---------------------------------------------------------
 ;;; MdInlineId -- an inline of a parsed document.  Valid only with the MdDoc it came from.
 
-(defstruct MdInlineId :copy [ix : int])
+(defstruct ^copy MdInlineId [ix : int])
 ;;; MdInline -- what an inline is.
 ;;;
 ;;; MdText, MdCode, MdHtmlInline and MdMath carry text (markdown/inline-text).
@@ -497,8 +495,7 @@
 ;;; scheme:// or an email address), is an MdLink.  (MdMath display) is a
 ;;; formula, with math on: $...$, or $$...$$ when display is true.
 
-(defdata MdInline
-  :copy
+(defdata ^copy MdInline
   (MdText)
   (MdCode)
   (MdEmph)

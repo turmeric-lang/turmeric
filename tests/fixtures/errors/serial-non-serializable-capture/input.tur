@@ -5,7 +5,7 @@
 (load "stdlib/serial.tur")
 
 ;; Foo: a struct with no Serializable instance
-(defstruct Foo :copy [x : int])
+(defstruct ^copy Foo [x : int])
 
 (defn k-discard [k] : int 0)
 

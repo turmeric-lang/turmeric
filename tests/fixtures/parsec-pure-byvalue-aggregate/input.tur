@@ -7,7 +7,7 @@
 ;; heap-promoted now.
 
 (load "stdlib/parsec.tur")
-(defstruct P :copy [a : int b : int])
+(defstruct ^copy P [a : int b : int])
 
 (defn two [] : (Parser (Pair int int))
   (do-m _c (item) (pure (pair 1 2))))

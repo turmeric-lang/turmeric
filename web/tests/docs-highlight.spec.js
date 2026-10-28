@@ -49,6 +49,22 @@ test.describe('docs highlighter', () => {
             expect(cls(ct), `${ct} is a type`).toBe('hl-type');
     });
 
+    test('the flags of a type declaration are modifiers', async ({ page }) => {
+        // caret-type-attributes-plan: `^copy` before the name is the same flag as
+        // the trailing `:copy`, so it reads as a modifier, not as a kind.
+        const toks = await tokens(page,
+            '(defstruct ^copy ^heap Cell [n : int])\n'
+            + '(defopaque ^linear ^sealed ^non-null Tok :ptr<void>)\n'
+            + '(defdata ^affine ^no-auto-ctor Job (Job int))\n'
+            + '(defdata ^move Pair [^f a] (Pair a))');
+        const cls = (text) => toks.find(([, t]) => t === text)?.[0];
+        for (const flag of ['^copy', '^heap', '^linear', '^sealed', '^non-null',
+                            '^affine', '^no-auto-ctor', '^move'])
+            expect(cls(flag), `${flag} is a modifier`).toBe('hl-ann');
+        // A kind in the type-parameter vector is still a kind.
+        expect(cls('^f')).toBe('hl-kind');
+    });
+
     test('a type is one token, fused or spaced', async ({ page }) => {
         const toks = await tokens(page,
             '(defn hello [name : cstr] : void (println name))\n'

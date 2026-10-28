@@ -7,7 +7,7 @@
 ;; which is why only nominal `defopaque`/struct payloads tripped it.
 (defmodule wt
   (export main)
-  (defopaque Box [T] :ptr<void> :linear)
+  (defopaque ^linear Box [T] :ptr<void>)
   (defopaque Tag :int)
   (defn tag-of [n : int] : Tag ```c return n; ```)
   (defn tag-val [t : Tag] : int ```c return (int64_t)t; ```)

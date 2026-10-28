@@ -116,7 +116,7 @@ signature just names it. Requirements on the record:
 
 - one constructor, record-style (a multi-variant sum has a tag, which no C
   API declares);
-- not `:heap` (its ABI is a pointer -- declare the slot `:ptr`);
+- not `^heap` (its ABI is a pointer -- declare the slot `:ptr`);
 - monomorphic (a parametric record has no single layout);
 - every field a scalar from the table above, or itself such a record
   (a nested by-value record is inlined, exactly as the emitted C inlines

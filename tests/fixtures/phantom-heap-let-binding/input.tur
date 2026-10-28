@@ -4,7 +4,7 @@
 ;; pointer -- a let binding of it ICE'd.  `:heap` now keeps it a heap record.
 ;; The report's control table, row by row, plus mutation through a generic
 ;; callee (reference semantics, which an int64 identity cannot give).
-(defstruct Holder :heap [V] [payload : int])
+(defstruct ^heap Holder [V] [payload : int])
 (defn holder-new [V] [] : (Holder V) (Holder 0))
 (defn holder-put [V] [^borrow h : (Holder V) v : V] : (Holder V) (Holder (:: v int)))
 (defn holder-get [V] [^borrow h : (Holder V)] : int (.payload h))
@@ -13,7 +13,7 @@
   0)
 
 ;; Control: the same shape with a non-phantom parameter.
-(defstruct Real :heap [V] [payload : V])
+(defstruct ^heap Real [V] [payload : V])
 (defn real-put [V] [^borrow h : (Real V) v : V] : (Real V) (Real v))
 
 (defn main [] : int

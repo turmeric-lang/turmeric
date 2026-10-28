@@ -1,5 +1,5 @@
 ;; RC wrapping a struct that contains an RC field - verify drop glue
-(defstruct Node :move [val : rc<int>])
+(defstruct ^move Node [val : rc<int>])
 
 (defn main [] : int
   (let [inner (rc/of 42)

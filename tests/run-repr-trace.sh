@@ -51,7 +51,7 @@ EOF
 # parametric `:copy` product (`(Q2 int)`, the same 16-byte two-field shape)
 # is the by-value monomorph that still does.
 cat > "$tmp/vprobe.tur" <<'EOF'
-(defstruct Q2 :copy [A] [a : A b : A])
+(defstruct ^copy Q2 [A] [a : A b : A])
 (defn q-get [o : (Q2 int)] : int (.a o))
 (defn call-it [f : fn x : (Q2 int)] : int (f x))
 (defn mk [n : int] : (Q2 int) (make-struct Q2 n (+ n 1)))
@@ -166,7 +166,7 @@ fi
 # means a field decision drifted from the protocol -- triage against
 # docs/archive/repr-decision-function-plan.md.
 cat > "$tmp/shadow-fields.tur" <<'EOF'
-(defstruct FdPoint :heap [x : int y : int])
+(defstruct ^heap FdPoint [x : int y : int])
 (defstruct FdFlat [a : int b : int])
 (defstruct FdOwn [r : rc<int> tag : int])
 (defstruct FdInline [i : FdFlat n : int])

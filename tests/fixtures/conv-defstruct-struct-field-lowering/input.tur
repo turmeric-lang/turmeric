@@ -9,7 +9,7 @@
 (defstruct Pt [a : int b : int])
 (defstruct Outer [tag : int pt : Pt])
 (defstruct HBox [label : int big : Big])
-(defstruct Big :heap [x : int y : int z : int])
+(defstruct ^heap Big [x : int y : int z : int])
 
 (defn psum [p : Pt] : int (+ (.a p) (.b p)))
 (defn bsum [g : Big] : int (+ (.x g) (+ (.y g) (.z g))))

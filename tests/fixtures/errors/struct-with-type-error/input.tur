@@ -1,6 +1,6 @@
 ;; WITH-V0: an override value of the wrong type is rejected with the same
 ;; field-type diagnostic the positional constructor would produce.
-(defstruct Person :copy [name : cstr age : int])
+(defstruct ^copy Person [name : cstr age : int])
 
 (defn main [] : int
   (let [p (Person "Bob" 40)

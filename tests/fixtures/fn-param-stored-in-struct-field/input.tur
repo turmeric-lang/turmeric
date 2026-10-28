@@ -1,7 +1,7 @@
 ;; fn-param-stored-in-struct-field-miscompiles: a `(fn ...)` parameter not
 ;; marked `^fat` is the two-word poly carrier; storing it into a struct's fn
 ;; field used to cast the struct to an integer (a cc error).
-(defstruct F :copy [f : (fn [float] float)])
+(defstruct ^copy F [f : (fn [float] float)])
 (defstruct G [g : (fn [int int] int)  tag : int])
 (defn sq [x : float] : float (* x x))
 (defn mk [f : (fn [float] float)] : F (make-struct F f))

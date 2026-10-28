@@ -7,7 +7,7 @@
 ;; argument bridge now crosses a float kind as its bits.
 (defeffect l1FzEf1 [x :float] :float)
 
-(defstruct l1FzFE2 :copy [run : (fn [float] float) #fx{l1FzEf1}])
+(defstruct ^copy l1FzFE2 [run : (fn [float] float) #fx{l1FzEf1}])
 
 (defn l1fe3 [v : float] : float (perform (l1FzEf1 v)))
 

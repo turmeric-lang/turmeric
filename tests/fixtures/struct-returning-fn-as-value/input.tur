@@ -2,7 +2,7 @@
 ; a named struct-returning function yields a closure; completing it produces the
 ; by-value struct, type intact for field access.
 
-(defstruct Person :copy [name : cstr age : int])
+(defstruct ^copy Person [name : cstr age : int])
 
 (defn mkp [n : cstr a : int] : Person (make-struct Person n a))
 

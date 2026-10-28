@@ -21,7 +21,7 @@
 ;; an erasing `(:: (Link ..) :int)` and summed in inline C, as it was until
 ;; 2026-10-21, every bracket retired
 ;; (docs/archive/region-rewind-fixtures-never-rewind.md).
-(defdata Chain :heap (Link [v : int nxt : Chain]) (End))
+(defdata ^heap Chain (Link [v : int nxt : Chain]) (End))
 
 (defn build [n : int acc : Chain] : Chain
   (if (<= n 0)

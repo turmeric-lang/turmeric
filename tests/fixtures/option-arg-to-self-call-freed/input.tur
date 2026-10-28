@@ -15,7 +15,7 @@
 ;; Each prints its count, and a box freed while still read would print garbage
 ;; or trip ASan here.
 
-(defstruct Id :copy [ix : int])
+(defstruct ^copy Id [ix : int])
 
 (defn nxt [i : int] : (Option Id)
   (if (>= i 3) (none) (some (Id i))))

@@ -23,7 +23,7 @@
 ; -- measured as `error: invalid initializer`. An inline-C body is written
 ; against one C signature and cannot be re-specialized, so that case needs
 ; producer-side work, not a wider commit.
-(defstruct HBox :heap [A] (val A))
+(defstruct ^heap HBox [A] (val A))
 
 ;; Carrier-essential body: reuses the container rather than rebuilding it, which
 ;; is the shape that forces inline-C in the first place.

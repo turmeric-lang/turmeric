@@ -177,7 +177,7 @@ fixtures contribute 180,001 of 271,004), so the second table drops them.
 
 Without the two stress fixtures: 91,003 constructions, 22,176 allocations
 (24%). The product allocations are a classifier artifact: 16,502 of them are
-`gc-heap-struct-rc`'s `(defstruct H :heap ...)`, whose name collides with a
+`gc-heap-struct-rc`'s `(defstruct ^heap H ...)`, whose name collides with a
 non-heap `H` in six other fixtures and takes their class in the name-keyed
 scan (the caveat at the top of `static-census.py` applies to `classify.py`
 too). Read as intended, product allocates ~160 and heap/gadt allocate by

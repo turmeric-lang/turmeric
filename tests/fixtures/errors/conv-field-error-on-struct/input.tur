@@ -1,5 +1,5 @@
 ;; CONV-S6: a field error on a `defstruct`-originated type reads as "struct Foo",
 ;; matching the surface keyword the user wrote.
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 (defn main [] : int
   (let [p (Point :x 1 :z 2)] 0))

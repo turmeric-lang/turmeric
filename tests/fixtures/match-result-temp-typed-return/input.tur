@@ -16,7 +16,7 @@
 ;;    printed 7, with no diagnostic; at cstr, or at an `(Option T)` result,
 ;;    it was a cc error.
 
-(defdata R :heap :copy (Lf int) (Br (Cons R)))
+(defdata ^heap ^copy R (Lf int) (Br (Cons R)))
 
 (defclass Kids [a] (kids [x : a] : (Cons a)))
 (definstance Kids [R]

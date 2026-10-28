@@ -19,7 +19,7 @@
 ;; directly.
 ;;
 ;; Under --strict-refine: losing either is a compile error.
-(defdata Box :copy (Box [width : int height : int]))
+(defdata ^copy Box (Box [width : int height : int]))
 
 ;; The axiom alone.
 (defn direct [p : int] : #refine{ r : int | (= r p) }

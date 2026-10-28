@@ -17,14 +17,14 @@
   return (const char *)s;
   ```)
 
-(defstruct Pos :copy [line : int col : int])
-(defstruct Sm :copy [a : int32 b : int32])
-(defdata K :heap (Ka int) (Kb Pos))
-(defdata One :heap (One Pos int))
-(defdata Ev :heap (A int) (C S (Option S)))
-(defstruct H :heap [p : Pos n : int])
-(defstruct HB :heap [A] [v : A n : int])
-(defdata Bx :heap [A] (Bx A))
+(defstruct ^copy Pos [line : int col : int])
+(defstruct ^copy Sm [a : int32 b : int32])
+(defdata ^heap K (Ka int) (Kb Pos))
+(defdata ^heap One (One Pos int))
+(defdata ^heap Ev (A int) (C S (Option S)))
+(defstruct ^heap H [p : Pos n : int])
+(defstruct ^heap HB [A] [v : A n : int])
+(defdata ^heap Bx [A] (Bx A))
 
 (defn sum-one [o : One] : int (match o (One p n) (+ (.col p) n)))
 (defn desc [e : Ev] : cstr

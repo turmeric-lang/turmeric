@@ -55,7 +55,7 @@
   (vec-fold v 0 (fn [acc x] (+ acc x))))
 
 ;; --- 5. Algebraic data types ----------------------------------------------
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle :float)
   (Rect   :float :float))
 

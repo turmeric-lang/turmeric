@@ -13,7 +13,7 @@
   (get (fn [S] A))
   (put (fn [S A] S)))
 
-(defstruct Person :copy
+(defstruct ^copy Person
   [name : cstr age : int])
 
 (defn name-get [p : Person] : cstr

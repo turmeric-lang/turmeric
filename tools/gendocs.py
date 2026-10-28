@@ -1041,6 +1041,25 @@ def _extract_exports(text, module):
             module['exports'].add(tok)
 
 
+# The declaration forms whose flags (^linear, ^copy, ...) may precede the name.
+TYPE_DECL_KINDS = ('defopaque', 'defstruct', 'defdata', 'defgadt')
+
+
+def _decl_flags(defn):
+    """The flags a type declaration carries, as bare names, in either spelling:
+    `^linear` before the name and a trailing `:linear` keyword alike."""
+    flags = {a[1:] for a in defn.get('lead_attrs', [])}
+    if defn.get('struct_ann'):
+        flags.add(defn['struct_ann'])
+    return flags
+
+
+def _lead_attrs_str(defn):
+    """`^copy ^heap ` -- the flags written before the name, with a trailing
+    space, or '' when there are none."""
+    return ''.join(a + ' ' for a in defn.get('lead_attrs', []))
+
+
 def _parse_def_line(kind, text):
     """
     Parse a defn/defmacro/defstruct/definstance line (possibly multi-line collapsed).
@@ -1051,20 +1070,26 @@ def _parse_def_line(kind, text):
     # annotation before the effect name: (defeffect ^private Ask [] :int).  A
     # defn may carry its pre-name attributes -- ^construct, ^byval, ^reflect,
     # ^deprecated ["message"] -- in any order: (defn ^construct some [A] ...).
+    # A defopaque / defstruct / defdata / defgadt may carry its flags before the
+    # name too -- (defstruct ^copy ^heap Point ...) -- as the trailing keywords
+    # (caret-type-attributes-plan); they are kept apart so the signature is
+    # shown as written.
     if kind == 'defeffect':
         caret_prefix = r'(?:\^\w+\s+)?'
     elif kind == 'defn':
         caret_prefix = r'(?:\^[\w-]+\s+(?:"[^"]*"\s+)?)*'
+    elif kind in TYPE_DECL_KINDS:
+        caret_prefix = r'(?P<lead>(?:\^[\w-]+\s+)*)'
     else:
         caret_prefix = ''
     # A name may contain `=` (`char=?`, `sym=?`, `r7rs-string<=?`): without it
     # `char=?` was published as `char`.
-    pattern = r'\(\s*' + kind + r'\s+' + caret_prefix + r'([\w/\-!?<>*+=]+)'
+    pattern = r'\(\s*' + kind + r'\s+' + caret_prefix + r'(?P<name>[\w/\-!?<>*+=]+)'
     m = re.search(pattern, text)
     if not m:
         return None, [], None, {}
 
-    name = m.group(1)
+    name = m.group('name')
     rest = text[m.end():]
 
     if kind == 'definstance':
@@ -1078,13 +1103,15 @@ def _parse_def_line(kind, text):
         return name + '[' + type_param + ']', [], None, {}
 
     extra = {}
+    if kind in TYPE_DECL_KINDS and m.group('lead').strip():
+        extra['lead_attrs'] = m.group('lead').split()
 
     # Sum types: (defdata Name [:copy] [L R] (Left L) (Right R)) and the
     # GADT form.  Capture the :copy/:move annotation, the optional type-param
     # vector, and the constructor names so the module page can render a
     # sum-type entry.
     if kind in ('defdata', 'defgadt'):
-        ann_m = re.search(r':(copy|move|heap)\b', rest)
+        ann_m = re.search(r':(copy|move|heap|linear|affine)\b', rest)
         if ann_m:
             extra['struct_ann'] = ann_m.group(1)
         # Optional type-param vector [L R ...] -- bare symbols, no ':' inside.
@@ -1106,7 +1133,7 @@ def _parse_def_line(kind, text):
 
     # LT4: For defstruct, detect :copy / :move / :linear annotation before the bracket.
     if kind == 'defstruct':
-        ann_m = re.search(r':(copy|move|linear|heap)\s', rest)
+        ann_m = re.search(r':(copy|move|linear|affine|heap)\s', rest)
         if ann_m:
             extra['struct_ann'] = ann_m.group(1)
 
@@ -2325,12 +2352,12 @@ def _render_signature(defn):
             fields = ''.join(
                 f" ({p} {t[1:] if t and t.startswith(':') else t})" if t else f" ({p})"
                 for p, t in params)
-            return f"(defstruct {name}{ann_str} [{tp_str}]{fields})"
+            return f"(defstruct {_lead_attrs_str(defn)}{name}{ann_str} [{tp_str}]{fields})"
         param_str = ' '.join(
             f"{p} {_spaced_ann(t)}" if t else p
             for p, t in params
         )
-        return f"(defstruct {name}{ann_str} [{param_str}])"
+        return f"(defstruct {_lead_attrs_str(defn)}{name}{ann_str} [{param_str}])"
 
     if kind in ('defdata', 'defgadt'):
         struct_ann = defn.get('struct_ann', '')
@@ -2339,7 +2366,7 @@ def _render_signature(defn):
         tp_str = f" [{' '.join(type_params)}]" if type_params else ''
         arms = defn.get('arms') or defn.get('ctors', [])
         ctor_str = ''.join(f" ({c})" for c in arms)
-        return f"({kind} {name}{ann_str}{tp_str}{ctor_str})"
+        return f"({kind} {_lead_attrs_str(defn)}{name}{ann_str}{tp_str}{ctor_str})"
 
     if kind == 'definstance':
         # name is like 'Functor[list]'
@@ -2379,12 +2406,12 @@ def _render_def_card(defn, anchor_prefix=''):
     params = defn.get('params', [])
     ret = defn.get('return_type', '') or ''
     is_linear = (
-        defn.get('struct_ann') == 'linear'
+        'linear' in _decl_flags(defn)
         or any('^linear' in (p or '') for p, _ in params)
         or any('lref<' in (t or '') for _, t in params)
         or 'lref<' in ret
     )
-    is_affine = defn.get('struct_ann') == 'affine'
+    is_affine = 'affine' in _decl_flags(defn)
 
     h = f'<div class="def-card" id="{html_module.escape(anchor)}">\n'
     h += f'  <div class="def-card-header">\n'
@@ -2771,12 +2798,12 @@ def _build_doc_entry(defn):
     params = defn.get('params', [])
     ret = defn.get('return_type', '') or ''
     is_linear = (
-        defn.get('struct_ann') == 'linear'
+        'linear' in _decl_flags(defn)
         or any('^linear' in (p or '') for p, _ in params)
         or any('lref<' in (t or '') for _, t in params)
         or 'lref<' in ret
     )
-    is_affine = defn.get('struct_ann') == 'affine'
+    is_affine = 'affine' in _decl_flags(defn)
     summary = doc['summary']
     if is_linear:
         summary = '[linear] ' + summary

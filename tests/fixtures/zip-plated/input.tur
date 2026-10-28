@@ -5,7 +5,7 @@
 (load "stdlib/str-build.tur")
 (load "stdlib/zip.tur")
 
-(defdata Tree :heap :copy (Leaf int) (Node (Cons Tree)))
+(defdata ^heap ^copy Tree (Leaf int) (Node (Cons Tree)))
 
 (definstance Plated [Tree]
   (plate-branch? [t] (match t (Leaf _) false (Node _) true))

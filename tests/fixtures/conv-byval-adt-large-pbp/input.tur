@@ -5,7 +5,7 @@
 ;; param lowers to a pointer; field access and `match` read through `->`, the
 ;; caller takes the address, and a pbp param forwards its pointer directly.
 
-(defdata Big :copy (Big [a : int b : int c : int]))
+(defdata ^copy Big (Big [a : int b : int c : int]))
 
 (defn sum-fields [s : Big] : int        ; field access through the pbp pointer
   (+ (.a s) (+ (.b s) (.c s))))

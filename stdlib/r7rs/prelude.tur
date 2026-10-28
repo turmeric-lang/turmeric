@@ -54,11 +54,11 @@
 
 ;;; ---- the types --------------------------------------------------------
 
-(defstruct R7rsPair :heap [a : any d : any])
+(defstruct ^heap R7rsPair [a : any d : any])
 (defstruct R7rsNull [tag : int])
 (defstruct R7rsEof [tag : int])
 (defopaque R7rsChar :int)
-(defstruct R7rsBytevector :heap [bytes : (Vec int)])
+(defstruct ^heap R7rsBytevector [bytes : (Vec int)])
 (defstruct R7rsValues [items : any])
 
 (def r7rs-null-value__ (R7rsNull 0))
@@ -67,7 +67,7 @@
 ;;; R7rsError -- the R7RS error object (R6): a message and a list of
 ;;; irritants.  Declared here, ahead of `display`, because a typed parameter's
 ;;; forward declaration needs the struct to exist.
-(defstruct R7rsError :heap [message : any irritants : any kind : int])
+(defstruct ^heap R7rsError [message : any irritants : any kind : int])
 (defn r7rs-error-object? [x] : bool (is? x R7rsError))
 (defn r7rs-error-object-message [e : R7rsError] : any (.message e))
 (defn r7rs-error-object-irritants [e : R7rsError] : any (.irritants e))
@@ -133,7 +133,7 @@
 ;;; `for-each` lambda updated the closure's copy and the enclosing procedure
 ;;; still read the old value.  scheme_lower.c's assignment conversion binds
 ;;; such a variable to one of these; reads and `set!`s go through it.
-(defstruct R7rsBox :heap [v : any])
+(defstruct ^heap R7rsBox [v : any])
 (defn r7rs-box__ [x] : any (R7rsBox x))
 (defn r7rs-unbox__ [b : R7rsBox] : any (.v b))
 (defn r7rs-box-set!__ [b : R7rsBox x] : nil (set! (.v b) x))
@@ -488,7 +488,7 @@
 ;;; outside int64; the arithmetic is the C of stdlib/r7rs/bignum.tur (the
 ;;; interpreter's natives run the same file).  r7rs-big-norm__ is the one
 ;;; constructor, so a value that fits is always an int.
-(defstruct R7rsBig :heap [digits : cstr])
+(defstruct ^heap R7rsBig [digits : cstr])
 (defn r7rs-big? [x] : bool (is? x R7rsBig))
 (defn r7rs-big-digits__ [b : R7rsBig] : cstr (.digits b))
 (defn r7rs-big-norm__ [s : cstr] : any
@@ -543,7 +543,7 @@
 ;;; one constructor, so a ratio is never a number an integer could be, and
 ;;; `(/ 6 3)` is the integer 2.  Tests go through r7rs-ratio?, not a bare
 ;;; `is?`, which would narrow the value to the (unique) heap struct.
-(defstruct R7rsRatio :heap [num : any den : any])
+(defstruct ^heap R7rsRatio [num : any den : any])
 (defn r7rs-ratio? [x] : bool (is? x R7rsRatio))
 (defn r7rs-ratio-num__ [r : R7rsRatio] : any (.num r))
 (defn r7rs-ratio-den__ [r : R7rsRatio] : any (.den r))
@@ -607,7 +607,7 @@
 ;;; either part is inexact, both are.  An inexact one keeps a 0.0 imaginary
 ;;; part, so `(real? 1.0+0.0i)` is #f.  Tests go through r7rs-cplx?, not a
 ;;; bare `is?` (the unique-narrowing reason r7rs-ratio? gives).
-(defstruct R7rsComplex :heap [re : any im : any])
+(defstruct ^heap R7rsComplex [re : any im : any])
 (defn r7rs-cplx? [x] : bool (is? x R7rsComplex))
 (defn r7rs-cplx-re__ [z : R7rsComplex] : any (.re z))
 (defn r7rs-cplx-im__ [z : R7rsComplex] : any (.im z))
@@ -1420,7 +1420,7 @@
 ;;; seam calls r7rs-str__, elab_call.c), and mutating a `cstr` string is the
 ;;; named error.  Tests go through r7rs-mstring?, not a bare `is?`, which
 ;;; would narrow the value to the (unique) heap struct.
-(defstruct R7rsString :heap [cps : (Vec int)])
+(defstruct ^heap R7rsString [cps : (Vec int)])
 (defn r7rs-mstring? [x] : bool (is? x R7rsString))
 (defn r7rs-mstring-cps__ [s : R7rsString] : (Vec int) (.cps s))
 (defn r7rs-mk-string__ [v : (Vec int)] : any (:: (R7rsString v) any))
@@ -1908,7 +1908,7 @@
     (if (r7rs-dyn-unset?__ v) r7rs-null-value__ v)))
 
 ;;; R7rsWind -- one `dynamic-wind` frame: its before and after thunks.
-(defstruct R7rsWind :heap [before : any after : any])
+(defstruct ^heap R7rsWind [before : any after : any])
 ;;; r7rs-winders__ -- the wind stack, innermost first, as a Scheme list.
 (defn r7rs-winders__ [] : any (r7rs-dyn-list__ 0))
 (defn r7rs-winders-set!__ [v] : nil (r7rs-dyn-set__ 0 v))
@@ -2634,9 +2634,9 @@
 ;;; R7rsParam -- a parameter object's cell: its global value and converter.
 ;;; `parameterize` does not write the cell: it binds it in the running code's
 ;;; dynamic environment (slot 2), so no other thread or fiber sees the value.
-(defstruct R7rsParam :heap [value : any converter : any])
+(defstruct ^heap R7rsParam [value : any converter : any])
 ;;; R7rsPBind -- one `parameterize` binding of a cell, in slot 2's list.
-(defstruct R7rsPBind :heap [cell : any value : any])
+(defstruct ^heap R7rsPBind [cell : any value : any])
 ;;; R7rsParamMarker -- the private argument that asks a parameter for its cell.
 (defstruct R7rsParamMarker [tag : int])
 (def r7rs-param-marker__ (R7rsParamMarker 0))
@@ -2709,8 +2709,8 @@
 
 ;;; R7rsPBox / R7rsPromise -- a promise shares its box with the promise a
 ;;; `delay-force` chain yields, the R7RS 7.3 reference shape.
-(defstruct R7rsPBox :heap [done : bool value : any])
-(defstruct R7rsPromise :heap [box : any])
+(defstruct ^heap R7rsPBox [done : bool value : any])
+(defstruct ^heap R7rsPromise [box : any])
 (defn r7rs-promise? [x] : bool (is? x R7rsPromise))
 (defn r7rs-pbox__ [p : R7rsPromise] : any (.box p))
 (defn r7rs-pbox-done__ [b : R7rsPBox] : bool (.done b))
@@ -3528,7 +3528,7 @@
 ;;; input port or an output port, never both, so one `open` flag serves.
 ;;; `fold` is the port's `#!fold-case` state, which `read` keeps (R7RS 2.1:
 ;;; the directive affects later data read from the same port).
-(defstruct R7rsPort :heap [kind : int input : bool output : bool binary : bool open : bool fold : bool io : R7rsIo])
+(defstruct ^heap R7rsPort [kind : int input : bool output : bool binary : bool open : bool fold : bool io : R7rsIo])
 (defn r7rs-port? [x] : bool (is? x R7rsPort))
 (defn r7rs-port-kind__ [p : R7rsPort] : int (.kind p))
 (defn r7rs-port-in__ [p : R7rsPort] : bool (.input p))

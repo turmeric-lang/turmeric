@@ -13,7 +13,7 @@
 (defn mk2 [T] [x : T] : (Cons T) (wrap x (wrap x (tnil))))
 (defn mk-rev [T] [x : T] : (Cons T) (wrap2 (tnil) x))
 
-(defstruct P :copy [a : float b : int])
+(defstruct ^copy P [a : float b : int])
 
 (defn main [] : int
   (println (thead (mk 5)))

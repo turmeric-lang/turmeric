@@ -18,8 +18,8 @@
 ; is what a by-value sum makes ordinary.  See
 ; docs/archive/c-name-accessors-share-static-buffers.md.
 
-(defdata Rat :copy (MkRat :int :int))
-(defdata Oops :copy (MkOops :int))
+(defdata ^copy Rat (MkRat :int :int))
+(defdata ^copy Oops (MkOops :int))
 
 (defn classify [n : int] : (Result Rat Oops)
   (if (> n 0)

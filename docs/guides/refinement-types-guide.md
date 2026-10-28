@@ -504,7 +504,7 @@ impure as `next-box`.
 caller can hold a `^mut` handle to the very object the callee reads through a
 non-mut one and mutate it between two calls -- exactly the aliasing congruence
 assumes away. A by-value receiver has no second handle to mutate through
-(`:copy` copies; a moved value leaves the caller nothing), so the vector closes
+(`^copy` copies; a moved value leaves the caller nothing), so the vector closes
 by construction. `rc` getters lose precision and nothing else.
 
 Note this does not make `width-of` and `.width` interchangeable: they are two

@@ -3392,8 +3392,11 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         bool is_defopaque = (head->as.sym == e.sym_defopaque);
         if (!is_defstruct && !is_defdata && !is_defgadt && !is_defopaque) continue;
         /* range-gadt-typeclass-migration-plan A1: GADTs are registered
-         * unconditionally. */
-        Form *name_f = f->as.list.items[1];
+         * unconditionally.  The name is past any leading ^attrs
+         * (caret-type-attributes-plan P0). */
+        uint32_t decl_name_idx = elab_type_decl_name_index(f);
+        if (decl_name_idx >= f->as.list.len) continue;
+        Form *name_f = f->as.list.items[decl_name_idx];
         if (!name_f || name_f->tag != F_SYM) continue;
         const Symbol *type_name = name_f->as.sym;
         /* Skip if already in scope (e.g. stdlib defines a type with this name) */
@@ -3422,8 +3425,9 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
              * `(Name A)` annotations resolved before the full defopaque
              * elaboration kind-check against the right arrow kind. */
             uint8_t opaque_arity = 0;
-            if (f->as.list.len >= 3 && f->as.list.items[2]->tag == F_VEC) {
-                opaque_arity = (uint8_t)f->as.list.items[2]->as.list.len;
+            if (f->as.list.len >= decl_name_idx + 2 &&
+                f->as.list.items[decl_name_idx + 1]->tag == F_VEC) {
+                opaque_arity = (uint8_t)f->as.list.items[decl_name_idx + 1]->as.list.len;
             }
             stub->n_type_params = opaque_arity;
             elab_register_adt_def(&e, stub);

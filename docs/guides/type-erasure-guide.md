@@ -174,7 +174,7 @@ field-emission site routes through, consulting
   `tur_adt_Vec2 p;` member. This covers nested by-value ADT/struct
   products and concrete by-value `TY_APP` monomorph fields
   (`(Option cstr)` -> `tur_adt_Option__cstr`).
-- **Everything else stays on the carrier**: a `:heap` field is a typed
+- **Everything else stays on the carrier**: a `^heap` field is a typed
   pointer; a field whose type owns an rc/ref (needs drop glue) is boxed so
   the owner stays trivially copyable; a *carrier* owner keeps every field
   as an `int64_t` slot holding a cast pointer to a heap-allocated

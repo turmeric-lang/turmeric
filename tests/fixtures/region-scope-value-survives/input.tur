@@ -25,7 +25,7 @@
 ;;; generation retired and nothing here tested a rewind
 ;;; (docs/archive/region-rewind-fixtures-never-rewind.md).  `run.env` sets
 ;;; TUR_REGION_STATS=1 and expected.stderr pins `rewinds=103 retires=0`.
-(defdata Chain :heap (Link [v : int nxt : Chain]) (End))
+(defdata ^heap Chain (Link [v : int nxt : Chain]) (End))
 
 ;;; build -- an n-link spine ending in End.
 (defn build [n : int acc : Chain] : Chain

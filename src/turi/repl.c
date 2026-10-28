@@ -1335,6 +1335,11 @@ static bool detect_type_form(const char *src,
         snprintf(kind, ksz, "%s", forms[i].kind);
         const char *p = src + klen;
         while (*p == ' ' || *p == '\t') p++;
+        /* Step over the `^attr`s before the name: (defstruct ^copy Point ...). */
+        while (*p == '^') {
+            while (*p && *p != ' ' && *p != '\t' && *p != ')') p++;
+            while (*p == ' ' || *p == '\t') p++;
+        }
 
         if (strcmp(forms[i].kind, "instance") == 0) {
             /* (definstance Typeclass Type ...) — include both names */

@@ -6,7 +6,7 @@
 ;; itself notes the node, and a by-value aggregate result is noted by its
 ;; words.  Every value is read AFTER the pop; TUR_REGIONS=0 prints the same.
 
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata ^heap Link (Link [v : int nxt : int]))
 
 (defn build [n : int acc : int] : int
   (if (<= n 0) acc (build (- n 1) (:: (Link n acc) :int))))

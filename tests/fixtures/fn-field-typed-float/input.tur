@@ -6,9 +6,9 @@
 ;; signature at all -- see errors/fn-field-bare-float-*.
 (defeffect Emit [x :float] :nil)
 (defeffect Count [n :int] :nil)
-(defstruct Scale :copy [app : (fn [float] float)])
-(defstruct Sink :copy [put : (fn [float] nil) #fx{Emit}])
-(defstruct Tally :copy [add : (fn [int] nil) #fx{Count}])
+(defstruct ^copy Scale [app : (fn [float] float)])
+(defstruct ^copy Sink [put : (fn [float] nil) #fx{Emit}])
+(defstruct ^copy Tally [add : (fn [int] nil) #fx{Count}])
 (defn twice [v : float] : float (* v 2.0))
 (defn put-float [v : float] (perform (Emit v)))
 (defn add-int [n : int] (perform (Count n)))

@@ -19,7 +19,7 @@
   (fmap [c g] (mk-const (get-const c))))
 
 ;; Identity a -- WIDE: a two-word `:copy` struct.  `mk-id` stamps tag = 42.
-(defstruct Identity :copy [A] (wrapped : A) (tag : int))
+(defstruct ^copy Identity [A] (wrapped : A) (tag : int))
 (defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x :tag 42))
 (defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
 (defn id-tag [A] [i : (Identity A)] : int          (.tag i))
@@ -28,7 +28,7 @@
 (definstance Functor [Identity]
   (fmap [i g] (make-struct Identity :wrapped (g (run-id i)) :tag (id-tag i))))
 
-(defstruct Point :copy :heap [x : int y : int])
+(defstruct ^copy ^heap Point [x : int y : int])
 
 (defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
   (fmap (g (.x s))

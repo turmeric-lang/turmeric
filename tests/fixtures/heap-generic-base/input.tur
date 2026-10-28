@@ -7,7 +7,7 @@
 ;; semantics, not a by-value header copy).  Complements heap-make-struct-roundtrip
 ;; (which constructs via a direct `(:: (make-struct Box ...) (Box int))`
 ;; ascription) by exercising the same heap ABI reached through generic dispatch.
-(defstruct Box :heap [A] (val :A) (tag :int))
+(defstruct ^heap Box [A] (val :A) (tag :int))
 
 (defn box-mk [A] [v : A] : (Box A)
   (make-struct Box :val v :tag 0))

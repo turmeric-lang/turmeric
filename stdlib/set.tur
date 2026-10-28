@@ -33,7 +33,7 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defstruct Set :heap [A] (hamt :ptr<void>))
+(defstruct ^heap Set [A] (hamt :ptr<void>))
 ;;; set-new -- create a new empty Set[A].
 ;;;
 ;;; Returns:

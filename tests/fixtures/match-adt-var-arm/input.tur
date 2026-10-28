@@ -10,7 +10,7 @@
 ;;; `:copy` product (the aggregate itself), and the switch-dispatch form.
 
 (defdata Outer (OA :int) (OB))
-(defdata Sh :copy (Circle :int) (Rect :int :int))
+(defdata ^copy Sh (Circle :int) (Rect :int :int))
 (defdata Inner (IA :int) (IB))
 (defdata Wrap (W :Inner) (Empty))
 

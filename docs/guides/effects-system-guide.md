@@ -158,7 +158,7 @@ Two engine bugs break this rule today:
 - **No move-only or linear captures in the clause** (TUR-E0500). A
   `^multishot` clause may not refer to a `^unique` or `^linear` binding of the
   enclosing code. A plain `defstruct` value counts as move-only: declare the
-  struct `:copy`, or pass the fields you need. The check covers only the
+  struct `^copy`, or pass the fields you need. The check covers only the
   clause. The continuation is checked too: a `^unique` or `^linear` value the
   *handled body* holds across a `perform` the clause answers and uses after it
   is refused, since every resume would use it again. A `perform` inside a

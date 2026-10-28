@@ -22,7 +22,7 @@
 ;;
 ;; Values are READ, not merely built -- this compiled fine and printed garbage.
 
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata ^heap Link (Link [v : int nxt : int]))
 (defdata HoldsLink (HL :int :Link))
 (defdata HoldsInt  (HI :int :int))
 

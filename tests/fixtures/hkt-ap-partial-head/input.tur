@@ -13,7 +13,7 @@
 ;; The capturing closure `cap` is stored in a user defdata's field, which used
 ;; to hand the constructor its `void *` handle uncast
 ;; (docs/archive/defdata-ctor-fn-field-passes-pointer-as-int.md).
-(defdata Either :copy [A E] (Right A) (Left E))
+(defdata ^copy Either [A E] (Right A) (Left E))
 
 (definstance Functor [(Either _ E)]
   (fmap [c g] (match c (Right v) (Right (g v)) (Left e) (Left e))))

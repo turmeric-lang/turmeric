@@ -1,0 +1,5 @@
+(defstruct ^copy Point [x : int])
+(defopaque ^linear Chan :ptr<void>)
+(defstruct ^heap Cell :linear [n : int])
+(defopaque ^sealed Key :int :affine)
+(exists ^linear [a] a)

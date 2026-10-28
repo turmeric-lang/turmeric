@@ -8,7 +8,7 @@
 ;; under the flag (admission is verified out-of-band via TUR_TRACE_EVICT).
 
 (defeffect Write [s :cstr] :nil)
-(defstruct Action :copy [run : fn #fx{Write}])
+(defstruct ^copy Action [run : fn #fx{Write}])
 
 (defn pure-greet [msg : cstr]
   (println msg))

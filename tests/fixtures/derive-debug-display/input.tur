@@ -6,7 +6,7 @@
 (load "stdlib/typeclass.tur")
 (load "stdlib/str.tur")
 
-(defstruct Rec :copy [title : cstr flag : bool count : int ratio : float])
+(defstruct ^copy Rec [title : cstr flag : bool count : int ratio : float])
 ;; derive-show emits the owned-String Show[Rec] (the stdlib Show returns
 ;; String since stage 4); derive-debug / derive-display stay cstr.
 (derive-show Rec title flag count ratio)

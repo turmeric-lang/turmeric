@@ -16,7 +16,7 @@
 ;;; Option -- parameterized optional value containing either some A or none.
 ;;;
 ;;; Since: Phase TC1
-(defdata Option :copy [A] (None) (Some A))
+(defdata ^copy Option [A] (None) (Some A))
 ;;; some -- wrap a value of type A in a some Option[A].
 ;;;
 ;;; Parameters:

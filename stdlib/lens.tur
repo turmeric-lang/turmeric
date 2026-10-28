@@ -27,7 +27,7 @@
 ;;;
 ;;; Since: constrained-hkt-forall slice 4
 ;; Lens optic module.
-(defstruct Lens :copy [S A] (lget (fn [S] A)) (lput (fn [A S] S)))
+(defstruct ^copy Lens [S A] (lget (fn [S] A)) (lput (fn [A S] S)))
 ;;; lens -- build a Lens from a getter and a setter.
 ;;;
 ;;; Parameters:

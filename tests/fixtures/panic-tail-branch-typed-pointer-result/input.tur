@@ -2,7 +2,7 @@
 ;; of a function's tail `if` or `match`, where the function returns a typed
 ;; pointer -- a `(Cons float)` or a generic `:heap` struct -- emitted `return
 ;; ((void)0);`, a hard cc error.  The arm now unwinds and returns a dead zero.
-(defstruct S :heap :copy [T] (x T))
+(defstruct ^heap ^copy S [T] (x T))
 
 (defn kids [b : bool] : (Cons float)
   (if b (tcons-of 2.5 (tnil)) (panic "no kids")))

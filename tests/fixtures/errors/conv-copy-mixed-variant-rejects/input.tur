@@ -2,7 +2,7 @@
 ;; payload to be copy-compatible.  Variant 'B' carries an `rc<int>` (a
 ;; move-only, refcounted ownership field), so the :copy annotation is rejected
 ;; with a diagnostic that pinpoints both the offending field and its variant.
-(defdata Mixed :copy
+(defdata ^copy Mixed
   (A [x : int])
   (B [o : rc<int>]))
 

@@ -16,7 +16,7 @@
 ;; Value ADT
 ;; ============================================================
 
-(defdata Value :copy
+(defdata ^copy Value
   (LongVal :int)
   (StrVal :cstr)
   (EntityVal :int))
@@ -25,7 +25,7 @@
 ;; Datum
 ;; ============================================================
 
-(defstruct Datum :copy
+(defstruct ^copy Datum
   [entity : int
    attr   : cstr
    value  : Value

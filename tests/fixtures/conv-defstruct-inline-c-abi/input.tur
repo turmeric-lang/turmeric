@@ -12,7 +12,7 @@
 ;; with no surface alias, so this inline-C failed with `unknown type name 'Cfg'`
 ;; / `'tur_adt_Cfg' has no member named 'width'`.
 
-(defstruct Cfg :copy [width : int  height : int])
+(defstruct ^copy Cfg [width : int  height : int])
 
 ;; By-value field access in inline-C (httpd-set-cookie! shape).
 (defn cfg-area [c : Cfg] : int

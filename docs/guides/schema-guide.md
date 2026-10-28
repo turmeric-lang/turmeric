@@ -256,7 +256,7 @@ binding), not from any argument.
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
 
-(defstruct User :copy [name : cstr age : int])
+(defstruct ^copy User [name : cstr age : int])
 
 (defn user-schema [] : int
   (schema/field
@@ -277,7 +277,7 @@ binding), not from any argument.
 ```sweet-exp
 load("stdlib/json.tur")
 load("stdlib/schema.tur")
-defstruct User :copy [name : cstr age : int]
+defstruct ^copy User [name : cstr age : int]
 defn user-schema [] : int
   schema/field(schema/field(schema/object-new() "name" schema/str()) "age" schema/int())
 definstance HasSchema [User] decode!([node] let([v (schema-decode! (user-schema) node)] make-struct(User json/get-string(json/get!(v "name")) json/get-int(json/get!(v "age")))))

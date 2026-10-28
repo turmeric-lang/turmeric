@@ -47,7 +47,7 @@
   ;;; operation consumes the handle and yields the continuation at the next step.
   ;;;
   ;;; Since: S1
-  (defopaque SChan [P] :ptr<void> :linear)
+  (defopaque ^linear SChan [P] :ptr<void>)
   ;;; schan-new -- open a session-typed channel running protocol P.
   ;;;
   ;;; Parameters:

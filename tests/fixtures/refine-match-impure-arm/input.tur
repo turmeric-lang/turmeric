@@ -18,7 +18,7 @@
 ;; W0372 and the kept check is what aborts -- which is the behaviour worth
 ;; pinning, because the bug would have been a missing abort, not a missing
 ;; diagnostic.
-(defdata Color :copy (Red) (Green) (Blue))
+(defdata ^copy Color (Red) (Green) (Blue))
 
 (defn tick [] #fx{} : int
   ```c

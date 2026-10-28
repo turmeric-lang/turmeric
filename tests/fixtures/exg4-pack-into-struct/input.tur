@@ -23,7 +23,7 @@
     return (const char *)buf;
     ```))
 
-(defstruct Box :move
+(defstruct ^move Box
   [payload (exists [a] [(Show a)] a)])
 
 (defn main [] : int

@@ -2,7 +2,7 @@
 ;; but its exactly-once (CK_LINEAR) discipline must be preserved -- using the value
 ;; a second time, after it has been consumed, is a hard error (TUR-E0101).  This
 ;; locks in that the lowering does not silently drop linearity enforcement.
-(defstruct Handle :linear [ptr : ptr<void>])
+(defstruct ^linear Handle [ptr : ptr<void>])
 
 (defn eat-handle [h : Handle] : int
   ```c (void)h; return 1; ```)

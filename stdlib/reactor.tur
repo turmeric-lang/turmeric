@@ -70,7 +70,7 @@
 ;; :ptr<void> in the C ABI -- the thin extern wrappers coerce with
 ;; (:: r :ptr<void>) at the call boundary, so the C surface is unchanged.
 
-(defopaque Reactor :ptr<void> :linear)
+(defopaque ^linear Reactor :ptr<void>)
 ;; ---- C surface declarations ----
 
 
@@ -564,7 +564,7 @@
 
 
 ;;; LocalFiberGroup -- a linear handle to a fiber group bound to one reactor.
-(defopaque LocalFiberGroup :ptr<void> :linear)
+(defopaque ^linear LocalFiberGroup :ptr<void>)
 
 (extern-c tur_local_fiber_group_new [r :ptr] :ptr)
 

@@ -1659,7 +1659,7 @@ fi
 # to its header, not the aggregate -- naming one in an extern-c slot is a
 # hard elaboration error on every build.
 cat > "$TMP_FFI" <<'TURFFI'
-(defstruct Boxy :heap [n : int])
+(defstruct ^heap Boxy [n : int])
 (extern-c bad_fn [v : Boxy] : int)
 (defn main [] : int 0)
 TURFFI

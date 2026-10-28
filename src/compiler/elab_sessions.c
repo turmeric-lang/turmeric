@@ -286,7 +286,7 @@ bool session_payload_supported(Elab *e, Type t, Span span, const char *op) {
                         "%s: session payload type %s is a by-value aggregate; "
                         "the session runtime carries one machine word per "
                         "message -- send it behind a pointer (rc<%s>, ref<%s>, "
-                        "or a :heap record) instead",
+                        "or a ^heap record) instead",
                         op, type_name(t), type_name(t), type_name(t));
     return false;
 }

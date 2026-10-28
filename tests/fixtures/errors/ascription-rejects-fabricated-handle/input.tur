@@ -8,7 +8,7 @@
 ;; Any other integer is a control-block pointer conjured out of arithmetic: the
 ;; first rc/clone or scope-exit drop through it writes to whatever that address
 ;; happens to be.
-(defstruct S :move [tag : int])
+(defstruct ^move S [tag : int])
 
 (defn main [] : int
   (println (rc/strong-count (:: 12345 rc<S>)))

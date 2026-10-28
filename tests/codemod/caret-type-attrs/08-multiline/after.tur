@@ -1,0 +1,7 @@
+(defstruct ^copy Point
+  [x : int y : int])
+(defopaque ^linear Chan
+  :ptr<void>)
+(defdata ^copy Shape ; a comment after the flag
+  (Circle int)
+  (Square int))

@@ -12,7 +12,7 @@
 ;; the ctors[0]-only size accounting reads such a sum as 8 bytes, so keep
 ;; this shape around anything keyed on width.
 
-(defdata S :copy
+(defdata ^copy S
   (A [x : int])
   (B [p : int q : int]))
 

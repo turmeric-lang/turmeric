@@ -4,7 +4,7 @@
   (show [x] : cstr))
 
 ;; MyOption struct: is_some=1 means some(value), is_some=0 means none.
-(defstruct MyOption :copy [is_some : int value : int])
+(defstruct ^copy MyOption [is_some : int value : int])
 
 (defn option-some [x] : int
   ```c

@@ -57,7 +57,7 @@ resolved 2026-10-22):
 
 - **`&mut` needs a mutable place.** `(&mut x)` and `(&mut (.f x))` are refused
   unless `x` is a `^mut` local ("cannot borrow `x` as mutable: it is not
-  declared `^mut`"). A place behind an `rc`, a `:heap` struct or another borrow
+  declared `^mut`"). A place behind an `rc`, a `^heap` struct or another borrow
   is interior-mutable and needs nothing.
 - **No assignment to a borrowed place while a `let` holds a live borrow of
   it.** `(set! x v)`, or `(set! (.f x) v)` when the borrow covers `.f` (or all

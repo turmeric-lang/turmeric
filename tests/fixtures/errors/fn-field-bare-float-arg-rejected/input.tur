@@ -1,6 +1,6 @@
 ;; Calling a bare `fn` field with a float argument: the argument would cross
 ;; the int64 register class.  Rejected, as a `:fn` parameter's application is.
-(defstruct Box1 :copy [app : fn])
+(defstruct ^copy Box1 [app : fn])
 (defn ident [v : int] : int v)
 (defn main [] : int
   (let [t (make-struct Box1 ident)]

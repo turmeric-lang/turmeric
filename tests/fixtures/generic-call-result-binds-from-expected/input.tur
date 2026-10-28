@@ -23,7 +23,7 @@
 (defn relay [A B E] [r : (Result A E) ^fat f : (fn [A] B)] : (Result B E)
   (result-map r f))
 
-(defdata Ei :copy [L R] (Lf L) (Rt R))
+(defdata ^copy Ei [L R] (Lf L) (Rt R))
 (defn ei-left [L R] [x : L] : (Ei L R) (Lf x))
 (defn ei-right [L R] [y : R] : (Ei L R) (Rt y))
 (defn ei-map [L A B] [^fat f : (fn [A] B) e : (Ei L A)] : (Ei L B)

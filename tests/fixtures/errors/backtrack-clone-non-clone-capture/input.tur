@@ -12,7 +12,7 @@
   (clone [x] x))
 
 ;; NoClone: a struct with no Clone instance — captures here are illegal.
-(defstruct NoClone :copy [x : int])
+(defstruct ^copy NoClone [x : int])
 
 (defn k-discard [k] : int 0)
 

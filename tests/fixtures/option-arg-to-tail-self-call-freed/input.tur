@@ -11,8 +11,8 @@
 ;;   walk-acc  -- the report's repro.
 ;;   walk-wide -- a two-field payload.
 
-(defstruct Id :copy [ix : int])
-(defstruct Wide :copy [ix : int w : int])
+(defstruct ^copy Id [ix : int])
+(defstruct ^copy Wide [ix : int w : int])
 
 (defn nxt [i : int] : (Option Id)
   (if (>= i 3) (none) (some (Id i))))

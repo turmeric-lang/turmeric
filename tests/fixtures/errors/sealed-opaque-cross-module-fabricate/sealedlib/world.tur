@@ -2,7 +2,7 @@
   (export W w-new w-bump! w-read)
 ;; A sealed opaque: `::` may not cross the W/:int boundary outside this module.
 ;; See docs/upcoming/sealed-opaque-plan.md.
-(defopaque W :int :sealed)
+(defopaque ^sealed W :int)
 (defn w-alloc [] #fx{} : int
   ```c return (int64_t)(intptr_t)calloc(4, sizeof(int64_t)); ```)
 (defn w-poke [c : int v : int] #fx{} : int

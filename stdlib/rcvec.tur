@@ -48,7 +48,7 @@
 ;;; through `rcvec-new`.
 ;;;
 ;;; Since: collections-cannot-hold-rc-values item 3
-(defstruct RcVec :move [managed-by-c : int])
+(defstruct ^move RcVec [managed-by-c : int])
 ;;; rcvec-new -- allocate a fresh, empty rc vector.
 ;;;
 ;;; The returned handle is a normal rc<RcVec>: clone it to share, and the last

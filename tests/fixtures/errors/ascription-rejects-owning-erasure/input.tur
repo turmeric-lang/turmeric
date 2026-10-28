@@ -18,7 +18,7 @@
 ;; chain without inline-C.  Any other integer fabricates a control-block pointer
 ;; out of arithmetic; that direction is pinned by the sibling fixture
 ;; ascription-rejects-fabricated-handle.
-(defstruct S :move [tag : int])
+(defstruct ^move S [tag : int])
 
 (defn main [] : int
   (let [a (rc/of (make-struct S 1))

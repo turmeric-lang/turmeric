@@ -10,7 +10,7 @@
 ;; "does not satisfy the schema" alike.  The two files live beside this
 ;; fixture; run.sh runs from the repo root.
 
-(defstruct User :copy [name : cstr age : int])
+(defstruct ^copy User [name : cstr age : int])
 
 (defn user-schema [] : int
   (schema/field

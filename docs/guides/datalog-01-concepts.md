@@ -240,20 +240,20 @@ rather than graph traversal.
 Turmeric uses a tagged union to represent the three Value types:
 
 ```turmeric
-(defdata Value :copy
+(defdata ^copy Value
   (LongVal :int)      ;; 64-bit integer
   (StrVal :cstr)      ;; string
   (EntityVal :int))   ;; reference to another entity
 ```
 
 ```sweet-exp
-defdata Value :copy
+defdata ^copy Value
   (LongVal :int)      ; 64-bit integer
   (StrVal :cstr)      ; string
   (EntityVal :int)    ; reference to another entity
 ```
 
-(`:copy` because a fact is immutable: its value is read and compared, never
+(`^copy` because a fact is immutable: its value is read and compared, never
 consumed. Part 2 explains it.)
 
 Use `match` to inspect a value:

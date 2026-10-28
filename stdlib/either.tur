@@ -45,7 +45,7 @@
 ;; resources, so it is freely copyable (like a primitive); this matches the
 ;; ergonomics of Option/Result.
 
-(defdata Either :copy [L R] (Left L) (Right R))
+(defdata ^copy Either [L R] (Left L) (Right R))
 ;;; left? -- is this Either a Left?
 ;;;
 ;;; Parameters:

@@ -1,4 +1,4 @@
-(defopaque Cstr! :ptr<void> :non-null)
+(defopaque ^non-null Cstr! :ptr<void>)
 (defn zero [] : int 0)
 (defn main [] : int
   (let [bad (some (:: (zero) Cstr!))]

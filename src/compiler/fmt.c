@@ -1120,6 +1120,19 @@ static void fmt_definstance(FmtState *s, const Form *f) {
     fs_putc(s, ')');
 }
 
+/* `^copy`, `^linear`, ...: a symbol that starts with a caret. */
+static bool is_caret_attr(const Form *f) {
+    return f->tag == F_SYM && f->as.sym->len > 1 && f->as.sym->name[0] == '^';
+}
+
+/* defopaque / defstruct / defdata / defgadt: the forms whose flags go before
+ * the name. */
+static bool is_type_decl_head(const Form *f) {
+    const Symbol *h = list_head_sym(f);
+    return h && (sym_eq(h, "defopaque") || sym_eq(h, "defstruct") ||
+                 sym_eq(h, "defdata")   || sym_eq(h, "defgadt"));
+}
+
 /* Generic function call:
  *   (f a b c)          — if inline fits
  *   (f a               — if not: head+first-arg on same line,
@@ -1138,6 +1151,16 @@ static void fmt_call(FmtState *s, const Form *f) {
      * first arg -- which is where a `#;` datum comment on the first argument
      * lives, and where it used to be deleted. */
     uint32_t on_first_line = (n > 2) ? 2 : n;
+    /* A type declaration's flags are `^attr`s before its name --
+     * `(defstruct ^copy ^heap Point` -- so the attributes and the name are the
+     * header together (caret-type-attributes-plan).  Without this the first
+     * attribute counted as "the first argument" and the name was moved to a
+     * line of its own. */
+    if (is_type_decl_head(f)) {
+        uint32_t name_at = 1;
+        while (name_at < n && is_caret_attr(f->as.list.items[name_at])) name_at++;
+        on_first_line = (name_at + 1 < n) ? name_at + 1 : n;
+    }
     uint32_t prev_end = 0;
     for (uint32_t i = 0; i < on_first_line; i++) {
         const Form *cur = f->as.list.items[i];
@@ -1947,6 +1970,122 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts) {
 #include "reader_macros.h"
 #include "symbols.h"
 
+/* ===========================================================================
+ * caret-type-attributes-plan P3: move a type declaration's flag keywords to
+ * `^attr`s before its name.
+ *
+ *   (defstruct Point :copy [x : int])      -> (defstruct ^copy Point [x : int])
+ *   (defopaque Chan :ptr<void> :linear)    -> (defopaque ^linear Chan :ptr<void>)
+ *   (exists :linear [a] a)                 -> (exists ^linear [a] a)
+ *
+ * The compiler warns about the keyword spelling (TUR-D0007); this is the
+ * one-command fix for a file.  It edits the parsed forms before they are
+ * printed, so the layout is the formatter's own.  A declaration whose source
+ * holds a comment is left as written: the printer re-emits comments from the
+ * gaps between neighbouring forms, and reordering forms around one would put
+ * it in the wrong place.  The compiler still warns about that one, and
+ * tools/caret-type-attrs-rewrite.py handles it.
+ * ======================================================================== */
+
+static bool migrate_flag_kw(const Form *k) {
+    static const char *const FLAGS[] = {"copy", "move", "linear", "affine", "heap",
+                                        "sealed", "non-null", "no-auto-ctor", NULL};
+    if (k->tag != F_KEYWORD) return false;
+    for (int i = 0; FLAGS[i]; i++)
+        if (sym_eq(k->as.sym, FLAGS[i])) return true;
+    return false;
+}
+
+static const Symbol *migrate_caret(SymbolTable *st, const Symbol *kw) {
+    char nb[80];
+    int n = snprintf(nb, sizeof nb, "^%s", kw->name);
+    if (n <= 0 || (size_t)n >= sizeof nb) return NULL;
+    return symtab_intern(st, strslice(nb, (uint32_t)n));
+}
+
+/* True if the source of `f` holds a `;` or a `#|` comment opener. */
+static bool migrate_has_comment(const char *src, size_t len, const Form *f) {
+    if (!src) return true;
+    for (uint32_t i = f->span.off_start; i < f->span.off_end && i < len; i++) {
+        if (src[i] == ';') return true;
+        if (src[i] == '#' && i + 1 < len && src[i + 1] == '|') return true;
+    }
+    return false;
+}
+
+static void migrate_decl(Arena *a, SymbolTable *st, const char *src, size_t len, Form *f) {
+    uint32_t n = f->as.list.len;
+    Form **it = f->as.list.items;
+    if (n < 2 || it[0]->tag != F_SYM) return;
+    const Symbol *h = it[0]->as.sym;
+
+    if (sym_eq(h, "exists")) {
+        if (migrate_flag_kw(it[1]) && sym_eq(it[1]->as.sym, "linear")) {
+            const Symbol *c = migrate_caret(st, it[1]->as.sym);
+            if (c) it[1] = form_sym(a, it[1]->span, c);
+        }
+        return;
+    }
+    bool is_opaque = sym_eq(h, "defopaque");
+    bool is_struct = sym_eq(h, "defstruct");
+    bool is_data   = sym_eq(h, "defdata") || sym_eq(h, "defgadt");
+    if (!is_opaque && !is_struct && !is_data) return;
+
+    uint32_t name_at = 1;
+    while (name_at < n && it[name_at]->tag == F_SYM && it[name_at]->as.sym->len > 1 &&
+           it[name_at]->as.sym->name[0] == '^') name_at++;
+    /* The name is a symbol, or `~name` in a macro template. */
+    if (name_at >= n || (it[name_at]->tag != F_SYM && it[name_at]->tag != F_UNQUOTE)) return;
+
+    bool *is_flag = (bool *)arena_alloc(a, n * sizeof(bool));
+    memset(is_flag, 0, n * sizeof(bool));
+    uint32_t nflags = 0;
+    uint32_t k = name_at + 1;
+    if (is_opaque) {
+        if (k < n && it[k]->tag == F_VEC) k++;       /* phantom parameters */
+        if (k < n && it[k]->tag == F_KEYWORD) k++;   /* the base type */
+        for (; k < n && migrate_flag_kw(it[k]); k++) { is_flag[k] = true; nflags++; }
+    } else if (is_struct) {
+        for (; k < n && migrate_flag_kw(it[k]); k++) { is_flag[k] = true; nflags++; }
+    } else {                                          /* flags and the parameter vector, either order */
+        for (; k < n; k++) {
+            if (migrate_flag_kw(it[k])) { is_flag[k] = true; nflags++; }
+            else if (it[k]->tag != F_VEC) break;
+        }
+    }
+    if (nflags == 0 || migrate_has_comment(src, len, f)) return;
+
+    Form **out = (Form **)arena_alloc(a, n * sizeof(Form *));
+    uint32_t o = 0;
+    for (uint32_t i = 0; i < name_at; i++) out[o++] = it[i];     /* head, existing ^attrs */
+    Span sp = it[0]->span;                                        /* zero-width, after the head */
+    sp.off_start = sp.off_end = it[0]->span.off_end;
+    for (uint32_t i = name_at + 1; i < n; i++) {
+        if (!is_flag[i]) continue;
+        const Symbol *c = migrate_caret(st, it[i]->as.sym);
+        if (!c) return;
+        out[o++] = form_sym(a, sp, c);
+    }
+    out[o++] = it[name_at];
+    for (uint32_t i = name_at + 1; i < n; i++)
+        if (!is_flag[i]) out[o++] = it[i];
+    f->as.list.items = out;
+}
+
+static void migrate_walk(Arena *a, SymbolTable *st, const char *src, size_t len, Form *f) {
+    switch (f->tag) {
+        case F_LIST: case F_VEC: case F_MAP: case F_SET: case F_MAP_LITERAL:
+        case F_SET_LITERAL: case F_ROW_LITERAL: case F_QUOTE: case F_QUASIQUOTE:
+        case F_UNQUOTE: case F_UNQUOTE_SPLICING:
+            for (uint32_t i = 0; i < f->as.list.len; i++)
+                migrate_walk(a, st, src, len, f->as.list.items[i]);
+            if (f->tag == F_LIST) migrate_decl(a, st, src, len, f);
+            break;
+        default:
+            break;
+    }
+}
+
 
 /* ===========================================================================
  * r7rs-lang-plan R9: `tur fmt` for `#lang r7rs` -- re-indent, never reprint.
@@ -2270,6 +2409,8 @@ int fmt_format_buffer(const char *path_label, const char *src, size_t len,
         opts.line_width   = 80;
         opts.src          = src;
         opts.src_len      = len;
+        for (uint32_t i = 0; i < nforms; i++)
+            migrate_walk(&arena, &st, src, len, forms[i]);
         buf_init(out);
         if (fmt_print(out, forms, nforms, opts) != 0) {
             buf_free(out);

@@ -751,7 +751,7 @@ static Type call_ptr_aggregate_type(Elab *e, const Symbol *name, Span span,
      * aggregate itself; passing it by value would pass the header. */
     if (def->is_heap) {
         diag_emit(DIAG_ERROR, span,
-                  "call-ptr: '%s' is a :heap record -- its ABI is a pointer, "
+                  "call-ptr: '%s' is a ^heap record -- its ABI is a pointer, "
                   "not a by-value aggregate; declare the slot :ptr instead",
                   def->name ? def->name : name->name);
         *fatal = true;

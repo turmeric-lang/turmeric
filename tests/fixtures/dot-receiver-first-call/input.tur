@@ -7,7 +7,7 @@
 ;; the bare `.` head previously routed through typeclass dispatch with an
 ;; empty method name ("no typeclass method found for ''").
 
-(defstruct Person :copy
+(defstruct ^copy Person
   [name : cstr age : int])
 
 (defn name-get [p : Person] : cstr

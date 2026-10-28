@@ -4,7 +4,7 @@
 ;; variant's named field -- the same auto-deref `rc<Struct>` already gets, now
 ;; carried on the rc type via the `rc.adt_def` slot (mirror of `rc.struct_def`).
 
-(defdata Point :copy (Point [x : int y : int]))
+(defdata ^copy Point (Point [x : int y : int]))
 
 (defn main [] : int
   (let [p (rc/of (Point 3 4))]

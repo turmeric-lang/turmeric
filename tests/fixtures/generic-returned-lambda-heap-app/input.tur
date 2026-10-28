@@ -8,7 +8,7 @@
 ;; lambda, with its own env.  `mk-f` captures nothing (a lifted `__fn_N` the
 ;; body only names); `mk-k` captures `x`.
 
-(defstruct Box :heap :copy [A] (v A))
+(defstruct ^heap ^copy Box [A] (v A))
 (defstruct Pt [A] (x A) (y A))
 
 (defn mk-f [A] [x : A] : (fn [A] (Box A))

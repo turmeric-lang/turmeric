@@ -24,7 +24,7 @@
 ; Measured at 217 bytes per pair before the fix.
 (load "stdlib/weak.tur")
 
-(defstruct Node :move [tag : int child : rc<Node> parent : weak<Node>])
+(defstruct ^move Node [tag : int child : rc<Node> parent : weak<Node>])
 
 (defn null-child [] : rc<Node>
   ```c

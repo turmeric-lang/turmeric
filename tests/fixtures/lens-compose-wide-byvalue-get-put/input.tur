@@ -12,9 +12,9 @@
 ;;         through the field's by-value typed thunk, so its wide by-value ADT
 ;;         params must NOT be B4-boxed (emit marks such closures and suppresses
 ;;         b4box), matching the typed thunk + call site.
-(defstruct Person :copy [name : cstr age : int])
-(defstruct Company :copy [ceo : Person])
-(defstruct Lens :copy [S A] (get (fn [S] A)) (put (fn [S A] S)))
+(defstruct ^copy Person [name : cstr age : int])
+(defstruct ^copy Company [ceo : Person])
+(defstruct ^copy Lens [S A] (get (fn [S] A)) (put (fn [S A] S)))
 
 (defn compose-lens [S A B] [l1 : (Lens S A) l2 : (Lens A B)] : (Lens S B)
   (make-struct Lens

@@ -19,7 +19,7 @@
     ```))
 
 (defn main [] : int
-  (let [e (pack 7 (exists :linear [a] [(Show a)] a))]
+  (let [e (pack 7 (exists ^linear [a] [(Show a)] a))]
     (open e [_ v]
       (println (.show v))))
   0)

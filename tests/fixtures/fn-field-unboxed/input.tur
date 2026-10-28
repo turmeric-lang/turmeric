@@ -4,7 +4,7 @@
 ;; pointer field (tur_fnptr_..._t) rather than int64_t, and the call
 ;; through (.op cb) should need no intptr_t cast.
 
-(defstruct Callback :copy
+(defstruct ^copy Callback
   [op (fn [int32] int32)])
 
 (defn double-it [x : int32] : int32

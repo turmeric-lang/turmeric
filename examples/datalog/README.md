@@ -126,7 +126,7 @@ need to respect retractions must check for the `:db/retract` marker.
 ### Value ADT
 
 ```turmeric
-(defdata Value :copy
+(defdata ^copy Value
   (LongVal :int)      ;; 64-bit integer
   (StrVal :cstr)      ;; string
   (EntityVal :int))   ;; reference to another entity

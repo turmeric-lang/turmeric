@@ -3,7 +3,7 @@
 ; struct, both chained directly and stored in a let.  Field access on the
 ; result resolves (the by-value struct survives the closure ABI).
 
-(defstruct Person :copy [name : cstr age : int])
+(defstruct ^copy Person [name : cstr age : int])
 
 (defn main [] : int
   (let [chained ((Person "Ada") 36)

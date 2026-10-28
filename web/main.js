@@ -105,7 +105,7 @@ defn sum-squares [a : int b : int] : int
 println $ sum-squares 3 4
 `,
     'adt': `;; Algebraic data types and pattern matching
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle :float)
   (Rect   :float :float))
 
@@ -167,7 +167,7 @@ println $ sum-squares 3 4
 `,
     'saffron-adt': `#lang saffron
 ;; Saffron ADTs: annotate the data's shape, leave the code dynamic
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle :float)
   (Rect   :float :float))
 
@@ -2107,6 +2107,10 @@ function configureMonaco() {
         'atomic', 'thread-local', 'deferred-init', 'borrow', 'fat', 'extends',
         'capability', 'multishot', 'deprecated', 'reflect', 'construct', 'byval',
         'non-exhaustive', 'tailcall',
+        // The flags of a defopaque / defstruct / defdata / defgadt, written
+        // before the name (caret-type-attributes-plan); `linear` and `affine`
+        // above are the same words.
+        'copy', 'move', 'heap', 'sealed', 'non-null', 'no-auto-ctor',
     ].join('|');
 
     // The C types an extern-c parameter may be written with, `^int`.

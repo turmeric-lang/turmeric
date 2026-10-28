@@ -15,7 +15,7 @@
 ;; first one through by luck, and the `Nah` arm is where a wrong representation
 ;; shows up as a plausible number rather than a crash.
 
-(defdata Opt2 :copy [a] (Nah) (Yep a))
+(defdata ^copy Opt2 [a] (Nah) (Yep a))
 
 (defn get-or [o : (Opt2 int) d : int] : int
   (match o

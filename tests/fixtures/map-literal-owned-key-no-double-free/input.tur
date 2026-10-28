@@ -25,7 +25,7 @@
 
 (load "stdlib/typeclass.tur")
 
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 
 (definstance Hash [Point]
   (hash [p] : int

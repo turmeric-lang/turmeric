@@ -9,8 +9,8 @@
 (defclass Named [a]
   (names [r : a] : (Vec cstr) (:: (vec-new) (Vec cstr))))
 
-(defstruct Box3 :copy [x : float  y : float  z : float])
-(defstruct Tagged :copy [label : cstr  w : float  h : float])
+(defstruct ^copy Box3 [x : float  y : float  z : float])
+(defstruct ^copy Tagged [label : cstr  w : float  h : float])
 
 ;; Box3 takes the default body; Tagged overrides it.
 (definstance Named [Box3])

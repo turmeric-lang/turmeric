@@ -18,7 +18,7 @@
   return *(int64_t *)h;
   ```)
 
-(defstruct Holder :copy [h : Hnd n : int])
+(defstruct ^copy Holder [h : Hnd n : int])
 
 (defn holder-handle [x : Holder] : Hnd (.h x))
 

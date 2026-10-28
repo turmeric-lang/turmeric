@@ -41,7 +41,7 @@
 ;;; both the element and the spine.
 ;;;
 ;;; Since: collections-cannot-hold-rc-values item 3
-(defstruct RcChain :move [A] [item : rc<A> next : rc<RcChain>])
+(defstruct ^move RcChain [A] [item : rc<A> next : rc<RcChain>])
 ;;; rcchain-nil -- the empty chain.
 ;;;
 ;;; Returns:

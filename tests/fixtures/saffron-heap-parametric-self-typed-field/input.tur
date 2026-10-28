@@ -1,7 +1,7 @@
 #lang saffron
 ;; self-typed-heap-parametric-field-unsupported, Saffron arm: the monomorph
 ;; `(Node any)` is a typed pointer whose `val` slot is a two-word tagged box.
-(defstruct Node :heap [A] (val A) (next (Node A)))
+(defstruct ^heap Node [A] (val A) (next (Node A)))
 
 (defn main [] : int
   (let [m (make-struct Node 8 (:: 0 (Node any)))

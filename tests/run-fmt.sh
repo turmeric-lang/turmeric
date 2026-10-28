@@ -382,6 +382,93 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# caret-type-attributes-plan: the flags of a defopaque / defstruct / defdata /
+# defgadt are `^attr`s before the name, and the attributes and the name are the
+# header together.  A declaration too long for one line used to put the first
+# attribute on the head line and the NAME on a line of its own:
+#     (defdata ^copy
+#       MdKind
+#       (MdKDocument) ...
+# The keyword spelling is migrated (below), then laid out the same way.
+# ---------------------------------------------------------------------------
+NAME="fmt-type-decl-attrs-stay-with-name"
+ATTR_LONG='(defdata ^copy ^heap Tokenizer-State-With-A-Long-Name (TokenStart :int :int) (TokenEnd :int :int) (TokenError :cstr))'
+ACTUAL=$(printf '%s\n' "$ATTR_LONG" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+KW_LONG='(defdata Tokenizer-State-With-A-Long-Name :copy (TokenStart :int :int) (TokenEnd :int :int) (TokenError :cstr))'
+KW_ACTUAL=$(printf '%s\n' "$KW_LONG" | "$TUR" fmt --stdin 2>/dev/null)
+OPQ=$(printf '%s\n' '(defopaque ^linear ^sealed A-Very-Long-Opaque-Handle-Type-Name-For-A-Resource :ptr<void>)' | "$TUR" fmt --stdin 2>/dev/null)
+if printf '%s\n' "$ACTUAL" | head -1 | grep -qxF "(defdata ^copy ^heap Tokenizer-State-With-A-Long-Name" \
+   && printf '%s\n' "$ACTUAL" | sed -n 2p | grep -qE "^  \(TokenStart" \
+   && printf '%s\n' "$KW_ACTUAL" | head -1 | grep -qxF "(defdata ^copy Tokenizer-State-With-A-Long-Name" \
+   && printf '%s\n' "$OPQ" | head -1 | grep -qxF "(defopaque ^linear ^sealed A-Very-Long-Opaque-Handle-Type-Name-For-A-Resource" \
+   && [ "$ACTUAL" = "$ROUNDTRIP" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "attributes split from the name or not idempotent; got: $ACTUAL // $OPQ"
+fi
+
+# ---------------------------------------------------------------------------
+# caret-type-attributes-plan P3: `tur fmt` moves a declaration's flag keywords
+# to `^attr`s before the name (the compiler warns, TUR-D0007).  A declaration
+# whose source holds a comment is left as written, since the printer re-emits
+# comments from the gaps between neighbouring forms; and --check reports a file
+# still on the old spelling.
+# ---------------------------------------------------------------------------
+NAME="fmt-migrates-type-decl-keyword-flags"
+MIG_IN='(defstruct Point :copy :heap [x : int])
+(defopaque Chan :ptr<void> :linear :sealed)
+(defopaque Tagged [A] :int :affine)
+(defdata Tree [a] :heap (Leaf) (Node (Tree a) a (Tree a)))
+(defstruct ^move Cell :linear [n : int])
+(defmacro mk [name] `(defstruct ~name :copy [x : int]))
+(def e (pack 1 (exists :linear [a] a)))'
+MIG_WANT='(defstruct ^copy ^heap Point [x : int])
+
+(defopaque ^linear ^sealed Chan :ptr<void>)
+
+(defopaque ^affine Tagged [A] :int)
+
+(defdata ^heap Tree [a] (Leaf) (Node (Tree a) a (Tree a)))
+
+(defstruct ^move ^linear Cell [n : int])
+
+(defmacro mk [name] `(defstruct ^copy ~name [x : int]))
+
+(def e (pack 1 (exists ^linear [a] a)))'
+ACTUAL=$(printf '%s\n' "$MIG_IN" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+if [ "$ACTUAL" = "$MIG_WANT" ] && [ "$ACTUAL" = "$ROUNDTRIP" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "keyword flags not moved before the name, or not idempotent; got: $ACTUAL"
+fi
+
+NAME="fmt-keeps-commented-type-decl-keyword-flag"
+COM_IN='(defstruct Commented :copy ; keep this comment with the flag
+  [x : int])'
+ACTUAL=$(printf '%s\n' "$COM_IN" | "$TUR" fmt --stdin 2>/dev/null)
+if printf '%s\n' "$ACTUAL" | grep -qF "; keep this comment with the flag" \
+   && printf '%s\n' "$ACTUAL" | grep -qF ":copy" \
+   && ! printf '%s\n' "$ACTUAL" | grep -qF "^copy"; then
+    pass "$NAME"
+else
+    fail "$NAME" "a declaration with a comment was rewritten or lost its comment; got: $ACTUAL"
+fi
+
+NAME="fmt-check-flags-old-type-decl-spelling"
+OLD_F=$(mktemp "${TMPDIR:-/tmp}/fmt-old-XXXXXX.tur")
+NEW_F=$(mktemp "${TMPDIR:-/tmp}/fmt-new-XXXXXX.tur")
+printf '(defstruct Point :copy [x : int])\n' > "$OLD_F"
+printf '(defstruct ^copy Point [x : int])\n' > "$NEW_F"
+if ! "$TUR" fmt --check "$OLD_F" >/dev/null 2>&1 && "$TUR" fmt --check "$NEW_F" >/dev/null 2>&1; then
+    pass "$NAME"
+else
+    fail "$NAME" "--check should reject the keyword spelling and accept the attribute one"
+fi
+rm -f "$OLD_F" "$NEW_F"
+
+# ---------------------------------------------------------------------------
 # FT7: bootstrap -- every hand-authored stdlib file is already self-formatted.
 # docstrings.tur is excluded: it is an auto-generated artifact (gendocs.py
 # --emit-tur) whose inline-C literal bodies the formatter does not round-trip,

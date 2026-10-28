@@ -113,7 +113,7 @@ TYPES = {
 
 PRELUDE = """\
 (defstruct MxP [x : int y : float])
-(defstruct MxH :heap [x : int y : float])
+(defstruct ^heap MxH [x : int y : float])
 (defstruct MxBox [A] [val : A])
 (defn mx-id [A] [y : A] : A y)
 (defn mx-true [] : bool true)

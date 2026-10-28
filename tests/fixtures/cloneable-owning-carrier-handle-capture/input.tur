@@ -10,7 +10,7 @@
 ;; freed exactly once by the auto-inserted scope-exit drop (drop!/free), threaded
 ;; into the continuation by the P5b trailing-defer path.  LeakSanitizer-clean.
 
-(defstruct H :heap [tag : int])
+(defstruct ^heap H [tag : int])
 
 (defn k-identity [k] : int k)
 

@@ -10,10 +10,10 @@
 ;; stripped.  The compiled path was already right.
 (load "stdlib/list-typed.tur")
 
-(defdata Box :heap (B cstr))
-(defdata Shape :heap (Circle int) (Rect int int))
-(defdata Wrap :heap [A] (W A))
-(defstruct Pt :heap [x : int y : int])
+(defdata ^heap Box (B cstr))
+(defdata ^heap Shape (Circle int) (Rect int int))
+(defdata ^heap Wrap [A] (W A))
+(defstruct ^heap Pt [x : int y : int])
 
 (defn box-str [b : Box] : cstr (match b (B s) s))
 

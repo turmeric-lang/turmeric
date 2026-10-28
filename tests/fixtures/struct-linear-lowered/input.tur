@@ -1,7 +1,7 @@
 ;; structdef-retirement slice 4: a `:linear` defstruct lowers to a single-variant
 ;; record ADT (like every other defstruct) while keeping exactly-once discipline.
 ;; Construct via make-struct, read a field, then consume the value exactly once.
-(defstruct Handle :linear [tag : int])
+(defstruct ^linear Handle [tag : int])
 
 (defn handle-tag [h : Handle] : int
   (.tag h))
