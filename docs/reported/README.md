@@ -38,7 +38,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [wasm-mir-thunk-address-is-not-callable-by-host-code](wasm-mir-thunk-address-is-not-callable-by-host-code.md) | high (wasm JIT) | On wasm a MIR thunk is a heap slot, not a table index, so host C that `call_indirect`s an interpreted function's address traps. `wasm_ff_dispatch` substitutes a real entry only for an i32 call argument, not for an address stored in memory or passed as an i64 carrier. 201 corpus fixtures trap. Fix: thunks as real table entries, in the next turmeric-lang/mir PR |
+| [wasm-mir-thunk-address-is-not-callable-by-host-code](wasm-mir-thunk-address-is-not-callable-by-host-code.md) | high (wasm JIT) | On wasm a MIR thunk is a heap slot, not a table index, so host C that `call_indirect`s an interpreted function's address traps. `wasm_ff_dispatch` substitutes a real entry only for an i32 call argument, not for an address stored in memory or passed as an i64 carrier. 202 corpus fixtures trap, and so does the `closure` example. Fix: thunks as real table entries, in the next turmeric-lang/mir PR |
 | [ilp32-word-slots-truncate-64-bit-carriers](ilp32-word-slots-truncate-64-bit-carriers.md) | high (wasm JIT, `tur build --target wasm`) | On wasm32, carriers kept in `intptr_t`/`void *` slots (the CPS backend's `DK` slots, `tur_hamt_get`'s values) or declared at the wrong width (`tur_hamt_count`) lose their top 32 bits. Doubles and large ints come back wrong with no diagnostic: 44 corpus fixtures print a wrong answer |
 
 ## Found adding the instance-variance warning (filed 2026-10-27)

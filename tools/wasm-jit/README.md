@@ -22,7 +22,9 @@ page loads it only for the Compile engine.  `-DTUR_WASM_JIT=OFF` leaves it out.
 | `build-module.sh` | what the target runs: objects through a generated Makefile (`-MMD`, so a rebuild recompiles only what changed), the import table, the embedded headers, the link |
 | `gen-symtab.py` | the import table that stands in for `dlsym` (plan 5.3): the runtime's declarations region, `hamt.h`, the TLS accessors and a libc list at their real types, and the rest of the resident runtime at the wasm signatures its objects record |
 | `headers.txt` | the system headers c2mir may open, embedded at `/sysinclude` as their closure inside Emscripten's musl (plan 5.4) |
-| `run.js` | runs one program through the module under node, as the page will |
+| `stdatomic.h` | C11 atomics for c2mir, embedded beside them: musl has none, and on this single-threaded engine each operation is a plain access (its header says why that is sound here only) |
+| `run.js` | runs one program through the module under node, as the page will; `--dump-c FILE` writes the text c2mir was handed |
+| `check-examples.sh` | P3's gate: every Try Turmeric example compiles or falls back, and none differs from `tur interpret` |
 | `smoke/` | four programs from P1: inline C (`cmix`), effects (`eff`, which still needs P5's `setjmp` landing), a loop and hello |
 
 The sources that are not scripts live in `src/`: `src/web/wasm_jit_glue.c`
@@ -46,7 +48,8 @@ tur-wasm-jit: {"engine":"compiled","exit":0,"front_ms":130.9,"compile_ms":120.7,
 refused the program -- threads, an import it lacks, a c2mir rejection -- and
 the interpreter ran it instead, `reason` says why) or `error` (the program
 does not compile).  `TUR_JIT_WARNINGS=1` in the module's environment shows
-c2mir's warnings, which the page hides.
+c2mir's warnings, which the page hides.  A `<tur-jit>:LINE` diagnostic is a
+line of the text `--dump-c` writes.
 
 ## The corpus
 

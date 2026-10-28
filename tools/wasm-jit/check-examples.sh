@@ -19,6 +19,12 @@ MODULE_DIR="${TUR_WASM_JIT_MODULE:-build-wasm/wasm-jit}"
 [ -x "$TUR" ] || { echo "check-examples: no tur at $TUR" >&2; exit 2; }
 [ -f "$MODULE_DIR/turmeric-jit.wasm" ] || { echo "check-examples: no $MODULE_DIR/turmeric-jit.wasm" >&2; exit 2; }
 export TUR_NO_GLOBAL_SPICES=1
+# The interpreter never frees its closures (process-lifetime, by design), so
+# on a Debug tur LeakSanitizer reports them and exits before stdout is
+# flushed: the reference came back empty with exit 1, and a broken run on the
+# module "matched" it.  The interpreter harnesses opt out the same way
+# (CLAUDE.md, leak detection policy).
+export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/tur-examples.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT

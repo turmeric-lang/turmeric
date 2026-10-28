@@ -388,6 +388,34 @@ int turi_wasm_run_program(const char *path) {
     if (turi_wasm_init() != 0) return 1;
     turi_wasm_reset();
     if (!g_env || !path) return 1;
+    /* The program's #lang picks the session's language first, as the page
+     * does before an Interpret run: a language with its own prelude (r7rs) or
+     * stdlib (saffron) needs the session built for it, and `load` alone only
+     * switches the reader.  No #lang is turmeric -- a reset keeps the previous
+     * program's language, which must not leak into this one. */
+    {
+        char lang[128] = "turmeric";
+        FILE *f = fopen(path, "rb");
+        char head[160];
+        if (f) {
+            size_t n = fread(head, 1, sizeof head - 1, f);
+            fclose(f);
+            head[n] = '\0';
+            if (strncmp(head, "#lang ", 6) == 0) {
+                size_t len = strcspn(head + 6, "\r\n");
+                while (len > 0 && (head[6 + len - 1] == ' ' || head[6 + len - 1] == '\t')) len--;
+                if (len > 0 && len < sizeof lang) {
+                    memcpy(lang, head + 6, len);
+                    lang[len] = '\0';
+                }
+            }
+        }
+        if (turi_wasm_set_lang(lang) != 0) {
+            fprintf(stderr, "tur: unknown #lang '%s'\n", lang);
+            wasm_flush_program_output();
+            return 1;
+        }
+    }
     char epath[8200];
     if (!tur_source_literal_escape(path, epath, sizeof epath)) return 1;
     char load_form[8300];

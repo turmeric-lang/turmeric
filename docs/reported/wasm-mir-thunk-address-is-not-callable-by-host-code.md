@@ -1,7 +1,7 @@
 # On wasm, an interpreted function's address is not callable once it is stored
 
 **Severity:** high for the wasm JIT (wasm-jit-plan P3). It is the largest
-failure family in the first corpus run through the browser JIT module: 201
+failure family in the first corpus run through the browser JIT module: 202
 fixtures trap with `table index is out of bounds`, and the trap leaves the
 module unusable for the rest of the page's session (wasm-jit-plan 5.8).
 Native targets are unaffected.
@@ -37,15 +37,24 @@ It misses every other way an address reaches host code:
   `(fn ...)` handed to a runtime function as a carrier arrives as the raw
   thunk address.
 
-The CPS, effect-handler, reactor and closure-heavy fixtures make up most of
-the 201.
+Even the simplest closure hits it. Try Turmeric's `closure` example prints its
+first line and then traps in `TUR_CLOSURE_DROP`, because the resident
+`tur_closure_drop` calls the closure's drop function through the pointer the
+program stored.
 
 ## Repro
 
 ```sh
 cmake -S . -B build-wasm -DTUR_WASM=ON && cmake --build build-wasm --target tur_wasm_jit
-grep 'table index is out of bounds' tests/jit-wasm-baseline.txt | head
-node tools/wasm-jit/run.js tests/fixtures/<one of them>/input.tur
+cat > closure.tur <<'TUR'
+(defn make-adder [x : int] (fn [y : int] (+ x y)))
+(let [add5 (make-adder 5)]
+  (println (add5 10)))
+TUR
+node tools/wasm-jit/run.js closure.tur
+# 15
+# tur-wasm-jit: {"engine":"error","exit":1,"reason":"the module threw: table index is out of bounds"}
+grep 'table index is out of bounds' tests/jit-wasm-baseline.txt    # the corpus rows
 ```
 
 ## Fix direction (a turmeric-lang/mir change)

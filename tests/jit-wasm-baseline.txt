@@ -7,21 +7,19 @@
 # Regenerate from an unsharded, unfiltered run:
 #   TUR_JIT_WASM_BASELINE_UPDATE=1 bash tests/run-jit-wasm.sh
 adt-name-apostrophe-monomorph-mangle fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-all-any-fn-param interpreted  # c2mir rejected the generated C (see above)
+all-any-fn-param interpreted  # import of undefined item setjmp
 annotated-fat-lambda-param interpreted  # import of undefined item setjmp
 any-closure-roundtrip fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 any-fn-signature-discriminates fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 any-value-call interpreted  # import of undefined item setjmp
-any-widen-frame-box-dyn-call-operand interpreted  # c2mir rejected the generated C (see above)
-any-widen-frame-box-past-dyn-call interpreted  # c2mir rejected the generated C (see above)
-any-widen-fresh-payload-aliases interpreted  # c2mir rejected the generated C (see above)
-any-widen-of-a-borrowed-local interpreted  # c2mir rejected the generated C (see above)
+any-widen-frame-box-dyn-call-operand interpreted  # import of undefined item setjmp
+any-widen-frame-box-past-dyn-call interpreted  # import of undefined item setjmp
+any-widen-fresh-payload-aliases interpreted  # import of undefined item setjmp
+any-widen-of-a-borrowed-local interpreted  # import of undefined item setjmp
 any-widen-retaining-callee fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-arc-basic fail  # stdout mismatch on the interpreted path: import of undefined item __atomic_load_n
-arc-weak-upgrade fail  # stdout mismatch on the interpreted path: import of undefined item __atomic_load_n
 args-evaluated-left-to-right fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 args-evaluated-left-to-right-effect-unit fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-args-option-implicit fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
+args-option-implicit fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 arrow-compose-float interpreted  # import of undefined item setjmp
 arrow-generic-closure-direct-call fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 arrow-instance-apply fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
@@ -57,7 +55,6 @@ async-park-reaped-after-settle fail  # stdout mismatch on the interpreted path: 
 async-struct-capturing-body-env-dropped fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 async-timer-basic fail  # stdout mismatch on the interpreted path: the program starts threads (tur_timer_wheel_new), which this engine cannot run
 async-with-handler fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-atomic-basic fail  # stdout mismatch on the interpreted path: import of undefined item __atomic_compare_exchange_n
 await-below-evicted-caller-or-nontail-resume fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 await-below-struct-capturing-lambda fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 await-below-unthreaded-frame-refused interpreted  # import of undefined item setjmp
@@ -84,17 +81,17 @@ barrier-rendezvous fail  # stdout mismatch on the interpreted path: the program 
 borrow-closure fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 boxed-fn-typed-closure-return fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 bt-scope-panic-undo fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-byval-spine-drop-refused-nonscalar-param interpreted  # c2mir rejected the generated C (see above)
+byval-spine-drop-refused-nonscalar-param interpreted  # import of undefined item setjmp
 call-cc-star interpreted  # import of undefined item setjmp
 callcc-in-fiber fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 callcc-kv-sugar interpreted  # import of undefined item setjmp
 callcc-linear-k interpreted  # import of undefined item setjmp
 callcc-real-capture interpreted  # import of undefined item setjmp
 callcc-star-context interpreted  # import of undefined item setjmp
-cancel-chan fail  # stdout mismatch on the interpreted path: import of undefined item __atomic_store_n
-cancel-cooperative fail  # stdout mismatch on the interpreted path: import of undefined item __atomic_store_n
+cancel-chan fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
+cancel-cooperative fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 cancel-guard-typed-closures fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cancel-select fail  # stdout mismatch on the interpreted path: import of undefined item __atomic_store_n
+cancel-select fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 capability-effect-poly interpreted  # import of undefined item setjmp
 captureless-autobox fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 capturing-closure-struct-field fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
@@ -107,7 +104,7 @@ category-instance-basic fail  # stdout mismatch on the error path: the module th
 cfnptr-vs-boxed-monomorph-split interpreted  # import of undefined item setjmp
 childhandle-linear fail  # stdout mismatch on the interpreted path: import of undefined item fork
 class-var-applied-result-in-constrained-generic interpreted  # import of undefined item setjmp
-classic-list-surface interpreted  # c2mir rejected the generated C (see above)
+classic-list-surface interpreted  # import of undefined item setjmp
 cloneable-capture-precision interpreted  # import of undefined item setjmp
 cloneable-context-if interpreted  # import of undefined item setjmp
 cloneable-context-if-outer-frames interpreted  # import of undefined item setjmp
@@ -316,7 +313,7 @@ currying-partial-struct-capture fail  # exited 1 (expected 0) on the error path:
 currying-point-free interpreted  # import of undefined item setjmp
 currying-rank2-partial interpreted  # import of undefined item setjmp
 data-literal-typed-empty fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-defalias-composite interpreted  # c2mir rejected the generated C (see above)
+defalias-composite interpreted  # import of undefined item setjmp
 defalias-struct-field fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 defdynamic-option-convey fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 defer-abortive-handler-no-inline-c interpreted  # import of undefined item setjmp
@@ -344,11 +341,11 @@ direct-shift-outside-lexical-reset interpreted  # import of undefined item setjm
 dk-entry-landing-restores-pending-perform interpreted  # import of undefined item setjmp
 do-discarded-reset-shift-evicted interpreted  # import of undefined item setjmp
 do-tail-carrier-into-heap-ptr-temp fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-docs-introducing-saffron-examples fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-docs-r7rs-guide-examples fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-docs-saffron-guide-examples fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-docs-sicp-guide-examples fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-docs-sicp-guide-no-import fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
+docs-introducing-saffron-examples fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+docs-r7rs-guide-examples fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
+docs-saffron-guide-examples interpreted  # import of undefined item setjmp
+docs-sicp-guide-examples fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+docs-sicp-guide-no-import interpreted  # import of undefined item setjmp
 dynvar-binding-moves-with-fiber fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 dynvar-convey fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 dynvar-convey-isolation fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
@@ -438,7 +435,7 @@ effect-toplevel-handler-forms interpreted  # import of undefined item setjmp
 effect-type-alias interpreted  # import of undefined item setjmp
 effect-with-fail fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 effect-with-getenv fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-effect-with-read-console fail  # stdout mismatch on the interpreted path: import of undefined item scanf
+effect-with-read-console fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 effect-with-write fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 effectful-fat-fn-param interpreted  # import of undefined item setjmp
 effectful-fat-fn-param-named interpreted  # import of undefined item setjmp
@@ -458,7 +455,6 @@ escape-in-main fail  # stdout mismatch on the interpreted path: import of undefi
 escape-nested-reset interpreted  # import of undefined item setjmp
 escape-real interpreted  # import of undefined item setjmp
 fat-captureless-closure-ptr-void interpreted  # import of undefined item setjmp
-fat-closure-ascription fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 fat-closure-float-compose interpreted  # import of undefined item setjmp
 fat-closure-nested-option-result-sret interpreted  # import of undefined item setjmp
 fat-dispatch-parametric-monomorph-return interpreted  # import of undefined item setjmp
@@ -525,13 +521,10 @@ forward-call-generic-callee-in-module interpreted  # import of undefined item se
 free-interpreter fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 free-lift-bind fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 free-pure fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-fs-interp-basics interpreted  # import of undefined item rename
-fs-process-typed-errors fail  # stdout mismatch on the interpreted path: import of undefined item rename
+fs-interp-basics interpreted  # import of undefined item fnmatch
+fs-process-typed-errors fail  # stdout mismatch on the interpreted path: import of undefined item popen
 fs-stream-walk fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 fs-symlink-perms fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-future-capturing-closure fail  # stdout mismatch on the interpreted path: import of undefined item __atomic_sub_fetch
-future-linear interpreted  # import of undefined item __atomic_sub_fetch
-future-split-free interpreted  # import of undefined item __atomic_add_fetch
 g4b-thread-local-global fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 gadt-stdlib-vec-stdlib interpreted  # import of undefined item setjmp
 gc-registry-growth fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
@@ -612,10 +605,10 @@ hrt-rankn-propagation interpreted  # import of undefined item setjmp
 hrt-rankn-rank3 interpreted  # import of undefined item setjmp
 hrt-stdlib-cont interpreted  # import of undefined item setjmp
 httpd-async-echo fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-httpd-async-limit fail  # stdout mismatch on the interpreted path: import of undefined item __sync_fetch_and_add
+httpd-async-limit fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-async-mw-attr fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-async-mw-compose fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-httpd-async-throughput fail  # stdout mismatch on the interpreted path: import of undefined item __sync_fetch_and_add
+httpd-async-throughput fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-bind-addr fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-conn-upgrade fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-conn-upgrade-async fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
@@ -654,21 +647,21 @@ httpd-mw-trust-proxy fail  # stdout mismatch on the interpreted path: the progra
 httpd-new-pool-fail-drops-handler fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-pool-pending-limit fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-read-deadline fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-httpd-request-hardening fail  # stdout mismatch on the interpreted path: import of undefined item mkdtemp
+httpd-request-hardening fail  # stdout mismatch on the interpreted path: import of undefined item symlink
 httpd-static-index-listing fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 if-joins-closure-and-thin-fn interpreted  # import of undefined item setjmp
 image-globals-roundtrip fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-image-hooks-tracked fail  # stdout mismatch on the interpreted path: import of undefined item fscanf
-image-reload-hook fail  # stdout mismatch on the interpreted path: import of undefined item fscanf
+image-hooks-tracked fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+image-reload-hook fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 image-roundtrip fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 inline-c-result-builder fail  # stdout mismatch on the compiled path
 inline-c-result-nested-sum fail  # stdout mismatch on the compiled path
 inline-c-typed-result-option fail  # stdout mismatch on the compiled path
 inline-c-variadic-definition fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
 io-read-line-stdin fail  # stdout mismatch on the compiled path
-jit-ffi-call-ptr fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
+jit-ffi-call-ptr fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 jit-ffi-call-ptr-struct fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-jit-ffi-callback-ptr fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
+jit-ffi-callback-ptr fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 json-decode-hostile-input fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 kebab-case-capture fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 kleisli-arrow-instance fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
@@ -694,15 +687,14 @@ letrec-struct-arg-leak fail  # stdout mismatch on the error path: the module thr
 linear-effect-handler interpreted  # import of undefined item setjmp
 linear-fn-type interpreted  # import of undefined item setjmp
 list-byvalue-adt-elements fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-list-count-phantom-opaque-aggregate-element fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
-list-helpers-wide-head-element interpreted  # c2mir rejected the generated C (see above)
+list-helpers-wide-head-element interpreted  # import of undefined item setjmp
 load-inside-defmodule-injects-names interpreted  # import of undefined item setjmp
 local-struct-fnfield-drop fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 loop-invariant-declines interpreted  # import of undefined item setjmp
 macro-arg-not-ct-evaluated fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 macro-typed-inline-lambda-arg interpreted  # import of undefined item setjmp
 make-struct-parametric-fn-field-infer fail  # exited 1 (expected 42) on the error path: the module threw: table index is out of bounds
-map-get-miss-on-any-value-is-nil interpreted  # c2mir rejected the generated C (see above)
+map-get-miss-on-any-value-is-nil interpreted  # import of undefined item setjmp
 map-literal-frees-intermediates fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 map-multiword-struct-key interpreted  # import of undefined item setjmp
 map-typed-consumer interpreted  # import of undefined item setjmp
@@ -723,7 +715,7 @@ neoteric-ascription-sweet fail  # stdout mismatch on the error path: the module 
 nested-construct-byvalue-decode fail  # stdout mismatch on the compiled path
 net-blocking-tcp fail  # stdout mismatch on the interpreted path: import of undefined item socket
 never-call-panic-propagates interpreted  # import of undefined item setjmp
-niche-elem-comparator-conventions fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
+niche-elem-comparator-conventions fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 nil-arg-to-ptr-param fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 nil-call-panic-propagates interpreted  # import of undefined item setjmp
 nil-closure-into-erased-result interpreted  # import of undefined item setjmp
@@ -736,7 +728,7 @@ option-map-generic-partial interpreted  # import of undefined item setjmp
 option-map-literal-none-unannotated-lambda interpreted  # import of undefined item setjmp
 option-niche-crossings fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 option-niche-vec-closure-cmp fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-os-misc-surface fail  # stdout mismatch on the interpreted path: import of undefined item getuid
+os-misc-surface fail  # stdout mismatch on the interpreted path: import of undefined item getgid
 p19-8-fiber-effect-chain fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 pair-signals-typed interpreted  # import of undefined item setjmp
 panic-catch-panic-of fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
@@ -786,127 +778,122 @@ poly-to-fat-multiarg-roundtrip interpreted  # import of undefined item setjmp
 poly-to-fat-pbp-aggregate-arg interpreted  # import of undefined item setjmp
 poly-to-fat-wide-byval-arg interpreted  # import of undefined item setjmp
 println-io-row interpreted  # import of undefined item setjmp
-process-kill-signal fail  # stdout mismatch on the interpreted path: import of undefined item kill
-process-output fail  # stdout mismatch on the interpreted path: import of undefined item signal
-promise-linear interpreted  # import of undefined item __atomic_sub_fetch
+process-kill-signal fail  # stdout mismatch on the interpreted path: import of undefined item fork
+process-output fail  # stdout mismatch on the interpreted path: import of undefined item fork
 question-op-as-call-argument interpreted  # import of undefined item setjmp
-r7rs-apply-long fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-apply-many-args fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-apply-standard-variadic-many fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-base-library fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-bignum-int-seam fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-bignums fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-brackets-are-parens fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-bytevector-range-errors fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-callcc-escape-only fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-callcc-reclaimed-images fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-callcc-reentry-many fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-case-lambda-define-recurs fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-closure-one-capture-call fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-colon-identifiers fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-complex fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-conformance-fixes fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-continuation-after-return fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-continuations fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-control fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-core-forms fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-core-forms-interp fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-data-forms fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-datum-comment-anywhere fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-dead-mistyped-call fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-deep-recursion-million fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-eval fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-eval-callcc-reentry fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-eval-macros-and-set-persist fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-eval-pool-sweep fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-features-agree fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-file-ports fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-forward-reference fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-gc-basic fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-gc-seam fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-guard-calls-local-lambda fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-hygiene-binder-made-later fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-import-sets fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-internal-define-forward-set fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-internal-defines-mutual-capture fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-internal-procedure-identity fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-internal-record-type fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-let-star-not-deprecated fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-named-let-sum fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-number-syntax fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-numbers fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-numbers-values fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-pool-sweep-places fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-ports fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-procedure-identity fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-program-redefines-scheme-eval fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-program-redefinition fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-program-shadows-names fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-raise-under-musttail fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-rationals fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-read fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-reader-lexemes fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-record-type-without-fields fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-redefine-eval-with-scheme-eval fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-saved-scheme-eval-before-redefinition fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-saved-standard-procedure-before-redefinition fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-segmented-stack-deep-recursion fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-sicp-extras fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-sicp-metacircular-evaluator fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-1 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-13 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-14 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-17 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-18 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-2-8-26-31 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-216 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-27 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-28 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-35 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-4 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-41 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-42 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-48 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-60 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-61 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-64 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-64-failing fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-64-read-eval fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-66 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-69 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-78 fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-builtins fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-cond-expand fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-srfi-conflict-fixes fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-stdlib-seam fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-string-escape-emit fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-string-literal-immutable fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-strings fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-syntax-rules fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-syntax-rules-do fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-syntax-rules-hygiene fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-syntax-rules-referential-transparency fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-system-libraries fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-tail-call-hand-on-through-static-call fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-tail-call-through-procedure-value fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-too-few-arguments fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-toplevel-define-reads-command-line fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-toplevel-define-refers-to-itself fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-toplevel-define-sets-its-parameter fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-toplevel-form-names fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-toplevel-order fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-toplevel-reentry fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-turmeric-seam-imports fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-type-errors-raise fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-uncaught-error fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-unicode-case fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-vector-index-error fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-r7rs-write-labels fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
+r7rs-apply-long interpreted  # import of undefined item setjmp
+r7rs-apply-many-args interpreted  # import of undefined item setjmp
+r7rs-apply-standard-variadic-many interpreted  # import of undefined item setjmp
+r7rs-base-library interpreted  # import of undefined item setjmp
+r7rs-bignums interpreted  # import of undefined item setjmp
+r7rs-brackets-are-parens interpreted  # import of undefined item setjmp
+r7rs-bytevector-range-errors interpreted  # import of undefined item setjmp
+r7rs-callcc-escape-only fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
+r7rs-callcc-reclaimed-images fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
+r7rs-callcc-reentry-many fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(70)
+r7rs-case-lambda-define-recurs interpreted  # import of undefined item setjmp
+r7rs-closure-one-capture-call interpreted  # import of undefined item setjmp
+r7rs-colon-identifiers interpreted  # import of undefined item setjmp
+r7rs-complex interpreted  # import of undefined item setjmp
+r7rs-conformance-fixes interpreted  # import of undefined item setjmp
+r7rs-continuation-after-return fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
+r7rs-continuations fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
+r7rs-control interpreted  # import of undefined item setjmp
+r7rs-core-forms interpreted  # import of undefined item setjmp
+r7rs-core-forms-interp interpreted  # import of undefined item setjmp
+r7rs-data-forms interpreted  # import of undefined item setjmp
+r7rs-datum-comment-anywhere interpreted  # import of undefined item setjmp
+r7rs-dead-mistyped-call interpreted  # import of undefined item setjmp
+r7rs-deep-recursion-million interpreted  # import of undefined item setjmp
+r7rs-eval interpreted  # import of undefined item setjmp
+r7rs-eval-callcc-reentry fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
+r7rs-eval-macros-and-set-persist interpreted  # import of undefined item setjmp
+r7rs-eval-pool-sweep interpreted  # import of undefined item setjmp
+r7rs-features-agree interpreted  # import of undefined item setjmp
+r7rs-file-ports interpreted  # import of undefined item setjmp
+r7rs-forward-reference interpreted  # import of undefined item setjmp
+r7rs-gc-basic fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
+r7rs-gc-seam interpreted  # import of undefined item setjmp
+r7rs-guard-calls-local-lambda interpreted  # import of undefined item setjmp
+r7rs-hygiene-binder-made-later interpreted  # import of undefined item setjmp
+r7rs-import-sets interpreted  # import of undefined item setjmp
+r7rs-internal-define-forward-set interpreted  # import of undefined item setjmp
+r7rs-internal-defines-mutual-capture interpreted  # import of undefined item setjmp
+r7rs-internal-procedure-identity interpreted  # import of undefined item setjmp
+r7rs-internal-record-type interpreted  # import of undefined item setjmp
+r7rs-let-star-not-deprecated interpreted  # import of undefined item setjmp
+r7rs-named-let-sum interpreted  # import of undefined item setjmp
+r7rs-number-syntax interpreted  # import of undefined item setjmp
+r7rs-numbers interpreted  # import of undefined item setjmp
+r7rs-numbers-values interpreted  # import of undefined item setjmp
+r7rs-pool-sweep-places interpreted  # import of undefined item setjmp
+r7rs-ports interpreted  # import of undefined item setjmp
+r7rs-procedure-identity interpreted  # import of undefined item setjmp
+r7rs-program-redefines-scheme-eval interpreted  # import of undefined item setjmp
+r7rs-program-redefinition interpreted  # import of undefined item setjmp
+r7rs-program-shadows-names interpreted  # import of undefined item setjmp
+r7rs-raise-under-musttail interpreted  # import of undefined item setjmp
+r7rs-rationals interpreted  # import of undefined item setjmp
+r7rs-read interpreted  # import of undefined item setjmp
+r7rs-reader-lexemes interpreted  # import of undefined item setjmp
+r7rs-record-type-without-fields interpreted  # import of undefined item setjmp
+r7rs-redefine-eval-with-scheme-eval interpreted  # import of undefined item setjmp
+r7rs-saved-scheme-eval-before-redefinition interpreted  # import of undefined item setjmp
+r7rs-saved-standard-procedure-before-redefinition interpreted  # import of undefined item setjmp
+r7rs-segmented-stack-deep-recursion interpreted  # import of undefined item setjmp
+r7rs-sicp-extras fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
+r7rs-sicp-metacircular-evaluator interpreted  # import of undefined item setjmp
+r7rs-srfi-1 interpreted  # import of undefined item setjmp
+r7rs-srfi-13 interpreted  # import of undefined item setjmp
+r7rs-srfi-14 interpreted  # import of undefined item setjmp
+r7rs-srfi-17 interpreted  # import of undefined item setjmp
+r7rs-srfi-18 fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+r7rs-srfi-2-8-26-31 interpreted  # import of undefined item setjmp
+r7rs-srfi-216 fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+r7rs-srfi-27 interpreted  # import of undefined item setjmp
+r7rs-srfi-28 interpreted  # import of undefined item setjmp
+r7rs-srfi-35 interpreted  # import of undefined item setjmp
+r7rs-srfi-4 interpreted  # import of undefined item setjmp
+r7rs-srfi-41 interpreted  # import of undefined item setjmp
+r7rs-srfi-42 interpreted  # import of undefined item setjmp
+r7rs-srfi-48 interpreted  # import of undefined item setjmp
+r7rs-srfi-60 interpreted  # import of undefined item setjmp
+r7rs-srfi-61 interpreted  # import of undefined item setjmp
+r7rs-srfi-64 interpreted  # import of undefined item setjmp
+r7rs-srfi-64-read-eval interpreted  # import of undefined item setjmp
+r7rs-srfi-66 interpreted  # import of undefined item setjmp
+r7rs-srfi-69 interpreted  # import of undefined item setjmp
+r7rs-srfi-78 interpreted  # import of undefined item setjmp
+r7rs-srfi-builtins interpreted  # import of undefined item setjmp
+r7rs-srfi-cond-expand interpreted  # import of undefined item setjmp
+r7rs-srfi-conflict-fixes interpreted  # import of undefined item setjmp
+r7rs-stdlib-seam interpreted  # import of undefined item setjmp
+r7rs-string-escape-emit interpreted  # import of undefined item setjmp
+r7rs-strings interpreted  # import of undefined item setjmp
+r7rs-syntax-rules interpreted  # import of undefined item setjmp
+r7rs-syntax-rules-do interpreted  # import of undefined item setjmp
+r7rs-syntax-rules-hygiene interpreted  # import of undefined item setjmp
+r7rs-syntax-rules-referential-transparency interpreted  # import of undefined item setjmp
+r7rs-system-libraries fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+r7rs-tail-call-hand-on-through-static-call interpreted  # import of undefined item setjmp
+r7rs-tail-call-through-procedure-value interpreted  # import of undefined item setjmp
+r7rs-too-few-arguments interpreted  # import of undefined item setjmp
+r7rs-toplevel-define-reads-command-line fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+r7rs-toplevel-define-refers-to-itself interpreted  # import of undefined item setjmp
+r7rs-toplevel-define-sets-its-parameter interpreted  # import of undefined item setjmp
+r7rs-toplevel-form-names interpreted  # import of undefined item setjmp
+r7rs-toplevel-order interpreted  # import of undefined item setjmp
+r7rs-toplevel-reentry fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
+r7rs-turmeric-seam-imports interpreted  # import of undefined item setjmp
+r7rs-type-errors-raise fail  # exited 1 (expected 70) on the error path: the module threw: Program terminated with exit(70)
+r7rs-unicode-case interpreted  # import of undefined item setjmp
+r7rs-vector-index-error interpreted  # import of undefined item setjmp
+r7rs-write-labels interpreted  # import of undefined item setjmp
 rank2-argument-generic fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 rank2-class-result-word-converted interpreted  # import of undefined item setjmp
 rc-auto-drop-closure-capture fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 rc-elision-negative-closure-capture fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
-re-string fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
+re-string fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 reactor-captureless-callbacks fail  # stdout mismatch on the compiled path
 reactor-chan-typed fail  # stdout mismatch on the compiled path
 reactor-chan-watch-nonempty fail  # stdout mismatch on the compiled path
@@ -921,7 +908,7 @@ reactor-fibers-park-chan-typed fail  # stdout mismatch on the compiled path
 reactor-fibers-park-fd fail  # stdout mismatch on the compiled path
 reactor-fibers-smoke fail  # stdout mismatch on the compiled path
 reactor-fibers-stop-mid-run fail  # stdout mismatch on the compiled path
-reactor-signal-process-directed fail  # stdout mismatch on the interpreted path: import of undefined item kill
+reactor-signal-process-directed fail  # stdout mismatch on the error path: the module threw: Cannot convert a BigInt value to a number
 ref-auto-drop-early-return fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 ref-in-closure fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 refine-early-return-contracts interpreted  # import of undefined item setjmp
@@ -931,7 +918,7 @@ region-escape-via-erasure fail  # stdout mismatch on the interpreted path: impor
 region-escape-via-inline-c fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 region-escape-via-main-loop fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 region-escape-via-store fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-region-escape-via-store-future fail  # stdout mismatch on the interpreted path: import of undefined item __atomic_sub_fetch
+region-escape-via-store-future fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 region-retired-index-owns fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 region-scope-escape-refused fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 region-scope-value-survives interpreted  # import of undefined item setjmp
@@ -944,96 +931,96 @@ resume-fn-payload-case-own-k fail  # stdout mismatch on the error path: the modu
 resume-handler-k-outside-its-case interpreted  # import of undefined item setjmp
 resume-typed-as-handle-result fail  # stdout mismatch on the compiled path
 return-dispatched-sum-mint-constrained-instance fail  # stdout mismatch on the compiled path
-rwlock-basic fail  # stdout mismatch on the interpreted path: import of undefined item pthread_rwlock_init
-saffron-any-div-mod-minus-one interpreted  # c2mir rejected the generated C (see above)
-saffron-any-key-into-typed-map interpreted  # c2mir rejected the generated C (see above)
-saffron-any-map-beside-opaque-hash interpreted  # c2mir rejected the generated C (see above)
-saffron-any-map-into-map-get interpreted  # c2mir rejected the generated C (see above)
-saffron-borrowed-struct-key-widened interpreted  # c2mir rejected the generated C (see above)
-saffron-boundary-check interpreted  # c2mir rejected the generated C (see above)
-saffron-callcc-any-receiver interpreted  # c2mir rejected the generated C (see above)
-saffron-callcc-under-any-nodes interpreted  # c2mir rejected the generated C (see above)
-saffron-capturing-lambda interpreted  # c2mir rejected the generated C (see above)
-saffron-catch-unwind-cps-panic interpreted  # c2mir rejected the generated C (see above)
-saffron-class-fn-extra interpreted  # c2mir rejected the generated C (see above)
-saffron-closure-captured-mut-shared interpreted  # c2mir rejected the generated C (see above)
-saffron-closure-sets-global interpreted  # c2mir rejected the generated C (see above)
-saffron-cons-list interpreted  # c2mir rejected the generated C (see above)
-saffron-cons-list-walk-through-any interpreted  # c2mir rejected the generated C (see above)
-saffron-container-param-cast-shape fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
+rwlock-basic fail  # stdout mismatch on the interpreted path: import of undefined item pthread_rwlock_tryrdlock
+saffron-any-div-mod-minus-one interpreted  # import of undefined item setjmp
+saffron-any-key-into-typed-map interpreted  # import of undefined item setjmp
+saffron-any-map-beside-opaque-hash interpreted  # import of undefined item setjmp
+saffron-any-map-into-map-get interpreted  # import of undefined item setjmp
+saffron-borrowed-struct-key-widened interpreted  # import of undefined item setjmp
+saffron-boundary-check interpreted  # import of undefined item setjmp
+saffron-callcc-any-receiver interpreted  # import of undefined item setjmp
+saffron-callcc-under-any-nodes interpreted  # import of undefined item setjmp
+saffron-capturing-lambda interpreted  # import of undefined item setjmp
+saffron-catch-unwind-cps-panic interpreted  # import of undefined item setjmp
+saffron-class-fn-extra interpreted  # import of undefined item setjmp
+saffron-closure-captured-mut-shared interpreted  # import of undefined item setjmp
+saffron-closure-sets-global interpreted  # import of undefined item setjmp
+saffron-cons-list interpreted  # import of undefined item setjmp
+saffron-cons-list-walk-through-any interpreted  # import of undefined item setjmp
+saffron-container-param-cast-shape interpreted  # import of undefined item setjmp
 saffron-cps-vec-element-and-perform fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-saffron-ctor-under-all-any-expectation interpreted  # c2mir rejected the generated C (see above)
-saffron-data-literal-lambda-values interpreted  # c2mir rejected the generated C (see above)
+saffron-ctor-under-all-any-expectation interpreted  # import of undefined item setjmp
+saffron-data-literal-lambda-values interpreted  # import of undefined item setjmp
 saffron-defeffect-param-defaults-to-any fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-saffron-defn-empty-params-literal-body interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-any-result-method interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-applied-class-var-result interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-arith-float interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-bare-extra interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-binary-fn-method interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-bind-on-any-option interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-call-expression-head interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-constrained-instance interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-default-method interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-dispatch-payload-adt interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-field interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-field-on-generic-adt interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-field-read-dispatch interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-hkt-dispatch interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-hkt-partial-head interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-method-extra-args interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-method-in-argument-position interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-ops-on-vec-elements interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-read-of-any-field interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-shift-parity interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-spelled-int-extra interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-truthy interpreted  # c2mir rejected the generated C (see above)
-saffron-dyn-typeclass-dispatch interpreted  # c2mir rejected the generated C (see above)
-saffron-dynamic-body-concrete-return interpreted  # c2mir rejected the generated C (see above)
+saffron-defn-empty-params-literal-body interpreted  # import of undefined item setjmp
+saffron-dyn-any-result-method interpreted  # import of undefined item setjmp
+saffron-dyn-applied-class-var-result interpreted  # import of undefined item setjmp
+saffron-dyn-arith-float interpreted  # import of undefined item setjmp
+saffron-dyn-bare-extra interpreted  # import of undefined item setjmp
+saffron-dyn-binary-fn-method interpreted  # import of undefined item setjmp
+saffron-dyn-bind-on-any-option interpreted  # import of undefined item setjmp
+saffron-dyn-call-expression-head interpreted  # import of undefined item setjmp
+saffron-dyn-constrained-instance interpreted  # import of undefined item setjmp
+saffron-dyn-default-method interpreted  # import of undefined item setjmp
+saffron-dyn-dispatch-payload-adt interpreted  # import of undefined item setjmp
+saffron-dyn-field interpreted  # import of undefined item setjmp
+saffron-dyn-field-on-generic-adt interpreted  # import of undefined item setjmp
+saffron-dyn-field-read-dispatch interpreted  # import of undefined item setjmp
+saffron-dyn-hkt-dispatch interpreted  # import of undefined item setjmp
+saffron-dyn-hkt-partial-head interpreted  # import of undefined item setjmp
+saffron-dyn-method-extra-args interpreted  # import of undefined item setjmp
+saffron-dyn-method-in-argument-position interpreted  # import of undefined item setjmp
+saffron-dyn-ops-on-vec-elements interpreted  # import of undefined item setjmp
+saffron-dyn-read-of-any-field interpreted  # import of undefined item setjmp
+saffron-dyn-shift-parity interpreted  # import of undefined item setjmp
+saffron-dyn-spelled-int-extra interpreted  # import of undefined item setjmp
+saffron-dyn-truthy interpreted  # import of undefined item setjmp
+saffron-dyn-typeclass-dispatch interpreted  # import of undefined item setjmp
+saffron-dynamic-body-concrete-return interpreted  # import of undefined item setjmp
 saffron-effect-through-dyn-operand fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-saffron-eq-vec-any interpreted  # c2mir rejected the generated C (see above)
-saffron-forward-ref-any-and-variadic interpreted  # c2mir rejected the generated C (see above)
-saffron-forward-reference-defaults-any interpreted  # c2mir rejected the generated C (see above)
-saffron-fwd-decl-app-param-seam interpreted  # c2mir rejected the generated C (see above)
-saffron-heap-parametric-self-typed-field interpreted  # c2mir rejected the generated C (see above)
-saffron-higher-order interpreted  # c2mir rejected the generated C (see above)
-saffron-if-join-to-any interpreted  # c2mir rejected the generated C (see above)
-saffron-instance-any-result-widens-element interpreted  # c2mir rejected the generated C (see above)
-saffron-keyword-literal-body interpreted  # c2mir rejected the generated C (see above)
-saffron-lambda-arg-env-freed fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-saffron-lambda-literal-body-dyn-call fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-saffron-lang-line-accepted interpreted  # c2mir rejected the generated C (see above)
-saffron-lang-sweet interpreted  # c2mir rejected the generated C (see above)
-saffron-letrec-any-closure interpreted  # c2mir rejected the generated C (see above)
-saffron-literal-under-typed-return interpreted  # c2mir rejected the generated C (see above)
-saffron-macro-any-seam-and-truthiness interpreted  # c2mir rejected the generated C (see above)
-saffron-map-assoc-widens-value interpreted  # c2mir rejected the generated C (see above)
-saffron-map-literal interpreted  # c2mir rejected the generated C (see above)
-saffron-match-any-stdlib-sum interpreted  # c2mir rejected the generated C (see above)
-saffron-match-parametric-adt interpreted  # c2mir rejected the generated C (see above)
-saffron-nullary-parametric-ctor-any interpreted  # c2mir rejected the generated C (see above)
-saffron-open-generic-grounded interpreted  # c2mir rejected the generated C (see above)
+saffron-eq-vec-any interpreted  # import of undefined item setjmp
+saffron-forward-ref-any-and-variadic interpreted  # import of undefined item setjmp
+saffron-forward-reference-defaults-any interpreted  # import of undefined item setjmp
+saffron-fwd-decl-app-param-seam interpreted  # import of undefined item setjmp
+saffron-heap-parametric-self-typed-field interpreted  # import of undefined item setjmp
+saffron-higher-order interpreted  # import of undefined item setjmp
+saffron-if-join-to-any interpreted  # import of undefined item setjmp
+saffron-instance-any-result-widens-element interpreted  # import of undefined item setjmp
+saffron-keyword-literal-body interpreted  # import of undefined item setjmp
+saffron-lambda-arg-env-freed interpreted  # import of undefined item setjmp
+saffron-lambda-literal-body-dyn-call interpreted  # import of undefined item setjmp
+saffron-lang-line-accepted interpreted  # import of undefined item setjmp
+saffron-lang-sweet interpreted  # import of undefined item setjmp
+saffron-letrec-any-closure interpreted  # import of undefined item setjmp
+saffron-literal-under-typed-return interpreted  # import of undefined item setjmp
+saffron-macro-any-seam-and-truthiness interpreted  # import of undefined item setjmp
+saffron-map-assoc-widens-value interpreted  # import of undefined item setjmp
+saffron-map-literal interpreted  # import of undefined item setjmp
+saffron-match-any-stdlib-sum interpreted  # import of undefined item setjmp
+saffron-match-parametric-adt interpreted  # import of undefined item setjmp
+saffron-nullary-parametric-ctor-any interpreted  # import of undefined item setjmp
+saffron-open-generic-grounded interpreted  # import of undefined item setjmp
 saffron-perform-any-argument-mismatch fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 saffron-perform-any-argument-seam fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-saffron-prelude fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-saffron-record-opaque-ptr-field fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
-saffron-refinement-contract interpreted  # c2mir rejected the generated C (see above)
-saffron-returned-closure-env-freed interpreted  # c2mir rejected the generated C (see above)
-saffron-returned-closure-set-not-dropped interpreted  # c2mir rejected the generated C (see above)
-saffron-seam-into-typed-fn-param interpreted  # c2mir rejected the generated C (see above)
-saffron-set-literal interpreted  # c2mir rejected the generated C (see above)
-saffron-static-guarantees-still-hold interpreted  # c2mir rejected the generated C (see above)
-saffron-static-instance-spec-any-lambda interpreted  # c2mir rejected the generated C (see above)
-saffron-sym-in-any interpreted  # c2mir rejected the generated C (see above)
-saffron-typed-defn-in-any interpreted  # c2mir rejected the generated C (see above)
-saffron-unannotated-container-param interpreted  # c2mir rejected the generated C (see above)
-saffron-unannotated-main interpreted  # c2mir rejected the generated C (see above)
-saffron-variadic-dynamic-call interpreted  # c2mir rejected the generated C (see above)
-saffron-variadic-fixed-arg-narrow interpreted  # c2mir rejected the generated C (see above)
-saffron-variadic-rest-any interpreted  # c2mir rejected the generated C (see above)
-saffron-vector-literal interpreted  # c2mir rejected the generated C (see above)
-saffron-vector-literal-homogeneous interpreted  # c2mir rejected the generated C (see above)
-saffron-while-any-condition interpreted  # c2mir rejected the generated C (see above)
+saffron-prelude interpreted  # import of undefined item setjmp
+saffron-record-opaque-ptr-field fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+saffron-refinement-contract interpreted  # import of undefined item setjmp
+saffron-returned-closure-env-freed interpreted  # import of undefined item setjmp
+saffron-returned-closure-set-not-dropped interpreted  # import of undefined item setjmp
+saffron-seam-into-typed-fn-param interpreted  # import of undefined item setjmp
+saffron-set-literal interpreted  # import of undefined item setjmp
+saffron-static-guarantees-still-hold interpreted  # import of undefined item setjmp
+saffron-static-instance-spec-any-lambda interpreted  # import of undefined item setjmp
+saffron-sym-in-any interpreted  # import of undefined item setjmp
+saffron-typed-defn-in-any interpreted  # import of undefined item setjmp
+saffron-unannotated-container-param interpreted  # import of undefined item setjmp
+saffron-unannotated-main interpreted  # import of undefined item setjmp
+saffron-variadic-dynamic-call interpreted  # import of undefined item setjmp
+saffron-variadic-fixed-arg-narrow interpreted  # import of undefined item setjmp
+saffron-variadic-rest-any interpreted  # import of undefined item setjmp
+saffron-vector-literal interpreted  # import of undefined item setjmp
+saffron-vector-literal-homogeneous interpreted  # import of undefined item setjmp
+saffron-while-any-condition interpreted  # import of undefined item setjmp
 schan-worker-pool fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 scheduler-basic fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 scheduler-io-park fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
@@ -1163,7 +1150,7 @@ sum-payload-drop-dictionary-dispatch fail  # stdout mismatch on the compiled pat
 sx1-bt-row-checked interpreted  # import of undefined item setjmp
 tail-call-inline-c-carrier-bridge fail  # stdout mismatch on the compiled path
 tailcall-drop-glue-panic fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-tailcall-dyn-leak fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
+tailcall-dyn-leak interpreted  # import of undefined item setjmp
 tailcall-mutual-panic fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 taskgroup-async fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 taskgroup-timeout fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
@@ -1172,9 +1159,9 @@ tce4-map-cstr-key fail  # stdout mismatch on the error path: the module threw: n
 tco-named-let-capture-deep fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 tco-tail-call-panic-propagates fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 term-raw-cooked-roundtrip fail  # stdout mismatch on the interpreted path: import of undefined item fork
-thread-local-basic fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
+thread-local-basic fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 threads-effects-tail-resume fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-time-dates-iso8601 fail  # stdout mismatch on the interpreted path: import of undefined item tzset
+time-dates-iso8601 fail  # stdout mismatch on the compiled path
 toplevel-statements-run-before-user-main fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 try-with-basic interpreted  # import of undefined item setjmp
 try-with-nested interpreted  # import of undefined item setjmp
@@ -1187,11 +1174,10 @@ tvar-float-payload-value-converted fail  # stdout mismatch on the compiled path
 typeclass-constraint-tyvar-via-fn-param fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 typeclass-effect-row-caller interpreted  # import of undefined item setjmp
 typeclass-method-defn-coexist fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-typeclass-unsafe-passbyptr-struct-arg fail  # stdout mismatch on the interpreted path: c2mir rejected the generated C (see above)
+typeclass-unsafe-passbyptr-struct-arg fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 typed-signal-smoke interpreted  # import of undefined item setjmp
 typed-slots/float-closure fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 typed-slots/fmap-float-list fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-typed/list-concat fail  # stdout mismatch on the compiled path
 typed/list-macro fail  # stdout mismatch on the compiled path
 typed/option-basic interpreted  # import of undefined item setjmp
 typed/result-basic interpreted  # import of undefined item setjmp
@@ -1228,12 +1214,9 @@ weak-upgrade-after-drop fail  # stdout mismatch on the error path: the module th
 weak-upgrade-option fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
 with-handler-literal-lowers-as-handle interpreted  # import of undefined item setjmp
 with-handler-value interpreted  # import of undefined item setjmp
-with-lock-scoped fail  # stdout mismatch on the interpreted path: import of undefined item pthread_rwlock_init
 witness-dispatch-fn-arg fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 workflow-roundtrip interpreted  # import of undefined item setjmp
-workstealing-balance fail  # stdout mismatch on the interpreted path: import of undefined item __atomic_add_fetch
-workstealing-metrics fail  # stdout mismatch on the interpreted path: import of undefined item __atomic_compare_exchange_n
-workstealing-steal fail  # stdout mismatch on the interpreted path: import of undefined item __atomic_compare_exchange_n
+workstealing-balance fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 zip-cursor-tree fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 zip-edit-all-ast fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 zip-edit-root fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
