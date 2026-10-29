@@ -1934,6 +1934,74 @@ bool fn_def_panics_in_inline_c(const FnDef *fd) {
         if (memcmp(ic->code.p + i, needle, nl) == 0) return true;
     return false;
 }
+
+/* simd-and-vectorization-plan Q7: can this function NOT panic at all -- an
+ * inline-C body that makes no call, evaluates no Turmeric sub-expression
+ * (`__TUR_VAL_N__`) and never names `tur_panic`?  Then nothing it runs can
+ * set `tur_panicking`, and the check a caller writes after the call is dead.
+ * That check is what kept a loop storing through `f64vec-set-unchecked!` from
+ * vectorizing: under -fno-strict-aliasing a `double` store may write the
+ * flag, so the compiler cannot hoist the test out of the loop.
+ *
+ * "No call" is read off the text, conservatively: an identifier followed by
+ * `(` is a call unless it is a keyword or operator that takes parentheses
+ * (`sizeof`, `if`, ...).  A function-like macro reads as a call too, which only
+ * costs the check its skip.  Comments and literals are not read. */
+static bool ic_paren_word_ok(const char *w, size_t n) {
+    static const char *ok[] = {"sizeof", "_Alignof", "alignof", "__alignof__",
+        "typeof", "__typeof__", "if", "while", "for", "switch", "return"};
+    for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++)
+        if (strlen(ok[i]) == n && memcmp(ok[i], w, n) == 0) return true;
+    return false;
+}
+bool fn_def_inline_c_cannot_panic(const FnDef *fd) {
+    if (!fd || fd->closure || !fd->body || fd->body->kind != EX_INLINE_C) return false;
+    const InlineC *ic = fd->body->as.inline_c_.inline_c;
+    if (!ic || !ic->code.p || ic->n_val_exprs > 0) return false;
+    const char *s = ic->code.p;
+    size_t n = ic->code.len;
+    for (size_t i = 0; i < n; ) {
+        char c = s[i];
+        if (c == '/' && i + 1 < n && s[i + 1] == '*') {
+            const char *end = NULL;
+            for (size_t j = i + 2; j + 1 < n; j++)
+                if (s[j] == '*' && s[j + 1] == '/') { end = s + j; break; }
+            if (!end) return false;
+            i = (size_t)(end - s) + 2;
+        } else if (c == '/' && i + 1 < n && s[i + 1] == '/') {
+            while (i < n && s[i] != '\n') i++;
+        } else if (c == '"' || c == '\'') {
+            size_t j = i + 1;
+            while (j < n && s[j] != c) j += (s[j] == '\\') ? 2 : 1;
+            if (j >= n) return false;
+            i = j + 1;
+        } else if (isalpha((unsigned char)c) || c == '_') {
+            size_t j = i;
+            while (j < n && (isalnum((unsigned char)s[j]) || s[j] == '_')) j++;
+            if (j - i >= 9 && memcmp(s + i, "tur_panic", 9) == 0) return false;
+            size_t k = j;
+            while (k < n && (s[k] == ' ' || s[k] == '\t' || s[k] == '\n')) k++;
+            if (k < n && s[k] == '(' && !ic_paren_word_ok(s + i, j - i)) return false;
+            i = j;
+        } else if (c == '#') {
+            return false;   /* a directive could define or call anything */
+        } else {
+            i++;
+        }
+    }
+    return true;
+}
+
+/* A direct call whose callee cannot panic (fn_def_inline_c_cannot_panic):
+ * the caller's post-call panic check is dead and is not written.  Only the
+ * callee is in question -- every argument that can panic is a call the
+ * emitter has already hoisted and checked on its own. */
+bool emit_call_cannot_panic(const Expr *e) {
+    if (!e || e->kind != EX_CALL) return false;
+    const Binding *b = e->as.call_.fn_binding;
+    return b && b->is_global && b->source_fn_def &&
+           fn_def_inline_c_cannot_panic(b->source_fn_def);
+}
 /* The instance methods of `items` (and of a defmodule's body) whose inline-C
  * body panics, appended to ctx->inst_panic_bindings by the binding each call
  * site resolves to (the method FnDef's own). */

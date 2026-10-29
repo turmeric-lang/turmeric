@@ -254,6 +254,7 @@ fixture_has_inline_c() {
 TURI_INLINEC_RUN="
 inline-c-binop
 numvec-kernels
+numvec-store-loops
 map-multiword-struct-key
 set-multiword-struct-element
 clone-list

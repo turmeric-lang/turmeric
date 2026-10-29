@@ -2697,6 +2697,29 @@ static TuriValue native_##P##_set_unchecked(TuriEnv *env, TuriValue *a, uint32_t
     turi_runtime_panic(env, #P "-set-unchecked!: index out of bounds");               \
     return turi_nil();                                                                \
 }                                                                                     \
+/* N2's views (simd plan Q7).  Compiled, a view is the array's data pointer;  */ \
+/* here it is the array handle itself, so the handle-kind check still applies  */ \
+/* and view-ref / view-set! keep the bounds check the unchecked twins keep.    */ \
+static TuriValue native_##P##_view(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) { \
+    (void)env; (void)ud;                                                              \
+    return turi_int(n >= 1 ? a[0].as_int : 0);                                        \
+}                                                                                     \
+static TuriValue native_##P##_view_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) { \
+    (void)ud;                                                                         \
+    if (n < 2) return turi_int(0);                                                    \
+    TuriNumVecRep *b = nv_of(a[0]); int64_t i = a[1].as_int;                          \
+    if (b && i >= 0 && i < b->len) { CT x = ((CT *)b->data)[i]; return NV_OUT(x); }   \
+    turi_runtime_panic(env, #P "-view-ref: index out of bounds");                     \
+    return turi_int(0);                                                               \
+}                                                                                     \
+static TuriValue native_##P##_view_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) { \
+    (void)ud;                                                                         \
+    if (n < 3) return turi_nil();                                                     \
+    TuriNumVecRep *b = nv_of(a[0]); int64_t i = a[1].as_int;                          \
+    if (b && i >= 0 && i < b->len) { ((CT *)b->data)[i] = (CT)NV_IN(a[2]); return turi_nil(); } \
+    turi_runtime_panic(env, #P "-view-set!: index out of bounds");                    \
+    return turi_nil();                                                                \
+}                                                                                     \
 static TuriValue native_##P##_same_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) { \
     (void)ud;                                                                         \
     if (n < 2) return turi_int(0);                                                    \
@@ -5368,18 +5391,33 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "f64vec-ref-unchecked", native_f64vec_ref_unchecked, NULL);
     turi_env_register_native(env, "f64vec-set-unchecked!", native_f64vec_set_unchecked, NULL);
     turi_env_register_native(env, "f64vec-same-len__", native_f64vec_same_len, NULL);
+    turi_env_register_native(env, "f64vec-view", native_f64vec_view, NULL);
+    turi_env_register_native(env, "f64vec-view-ref", native_f64vec_view_ref, NULL);
+    turi_env_register_native(env, "f64vec-view-set!", native_f64vec_view_set, NULL);
     turi_env_register_native(env, "f32vec-ref-unchecked", native_f32vec_ref_unchecked, NULL);
     turi_env_register_native(env, "f32vec-set-unchecked!", native_f32vec_set_unchecked, NULL);
     turi_env_register_native(env, "f32vec-same-len__", native_f32vec_same_len, NULL);
+    turi_env_register_native(env, "f32vec-view", native_f32vec_view, NULL);
+    turi_env_register_native(env, "f32vec-view-ref", native_f32vec_view_ref, NULL);
+    turi_env_register_native(env, "f32vec-view-set!", native_f32vec_view_set, NULL);
     turi_env_register_native(env, "i64vec-ref-unchecked", native_i64vec_ref_unchecked, NULL);
     turi_env_register_native(env, "i64vec-set-unchecked!", native_i64vec_set_unchecked, NULL);
     turi_env_register_native(env, "i64vec-same-len__", native_i64vec_same_len, NULL);
+    turi_env_register_native(env, "i64vec-view", native_i64vec_view, NULL);
+    turi_env_register_native(env, "i64vec-view-ref", native_i64vec_view_ref, NULL);
+    turi_env_register_native(env, "i64vec-view-set!", native_i64vec_view_set, NULL);
     turi_env_register_native(env, "i32vec-ref-unchecked", native_i32vec_ref_unchecked, NULL);
     turi_env_register_native(env, "i32vec-set-unchecked!", native_i32vec_set_unchecked, NULL);
     turi_env_register_native(env, "i32vec-same-len__", native_i32vec_same_len, NULL);
+    turi_env_register_native(env, "i32vec-view", native_i32vec_view, NULL);
+    turi_env_register_native(env, "i32vec-view-ref", native_i32vec_view_ref, NULL);
+    turi_env_register_native(env, "i32vec-view-set!", native_i32vec_view_set, NULL);
     turi_env_register_native(env, "u8vec-ref-unchecked", native_u8vec_ref_unchecked, NULL);
     turi_env_register_native(env, "u8vec-set-unchecked!", native_u8vec_set_unchecked, NULL);
     turi_env_register_native(env, "u8vec-same-len__", native_u8vec_same_len, NULL);
+    turi_env_register_native(env, "u8vec-view", native_u8vec_view, NULL);
+    turi_env_register_native(env, "u8vec-view-ref", native_u8vec_view_ref, NULL);
+    turi_env_register_native(env, "u8vec-view-set!", native_u8vec_view_set, NULL);
     numvec_kernels_register(env);
     turi_env_register_native(env, "mutmap-new",      native_mutmap_new,      NULL);
     turi_env_register_native(env, "mutmap-len",      native_mutmap_len,      NULL);

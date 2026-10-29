@@ -36,9 +36,27 @@
       (set! i {i + 2}))
     {s0 + s1}))
 
-;; N2: an elementwise map written with -for-index and an unchecked store
+;; N2: an elementwise map written with -for-index and an unchecked store.
+;; It does NOT vectorize -- each store re-reads the header -- and is kept as
+;; the contrast for the view-based store loops below (simd plan Q7).
 (defn probe-map [^borrow dst : F64Vec ^borrow src : F64Vec] : nil
   (f64vec-for-index [i x src] (unsafe (f64vec-set-unchecked! dst i {x * 2.5}))))
+
+;; Q7: the same map through -map!, which stores through a view
+(defn probe-map-view [^borrow dst : F64Vec ^borrow src : F64Vec] : nil
+  (f64vec-map! dst [x src] {x * 2.5}))
+
+;; Q7: two sources into a third array
+(defn probe-map2 [^borrow dst : F64Vec ^borrow a : F64Vec ^borrow b : F64Vec] : nil
+  (f64vec-map! dst [x a y b] {x + y}))
+
+;; Q7: in place
+(defn probe-map-in-place [^borrow v : F32Vec] : nil
+  (f32vec-map! v [x v] {x * (:: 0.5 float32)}))
+
+;; Q7: -build, which fills a fresh array through a view
+(defn probe-build [] : I32Vec
+  (i32vec-build (len) [i] {(as int32 i) + (as int32 7)}))
 
 (defn f64s [] : float
   (let [a (f64vec-new (len) 7.1)
@@ -52,6 +70,18 @@
     {(f64vec-sum a) + (f64vec-sum-ordered a) + (f64vec-dot a b)
      + (f64vec-min a) + (f64vec-max a) + (probe-float-partials a)}))
 
+;; Q7's store loops and kernels, apart from f64s: adding them there changed
+;; how gcc inlines the probes f64s calls
+(defn f64-stores [] : float
+  (let [a (f64vec-new (len) 7.1)
+        b (f64vec-new (len) 3.25)]
+    (probe-map-view b a)
+    (probe-map2 b a b)
+    (f64vec-sub! a b)
+    (f64vec-mul! a b)
+    (f64vec-add-scalar! a 0.25)
+    (f64vec-sum a)))
+
 (defn f32s [] : float
   (let [a (f32vec-new (len) (:: 7.1 float32))
         b (f32vec-new (len) (:: 3.25 float32))]
@@ -60,6 +90,10 @@
     (f32vec-scale! a (:: 1.5 float32))
     (f32vec-add! a b)
     (f32vec-axpy! a (:: 0.5 float32) b)
+    (f32vec-sub! a b)
+    (f32vec-mul! a b)
+    (f32vec-add-scalar! a (:: 0.25 float32))
+    (probe-map-in-place a)
     (as float {(f32vec-sum a) + (f32vec-sum-ordered a) + (f32vec-dot a b)
                + (f32vec-min a) + (f32vec-max a)})))
 
@@ -71,6 +105,9 @@
     (i64vec-scale! a 3)
     (i64vec-add! a b)
     (i64vec-axpy! a 2 b)
+    (i64vec-sub! a b)
+    (i64vec-mul! a b)
+    (i64vec-add-scalar! a 5)
     {(i64vec-sum a) + (i64vec-dot a b) + (i64vec-min a) + (i64vec-max a)
      + (probe-int-fold a)}))
 
@@ -82,7 +119,10 @@
     (i32vec-scale! a (as int32 3))
     (i32vec-add! a b)
     (i32vec-axpy! a (as int32 2) b)
-    {(i32vec-sum a) + (i32vec-dot a b) + (as int (i32vec-min a))
+    (i32vec-sub! a b)
+    (i32vec-mul! a b)
+    (i32vec-add-scalar! a (as int32 5))
+    {(i32vec-len (probe-build)) + (i32vec-sum a) + (i32vec-dot a b) + (as int (i32vec-min a))
      + (as int (i32vec-max a)) + (probe-int-for a)}))
 
 (defn u8s [] : int
@@ -91,6 +131,8 @@
     (u8vec-fill! a (as uint8 7))
     (u8vec-copy! b a)
     (u8vec-add! a b)
+    (u8vec-sub! a b)
+    (u8vec-add-scalar! a (as uint8 5))
     {(u8vec-sum a) + (as int (u8vec-min a)) + (as int (u8vec-max a))}))
 
 ;; called from a loop: code gcc estimates runs once (only from main) is
@@ -99,6 +141,7 @@
   (let [^mut k 0]
     (while (< k 3)
       (println (f64s))
+      (println (f64-stores))
       (println (f32s))
       (println (i64s))
       (println (i32s))

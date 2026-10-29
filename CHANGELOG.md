@@ -4,7 +4,29 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Numvec store loops vectorize.** `P-map!` stores an expression into an
+  array element by element, from one source array or two, in place or into
+  another array: `(f64vec-map! v [x v] {x * 2.5})`. It and `P-build` now
+  store through a *view* (`P-view`, `P-view-ref`, `P-view-set!`, all
+  `#fx{Unsafe}`): the array's data pointer, read once, where a store
+  through the array re-reads its header every iteration and so kept the
+  loop scalar. On a 4096-element in-place map: 2.6x under clang `-O2`
+  (5.2x with `-march=native`), 1.26x under gcc `--release`; gcc's default
+  `-O2` still does not vectorize such a loop. New fixed-operation kernels,
+  vectorized at every level: `P-sub!`, `P-add-scalar!`, and except on
+  `U8Vec` `P-mul!` (element-wise).
+
 ### Changed
+
+- **No panic check after a call that cannot panic.** The emitter used to
+  write `if (tur_panicking) ...` after every call; it now omits it after a
+  call to an inline-C function whose body makes no call, never names
+  `tur_panic` and evaluates no Turmeric sub-expression -- `list-head`,
+  `f64vec-set-unchecked!` and the like. Besides the smaller C, that check
+  was what kept a store loop from vectorizing: a store might write the flag,
+  so the test could not leave the loop.
 
 - **wasm SIMD is on by default.** `tur build --target wasm` passes
   `-msimd128`, and the Try Turmeric modules are built with it, so the

@@ -19,21 +19,21 @@ import tempfile
 # p: prefix, T: type, E: element type, C: C element, zero: a literal of E,
 # zm: the same zero as a macro-time `list` form, ex/exs: docstring examples.
 TYPES = [
-    dict(p="f64vec", T="F64Vec", E="float", C="double",
+    dict(p="f64vec", T="F64Vec", W="F64View", E="float", C="double",
          zero="0.0", zm="0.0", ex=("1.5", "2.5"), exs="7.1",
          what="64-bit floats"),
-    dict(p="f32vec", T="F32Vec", E="float32", C="float",
+    dict(p="f32vec", T="F32Vec", W="F32View", E="float32", C="float",
          zero="(as float32 0.0)", zm="(list as float32 0.0)",
          ex=("(:: 1.5 float32)", "(:: 2.5 float32)"), exs="(:: 3.25 float32)",
          what="32-bit floats"),
-    dict(p="i64vec", T="I64Vec", E="int", C="int64_t",
+    dict(p="i64vec", T="I64Vec", W="I64View", E="int", C="int64_t",
          zero="0", zm="0", ex=("1", "2"), exs="7",
          what="64-bit integers"),
-    dict(p="i32vec", T="I32Vec", E="int32", C="int32_t",
+    dict(p="i32vec", T="I32Vec", W="I32View", E="int32", C="int32_t",
          zero="(as int32 0)", zm="(list as int32 0)",
          ex=("(as int32 1)", "(as int32 2)"), exs="(as int32 7)",
          what="32-bit integers"),
-    dict(p="u8vec", T="U8Vec", E="uint8", C="uint8_t",
+    dict(p="u8vec", T="U8Vec", W="U8View", E="uint8", C="uint8_t",
          zero="(as uint8 0)", zm="(list as uint8 0)",
          ex=("(as uint8 1)", "(as uint8 2)"), exs="(as uint8 200)",
          what="bytes"),
@@ -76,11 +76,13 @@ HDR = """;;; tur/numvec -- typed numeric arrays: F64Vec, F32Vec, I64Vec, I32Vec,
 ;;;   `P-sum-ordered`.  A float reduction uses a fixed eight-lane order, so it
 ;;;   is vectorized without -ffast-math and is bit-identical on every engine;
 ;;;   integer arithmetic wraps;
-;;; - loops (phase N2): `P-for`, `P-for-index`, `P-fold`, `P-build`, which
-;;;   bind elements, never an index the program could get wrong, and read
-;;;   through the unchecked `P-ref-unchecked` / `P-set-unchecked!`
-;;;   (`#fx{Unsafe}`).  A loop that only reads an array vectorizes; one that
-;;;   stores into one does not yet (see the plan's N2 notes).
+;;; - loops (phase N2): `P-for`, `P-for-index`, `P-fold`, `P-build`, `P-map!`,
+;;;   which bind elements, never an index the program could get wrong, and go
+;;;   through the unchecked accessors (`#fx{Unsafe}`).  Reads vectorize;
+;;;   `P-build` and `P-map!` store through a view (`P-view`, `P-view-ref`,
+;;;   `P-view-set!`), which is what lets a store loop vectorize too;
+;;; - more kernels for common store loops, vectorized at -O2 on every
+;;;   compiler: `P-sub!`, `P-add-scalar!`, and except on U8Vec `P-mul!`.
 ;;;
 ;;; Ownership: each type is `^affine` with a `Drop` instance, so a let-bound
 ;;; array is freed at scope exit, exactly once, and moving it (returning it,
@@ -141,6 +143,14 @@ TEMPLATE = r""";; ===== {T}: {what} =====
 ;;;
 ;;; Since: Phase N0
 (defopaque ^affine {T} :int)
+;;; {W} -- a view of a {T}'s elements: the data pointer, for a store loop.
+;;;
+;;; Made by `{p}-view`, read and written by `{p}-view-ref` / `{p}-view-set!`.
+;;; Not owned and not affine: it frees nothing, and it is valid exactly as long
+;;; as the array it came from (an array never resizes, so its data never moves).
+;;;
+;;; Since: Phase N2
+(defopaque {W} :int)
 ;; Every operation that touches the header is an inline-C body of its own,
 ;; never a Turmeric wrapper over a raw one, so a panic is reported at the
 ;; CALLER's line (as vec-get's is) and turi's natives are keyed by the public
@@ -533,22 +543,40 @@ def k_scale(t):
                                    unrolled(lambda j, k: op(j), op("i"))))
 
 
-def k_add(t):
+def k_binop(t, name, opc):
+    """dst[i] = dst[i] <opc> src[i] -- `add!`, `sub!`, `mul!`."""
     C = t["C"]
     if IS_FLOAT[t["p"]]:
-        op = lambda j: "yd[%s] = yd[%s] + xd[%s];" % (j, j, j)
-        st = lambda j, k: "yd[%s] = y%d + x%d;" % (j, k, k)
+        op = lambda j: "yd[%s] = yd[%s] %s xd[%s];" % (j, j, opc, j)
+        st = lambda j, k: "yd[%s] = y%d %s x%d;" % (j, k, opc, k)
     else:
         U = UNS[t["p"]]
-        op = lambda j: "yd[%s] = (%s)((%s)yd[%s] + (%s)xd[%s]);" % (j, C, U, j, U, j)
-        st = lambda j, k: "yd[%s] = (%s)((%s)y%d + (%s)x%d);" % (j, C, U, k, U, k)
+        op = lambda j: "yd[%s] = (%s)((%s)yd[%s] %s (%s)xd[%s]);" % (j, C, U, j, opc, U, j)
+        st = lambda j, k: "yd[%s] = (%s)((%s)y%d %s (%s)x%d);" % (j, C, U, k, opc, U, k)
     ld = lambda j, k: "%s y%d = yd[%s], x%d = xd[%s];" % (C, k, j, k, j)
     return "\n".join([hdr(t, "y", "dst"), hdr(t, "x", "src"),
-                      same_len(t, "add!", ""),
+                      same_len(t, name, ""),
                       "int64_t n = y->len;",
                       "%s *yd = y->data;" % C, "const %s *xd = x->data;" % C]
                      + by_compiler(["for (int64_t i = 0; i < n; i++) " + op("i")],
                                    unrolled_loads_first(ld, None, st, op("i"))))
+
+
+def k_add(t):
+    return k_binop(t, "add!", "+")
+
+
+def k_add_scalar(t):
+    """v[i] = v[i] + s, spelled as `scale!` is."""
+    C = t["C"]
+    if IS_FLOAT[t["p"]]:
+        op = lambda j: "d[%s] = d[%s] + s;" % (j, j)
+    else:
+        U = UNS[t["p"]]
+        op = lambda j: "d[%s] = (%s)((%s)d[%s] + (%s)s);" % (j, C, U, j, U)
+    return "\n".join([hdr(t, "a", "v"), "int64_t n = a->len;", "%s *d = a->data;" % C]
+                     + by_compiler(["for (int64_t i = 0; i < n; i++) " + op("i")],
+                                   unrolled(lambda j, k: op(j), op("i"))))
 
 
 def k_axpy(t):
@@ -708,6 +736,18 @@ def k_set_unchecked(t):
     return "\n".join([hdr(t, "a", "v"), "a->data[i] = x;"])
 
 
+def k_view(t):
+    return "\n".join([hdr(t, "a", "v"), "return (int64_t)(intptr_t)a->data;"])
+
+
+def k_view_ref(t):
+    return "return ((%s *)(intptr_t)w)[i];" % t["C"]
+
+
+def k_view_set(t):
+    return "((%s *)(intptr_t)w)[i] = x;" % t["C"]
+
+
 ALL = ("f64vec", "f32vec", "i64vec", "i32vec", "u8vec")
 FI = ("f64vec", "f32vec", "i64vec", "i32vec")
 FL = ("f64vec", "f32vec")
@@ -739,6 +779,20 @@ KERNELS = [
          doc=["dst -- the array updated (borrowed)", "s -- the factor",
               "src -- the array scaled and added (borrowed)"],
          ex="({p}-axpy! y {e1} x)"),
+    dict(name="sub!", types=ALL, params=[("dst", "T"), ("src", "T")], ret="nil",
+         body=lambda t: k_binop(t, "sub!", "-"),
+         summary="dst[i] -= src[i] for every i (same length, or a panic).",
+         doc=["dst -- the array updated (borrowed)", "src -- the array subtracted (borrowed)"],
+         ex="({p}-sub! y x)"),
+    dict(name="mul!", types=FI, params=[("dst", "T"), ("src", "T")], ret="nil",
+         body=lambda t: k_binop(t, "mul!", "*"),
+         summary="dst[i] *= src[i] for every i (same length, or a panic).",
+         doc=["dst -- the array updated (borrowed)", "src -- the array multiplied in (borrowed)"],
+         ex="({p}-mul! y x)"),
+    dict(name="add-scalar!", types=ALL, params=[("v", "T"), ("s", "E")], ret="nil",
+         body=k_add_scalar, summary="add s to every element, in place.",
+         doc=["v -- the array (borrowed)", "s -- the value added"],
+         ex="({p}-add-scalar! v {e1})"),
     dict(name="sum", types=ALL, params=[("v", "T")], ret="sum",
          body=k_sum, summary="the sum of the elements.",
          doc=["v -- the array (borrowed)"],
@@ -772,6 +826,24 @@ KERNELS = [
               "i -- zero-based index; the caller proves 0 <= i < len",
               "x -- the new element"],
          ex="(unsafe ({p}-set-unchecked! v 0 {e0}))"),
+    dict(name="view", types=ALL, params=[("v", "T")], ret="W",
+         body=k_view, unsafe=True, native=False,
+         summary="a view of v's elements, for a loop that stores into it.",
+         doc=["v -- the array (borrowed); the view is valid while v is"],
+         ex="(let [v ({p}-of {e0} {e1}) w (unsafe ({p}-view v))] (unsafe ({p}-view-ref w 1)))   ; => {e1}"),
+    dict(name="view-ref", types=ALL, params=[("w", "W"), ("i", "int")], ret="E",
+         body=k_view_ref, unsafe=True, native=False,
+         summary="the element at index i of a view, NOT bounds-checked.",
+         doc=["w -- the view",
+              "i -- zero-based index; the caller proves 0 <= i < len"],
+         ex="(unsafe ({p}-view-ref w 0))"),
+    dict(name="view-set!", types=ALL, params=[("w", "W"), ("i", "int"), ("x", "E")], ret="nil",
+         body=k_view_set, unsafe=True, native=False,
+         summary="store x at index i of a view, NOT bounds-checked.",
+         doc=["w -- the view",
+              "i -- zero-based index; the caller proves 0 <= i < len",
+              "x -- the new element"],
+         ex="(unsafe ({p}-view-set! w 0 {e0}))"),
 ]
 
 SUM_RET = {"f64vec": "float", "f32vec": "float32", "i64vec": "int",
@@ -803,11 +875,32 @@ KERNEL_NOTES = {
     "scale!": ["Integer arithmetic wraps."],
     "add!": ["Integer arithmetic wraps; dst and src may be the same array."],
     "axpy!": ["Integer arithmetic wraps; the multiply and the add are not fused."],
+    "sub!": ["Integer arithmetic wraps; dst and src may be the same array."],
+    "mul!": ["Element-wise, not a dot product.  Integer arithmetic wraps; dst and",
+             "src may be the same array."],
+    "add-scalar!": ["Integer arithmetic wraps."],
     "ref-unchecked": [
         "`#fx{Unsafe}`: call it inside `(unsafe ...)`.  The loop macros",
         "(`-for`, `-fold`, ...) use it where they have already checked the index.",
         "Its body calls nothing, so a call to it carries no panic check, and a",
         "loop of such calls can vectorize.",
+    ],
+    "view": [
+        "`#fx{Unsafe}`: nothing ties the view to the array, so a view used after",
+        "the array is freed reads freed memory.  Why it exists: a store through",
+        "the array (`-set-unchecked!`) re-reads the header's data pointer, which",
+        "the store might have overwritten as far as the C compiler knows, so the",
+        "loop does not vectorize; a view is that pointer, read once.  `-build`",
+        "and `-map!` store through one; reach for it directly only for a store",
+        "loop they do not cover.",
+    ],
+    "view-ref": [
+        "`#fx{Unsafe}`: call it inside `(unsafe ...)`.  The interpreter checks",
+        "the index anyway, as it does for `-ref-unchecked`.",
+    ],
+    "view-set!": [
+        "`#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no",
+        "TUR_REGION_NOTE.  The interpreter checks the index anyway.",
     ],
     "set-unchecked!": [
         "`#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no",
@@ -822,7 +915,7 @@ def kernel_types(k, t):
         return (SUM_RET[t["p"]], t["C"] if IS_FLOAT[t["p"]] else "int64_t")
     if k == "nil":
         return ("nil", "void")
-    return {"T": (t["T"], "int64_t"), "int": ("int", "int64_t"),
+    return {"T": (t["T"], "int64_t"), "W": (t["W"], "int64_t"), "int": ("int", "int64_t"),
             "E": (t["E"], t["C"])}[k]
 
 
@@ -978,7 +1071,9 @@ MACROS = r''';;; {p}-for -- run body once per element of one or two {T}s.
 ;;; {p}-build -- a fresh {T} of n elements, element i the value of expr.
 ;;;
 ;;; `(build n [i] expr)`, after Racket's `for/flvector`: i is bound to each
-;;; index in turn, and expr runs outside any `unsafe`.
+;;; index in turn, and expr runs outside any `unsafe`.  The stores go through a
+;;; view (`{p}-view`), so the loop vectorizes where expr allows: at -O2 under
+;;; clang, at -O3 (`--release`) under gcc.
 ;;;
 ;;; Parameters:
 ;;;   n    -- the length (evaluated once)
@@ -998,16 +1093,81 @@ MACROS = r''';;; {p}-for -- run body once per element of one or two {T}s.
         m   (gensym "n")
         e   (gensym "e")
         out (gensym "out")
+        w   (gensym "w")
         iv  (first bv)]
     `(let [~m      ~n
            ~out    ({p}-new ~m %ZERO%)
+           ~w      (unsafe ({p}-view ~out))
            ^mut ~i 0]
        (while (< ~i ~m)
          (let [~iv ~i
                ~e  ~expr]
-           (unsafe ({p}-set-unchecked! ~out ~i ~e)))
+           (unsafe ({p}-view-set! ~w ~i ~e)))
          (set! ~i (+ ~i 1)))
        ~out)))
+;;; {p}-map! -- store expr into dst[i] for every i, x bound to src[i].
+;;;
+;;; `(map! dst [x src] expr)` stores into each slot of dst the value of expr
+;;; with x bound to the element of src at the same index; `(map! dst [x a y b]
+;;; expr)` walks two sources together.  dst may be one of the sources:
+;;; `(map! v [x v] {{x * 2}})` maps in place.  Every array has the same length,
+;;; or a panic before the first element.  The loop reads and stores through
+;;; views (`{p}-view`), so it vectorizes where expr allows: at -O2 under clang,
+;;; at -O3 (`--release`) under gcc.  expr runs outside any `unsafe`; an array
+;;; argument that is not a name is evaluated once, and freed after the loop.
+;;;
+;;; Parameters:
+;;;   dst      -- the array stored into (borrowed)
+;;;   bindings -- `[x src]` or `[x a y b]`
+;;;   expr     -- the new element, of type {E}
+;;;
+;;; Example:
+;;;   (let [v ({p}-of {e0} {e1})] ({p}-map! v [x v] x) ({p}-ref v 1))   ; => {e1}
+;;;
+;;; Since: Phase N2
+
+(defmacro {p}-map! [dst bv expr]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        e    (gensym "e")
+        wd   (gensym "wd")
+        wa   (gensym "wa")
+        wb   (gensym "wb")
+        x    (first bv)
+        a    (second bv)
+        more (rest (rest bv))]
+    (if (list? dst)
+      (let [t (gensym "nv")]
+        `(let [~t ~dst] ({p}-map! ~t ~bv ~expr)))
+      (if (list? a)
+        (let [t (gensym "nv")]
+          `(let [~t ~a] ({p}-map! ~dst [~x ~t ~@more] ~expr)))
+        (if (empty? more)
+          `(let [~n      ({p}-same-len__ ~dst ~a)
+                 ~wd     (unsafe ({p}-view ~dst))
+                 ~wa     (unsafe ({p}-view ~a))
+                 ^mut ~i 0]
+             (while (< ~i ~n)
+               (let [~x (unsafe ({p}-view-ref ~wa ~i))
+                     ~e ~expr]
+                 (unsafe ({p}-view-set! ~wd ~i ~e)))
+               (set! ~i (+ ~i 1))))
+          (let [y (first more)
+                b (second more)]
+            (if (list? b)
+              (let [t (gensym "nv")]
+                `(let [~t ~b] ({p}-map! ~dst [~x ~a ~y ~t] ~expr)))
+              `(let [~n      (do ({p}-same-len__ ~a ~b) ({p}-same-len__ ~dst ~a))
+                     ~wd     (unsafe ({p}-view ~dst))
+                     ~wa     (unsafe ({p}-view ~a))
+                     ~wb     (unsafe ({p}-view ~b))
+                     ^mut ~i 0]
+                 (while (< ~i ~n)
+                   (let [~x (unsafe ({p}-view-ref ~wa ~i))
+                         ~y (unsafe ({p}-view-ref ~wb ~i))
+                         ~e ~expr]
+                     (unsafe ({p}-view-set! ~wd ~i ~e)))
+                   (set! ~i (+ ~i 1)))))))))))
 ;;; {p}-same-len__ -- internal: the common length of two arrays, or a panic.
 
 (defn {p}-same-len__ [^borrow a : {T} ^borrow b : {T}]

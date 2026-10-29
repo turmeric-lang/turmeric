@@ -9,9 +9,9 @@
 > **Open questions reviewed 2026-10-29** (section 6): the class is `NumArray`
 > with `na-` methods (Q2, decided); D and E deferred (Q3); wasm `-msimd128`
 > measured at 1.0-29x on the kernels, bit-identical results, and turned
-> on by default (Q5, done); multiversioning deferred (Q6); the store-loop gap is the new Q7,
-> decided as views plus a few fixed-operation kernels (needs an emitter
-> change too).
+> on by default (Q5, done); multiversioning deferred (Q6); the store-loop
+> gap is the new Q7, built 2026-10-29: views, `P-map!`, fixed-operation
+> kernels and no panic check after a call that cannot panic.
 > Proposed 2026-10-24. Written in response to
 > "are (1) SIMD functions for manual calling and (2) vectorization
 > optimizations, likely in MIR, useful or viable for Turmeric?", with Racket's
@@ -607,8 +607,9 @@ N1 vectorization check.
   be the array's own header, and reloads the data pointer every iteration.
   Fix directions: an N1 kernel for the common shape, or a way to hand a loop
   the data pointer once (a borrowed view type) so the header is not re-read.
-  Probed and decided as open question 7 (views, plus dropping the post-call
-  panic test after the store; that test blocks the loop as well).
+  **Closed 2026-10-29 by open question 7:** `P-build` and the new `P-map!`
+  store through a view, and the post-call panic test that also blocked the
+  loop is gone.
 
 Also in N2, as a separate small decision: whether `tur build` (not only
 `--release`) should pass `-fvect-cost-model=cheap`, so unknown-trip-count
@@ -702,7 +703,7 @@ measured no slower than its inline-C version.
 | | cc | `tur jit` | turi | wasm |
 |---|---|---|---|---|
 | N0/N1 | vectorized kernels at `-O2` and `-O3` (gcc and clang) | same C, MIR scalar code | the same kernel C, built with the host's `tur` | vectorized with `-msimd128`, on by default (Q5) |
-| N2 | read loops vectorize at `-O3`; store loops do not (Q7) | scalar | scalar | scalar |
+| N2 | read loops vectorize at `-O3`; store loops through `-map!` / `-build` at clang `-O2` and gcc `-O3` (Q7) | scalar | scalar | scalar |
 | S1 | vector extensions (SSE2 baseline, AVX with `-march`) | struct-of-lanes helpers | struct-of-lanes natives | simd128 if enabled |
 
 Results identical in every cell.
@@ -849,7 +850,8 @@ Results identical in every cell.
    - **(c) Do nothing** and document the gap: a store loop runs scalar, at
      the speed of the equivalent C loop under gcc `-O2` today.
 
-   **Decided 2026-10-29: (a), plus a few fixed-operation kernels from (b).**
+   **Decided 2026-10-29: (a), plus a few fixed-operation kernels from (b).
+   Built the same day (below).**
    The audience that matters is macOS (clang) and `--release` builds, where
    (a) pays off fully; default gcc `-O2` builds keep the kernels.
 
@@ -899,6 +901,47 @@ Results identical in every cell.
    Acceptance: each new macro's loop reports `loop vectorized` under clang
    `-O2` and gcc `-O3` in the vectorization check, cc, turi and `tur jit`
    agree bit for bit, and a timed store loop (the probe above) improves.
+
+   **As built (2026-10-29).** All four, with one change of surface: one
+   `P-map!` taking one source or two -- `(P-map! dst [x src] expr)`,
+   `(P-map! dst [x a y b] expr)`, dst may be a source -- in place of a
+   separate in-place `P-map!` and a `P-map2!`; it reads as `P-for` does.
+
+   - **Emitter** (`fn_def_inline_c_cannot_panic`, `emit_call_cannot_panic`
+     in `src/compiler/emit_core.c`): the body is read as text, and makes no
+     call when no identifier but a keyword (`sizeof`, `if`, `return`, ...)
+     is followed by `(`; a `#` directive, `tur_panic`, or a `__TUR_VAL_N__`
+     sub-expression rules it out. Checked at the hoisted-call site and the
+     `: nil` statement call. 158 fixture snapshots lose 7,345 lines and gain
+     none -- `list-head` / `list-tail`'s checks in the stackless runtime are
+     most of them -- and the suite is otherwise unchanged.
+   - **Views:** `F64View` ... `U8View` (`defopaque`, not affine),
+     `P-view` / `P-view-ref` / `P-view-set!`, all `#fx{Unsafe}`; in turi a
+     view is the array handle, its twins bounds-checked, with
+     `native_caps.c` rows (the handle kind still applies).
+   - **Kernels:** `P-sub!` and `P-add-scalar!` on every type, `P-mul!` except
+     on `U8Vec` (as `scale!`). Vectorized at gcc `-O2` and `-O3` like
+     `add!` / `scale!` (`i64vec-mul!` excepted: SSE2 has no 64-bit multiply).
+   - **Acceptance met:** `tests/check-numvec-vectorized.py` (87 of 87) now
+     also compiles the probe with clang `-O2 -Rpass=loop-vectorize` and
+     requires the four store probes (`-map!` from one source, from two, in
+     place, and `-build`) there as well as at gcc `-O3`. The fixture
+     `numvec-store-loops` prints float results as bit patterns and runs on
+     cc, `tur jit` and turi alike (leak-checked). Timed, an in-place
+     `{x * k}` over 4096 doubles, 200,000 passes, best of three:
+
+     | | `-for-index` + `-set-unchecked!` | `-map!` |
+     |---|---|---|
+     | gcc `-O2` | 0.162s | 0.150s |
+     | gcc `-O3` | 0.186s | 0.148s |
+     | clang `-O2` | 0.267s | 0.104s |
+     | gcc `-O3 -march=native` | 0.084s | 0.089s |
+     | clang `-O2 -march=native` | 0.325s | 0.063s |
+
+     2.6x under clang at the SSE2 baseline (5.2x with AVX); a smaller win
+     under gcc `--release`, whose own runtime alias check already rescues
+     the old loop once AVX is on; nothing at gcc's default `-O2`, as
+     expected -- the kernels are the answer there.
 
 ## Appendix -- reproducing 1.1 and 1.3
 
