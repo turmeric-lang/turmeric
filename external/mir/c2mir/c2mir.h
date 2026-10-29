@@ -26,7 +26,12 @@ struct c2mir_options {
   size_t macro_commands_num, include_dirs_num;
   struct c2mir_macro_command *macro_commands;
   const char **include_dirs;
+  /* With prepro_only_p: end the output with the #pragma pack state and every
+     macro still defined, as directives (c2m -E -fdump-defines).  An embedder
+     can test C2MIR_PREPRO_DEFINES for it. */
+  int prepro_defines_p;
 };
+#define C2MIR_PREPRO_DEFINES 1
 
 void c2mir_init (MIR_context_t ctx);
 void c2mir_finish (MIR_context_t ctx);

@@ -34,6 +34,21 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found probing separate compilation for split REPL images (filed 2026-10-29)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [sepcomp-module-def-initializers-never-run](sepcomp-module-def-initializers-never-run.md) | high (silent wrong value) | Under separate compilation (`tur build --shared`, the spice REPL's library, `emit-c --output-dir`) a module's `def` initializers are emitted into `body` and then dropped: no `main` writes them. `(def ^mut counter 5)` reads `0` through the library. Executables are unaffected (built whole-program) |
+| [sepcomp-exported-global-header-name-mismatch](sepcomp-exported-global-header-name-mismatch.md) | medium | An exported `def` is defined as `counter_N` but declared in its header as `glob__counter`, and an importing module reads its own `counter_N` with nothing declaring it: a two-module `--shared` build fails to compile, and a C host cannot link the header's name. Exported `defn`s are spelled module-qualified on both sides and work |
+
+## Found matching the compiled REPL's printer (filed 2026-10-29)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [compiled-repl-inline-c-defn-errors-deferred-to-first-call](compiled-repl-inline-c-defn-errors-deferred-to-first-call.md) | low (REPL diagnostics) | Under `--enable=compiled-repl` the JIT pruner drops a defn no turn has called yet, so its inline C is first compiled -- and rejected -- at its first call, not in the turn that defines it; a one-letter name is kept by an identifier collision, which is the only reason `repl-compiled.sh`'s rejection check sees the error at definition |
+| [turi-repl-continuation-resumed-in-later-turn-reads-freed-frames](turi-repl-continuation-resumed-in-later-turn-reads-freed-frames.md) | medium (REPL, use-after-poison) | At the interpreter prompt, a `k` stored in a `^mut` global by one turn and resumed by a later one walks frames from a slab the first turn's end poisoned: ASan stops in `frame_release`; Release prints the right answer by luck. In one file, resumed within the run, it is fine |
+| [repl-show-uses-wrong-instance-for-vec-elements](repl-show-uses-wrong-instance-for-vec-elements.md) | medium-low (REPL display) | At the interpreter prompt a `Vec` of structs with no `Show` shows through another struct's instance (`[P! P!]` for `[(Q 1) (Q 2)]`) or as an address, and a `(def w [1 2 3])` turn prints an address: `Show [Vec]`'s `[(Show A)]` is never checked, and a def turn's display gets the unit-typed def node. `--enable=compiled-repl` prints them right |
+
 ## Found landing simd-and-vectorization-plan N0 (filed 2026-10-28)
 
 | Report | Severity | One line |

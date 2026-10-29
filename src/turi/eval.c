@@ -96,6 +96,7 @@
 #include "ffi_thunk.h"  /* jit-ffi-c2mir-plan F2: thunk-backed extern-c */
 #include "jit_ffi.h"    /* jit-ffi-c2mir-plan: provider + sig vocabulary */
 #include "inline_c_jit.h"  /* aot-compiled-repl-plan C1 */
+#include "compiled_turn.h" /* aot-compiled-repl-plan C2 */
 
 /* Integer `/` and `mod` on the interpreter's int64 carrier, for a divisor the
  * caller has already checked is not zero.  INT64_MIN / -1 and INT64_MIN % -1
@@ -18786,8 +18787,26 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * items, so none of them have run before -- the already-run prefix is zero.
      * On the whole-program path the cumulative count applies, as before. */
     uint32_t prior_prog = use_incr_elab ? 0u : env->prior_prog_items;
-    /* Imported module bodies [0, n_fsd), then the new user forms. */
-    last = eval_toplevel_guarded(env, prog, n_fsd, n_fsd + prior_prog, total);
+    if (turi_compiled_turn_applies(env)) {
+        /* aot-compiled-repl-plan C2: the turn runs as a compiled program, not
+         * here.  Its result (nil, or an error when it did not compile or
+         * failed) feeds step 8 as an evaluated turn's would, so the session
+         * commits the turn's elaboration only when it ran. */
+        Expr *last_item = total > n_fsd + prior_prog ? prog->as.program.items[total - 1] : NULL;
+        bool last_is_def = last_item && (last_item->kind == EX_DEF || last_item->kind == EX_FN_DEF);
+        /* A def's own node is unit-typed; what the REPL prints is its value. */
+        const Type *last_type = last_item ? &last_item->type : NULL;
+        if (last_item && last_item->kind == EX_DEF && last_item->as.def_.init)
+            last_type = &last_item->as.def_.init->type;
+        uint32_t first_new = n_fsd + prior_prog;
+        last = turi_compiled_turn_run(env, forms, prior, nforms, sfile->src,
+                                      prog->as.program.items + first_new,
+                                      total > first_new ? total - first_new : 0,
+                                      last_type, last_is_def);
+    } else {
+        /* Imported module bodies [0, n_fsd), then the new user forms. */
+        last = eval_toplevel_guarded(env, prog, n_fsd, n_fsd + prior_prog, total);
+    }
 
     /* 8. Update accumulated state only on success.
      * Store nforms (parsed count) rather than total so the n_fsd formula
@@ -19014,7 +19033,12 @@ static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth) {
             turi_value_repr_d(fval, sizeof(fval), s->fields[i], depth - 1);
             const char *fname = (i < cd->n_fields) ? cd->fields[i].name : "?";
             const char *sep = (i == 0) ? " " : ", ";
-            pos += (size_t)snprintf(buf + pos, cap - pos, "%s%s = %s", sep, fname, fval);
+            /* A positional field -- `(Some A)` -- has no name to show; its
+             * value stands alone (it printed as "(null) = 3"). */
+            if (fname)
+                pos += (size_t)snprintf(buf + pos, cap - pos, "%s%s = %s", sep, fname, fval);
+            else
+                pos += (size_t)snprintf(buf + pos, cap - pos, "%s%s", sep, fval);
         }
         if (pos < cap - 1) snprintf(buf + pos, cap - pos, " }");
         break;

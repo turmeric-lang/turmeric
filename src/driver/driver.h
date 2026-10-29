@@ -66,6 +66,7 @@
 #include "spice_search.h" /* resolve_include_dirs_from_manifest */
 #include "script_deps.h"  /* script-spice-deps-plan */
 #include "turi/inline_c_jit.h"  /* TuriInlineCJitHook */
+#include "turi/compiled_turn.h" /* TuriCompiledTurnHook */
 #include "turi/spice_loader.h"  /* TurSpiceJitHook */
 
 #ifndef TUR_VERSION
@@ -294,6 +295,7 @@ void drv_obj_sibling_path(const char *obj, const char *suffix,
 #ifdef TUR_HAVE_JIT
 extern const TurSpiceJitHook g_repl_jit_hook;
 extern const TuriInlineCJitHook g_repl_inline_c_jit_hook;
+extern const TuriCompiledTurnHook g_repl_compiled_turn_hook;
 #endif
 
 /* == driver/cli.c ========================================================== */

@@ -20,6 +20,7 @@
 #endif
 
 /* We need to include the turi headers. src/ is in the include path. */
+#include "turi/compiled_turn.h"
 #include "turi/env.h"
 #include "turi/eval.h"
 #include "turi/value.h"
@@ -279,6 +280,19 @@ void turi_wasm_rewind_to_prelude(void) {
  * 
  * On parse/runtime error, the error message is returned as the result string.
  */
+/* aot-compiled-repl-plan C2 at the page's prompt: turn compiled turns on or
+ * off for the session (`--enable=compiled-repl`, per session).  Only a module
+ * with an engine has a compiled-turn hook (wasm_jit_glue.c); elsewhere this
+ * stays off.  Returns whether they are on. */
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+int turi_wasm_set_compiled_repl(int on) {
+    if (!g_env) return 0;
+    g_env->compiled_repl = on && turi_compiled_turn_available();
+    return g_env->compiled_repl ? 1 : 0;
+}
+
 char *turi_wasm_eval(const char *input) {
     if (!g_env) return turi_wasm_strdup("Error: Turmeric runtime not initialized. Call turi_wasm_init() first.");
     if (!input) return turi_wasm_strdup("Error: NULL input");
@@ -288,6 +302,10 @@ char *turi_wasm_eval(const char *input) {
     char type_tag[64] = {0};
     TuriValue result = turi_eval_typed(g_env, input, type_tag, sizeof(type_tag));
     wasm_flush_program_output();
+
+    /* aot-compiled-repl-plan C2: a compiled turn rendered its own result. */
+    if (g_env->last_turn_printed && g_env->last_turn_text)
+        return turi_wasm_strdup(g_env->last_turn_text);
 
     /* SI4: four-tier display:
      *   1. turi_try_show        -- TURI_STRUCT with Show instance
@@ -353,6 +371,10 @@ int turi_wasm_eval_ex(const char *input, char **out_result, char **out_error) {
         turi_value_repr(buf, sizeof(buf), result);
         *out_error = turi_wasm_strdup(buf);
         return 1;
+    }
+    if (g_env->last_turn_printed && g_env->last_turn_text) {
+        *out_result = turi_wasm_strdup(g_env->last_turn_text);
+        return 0;
     }
 
     /* SI4: four-tier display:
