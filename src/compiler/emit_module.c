@@ -4181,6 +4181,26 @@ static Type emit_abi_instantiate_type(const Type *t,
     }
 }
 
+/* generic-callee-tyvar-captured-by-caller: are `bindings` the call's real
+ * answer rather than carrier collapse?  They are when the call's elaborated
+ * result type is ground and is what the callee's declared result becomes
+ * under them -- `(tnil)` returning `(Cons int)` with `A := int`.  An `int`
+ * binding then IS `int`, and must not be "rehydrated" by name from an
+ * enclosing spec whose own, unrelated variable happens to be spelled `A`. */
+static bool emit_abi_bindings_pin_call_result(const Expr *call,
+                                              const AbiTypeBinding *bindings,
+                                              uint8_t n_bindings, Arena *arena) {
+    const Binding *cb = call->as.call_.fn_binding;
+    if (!cb || cb->type.kind != TY_FN || !cb->type.as.fn.result_full_type ||
+        n_bindings == 0)
+        return false;
+    if (call->type.kind != TY_APP || emit_abi_type_has_any_tyvar(&call->type))
+        return false;
+    Type inst = emit_abi_instantiate_type(cb->type.as.fn.result_full_type,
+                                          bindings, n_bindings, arena);
+    return !emit_abi_type_has_any_tyvar(&inst) && type_eq(inst, call->type);
+}
+
 /* nested-construct-byvalue: structurally unify a generic pattern (carrying named
  * tyvars, e.g. `(Result A B)`) against a concrete type (`Result__Option__cstr__cstr`,
  * a monomorphized struct, or `(Result (Option cstr) cstr)`) and collect the
@@ -6905,7 +6925,9 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                     }
                 }
             }
-        } else if (n_bindings <= ABI_TYPE_BINDINGS_MAX) {
+        } else if (n_bindings <= ABI_TYPE_BINDINGS_MAX &&
+                   !emit_abi_bindings_pin_call_result(call, bindings, n_bindings,
+                                                      ctx->type_arena)) {
             /* (2) re-hydrate carrier-collapsed bindings by name. */
             bool any = false;
             /* instance-method-call-inside-an-instance-body-takes-the-enclosing-

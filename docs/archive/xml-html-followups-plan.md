@@ -859,7 +859,7 @@ What building C, A1-A2 and D1 changed against the text above.
   `dom/hiccup`: rendering a `raw-html` hole needs lexbor, and so does
   `ToChild Html`. The expansion calls wrapper functions (`mk-elem`, ...)
   rather than the qualified constructors, which mistype as arguments
-  ([qualified-adt-constructor-mistyped-as-argument](../reported/qualified-adt-constructor-mistyped-as-argument.md)).
+  ([qualified-adt-constructor-mistyped-as-argument](qualified-adt-constructor-mistyped-as-argument.md)).
 - `ToChild` gained one constrained instance for `(Cons T)` (and `Child` a
   `ChildList` case) in place of per-type list instances: an instance for
   `(Cons Html)` in `html/hiccup` would be an orphan. D2's `hiccup->xml-string` will need the types moved down
@@ -885,7 +885,7 @@ What building C, A1-A2 and D1 changed against the text above.
   `match`es over `Option`, not through the `for` macro: its `.pure` looks
   for an instance on the body's type when that is concrete, and takes the
   monad only from a `defn`'s return type
-  ([for-comprehension-pure-picks-the-payload-type](../reported/for-comprehension-pure-picks-the-payload-type.md)).
+  ([for-comprehension-pure-picks-the-payload-type](for-comprehension-pure-picks-the-payload-type.md)).
   An inline `fn` given to `list-map` needs a typed parameter. The test
   supplied its own `list-foldl` until 2026-10-29, when tur-html could load
   `stdlib/list-typed.tur` beside dom/ownstr's `String` for the first time.

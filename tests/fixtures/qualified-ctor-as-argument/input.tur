@@ -1,0 +1,24 @@
+;; qualified-adt-constructor-mistyped-as-argument: a constructor called by
+;; its module-qualified name (full or alias) types as its ADT, so it can be
+;; passed straight to a function -- a defdata's, a ^heap one's, a defstruct's.
+(defmodule main
+  (import lib/shapes :refer [Shape])
+  (import lib/hs :as h :refer [HShape Pt])
+  (defn area [s : Shape] : int
+    (match s
+      (Circle r) (* 3 (* r r))
+      (Square w) (* w w)))
+  (defn harea [s : HShape] : int
+    (match s
+      (HCircle r) (* 3 (* r r))
+      (HSquare w) (* w w)))
+  (defn sum [p : Pt] : int (+ (.x p) (.y p)))
+  (defn main [] : int
+    (println (area (lib/shapes/Square 4)))
+    (let [c (lib/shapes/Circle 1)]
+      (println (area c)))
+    (println (harea (lib/hs/HSquare 5)))
+    (println (harea (h/HCircle 2)))
+    (println (sum (lib/hs/Pt 3 4)))
+    (println (sum (h/Pt 1 1)))
+    0))

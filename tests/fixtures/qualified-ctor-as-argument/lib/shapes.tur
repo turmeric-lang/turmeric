@@ -1,0 +1,3 @@
+(defmodule lib/shapes
+  (export Shape Circle Square)
+  (defdata ^copy Shape (Circle int) (Square int)))

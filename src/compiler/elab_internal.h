@@ -203,6 +203,11 @@ struct ReaderMacroRegistry;
 
 typedef struct Elab {
     Arena       *arena;
+    /* for-comprehension-pure-picks-the-payload-type: while a lambda passed to
+     * a dot-method is elaborated, the head its result must have when the
+     * receiver fixes it (`(Option b)` for a `bind` over an Option), for a
+     * return-directed `pure` / `empty` in the body with no expected type. */
+    const Type  *cont_head_hint;
     SymbolTable *st;
     Scope       *scope;     /* current */
     Scope        global;

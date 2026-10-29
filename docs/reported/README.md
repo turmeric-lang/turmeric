@@ -3456,9 +3456,6 @@ the `__int128` work only surfaced them.  Both resolved the same day.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [qualified-adt-constructor-mistyped-as-argument](qualified-adt-constructor-mistyped-as-argument.md) | low | `(lib/shapes/Square 4)` passed to a function types as an anonymous `<adt>` and is refused (TUR-E0001); the unqualified constructor and qualified function calls work. tur-html's `hiccup` expands to wrapper functions to avoid it |
-| [generic-callee-tyvar-captured-by-caller](generic-callee-tyvar-captured-by-caller.md) | medium | In `(defn f [A] [xs : (Cons A)] : (Cons int) (if (tnil? xs) (tnil) ...))` the `(tnil)` specializes at `(Cons A)` with the caller's `A`, so the C returns a `Cons__cstr *` from a `Cons__int *` function (an error on gcc 14 / clang 15+); an ascription does not help, renaming the variable does |
-| [for-comprehension-pure-picks-the-payload-type](for-comprehension-pure-picks-the-payload-type.md) | low-medium | `(for [x (some 3)] (P x))` in a `(Option Pt)` defn looks for `Applicative [Pt]`: `.pure` dispatches on a concrete payload type. And a `for` outside a defn's return position (an argument, an annotated `let`) is ambiguous |
 | [monomorph-emitted-before-its-type-argument](monomorph-emitted-before-its-type-argument.md) | medium | With `tourist/app` imported before the markup spices, the C for `ctor_Cons_Cons__Hole` (which takes a `Hole` by value) precedes `struct tur_adt_Hole`, and cc rejects the incomplete type; the other import order compiles |
 | [unused-module-global-heap-init-reported-as-leak](unused-module-global-heap-init-reported-as-leak.md) | low | A module `def` holding a heap constructor box that nothing reads is a `static` global the C compiler drops with its store, so LeakSanitizer reports the box (dom/core's `__syntax-node` and friends) |
 

@@ -48,3 +48,17 @@ expression's type is an ADT the checker does not identify with `Shape`.
 Resolve a qualified constructor to the same `Type` the unqualified one gets
 (the ADT registered by its `defdata`), wherever the elaborator types a call
 head of the form `module/Ctor`.
+
+## Resolution (2026-10-29)
+
+The call head resolved to the constructor's binding, but every constructor
+lookup in `elab_call_inner` (src/compiler/elab_call.c) -- the one that
+patches the call's result with its ADT among them -- is by the name the call
+spells, and no constructor is named `lib/shapes/Square`. A qualified head
+(full or alias) that resolves to a constructor now continues under the
+constructor's own name, so `(lib/shapes/Square 4)` and `(s/Square 4)` type as
+`Shape` wherever the bare constructor does: a `defdata`'s, a `^heap` one's,
+a `defstruct`'s. Pinned by `tests/fixtures/qualified-ctor-as-argument` (both
+engines). tur-html's `hiccup` keeps its `mk-*` wrappers for another reason
+(a macro expansion names helpers of the macro's own module, which a using
+file need not import); the report's own case is fixed.

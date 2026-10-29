@@ -41,3 +41,17 @@ Freshen a callee's type variables before unifying its signature at a call
 inside a generic body (the archived fix did this for one expected-type
 shape); the specializer should never see the caller's `A` in `tnil`'s
 instantiation.
+
+## Resolution (2026-10-29)
+
+Not in the elaborator: `(tnil)` was typed `(Cons int)` with tnil's
+`A := int`. The emitter's re-hydration of carrier-collapsed bindings
+(`emit_abi_register_call`, src/compiler/emit_module.c, case 2) replaced, BY
+NAME, any binding whose C type is `int64_t` with the active spec's binding of
+the same name -- and a genuine `int` is `int64_t` too, so inside `lens`'s
+`A = cstr` spec tnil's `A := int` became `cstr`. A call whose elaborated
+result is ground and is exactly the callee's declared result under its
+bindings (`emit_abi_bindings_pin_call_result`) now keeps them. Pinned by
+`tests/fixtures/generic-callee-tyvar-not-captured-by-caller` (run.sh fails a
+fixture on `-Wincompatible-pointer-types`). tur-dom-core's `__children` and
+tur-html's `__to-html-list` can name their variable `A` again.

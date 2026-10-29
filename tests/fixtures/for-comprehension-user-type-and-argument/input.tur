@@ -1,0 +1,19 @@
+;; for-comprehension-pure-picks-the-payload-type: `for` over Option with a
+;; body of a user type (its `.pure` dispatches on the expected result, not
+;; the payload), and a `for` that is a function's argument (the bind's
+;; receiver fixes the monad), with and without :when.
+(defdata ^heap Pt (P int) (Q))
+(defn f [] : (Option Pt) (for [x (some 3)] (P x)))
+(defn take [o : (Option int)] : int (match o (Some n) n (None) -1))
+(defn take-pt [o : (Option Pt)] : int
+  (match o (Some p) (match p (P n) n (Q) 0) (None) -1))
+(defn main [] : int
+  (match (f) (Some p) (match p (P n) (println n) (Q) (println 0)) (None) (println -1))
+  (println (take (for [x (some 3)] (+ x 1))))
+  (println (take (for [x (some 3) :when (> x 1)] (* x 10))))
+  (println (take (for [x (some 3) :when (> x 5)] (* x 10))))
+  (println (take (for [x (some 3) y (some 4)] (+ x y))))
+  (println (take-pt (for [x (some 9)] (P x))))
+  (let [y : (Option int) (for [x (some 4)] (* x 2))]
+    (println (take y)))
+  0)
