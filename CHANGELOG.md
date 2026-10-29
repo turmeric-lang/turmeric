@@ -2,6 +2,72 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **16-byte vector types, behind `--enable=simd`.** `(load
+  "stdlib/simd.tur")` gives `F64x2`, `F32x4`, `I64x2`, `I32x4`, `U16x8` and
+  `U8x16`: by-value structs with one field per lane, with `splat`, `lane`,
+  `load` / `store!` from the typed numeric arrays (and unchecked forms),
+  lanewise `add` `sub` `mul` `div` `neg` `min` `max`, `sqrt` / `abs`, a
+  fixed-order `hsum`, byte widen / narrow and a sixteen-bit shift, plus a
+  `Num` instance so `{a + b}` is the lanewise sum. Compiled, each operation
+  is one GCC/Clang vector instruction; under `tur jit` a lane loop; under the
+  interpreter a native -- with the same bits on all three. A byte-image
+  blend written on them runs as fast as hand-written vector C.
+
+- **`NumArray`: generic numeric-array code.** One class over `F64Vec`,
+  `F32Vec`, `I64Vec`, `I32Vec` and `U8Vec` (`stdlib/numvec.tur`), with the
+  element type as the associated type `Elem` (`Sum` for `na-sum`, `View` for
+  views): `na-len`, `na-ref`, `na-set!`, `na-sum`, `na-min`, `na-max`,
+  `na-add!`, `na-fill!`, ... and the loops `na-for`, `na-fold`, `na-map!`.
+  A function written once over `[V] [(NumArray V)]` is specialized per type
+  and its loops vectorize like the per-type ones. A generic-typed local is
+  not dropped yet, so free `na-copy`'s result with `na-free`.
+
+- **Numvec store loops vectorize.** `P-map!` stores an expression into an
+  array element by element, from one source array or two, in place or into
+  another array: `(f64vec-map! v [x v] {x * 2.5})`. It and `P-build` now
+  store through a *view* (`P-view`, `P-view-ref`, `P-view-set!`, all
+  `#fx{Unsafe}`): the array's data pointer, read once, where a store
+  through the array re-reads its header every iteration and so kept the
+  loop scalar. On a 4096-element in-place map: 2.6x under clang `-O2`
+  (5.2x with `-march=native`), 1.26x under gcc `--release`; gcc's default
+  `-O2` still does not vectorize such a loop. New fixed-operation kernels,
+  vectorized at every level: `P-sub!`, `P-add-scalar!`, and except on
+  `U8Vec` `P-mul!` (element-wise).
+
+### Fixed
+
+- **A generic call whose receiver has the class's associated type** --
+  `(m w)` with `w : (View V)` -- called the representative instance's method
+  in every specialization instead of each type's own. It now dispatches on
+  `V`.
+
+### Changed
+
+- **A method argument at an associated type is inferred from it**:
+  `(na-add-scalar! c (from-int 1))` in a generic no longer needs
+  `(:: (from-int 1) (Elem V))`.
+- **No panic check after a call that cannot panic.** The emitter used to
+  write `if (tur_panicking) ...` after every call; it now omits it after a
+  call to an inline-C function whose body makes no call, never names
+  `tur_panic` and evaluates no Turmeric sub-expression -- `list-head`,
+  `f64vec-set-unchecked!` and the like -- and after a Turmeric function
+  built only from such calls, arithmetic and `unsafe`, class-method
+  instances included. Besides the smaller C, that check
+  was what kept a store loop from vectorizing: a store might write the flag,
+  so the test could not leave the loop.
+
+- **wasm SIMD is on by default.** `tur build --target wasm` passes
+  `-msimd128`, and the Try Turmeric modules are built with it, so the
+  numvec kernels vectorize in the browser: 1.2-29x faster on 15 of 16
+  measured kernels (the u8 sum gains nothing), with bit-identical
+  results. An engine without wasm SIMD (before Chrome 91, Firefox 89,
+  Safari 16.4) refuses such a module; `:web #{:simd false}` in `build.tur`
+  builds one without it.
+
 ## [0.72.0] -- 2026-10-29
 
 ### Added

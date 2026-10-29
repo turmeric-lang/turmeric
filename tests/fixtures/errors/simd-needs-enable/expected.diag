@@ -1,0 +1,1 @@
+stdlib/simd.tur needs --enable=simd

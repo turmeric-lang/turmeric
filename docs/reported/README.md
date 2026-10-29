@@ -34,6 +34,19 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found building the tur-simd spice, plan phase S0 (filed 2026-10-29)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [jit-ignores-spice-c-includes](jit-ignores-spice-c-includes.md) | low (cc fallback) | `tur jit` hands c2mir only the SDK include dirs, so a spice's `:c-includes` header is "error in opening file" and the program falls back to cc; `tur build` / `test` / `run` pass it |
+
+## Found building the NumArray class (filed 2026-10-29)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [generic-affine-local-never-dropped](generic-affine-local-never-dropped.md) | medium-low (leak) | A `let`-bound value of a generic's type variable is never dropped in any specialization, even when that type is `^affine` with a `Drop` instance; the same code at the concrete type drops it. `NumArray` code frees `na-copy`'s result with `na-free` meanwhile |
+| [assoc-typed-receiver-not-a-dispatch-arg](assoc-typed-receiver-not-a-dispatch-arg.md) | low (refusal) | A class method whose only class-typed parameter is an associated type (`(peek [h : Handle])`) is E0015 at a concrete type and "cannot infer ... return-directed" in a generic. The emitter's silent wrong-instance half is fixed; `NumArray` works around the rest by passing the array too |
+
 ## Found fixing the REPL display reports (filed 2026-10-29)
 
 | Report | Severity | One line |

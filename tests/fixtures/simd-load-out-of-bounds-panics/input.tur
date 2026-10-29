@@ -1,0 +1,11 @@
+;; simd-load-out-of-bounds-panics: a vector load or store that would run past
+;; the array panics once, before touching any lane, at the CALLER's line on
+;; every engine -- the bounds check is the whole vector's, not one per lane.
+(load "stdlib/simd.tur")
+
+(defn main [] : int
+  (let [a (f64vec-of 1.5 2.5 7.1)]
+    (println (f64x2-hsum (f64x2-load a 1)))
+    (println (f64x2-hsum (f64x2-load a 2)))
+    (println "unreachable")
+    0))

@@ -19,21 +19,21 @@ import tempfile
 # p: prefix, T: type, E: element type, C: C element, zero: a literal of E,
 # zm: the same zero as a macro-time `list` form, ex/exs: docstring examples.
 TYPES = [
-    dict(p="f64vec", T="F64Vec", E="float", C="double",
+    dict(p="f64vec", T="F64Vec", W="F64View", E="float", C="double",
          zero="0.0", zm="0.0", ex=("1.5", "2.5"), exs="7.1",
          what="64-bit floats"),
-    dict(p="f32vec", T="F32Vec", E="float32", C="float",
+    dict(p="f32vec", T="F32Vec", W="F32View", E="float32", C="float",
          zero="(as float32 0.0)", zm="(list as float32 0.0)",
          ex=("(:: 1.5 float32)", "(:: 2.5 float32)"), exs="(:: 3.25 float32)",
          what="32-bit floats"),
-    dict(p="i64vec", T="I64Vec", E="int", C="int64_t",
+    dict(p="i64vec", T="I64Vec", W="I64View", E="int", C="int64_t",
          zero="0", zm="0", ex=("1", "2"), exs="7",
          what="64-bit integers"),
-    dict(p="i32vec", T="I32Vec", E="int32", C="int32_t",
+    dict(p="i32vec", T="I32Vec", W="I32View", E="int32", C="int32_t",
          zero="(as int32 0)", zm="(list as int32 0)",
          ex=("(as int32 1)", "(as int32 2)"), exs="(as int32 7)",
          what="32-bit integers"),
-    dict(p="u8vec", T="U8Vec", E="uint8", C="uint8_t",
+    dict(p="u8vec", T="U8Vec", W="U8View", E="uint8", C="uint8_t",
          zero="(as uint8 0)", zm="(list as uint8 0)",
          ex=("(as uint8 1)", "(as uint8 2)"), exs="(as uint8 200)",
          what="bytes"),
@@ -76,11 +76,17 @@ HDR = """;;; tur/numvec -- typed numeric arrays: F64Vec, F32Vec, I64Vec, I32Vec,
 ;;;   `P-sum-ordered`.  A float reduction uses a fixed eight-lane order, so it
 ;;;   is vectorized without -ffast-math and is bit-identical on every engine;
 ;;;   integer arithmetic wraps;
-;;; - loops (phase N2): `P-for`, `P-for-index`, `P-fold`, `P-build`, which
-;;;   bind elements, never an index the program could get wrong, and read
-;;;   through the unchecked `P-ref-unchecked` / `P-set-unchecked!`
-;;;   (`#fx{Unsafe}`).  A loop that only reads an array vectorizes; one that
-;;;   stores into one does not yet (see the plan's N2 notes).
+;;; - loops (phase N2): `P-for`, `P-for-index`, `P-fold`, `P-build`, `P-map!`,
+;;;   which bind elements, never an index the program could get wrong, and go
+;;;   through the unchecked accessors (`#fx{Unsafe}`).  Reads vectorize;
+;;;   `P-build` and `P-map!` store through a view (`P-view`, `P-view-ref`,
+;;;   `P-view-set!`), which is what lets a store loop vectorize too;
+;;; - more kernels for common store loops, vectorized at -O2 on every
+;;;   compiler: `P-sub!`, `P-add-scalar!`, and except on U8Vec `P-mul!`.
+;;;
+;;; Generic code over all five types goes through the `NumArray` class at the
+;;; end of the module: `na-len`, `na-ref`, `na-sum`, ... and the loops
+;;; `na-for`, `na-fold`, `na-map!`, with the element type as `(Elem V)`.
 ;;;
 ;;; Ownership: each type is `^affine` with a `Drop` instance, so a let-bound
 ;;; array is freed at scope exit, exactly once, and moving it (returning it,
@@ -141,6 +147,14 @@ TEMPLATE = r""";; ===== {T}: {what} =====
 ;;;
 ;;; Since: Phase N0
 (defopaque ^affine {T} :int)
+;;; {W} -- a view of a {T}'s elements: the data pointer, for a store loop.
+;;;
+;;; Made by `{p}-view`, read and written by `{p}-view-ref` / `{p}-view-set!`.
+;;; Not owned and not affine: it frees nothing, and it is valid exactly as long
+;;; as the array it came from (an array never resizes, so its data never moves).
+;;;
+;;; Since: Phase N2
+(defopaque {W} :int)
 ;; Every operation that touches the header is an inline-C body of its own,
 ;; never a Turmeric wrapper over a raw one, so a panic is reported at the
 ;; CALLER's line (as vec-get's is) and turi's natives are keyed by the public
@@ -533,22 +547,40 @@ def k_scale(t):
                                    unrolled(lambda j, k: op(j), op("i"))))
 
 
-def k_add(t):
+def k_binop(t, name, opc):
+    """dst[i] = dst[i] <opc> src[i] -- `add!`, `sub!`, `mul!`."""
     C = t["C"]
     if IS_FLOAT[t["p"]]:
-        op = lambda j: "yd[%s] = yd[%s] + xd[%s];" % (j, j, j)
-        st = lambda j, k: "yd[%s] = y%d + x%d;" % (j, k, k)
+        op = lambda j: "yd[%s] = yd[%s] %s xd[%s];" % (j, j, opc, j)
+        st = lambda j, k: "yd[%s] = y%d %s x%d;" % (j, k, opc, k)
     else:
         U = UNS[t["p"]]
-        op = lambda j: "yd[%s] = (%s)((%s)yd[%s] + (%s)xd[%s]);" % (j, C, U, j, U, j)
-        st = lambda j, k: "yd[%s] = (%s)((%s)y%d + (%s)x%d);" % (j, C, U, k, U, k)
+        op = lambda j: "yd[%s] = (%s)((%s)yd[%s] %s (%s)xd[%s]);" % (j, C, U, j, opc, U, j)
+        st = lambda j, k: "yd[%s] = (%s)((%s)y%d %s (%s)x%d);" % (j, C, U, k, opc, U, k)
     ld = lambda j, k: "%s y%d = yd[%s], x%d = xd[%s];" % (C, k, j, k, j)
     return "\n".join([hdr(t, "y", "dst"), hdr(t, "x", "src"),
-                      same_len(t, "add!", ""),
+                      same_len(t, name, ""),
                       "int64_t n = y->len;",
                       "%s *yd = y->data;" % C, "const %s *xd = x->data;" % C]
                      + by_compiler(["for (int64_t i = 0; i < n; i++) " + op("i")],
                                    unrolled_loads_first(ld, None, st, op("i"))))
+
+
+def k_add(t):
+    return k_binop(t, "add!", "+")
+
+
+def k_add_scalar(t):
+    """v[i] = v[i] + s, spelled as `scale!` is."""
+    C = t["C"]
+    if IS_FLOAT[t["p"]]:
+        op = lambda j: "d[%s] = d[%s] + s;" % (j, j)
+    else:
+        U = UNS[t["p"]]
+        op = lambda j: "d[%s] = (%s)((%s)d[%s] + (%s)s);" % (j, C, U, j, U)
+    return "\n".join([hdr(t, "a", "v"), "int64_t n = a->len;", "%s *d = a->data;" % C]
+                     + by_compiler(["for (int64_t i = 0; i < n; i++) " + op("i")],
+                                   unrolled(lambda j, k: op(j), op("i"))))
 
 
 def k_axpy(t):
@@ -708,6 +740,18 @@ def k_set_unchecked(t):
     return "\n".join([hdr(t, "a", "v"), "a->data[i] = x;"])
 
 
+def k_view(t):
+    return "\n".join([hdr(t, "a", "v"), "return (int64_t)(intptr_t)a->data;"])
+
+
+def k_view_ref(t):
+    return "return ((%s *)(intptr_t)w)[i];" % t["C"]
+
+
+def k_view_set(t):
+    return "((%s *)(intptr_t)w)[i] = x;" % t["C"]
+
+
 ALL = ("f64vec", "f32vec", "i64vec", "i32vec", "u8vec")
 FI = ("f64vec", "f32vec", "i64vec", "i32vec")
 FL = ("f64vec", "f32vec")
@@ -739,6 +783,20 @@ KERNELS = [
          doc=["dst -- the array updated (borrowed)", "s -- the factor",
               "src -- the array scaled and added (borrowed)"],
          ex="({p}-axpy! y {e1} x)"),
+    dict(name="sub!", types=ALL, params=[("dst", "T"), ("src", "T")], ret="nil",
+         body=lambda t: k_binop(t, "sub!", "-"),
+         summary="dst[i] -= src[i] for every i (same length, or a panic).",
+         doc=["dst -- the array updated (borrowed)", "src -- the array subtracted (borrowed)"],
+         ex="({p}-sub! y x)"),
+    dict(name="mul!", types=FI, params=[("dst", "T"), ("src", "T")], ret="nil",
+         body=lambda t: k_binop(t, "mul!", "*"),
+         summary="dst[i] *= src[i] for every i (same length, or a panic).",
+         doc=["dst -- the array updated (borrowed)", "src -- the array multiplied in (borrowed)"],
+         ex="({p}-mul! y x)"),
+    dict(name="add-scalar!", types=ALL, params=[("v", "T"), ("s", "E")], ret="nil",
+         body=k_add_scalar, summary="add s to every element, in place.",
+         doc=["v -- the array (borrowed)", "s -- the value added"],
+         ex="({p}-add-scalar! v {e1})"),
     dict(name="sum", types=ALL, params=[("v", "T")], ret="sum",
          body=k_sum, summary="the sum of the elements.",
          doc=["v -- the array (borrowed)"],
@@ -772,6 +830,24 @@ KERNELS = [
               "i -- zero-based index; the caller proves 0 <= i < len",
               "x -- the new element"],
          ex="(unsafe ({p}-set-unchecked! v 0 {e0}))"),
+    dict(name="view", types=ALL, params=[("v", "T")], ret="W",
+         body=k_view, unsafe=True, native=False,
+         summary="a view of v's elements, for a loop that stores into it.",
+         doc=["v -- the array (borrowed); the view is valid while v is"],
+         ex="(let [v ({p}-of {e0} {e1}) w (unsafe ({p}-view v))] (unsafe ({p}-view-ref w 1)))   ; => {e1}"),
+    dict(name="view-ref", types=ALL, params=[("w", "W"), ("i", "int")], ret="E",
+         body=k_view_ref, unsafe=True, native=False,
+         summary="the element at index i of a view, NOT bounds-checked.",
+         doc=["w -- the view",
+              "i -- zero-based index; the caller proves 0 <= i < len"],
+         ex="(unsafe ({p}-view-ref w 0))"),
+    dict(name="view-set!", types=ALL, params=[("w", "W"), ("i", "int"), ("x", "E")], ret="nil",
+         body=k_view_set, unsafe=True, native=False,
+         summary="store x at index i of a view, NOT bounds-checked.",
+         doc=["w -- the view",
+              "i -- zero-based index; the caller proves 0 <= i < len",
+              "x -- the new element"],
+         ex="(unsafe ({p}-view-set! w 0 {e0}))"),
 ]
 
 SUM_RET = {"f64vec": "float", "f32vec": "float32", "i64vec": "int",
@@ -803,11 +879,32 @@ KERNEL_NOTES = {
     "scale!": ["Integer arithmetic wraps."],
     "add!": ["Integer arithmetic wraps; dst and src may be the same array."],
     "axpy!": ["Integer arithmetic wraps; the multiply and the add are not fused."],
+    "sub!": ["Integer arithmetic wraps; dst and src may be the same array."],
+    "mul!": ["Element-wise, not a dot product.  Integer arithmetic wraps; dst and",
+             "src may be the same array."],
+    "add-scalar!": ["Integer arithmetic wraps."],
     "ref-unchecked": [
         "`#fx{Unsafe}`: call it inside `(unsafe ...)`.  The loop macros",
         "(`-for`, `-fold`, ...) use it where they have already checked the index.",
         "Its body calls nothing, so a call to it carries no panic check, and a",
         "loop of such calls can vectorize.",
+    ],
+    "view": [
+        "`#fx{Unsafe}`: nothing ties the view to the array, so a view used after",
+        "the array is freed reads freed memory.  Why it exists: a store through",
+        "the array (`-set-unchecked!`) re-reads the header's data pointer, which",
+        "the store might have overwritten as far as the C compiler knows, so the",
+        "loop does not vectorize; a view is that pointer, read once.  `-build`",
+        "and `-map!` store through one; reach for it directly only for a store",
+        "loop they do not cover.",
+    ],
+    "view-ref": [
+        "`#fx{Unsafe}`: call it inside `(unsafe ...)`.  The interpreter checks",
+        "the index anyway, as it does for `-ref-unchecked`.",
+    ],
+    "view-set!": [
+        "`#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no",
+        "TUR_REGION_NOTE.  The interpreter checks the index anyway.",
     ],
     "set-unchecked!": [
         "`#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no",
@@ -822,7 +919,7 @@ def kernel_types(k, t):
         return (SUM_RET[t["p"]], t["C"] if IS_FLOAT[t["p"]] else "int64_t")
     if k == "nil":
         return ("nil", "void")
-    return {"T": (t["T"], "int64_t"), "int": ("int", "int64_t"),
+    return {"T": (t["T"], "int64_t"), "W": (t["W"], "int64_t"), "int": ("int", "int64_t"),
             "E": (t["E"], t["C"])}[k]
 
 
@@ -978,7 +1075,9 @@ MACROS = r''';;; {p}-for -- run body once per element of one or two {T}s.
 ;;; {p}-build -- a fresh {T} of n elements, element i the value of expr.
 ;;;
 ;;; `(build n [i] expr)`, after Racket's `for/flvector`: i is bound to each
-;;; index in turn, and expr runs outside any `unsafe`.
+;;; index in turn, and expr runs outside any `unsafe`.  The stores go through a
+;;; view (`{p}-view`), so the loop vectorizes where expr allows: at -O2 under
+;;; clang, at -O3 (`--release`) under gcc.
 ;;;
 ;;; Parameters:
 ;;;   n    -- the length (evaluated once)
@@ -998,16 +1097,81 @@ MACROS = r''';;; {p}-for -- run body once per element of one or two {T}s.
         m   (gensym "n")
         e   (gensym "e")
         out (gensym "out")
+        w   (gensym "w")
         iv  (first bv)]
     `(let [~m      ~n
            ~out    ({p}-new ~m %ZERO%)
+           ~w      (unsafe ({p}-view ~out))
            ^mut ~i 0]
        (while (< ~i ~m)
          (let [~iv ~i
                ~e  ~expr]
-           (unsafe ({p}-set-unchecked! ~out ~i ~e)))
+           (unsafe ({p}-view-set! ~w ~i ~e)))
          (set! ~i (+ ~i 1)))
        ~out)))
+;;; {p}-map! -- store expr into dst[i] for every i, x bound to src[i].
+;;;
+;;; `(map! dst [x src] expr)` stores into each slot of dst the value of expr
+;;; with x bound to the element of src at the same index; `(map! dst [x a y b]
+;;; expr)` walks two sources together.  dst may be one of the sources:
+;;; `(map! v [x v] {{x * 2}})` maps in place.  Every array has the same length,
+;;; or a panic before the first element.  The loop reads and stores through
+;;; views (`{p}-view`), so it vectorizes where expr allows: at -O2 under clang,
+;;; at -O3 (`--release`) under gcc.  expr runs outside any `unsafe`; an array
+;;; argument that is not a name is evaluated once, and freed after the loop.
+;;;
+;;; Parameters:
+;;;   dst      -- the array stored into (borrowed)
+;;;   bindings -- `[x src]` or `[x a y b]`
+;;;   expr     -- the new element, of type {E}
+;;;
+;;; Example:
+;;;   (let [v ({p}-of {e0} {e1})] ({p}-map! v [x v] x) ({p}-ref v 1))   ; => {e1}
+;;;
+;;; Since: Phase N2
+
+(defmacro {p}-map! [dst bv expr]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        e    (gensym "e")
+        wd   (gensym "wd")
+        wa   (gensym "wa")
+        wb   (gensym "wb")
+        x    (first bv)
+        a    (second bv)
+        more (rest (rest bv))]
+    (if (list? dst)
+      (let [t (gensym "nv")]
+        `(let [~t ~dst] ({p}-map! ~t ~bv ~expr)))
+      (if (list? a)
+        (let [t (gensym "nv")]
+          `(let [~t ~a] ({p}-map! ~dst [~x ~t ~@more] ~expr)))
+        (if (empty? more)
+          `(let [~n      ({p}-same-len__ ~dst ~a)
+                 ~wd     (unsafe ({p}-view ~dst))
+                 ~wa     (unsafe ({p}-view ~a))
+                 ^mut ~i 0]
+             (while (< ~i ~n)
+               (let [~x (unsafe ({p}-view-ref ~wa ~i))
+                     ~e ~expr]
+                 (unsafe ({p}-view-set! ~wd ~i ~e)))
+               (set! ~i (+ ~i 1))))
+          (let [y (first more)
+                b (second more)]
+            (if (list? b)
+              (let [t (gensym "nv")]
+                `(let [~t ~b] ({p}-map! ~dst [~x ~a ~y ~t] ~expr)))
+              `(let [~n      (do ({p}-same-len__ ~a ~b) ({p}-same-len__ ~dst ~a))
+                     ~wd     (unsafe ({p}-view ~dst))
+                     ~wa     (unsafe ({p}-view ~a))
+                     ~wb     (unsafe ({p}-view ~b))
+                     ^mut ~i 0]
+                 (while (< ~i ~n)
+                   (let [~x (unsafe ({p}-view-ref ~wa ~i))
+                         ~y (unsafe ({p}-view-ref ~wb ~i))
+                         ~e ~expr]
+                     (unsafe ({p}-view-set! ~wd ~i ~e)))
+                   (set! ~i (+ ~i 1)))))))))))
 ;;; {p}-same-len__ -- internal: the common length of two arrays, or a panic.
 
 (defn {p}-same-len__ [^borrow a : {T} ^borrow b : {T}]
@@ -1035,6 +1199,233 @@ def render_kernels(t, d):
     return "".join(out)
 
 
+
+# ---- the generic layer: one NumArray class over the five types ----
+# (simd-and-vectorization-plan section 3.1, "2026-10-29", and open question 2:
+# the class is NumArray, its methods `na-`.)  Each instance method delegates
+# to the per-type function of the same name, so the C is still the per-type
+# kernel; constructors stay per type (3.1 item 3: a length alone cannot pick
+# an instance).  Only the operations every type has are methods: `scale!`,
+# `axpy!`, `dot` and `mul!` do not exist on U8Vec.
+# (method, params after the receiver as "name : type", result, unsafe, summary)
+NA_METHODS = [
+    ("len", ["^borrow a : v"], "int", False, "the element count"),
+    ("ref", ["^borrow a : v", "i : int"], "Elem", False, "the element at i (bounds-checked)"),
+    ("set!", ["^borrow a : v", "i : int", "x : Elem"], "nil", False, "store x at i (bounds-checked)"),
+    ("ref-unchecked", ["^borrow a : v", "i : int"], "Elem", True, "the element at i, NOT bounds-checked"),
+    ("set-unchecked!", ["^borrow a : v", "i : int", "x : Elem"], "nil", True, "store x at i, NOT bounds-checked"),
+    ("view", ["^borrow a : v"], "View", True, "a view of a's elements (see `-view`)"),
+    # The array rides along as the receiver: a method whose only class-typed
+    # argument is an associated type (`w : View`) cannot be dispatched by the
+    # elaborator yet (docs/reported/assoc-typed-receiver-not-a-dispatch-arg.md).
+    # The instance ignores it.
+    ("view-ref", ["^borrow a : v", "w : View", "i : int"], "Elem", True,
+     "the element at i of a's view w, NOT bounds-checked"),
+    ("view-set!", ["^borrow a : v", "w : View", "i : int", "x : Elem"], "nil", True,
+     "store x at i of a's view w, NOT bounds-checked"),
+    ("fill!", ["^borrow a : v", "x : Elem"], "nil", False, "store x in every slot"),
+    ("copy!", ["^borrow dst : v", "^borrow src : v"], "nil", False, "copy src into dst (same length)"),
+    ("add!", ["^borrow dst : v", "^borrow src : v"], "nil", False, "dst[i] += src[i] (same length)"),
+    ("sub!", ["^borrow dst : v", "^borrow src : v"], "nil", False, "dst[i] -= src[i] (same length)"),
+    ("add-scalar!", ["^borrow a : v", "s : Elem"], "nil", False, "add s to every element"),
+    ("sum", ["^borrow a : v"], "Sum", False, "the sum (eight-lane order for floats; integers wrap)"),
+    ("min", ["^borrow a : v"], "Elem", False, "the smallest element (an empty array panics)"),
+    ("max", ["^borrow a : v"], "Elem", False, "the largest element (an empty array panics)"),
+    ("copy", ["^borrow a : v"], "v", False,
+     "a fresh copy, owned by the caller -- free it with `na-free` (a generic local is not dropped yet)"),
+    ("free", ["a : v"], "nil", False, "release an array now, consuming it"),
+    ("show", ["^borrow a : v"], "String", False, "an owned \"#P[a b c]\" String"),
+]
+
+
+def render_class():
+    out = [""";; ===== NumArray: one generic layer over the five types =====
+;;; NumArray -- the operations every typed numeric array has, as one class.
+;;;
+;;; Write a numeric algorithm once, over `[V] [(NumArray V)]`, and it runs on
+;;; F64Vec, F32Vec, I64Vec, I32Vec and U8Vec, each call going straight to that
+;;; type's own function (one specialization per type, no runtime dispatch).
+;;; The element type is the associated type `Elem` -- `(Elem V)` in a
+;;; signature -- so a method returns the honest `float32` or `uint8`, not a
+;;; carrier word.  `Sum` is what `na-sum` returns (`int` for the integer
+;;; types, the element type for the floats) and `View` the type of
+;;; `na-view`'s result.  Arithmetic on an element needs `(Num (Elem V))`, and
+;;; a conversion or a constant `(NumCast (Elem V))` (`stdlib/typeclass.tur`).
+;;; Constructors stay per type (`f64vec-new` ...): a length alone cannot pick
+;;; an instance.  The loops `na-for`, `na-fold` and `na-map!` below work
+;;; inside such a generic.
+;;;
+;;; Parameters:
+;;;   v -- the array type
+;;;
+;;; Methods:"""]
+    for (m, ps, r, uns, summ) in NA_METHODS:
+        out.append(";;;   na-%s -- %s%s" % (m, summ, " (`#fx{Unsafe}`)" if uns else ""))
+    out.append(""";;;
+;;; Example:
+;;;   (defn mean [V] [(NumArray V) (NumCast (Sum V))] [^borrow a : V] : float
+;;;     {(to-float (na-sum a)) / (as float (na-len a))})
+;;;   (mean (f64vec-of 1.5 2.5))   ; => 2.0
+;;;
+;;; Since: Phase N2
+(defclass NumArray [v]
+  (type Elem : Type)
+  (type Sum : Type)
+  (type View : Type)""")
+    for (m, ps, r, uns, summ) in NA_METHODS:
+        out.append("  (na-%s [%s]%s : %s)" % (m, " ".join(ps), " #fx{Unsafe}" if uns else "", r))
+    out[-1] += ")"
+    for t in TYPES:
+        out.append(";;; NumArray [%s] -- delegates to the %s-* functions." % (t["T"], t["p"]))
+        out.append("")
+        out.append("(definstance NumArray [%s]" % t["T"])
+        out.append("  (type Elem = %s)" % t["E"])
+        out.append("  (type Sum = %s)" % SUM_RET[t["p"]])
+        out.append("  (type View = %s)" % t["W"])
+        for (m, ps, r, uns, summ) in NA_METHODS:
+            names = [q.replace("^borrow ", "").split(" : ")[0] for q in ps]
+            args = names[1:] if m in ("view-ref", "view-set!") else names
+            call = "(%s-%s %s)" % (t["p"], m, " ".join(args))
+            if uns:
+                call = "(unsafe %s)" % call
+            out.append("  (na-%s [%s] %s)" % (m, " ".join(names), call))
+        out[-1] += ")"
+    out.append(NA_MACROS)
+    return "\n".join(out) + "\n"
+
+
+NA_MACROS = r''';;; na-same-len__ -- internal: the common length of two arrays, or a panic.
+
+(defn na-same-len__ [V] [(NumArray V)] [^borrow a : V ^borrow b : V] : int
+  (if (= (na-len a) (na-len b))
+    (na-len a)
+    (do
+      (panic "na-for: length mismatch")
+      0)))
+;;; na-for -- run body once per element of one or two arrays, in a generic.
+;;;
+;;; `-for` over the class: `(na-for [x v] body...)`, or `(na-for [x v y w]
+;;; body...)` to walk two together (same length, or a panic first).  The
+;;; enclosing function needs `(NumArray V)`; x is an `(Elem V)`.
+;;;
+;;; Parameters:
+;;;   bindings -- `[x v]` or `[x v y w]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (defn count-pos [V] [(NumArray V) (Ord (Elem V)) (NumCast (Elem V))]
+;;;     [^borrow a : V] : int
+;;;     (let [^mut n 0]
+;;;       (na-for [x a] (when (> x (:: (from-int 0) (Elem V))) (set! n {n + 1})))
+;;;       n))
+;;;
+;;; Since: Phase N2
+
+(defmacro na-for [bv & body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        x    (first bv)
+        v    (second bv)
+        more (rest (rest bv))]
+    (if (empty? more)
+      `(let [^mut ~i 0
+             ~n      (na-len ~v)]
+         (while (< ~i ~n)
+           (let [~x (unsafe (na-ref-unchecked ~v ~i))]
+             ~@body)
+           (set! ~i (+ ~i 1))))
+      (let [y (first more)
+            w (second more)]
+        `(let [^mut ~i 0
+               ~n      (na-same-len__ ~v ~w)]
+           (while (< ~i ~n)
+             (let [~x (unsafe (na-ref-unchecked ~v ~i))
+                   ~y (unsafe (na-ref-unchecked ~w ~i))]
+               ~@body)
+             (set! ~i (+ ~i 1))))))))
+;;; na-fold -- fold the elements of an array into an accumulator, in a generic.
+;;;
+;;; `-fold` over the class: `(na-fold [acc init x v] body)`.
+;;;
+;;; Parameters:
+;;;   bindings -- `[acc init x v]`
+;;;   body     -- the new accumulator
+;;;
+;;; Returns:
+;;;   The final accumulator.
+;;;
+;;; Example:
+;;;   (na-fold [n 0 x a] {n + 1})   ; => the length, in a generic over a
+;;;
+;;; Since: Phase N2
+
+(defmacro na-fold [bv body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        acc  (first bv)
+        init (second bv)
+        x    (first (rest (rest bv)))
+        v    (second (rest (rest bv)))]
+    `(let [^mut ~i   0
+           ~n        (na-len ~v)
+           ^mut ~acc ~init]
+       (while (< ~i ~n)
+         (let [~x (unsafe (na-ref-unchecked ~v ~i))]
+           (set! ~acc ~body))
+         (set! ~i (+ ~i 1)))
+       ~acc)))
+;;; na-map! -- store expr into dst[i] for every i, in a generic.
+;;;
+;;; `-map!` over the class: `(na-map! dst [x src] expr)` or `(na-map! dst
+;;; [x a y b] expr)`; dst may be a source.  Stores through views.
+;;;
+;;; Parameters:
+;;;   dst      -- the array stored into (borrowed)
+;;;   bindings -- `[x src]` or `[x a y b]`
+;;;   expr     -- the new element, an `(Elem V)`
+;;;
+;;; Example:
+;;;   (defn double! [V] [(NumArray V) (Num (Elem V))] [^borrow a : V] : nil
+;;;     (na-map! a [x a] {x + x}))
+;;;
+;;; Since: Phase N2
+
+(defmacro na-map! [dst bv expr]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        e    (gensym "e")
+        wd   (gensym "wd")
+        wa   (gensym "wa")
+        wb   (gensym "wb")
+        x    (first bv)
+        a    (second bv)
+        more (rest (rest bv))]
+    (if (empty? more)
+      `(let [~n      (na-same-len__ ~dst ~a)
+             ~wd     (unsafe (na-view ~dst))
+             ~wa     (unsafe (na-view ~a))
+             ^mut ~i 0]
+         (while (< ~i ~n)
+           (let [~x (unsafe (na-view-ref ~a ~wa ~i))
+                 ~e ~expr]
+             (unsafe (na-view-set! ~dst ~wd ~i ~e)))
+           (set! ~i (+ ~i 1))))
+      (let [y (first more)
+            b (second more)]
+        `(let [~n      (do (na-same-len__ ~a ~b) (na-same-len__ ~dst ~a))
+               ~wd     (unsafe (na-view ~dst))
+               ~wa     (unsafe (na-view ~a))
+               ~wb     (unsafe (na-view ~b))
+               ^mut ~i 0]
+           (while (< ~i ~n)
+             (let [~x (unsafe (na-view-ref ~a ~wa ~i))
+                   ~y (unsafe (na-view-ref ~b ~wb ~i))
+                   ~e ~expr]
+               (unsafe (na-view-set! ~dst ~wd ~i ~e)))
+             (set! ~i (+ ~i 1))))))))
+'''
+
+
 def render():
     out = [HDR]
     for t in TYPES:
@@ -1046,6 +1437,7 @@ def render():
             "u8vec": ("1", "2")}[t["p"]]
         out.append(TEMPLATE.format(**d))
         out.append(render_kernels(t, d))
+    out.append(render_class())
     return "".join(out)
 
 

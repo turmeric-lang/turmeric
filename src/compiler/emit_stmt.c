@@ -950,8 +950,10 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * call has no value to hoist, so it returned before that check
                  * and the caller ran its next statements -- `after boom` under
                  * `catch-unwind` -- before a later call noticed.  Its check
-                 * goes here, after the call. */
-                emit_panic_signal_return(ctx, body);
+                 * goes here, after the call -- unless the callee cannot panic
+                 * (emit_call_cannot_panic), which is what lets a loop of
+                 * `f64vec-set-unchecked!` stores vectorize (simd plan Q7). */
+                if (!emit_call_cannot_panic(ctx, e)) emit_panic_signal_return(ctx, body);
             } else {
                 buf_printf(body, "(void)(%s);\n", v);
                 /* A `!` call has no value to hoist either: under catch-unwind

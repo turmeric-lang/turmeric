@@ -1940,6 +1940,226 @@ bool fn_def_panics_in_inline_c(const FnDef *fd) {
         if (memcmp(ic->code.p + i, needle, nl) == 0) return true;
     return false;
 }
+
+/* simd-and-vectorization-plan Q7: can this function NOT panic at all -- an
+ * inline-C body that makes no call, evaluates no Turmeric sub-expression
+ * (`__TUR_VAL_N__`) and never names `tur_panic`?  Then nothing it runs can
+ * set `tur_panicking`, and the check a caller writes after the call is dead.
+ * That check is what kept a loop storing through `f64vec-set-unchecked!` from
+ * vectorizing: under -fno-strict-aliasing a `double` store may write the
+ * flag, so the compiler cannot hoist the test out of the loop.
+ *
+ * "No call" is read off the text, conservatively: an identifier followed by
+ * `(` is a call unless it is a keyword or operator that takes parentheses
+ * (`sizeof`, `if`, ...).  A function-like macro reads as a call too, which only
+ * costs the check its skip.  Comments and literals are not read. */
+static bool ic_paren_word_ok(const char *w, size_t n) {
+    /* keywords, and compile-time-only builtins a vector body uses */
+    static const char *ok[] = {"sizeof", "_Alignof", "alignof", "__alignof__",
+        "typeof", "__typeof__", "if", "while", "for", "switch", "return",
+        "defined", "__attribute__", "vector_size", "__builtin_shufflevector",
+        "__builtin_convertvector",
+        /* libm and its builtins: a NaN or errno, never a panic */
+        "sqrt", "sqrtf", "fabs", "fabsf", "__builtin_sqrt", "__builtin_sqrtf",
+        "__builtin_fabs", "__builtin_fabsf",
+        /* the byte copies a vector load or store is */
+        "memcpy", "memmove", "memset", "__builtin_memcpy", "__builtin_memmove",
+        "__builtin_memset"};
+    for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++)
+        if (strlen(ok[i]) == n && memcmp(ok[i], w, n) == 0) return true;
+    return false;
+}
+bool fn_def_inline_c_cannot_panic(const FnDef *fd) {
+    if (!fd || fd->closure || !fd->body || fd->body->kind != EX_INLINE_C) return false;
+    const InlineC *ic = fd->body->as.inline_c_.inline_c;
+    if (!ic || !ic->code.p || ic->n_val_exprs > 0) return false;
+    const char *s = ic->code.p;
+    size_t n = ic->code.len;
+    for (size_t i = 0; i < n; ) {
+        char c = s[i];
+        if (c == '/' && i + 1 < n && s[i + 1] == '*') {
+            const char *end = NULL;
+            for (size_t j = i + 2; j + 1 < n; j++)
+                if (s[j] == '*' && s[j + 1] == '/') { end = s + j; break; }
+            if (!end) return false;
+            i = (size_t)(end - s) + 2;
+        } else if (c == '/' && i + 1 < n && s[i + 1] == '/') {
+            while (i < n && s[i] != '\n') i++;
+        } else if (c == '"' || c == '\'') {
+            size_t j = i + 1;
+            while (j < n && s[j] != c) j += (s[j] == '\\') ? 2 : 1;
+            if (j >= n) return false;
+            i = j + 1;
+        } else if (isalpha((unsigned char)c) || c == '_') {
+            size_t j = i;
+            while (j < n && (isalnum((unsigned char)s[j]) || s[j] == '_')) j++;
+            if (j - i >= 9 && memcmp(s + i, "tur_panic", 9) == 0) return false;
+            size_t k = j;
+            while (k < n && (s[k] == ' ' || s[k] == '\t' || s[k] == '\n')) k++;
+            if (k < n && s[k] == '(' && !ic_paren_word_ok(s + i, j - i)) return false;
+            i = j;
+        } else if (c == '#') {
+            /* A conditional (`#if !defined(__MIRC__)`, the two lowerings of a
+             * vector operation) only selects text, and its condition is
+             * scanned like the rest.  Any other directive could define or
+             * call anything. */
+            size_t j = i + 1;
+            while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
+            size_t k = j;
+            while (k < n && isalpha((unsigned char)s[k])) k++;
+            static const char *cond[] = {"if", "ifdef", "ifndef", "elif", "else", "endif"};
+            bool is_cond = false;
+            for (size_t ci = 0; ci < sizeof cond / sizeof cond[0] && !is_cond; ci++)
+                is_cond = strlen(cond[ci]) == k - j && memcmp(cond[ci], s + j, k - j) == 0;
+            if (!is_cond) return false;
+            i = k;
+        } else {
+            i++;
+        }
+    }
+    return true;
+}
+
+static bool expr_cannot_panic(EmitCtx *ctx, const Expr *x);
+
+/* Can a call into `fd` not panic?  An inline-C body is read as above.  A
+ * Turmeric body cannot when every part of it cannot (expr_cannot_panic): the
+ * one-line delegations a generic layer is made of -- `NumArray`'s
+ * `(na-view-set! [a w i x] (unsafe (f64vec-view-set! w i x)))`, `Num`'s `add`
+ * -- so a loop over them keeps no panic check once they are inlined.  A
+ * closure is never asked (its captures are emitted around it); recursion
+ * answers no. */
+bool emit_fn_def_cannot_panic(EmitCtx *ctx, FnDef *fd) {
+    if (!fd || fd->closure || !fd->body) return false;
+    if (fd->body->kind == EX_INLINE_C) return fn_def_inline_c_cannot_panic(fd);
+    if (fd->cannot_panic_memo == 1) return false;
+    if (fd->cannot_panic_memo) return fd->cannot_panic_memo == 2;
+    fd->cannot_panic_memo = 1;
+    bool ok = expr_cannot_panic(ctx, fd->body);
+    fd->cannot_panic_memo = ok ? 2 : 3;
+    return ok;
+}
+
+/* The function a call enters: a direct global's, or the instance method a
+ * class-method call resolves to -- per specialization when the dispatch type
+ * is a type variable (emit_reresolve_method_fndef), else the instance the
+ * elaborator baked.  NULL when it cannot be known here (a call through a
+ * value, a generic dispatch outside a specialization). */
+/* Does `t` mention a type variable -- is a dispatch on it generic? */
+static bool cp_type_has_tyvar(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR) return true;
+    if (t->kind == TY_APP)
+        return cp_type_has_tyvar(t->as.app.fn) || cp_type_has_tyvar(t->as.app.arg);
+    return false;
+}
+
+/* A class-method call whose instance is picked per specialization: its
+ * receiver or result is (or holds) a type variable.  Otherwise the elaborator
+ * baked the instance into the call's dict. */
+static bool cp_dispatch_is_generic(const Expr *e) {
+    if (cp_type_has_tyvar(&e->type)) return true;
+    if (e->as.call_.n_args >= 1 && e->as.call_.args) {
+        for (const Expr *a = e->as.call_.args[0]; a; ) {
+            if (cp_type_has_tyvar(&a->type)) return true;
+            if (a->kind != EX_ASCRIBE) break;
+            a = a->as.ascribe_.inner;
+        }
+    }
+    return false;
+}
+
+static FnDef *call_target_fndef(EmitCtx *ctx, const Expr *e) {
+    const Expr *d = e->as.call_.dict_arg;
+    if (d) {
+        if (d->kind != EX_DICT || !d->as.dict_.instance ||
+            !d->as.dict_.method_name[0]) return NULL;
+        if (cp_dispatch_is_generic(e))
+            return (ctx && ctx->current_abi_specialization)
+                ? emit_reresolve_method_fndef(ctx, e) : NULL;
+        const TypeClassInstance *inst = d->as.dict_.instance;
+        const TypeClass *tc = inst->typeclass;
+        for (uint8_t mi = 0; tc && mi < tc->n_methods && mi < inst->n_method_impls; mi++)
+            if (tc->methods[mi].name &&
+                strcmp(tc->methods[mi].name->name, d->as.dict_.method_name) == 0)
+                return inst->method_impls[mi];
+        return NULL;
+    }
+    const Binding *b = e->as.call_.fn_binding;
+    return (b && b->is_global) ? b->source_fn_def : NULL;
+}
+
+/* The builtins that compute a value from their operands and nothing else.
+ * Integer division by zero aborts rather than panicking, so `/` and `mod`
+ * qualify: the abort sets no flag a caller could test. */
+static bool builtin_cannot_panic(const Expr *x) {
+    const BuiltinSpec *sp = x->as.builtin.spec;
+    if (!sp) return false;
+    switch (sp->shape) {
+        case BS_BIN_INFIX: case BS_VARIADIC_FOLD: case BS_PREFIX_UNARY:
+        case BS_DIV_CHECK: case BS_AND_SC: case BS_OR_SC:
+            break;
+        default:
+            return false;
+    }
+    for (uint32_t i = 0; i < x->as.builtin.n; i++)
+        if (!expr_cannot_panic(NULL, x->as.builtin.args[i])) return false;
+    return true;
+}
+
+/* Nothing in `x` can set `tur_panicking`.  Only the shapes a delegation is
+ * made of are understood; anything else answers no. */
+static bool expr_cannot_panic(EmitCtx *ctx, const Expr *x) {
+    if (!x) return true;
+    switch (x->kind) {
+        case EX_BOOL_LIT: case EX_INT_LIT: case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        case EX_VAR:
+            return true;
+        case EX_ASCRIBE:     return expr_cannot_panic(ctx, x->as.ascribe_.inner);
+        case EX_CAST:        return expr_cannot_panic(ctx, x->as.cast_.expr);
+        case EX_REINTERPRET: return expr_cannot_panic(ctx, x->as.reinterpret_.expr);
+        case EX_DO:
+            for (uint32_t i = 0; i < x->as.do_.n; i++)
+                if (!expr_cannot_panic(ctx, x->as.do_.items[i])) return false;
+            return true;
+        case EX_LET:
+            for (uint32_t i = 0; i < x->as.let_.n; i++)
+                if (!expr_cannot_panic(ctx, x->as.let_.bindings[i].init)) return false;
+            return expr_cannot_panic(ctx, x->as.let_.body);
+        case EX_IF:
+            return expr_cannot_panic(ctx, x->as.if_.cond) &&
+                   expr_cannot_panic(ctx, x->as.if_.then_) &&
+                   expr_cannot_panic(ctx, x->as.if_.else_or_null);
+        case EX_HANDLE:
+            /* `(unsafe ...)`: a marker nothing performs; only its body runs. */
+            return x->as.handle_.handle && x->as.handle_.handle->is_unsafe_marker &&
+                   expr_cannot_panic(ctx, x->as.handle_.handle->body);
+        case EX_BUILTIN:
+            return builtin_cannot_panic(x);
+        case EX_CALL: {
+            /* Inside a callee's body the active specialization is not the
+             * callee's, so only a call whose target is fixed is followed. */
+            if (x->as.call_.dict_arg && cp_dispatch_is_generic(x)) return false;
+            FnDef *fd = call_target_fndef(NULL, x);
+            if (!fd || !emit_fn_def_cannot_panic(ctx, fd)) return false;
+            for (uint32_t i = 0; i < x->as.call_.n_args; i++)
+                if (!expr_cannot_panic(ctx, x->as.call_.args[i])) return false;
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
+/* A call whose callee cannot panic (emit_fn_def_cannot_panic): the caller's
+ * post-call panic check is dead and is not written.  Only the callee is in
+ * question -- every argument that can panic is a call the emitter has already
+ * hoisted and checked on its own. */
+bool emit_call_cannot_panic(EmitCtx *ctx, const Expr *e) {
+    if (!e || e->kind != EX_CALL) return false;
+    FnDef *fd = call_target_fndef(ctx, e);
+    return fd && emit_fn_def_cannot_panic(ctx, fd);
+}
 /* The instance methods of `items` (and of a defmodule's body) whose inline-C
  * body panics, appended to ctx->inst_panic_bindings by the binding each call
  * site resolves to (the method FnDef's own). */
@@ -3953,45 +4173,59 @@ static bool emit_pattern_extract_classvar(const Type *pattern, const Type *concr
  * (emit_reresolve_disp_type) and the scan-time predicate
  * (emit_call_dispatches_on_spec_tyvar) route through here so they never disagree
  * about which position carries the dispatch variable. */
+/* associated-type-unusable-nullary-and-generic: a projection `(Inner A)`
+ * standing where the dispatch type is read dispatches on `A` -- the
+ * projection's own spec binding is the REDUCED type (`int`), which names no
+ * instance.  But only when the class being dispatched DECLARES that
+ * associated type.  `(from-float 2.75)` at `(Elem V)` dispatches `NumCast`,
+ * whose instances are keyed on the element type itself: mapped to `V`, it
+ * found no `NumCast` instance for the array type and kept the int
+ * representative (2.75 came back as 2 in the float spec).  Handed the
+ * projection, emit_resolve_type reduces it to the element type
+ * (numcast-from-float-at-projection-picks-representative).  True, with *out
+ * set to `A`, when `t` is such a projection. */
+static bool dispatch_projection_arg(const Expr *call, const Type *t, Type *out) {
+    if (t->kind != TY_TYVAR || !t->as.tyvar_.assoc_of || !t->as.tyvar_.assoc_arg ||
+        !call->as.call_.dict_arg)
+        return false;
+    const Expr *d = call->as.call_.dict_arg;
+    const TypeClass *dtc = (d->kind == EX_DICT && d->as.dict_.instance)
+        ? d->as.dict_.instance->typeclass : NULL;
+    bool owns = false;
+    const Symbol *an = t->as.tyvar_.assoc_of;
+    for (uint8_t k = 0; dtc && k < dtc->n_assoc_types && !owns; k++)
+        owns = dtc->assoc_type_names[k] &&
+               (dtc->assoc_type_names[k] == an ||
+                strcmp(dtc->assoc_type_names[k]->name, an->name) == 0);
+    if (!owns && dtc) return false;
+    *out = *t->as.tyvar_.assoc_arg;
+    return true;
+}
+
 bool emit_dispatch_tyvar(const Expr *call, Type *out) {
     if (!call || call->kind != EX_CALL) return false;
     if (call->as.call_.n_args >= 1 && call->as.call_.args) {
         const Expr *recv = call->as.call_.args[0];
+        /* A receiver typed by the class's own associated type -- `w : (View
+         * V)` in `(na-view-set! w i x)` -- dispatches on V, exactly as a
+         * result of that type does below; read as itself it reduced to the
+         * view type, named no instance, and the spec kept the representative
+         * (assoc-typed-receiver-dispatches-representative). */
         for (const Expr *a = recv; a && a->kind == EX_ASCRIBE;
              a = a->as.ascribe_.inner) {
-            if (a->type.kind == TY_TYVAR) { *out = a->type; return true; }
-        }
-        while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
-        if (recv && recv->type.kind == TY_TYVAR) { *out = recv->type; return true; }
-    }
-    if (call->type.kind == TY_TYVAR) {
-        /* associated-type-unusable-nullary-and-generic: a return-directed
-         * method whose result is the associated type, called at the projection
-         * `(Inner A)`, dispatches on `A` -- the projection's own spec binding
-         * is the REDUCED type (`int`), which names no instance. */
-        /* ...but only when the class being dispatched DECLARES that
-         * associated type.  `(from-float 2.75)` at `(Elem V)` dispatches
-         * `NumCast`, whose instances are keyed on the element type itself:
-         * mapped to `V`, it found no `NumCast` instance for the array type and
-         * kept the int representative (2.75 came back as 2 in the float spec).
-         * Handed the projection, emit_resolve_type reduces it to the element
-         * type (numcast-from-float-at-projection-picks-representative). */
-        if (call->type.as.tyvar_.assoc_of && call->type.as.tyvar_.assoc_arg &&
-            call->as.call_.dict_arg) {
-            const Expr *d = call->as.call_.dict_arg;
-            const TypeClass *dtc = (d->kind == EX_DICT && d->as.dict_.instance)
-                ? d->as.dict_.instance->typeclass : NULL;
-            bool owns = false;
-            const Symbol *an = call->type.as.tyvar_.assoc_of;
-            for (uint8_t k = 0; dtc && k < dtc->n_assoc_types && !owns; k++)
-                owns = dtc->assoc_type_names[k] &&
-                       (dtc->assoc_type_names[k] == an ||
-                        strcmp(dtc->assoc_type_names[k]->name, an->name) == 0);
-            if (owns || !dtc) {
-                *out = *call->type.as.tyvar_.assoc_arg;
+            if (a->type.kind == TY_TYVAR) {
+                if (!dispatch_projection_arg(call, &a->type, out)) *out = a->type;
                 return true;
             }
         }
+        while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+        if (recv && recv->type.kind == TY_TYVAR) {
+            if (!dispatch_projection_arg(call, &recv->type, out)) *out = recv->type;
+            return true;
+        }
+    }
+    if (call->type.kind == TY_TYVAR) {
+        if (dispatch_projection_arg(call, &call->type, out)) return true;
         *out = call->type;
         return true;
     }

@@ -900,6 +900,15 @@ add_test(
 # The generator lays the module out with `tur fmt`, so it needs this build's tur.
 set_tests_properties(tur_numvec_generated PROPERTIES
   ENVIRONMENT "TUR=$<TARGET_FILE:tur>")
+# stdlib/simd.tur and src/turi/simd_natives.inc are generated the same way
+# (simd-and-vectorization-plan S1); a hand edit to either is stale.
+add_test(
+  NAME tur_simd_generated
+  COMMAND python3 tools/gen-simd.py --check
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_simd_generated PROPERTIES
+  ENVIRONMENT "TUR=$<TARGET_FILE:tur>")
 # The numvec loops that should vectorize at -O3 do (simd-and-vectorization-
 # plan N1/N2): the N1 kernels and loops written with the N2 macros.  Neither
 # shows in any output, so a change that put control flow back in a loop would

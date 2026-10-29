@@ -1,0 +1,118 @@
+;; simd-ops: every operation of stdlib/simd.tur (simd-and-vectorization-plan
+;; S1, --enable=simd) on every vector type.  Floats print as bit patterns, so
+;; cc (vector instructions), `tur jit` (lane loops) and turi (natives) must
+;; agree to the last bit; integer inputs sit where lanes wrap.
+(load "stdlib/simd.tur")
+(load "stdlib/bits.tur")
+
+(defn pf [x : float] : nil
+  (println (float->bits x)))
+
+(defn p2 [v : F64x2] : nil
+  (pf (.l0 v))
+  (pf (.l1 v)))
+
+(defn p4 [v : F32x4] : nil
+  (pf (as float (.l0 v)))
+  (pf (as float (.l1 v)))
+  (pf (as float (.l2 v)))
+  (pf (as float (.l3 v))))
+
+(defn pi2 [v : I64x2] : nil
+  (println (.l0 v))
+  (println (.l1 v)))
+
+(defn pi4 [v : I32x4] : nil
+  (println (as int (.l0 v)))
+  (println (as int (.l3 v))))
+
+(defn pu8 [v : U16x8] : nil
+  (println (as int (.l0 v)))
+  (println (as int (.l7 v))))
+
+(defn pb [v : U8x16] : nil
+  (println (as int (.l0 v)))
+  (println (as int (.l15 v))))
+
+(defn f64s [] : nil
+  (let [a (F64x2 7.1 -3.25)
+        b (F64x2 0.3 2.5)]
+    (p2 (f64x2-splat 1.1))
+    (pf (f64x2-lane a 1))
+    (p2 {a + b})
+    (p2 {a - b})
+    (p2 {a * b})
+    (p2 {a / b})
+    (p2 (f64x2-neg a))
+    (p2 (f64x2-min a b))
+    (p2 (f64x2-max a b))
+    (p2 (f64x2-sqrt (F64x2 2.0 7.1)))
+    (p2 (f64x2-abs a))
+    (pf (f64x2-hsum a))
+    (let [arr (f64vec-of 1.5 2.25 3.125 4.0625)]
+      (f64x2-store! arr 2 (f64x2-load arr 0))
+      (pf (f64vec-ref arr 3))
+      (p2 (unsafe (f64x2-load-unchecked arr 1))))))
+
+(defn f32s [] : nil
+  (let [a (F32x4 (as float32 7.1) (as float32 -3.25) (as float32 0.1) (as float32 1e30))
+        b (F32x4 (as float32 0.3) (as float32 2.5) (as float32 0.2) (as float32 1e10))]
+    (p4 {a + b})
+    (p4 {a * b})
+    (p4 {a / b})
+    (p4 (f32x4-min a b))
+    (p4 (f32x4-sqrt (f32x4-abs a)))
+    (pf (as float (f32x4-hsum a)))
+    (let [arr (f32vec-of (as float32 1.5) (as float32 2.25) (as float32 3.125) (as float32 4.0625))]
+      (p4 (f32x4-load arr 0)))))
+
+(defn ints [] : nil
+  (let [a (I64x2 9223372036854775807 -7)
+        b (I64x2 2 -9223372036854775807)]
+    (pi2 {a + b})
+    (pi2 {a * b})
+    (pi2 (i64x2-div (I64x2 -9223372036854775807 21) (I64x2 -1 -4)))
+    (pi2 (i64x2-neg (I64x2 (- 0 9223372036854775807) 5)))
+    (pi2 (i64x2-max a b))
+    (println (i64x2-hsum a)))
+  (let [a (I32x4 (as int32 2147483647) (as int32 -7) (as int32 100) (as int32 -2147483647))
+        b (I32x4 (as int32 3) (as int32 -1) (as int32 7) (as int32 -2))]
+    (pi4 {a + b})
+    (pi4 {a * b})
+    (pi4 {a / b})
+    (pi4 (i32x4-min a b))
+    (println (i32x4-hsum a))
+    (let [arr (i32vec-of (as int32 5) (as int32 6) (as int32 7) (as int32 8) (as int32 9))]
+      (pi4 (i32x4-load arr 1))))
+  (let [a (u8x16-splat (as uint8 250))
+        b (u8x16-splat (as uint8 11))]
+    (pb {a + b})
+    (pb {a * b})
+    (pb {b - a})
+    (pb (u8x16-neg b))
+    (pb (u8x16-max a b))
+    (println (u8x16-hsum a))
+    (let [w  (u8x16-widen-lo a)
+          w2 (u16x8-mul w (u16x8-splat (as uint16 300)))]
+      (pu8 w)
+      (pu8 w2)
+      (pu8 (u16x8-shr w2 8))
+      (pb (u16x8-narrow w2 (u8x16-widen-hi b)))
+      (println (u16x8-hsum w2)))
+    (let [arr (u8vec-new 32 (as uint8 1))]
+      (u8x16-store! arr 16 {a + b})
+      (println (as int (u8vec-ref arr 31)))
+      (println (as int (u8vec-ref arr 15)))
+      ;; the unchecked pair, for a loop that checked its bounds once
+      (unsafe (u8x16-store-unchecked! arr 0 (unsafe (u8x16-load-unchecked arr 16))))
+      (println (as int (u8vec-ref arr 0))))
+    ;; a shift of 16 or more, or a negative one, empties every lane
+    (pu8 (u16x8-shr (u16x8-splat (as uint16 65535)) 15))
+    (pu8 (u16x8-shr (u16x8-splat (as uint16 65535)) 16))
+    (pu8 (u16x8-shr (u16x8-splat (as uint16 65535)) -1))))
+
+(defn main [] : int
+  (f64s)
+  (f32s)
+  (ints)
+  0)

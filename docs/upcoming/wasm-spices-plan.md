@@ -234,6 +234,8 @@ App authors and spice authors describe browser needs declaratively. Read when
                                      ;   own is 64 KiB)
     :tail-calls   true               ; -mtail-call, so TUR_MUSTTAIL is a real
                                      ;   tail call (default true)
+    :simd         true               ; -msimd128, so loops vectorize
+                                     ;   (default true)
     :threads      false              ; DEFAULT false for apps (reversal, see 11)
     :title        "My Game"
     :lazy-assets  ["assets/music/long-track.ogg"]

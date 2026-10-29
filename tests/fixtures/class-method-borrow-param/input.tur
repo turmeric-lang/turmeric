@@ -1,8 +1,8 @@
 ;; class-method-borrow-param-ignored: a class method whose signature writes a
 ;; parameter `^borrow` reads that argument without spending it.  The caret
 ;; was skipped when the class was parsed, so an instance's parameter was an
-;; ordinary one and a call spent an affine argument: `(na-len a)` twice was
-;; TUR-E0150, and so was `(na-dot a a)`.  Now the class records the mask, the
+;; ordinary one and a call spent an affine argument: `(ba-len a)` twice was
+;; TUR-E0150, and so was `(ba-dot a a)`.  Now the class records the mask, the
 ;; instance's parameter inherits it, and a method call undoes the argument's
 ;; use right after elaborating it, as an ordinary call does.  The array is
 ;; still freed at scope exit (leak-checked).  The refusals that must stay are
@@ -10,33 +10,33 @@
 
 (load "stdlib/numvec.tur")
 
-(defclass NumArray [v]
+(defclass BorrowArr [v]
   (type Elem : Type)
-  (na-len [^borrow a : v] : int)
-  (na-ref [^borrow a : v i : int] : Elem)
-  (na-dot [^borrow a : v ^borrow b : v] : Elem))
+  (ba-len [^borrow a : v] : int)
+  (ba-ref [^borrow a : v i : int] : Elem)
+  (ba-dot [^borrow a : v ^borrow b : v] : Elem))
 
-(definstance NumArray [F64Vec] (type Elem = float)
-  (na-len [a] (f64vec-len a))
-  (na-ref [a i] (f64vec-ref a i))
-  (na-dot [a b] (f64vec-dot a b)))
-(definstance NumArray [F32Vec] (type Elem = float32)
-  (na-len [a] (f32vec-len a))
-  (na-ref [a i] (f32vec-ref a i))
-  (na-dot [a b] (f32vec-dot a b)))
+(definstance BorrowArr [F64Vec] (type Elem = float)
+  (ba-len [a] (f64vec-len a))
+  (ba-ref [a i] (f64vec-ref a i))
+  (ba-dot [a b] (f64vec-dot a b)))
+(definstance BorrowArr [F32Vec] (type Elem = float32)
+  (ba-len [a] (f32vec-len a))
+  (ba-ref [a i] (f32vec-ref a i))
+  (ba-dot [a b] (f32vec-dot a b)))
 
 ;; a generic over the class, borrowing its argument
-(defn last-of [V] [(NumArray V)] [^borrow a : V] : (Elem V)
-  (na-ref a {(na-len a) - 1}))
+(defn last-of [V] [(BorrowArr V)] [^borrow a : V] : (Elem V)
+  (ba-ref a {(ba-len a) - 1}))
 
 (defn main [] : int
   (let [a (f64vec-new 3 1.25)
         b (f32vec-new 4 (:: 3.25 float32))]
-    (println (na-len a))
-    (println (na-len a))
-    (println (na-dot a a))
+    (println (ba-len a))
+    (println (ba-len a))
+    (println (ba-dot a a))
     (println (last-of a))
-    (println (as float (na-dot b b)))
+    (println (as float (ba-dot b b)))
     (println (as float (last-of b)))
     (println (f64vec-len a))
     0))
