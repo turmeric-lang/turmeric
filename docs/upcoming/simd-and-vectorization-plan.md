@@ -6,6 +6,10 @@
 > 1) re-measured 2026-10-29 -- recommendation: a generated class over the five
 > types, not a `(NumVec T)` rewrite (section 3.1, "2026-10-29"). N2
 > approaches D/E, S0 and S1 not started.
+> **Open questions reviewed 2026-10-29** (section 6): the class is `NumArray`
+> with `na-` methods (Q2, decided); D and E deferred (Q3); wasm `-msimd128`
+> measured at 1.0-29x on the kernels, bit-identical results (Q5, decision
+> pending); multiversioning deferred (Q6); the store-loop gap is the new Q7.
 > Proposed 2026-10-24. Written in response to
 > "are (1) SIMD functions for manual calling and (2) vectorization
 > optimizations, likely in MIR, useful or viable for Turmeric?", with Racket's
@@ -37,7 +41,7 @@ Five phases, each useful on its own and each landing in its own PR:
 | Phase | What | Compiler work | Gate |
 |---|---|---|---|
 | **N0** | Typed numeric arrays: `F64Vec`, `F32Vec`, `I64Vec`, `I32Vec`, `U8Vec` | none (stdlib) | none -- new API surface, not a semantic change |
-| **N1** | Bulk kernels over them (`sum`, `dot`, `axpy!`, `scale!`, `fill!`, `copy!`, `min`/`max`) as plain C loops gcc vectorizes | none (stdlib) | none |
+| **N1** | Bulk kernels over them (`sum`, `dot`, `axpy!`, `scale!`, `fill!`, `copy!`, `min`/`max`) as fixed-order C that gcc and clang vectorize at the default `-O2` | none (stdlib) | none |
 | **N2** | An element-access path cheap enough that a Turmeric-written loop over an N0 array vectorizes | emitter / elaborator | none, unless it adds a form |
 | **S0** | A spice prototyping explicit SIMD on inline-C vector extensions | none | none (it is a spice) |
 | **S1** | Compiler-known vector types `f64x2`, `f64x4`, `f32x4`, `f32x8`, `i32x4`, `i64x2`, `u8x16` | elaborator, emitter, preamble, turi natives | `--enable=simd` |
@@ -601,6 +605,7 @@ N1 vectorization check.
   be the array's own header, and reloads the data pointer every iteration.
   Fix directions: an N1 kernel for the common shape, or a way to hand a loop
   the data pointer once (a borrowed view type) so the header is not re-read.
+  Probed and laid out as open question 7.
 
 Also in N2, as a separate small decision: whether `tur build` (not only
 `--release`) should pass `-fvect-cost-model=cheap`, so unknown-trip-count
@@ -693,8 +698,8 @@ measured no slower than its inline-C version.
 
 | | cc | `tur jit` | turi | wasm |
 |---|---|---|---|---|
-| N0/N1 | vectorized kernels at `-O3`; scalar but cheap at `-O2` | same C, MIR scalar code | scalar natives | scalar (no simd128) |
-| N2 | user loops vectorize at `-O3` | scalar | scalar | scalar |
+| N0/N1 | vectorized kernels at `-O2` and `-O3` (gcc and clang) | same C, MIR scalar code | the same kernel C, built with the host's `tur` | scalar; 1.0-29x with `-msimd128` (Q5) |
+| N2 | read loops vectorize at `-O3`; store loops do not (Q7) | scalar | scalar | scalar |
 | S1 | vector extensions (SSE2 baseline, AVX with `-march`) | struct-of-lanes helpers | struct-of-lanes natives | simd128 if enabled |
 
 Results identical in every cell.
@@ -721,8 +726,9 @@ Results identical in every cell.
   to opt in.
 - **Function multiversioning** (`__attribute__((target_clones("avx2",
   "default")))` on the N1 kernels): would give AVX2 speed in a portable
-  binary on x86-64 Linux (glibc ifunc). Deferred to open question 6; not
-  portable to macOS or Windows as-is.
+  binary on x86-64 Linux (glibc ifunc). Deferred 2026-10-29 (open question
+  6): `target_clones` needs ifunc, so it is Linux-only; the portable spelling
+  is explicit dispatch, below.
 
 ## 6. Open questions
 
@@ -733,24 +739,108 @@ Results identical in every cell.
    ([assoc-type-method-at-applied-opaque-instance-no-instance](../archive/assoc-type-method-at-applied-opaque-instance-no-instance.md))
    is fixed. Before anything higher-order goes in the class:
    [closure-in-constrained-generic-dispatches-one-instance](../reported/closure-in-constrained-generic-dispatches-one-instance.md).
-2. Names. **Author leans toward honest names: `F64Vec`, not `FlVec`.** With a
-   generic type, those become `defalias`es of `(NumVec float)` etc., and the
-   function family is `nv-*` (or `numvec-*`) rather than `f64vec-*`. Still
-   open: the generic type's own name, and whether per-type function names
-   (`f64vec-new`) survive for constructors (3.1, item 3).
+2. Names. Honest names, `F64Vec`, not `FlVec` (as shipped). **Decided
+   2026-10-29:** there is no generic type; the generic layer is the class
+   **`NumArray`**, its methods prefixed **`na-`** (`na-len`, `na-sum`,
+   `na-ref`, ...), and the per-type families (`f64vec-new`, `f64vec-sum`)
+   stay -- constructors only ever exist per type (3.1, item 3).
 3. Which N2 approaches (A-G in N2)? Recommended: A + B first, D or E later,
-   G separately. **A + B landed 2026-10-28.** D would change `NumVec`'s type
-   (a phantom length), which N0 shipped without; it can still be added as a
-   separate branded type.
+   G separately. **A + B landed 2026-10-28. D and E deferred 2026-10-29.**
+   Both remove the bounds check by proving the index in range, and the
+   check is not what stops a loop vectorizing today -- Q7 is. D (a phantom
+   length brand) would also change the array's type, which N0 shipped
+   without; it can still come later as a separate branded type. E
+   (refinement-typed indices) waits on the solver reasoning about a length
+   across a loop, which is the `reflected-measures` experiment's job.
+   Revisit either when a measured loop is held back by its bounds check
+   rather than by Q7.
 4. Is eight the right partial-sum count for N1 reductions on every target,
    or should it be fixed per element width (8 for `float64`, 16 for
    `float32`)? Either way it must not depend on the build machine.
    **Decided 2026-10-28: eight for every width** (N1 "As built").
 5. wasm: turn on `-msimd128` always (every current browser supports it) or
-   only when the program uses S1 types? **Undecided**; it does not block
-   anything before S1.
+   only when the program uses S1 types? **Measured 2026-10-29; decision
+   pending.** Two builds take the flag: the prebuilt web modules (turi's
+   numvec natives run there) and `tur build --target wasm` (emcc, `-O2`;
+   the stdlib kernels and any N2 loop). The kernel C is the same in both, so
+   it was measured once: the 44 kernels from `src/turi/numvec_kernels.inc`
+   built with clang 18 `--target=wasm32 -O2`, with and without
+   `-msimd128`, run under node 22 (V8), 4096 elements, 20,000 calls,
+   interleaved, best of 15, ns per element:
+
+   | kernel | `-O2` | `-O2 -msimd128` | speedup |
+   |---|---|---|---|
+   | `f64vec-sum` | 0.34 | 0.11 | 3.0x |
+   | `f64vec-dot` | 0.60 | 0.31 | 1.9x |
+   | `f64vec-min` | 0.45 | 0.39 | 1.2x |
+   | `f64vec-add!` | 0.45 | 0.25 | 1.8x |
+   | `f64vec-axpy!` | 0.51 | 0.31 | 1.7x |
+   | `f64vec-scale!` | 0.26 | 0.18 | 1.4x |
+   | `f64vec-fill!` | 0.22 | 0.11 | 1.9x |
+   | `f32vec-sum` | 0.33 | 0.08 | 4.3x |
+   | `f32vec-dot` | 0.52 | 0.10 | 5.0x |
+   | `f32vec-min` | 0.45 | 0.29 | 1.5x |
+   | `i64vec-sum` | 0.34 | 0.12 | 2.9x |
+   | `i32vec-sum` | 0.35 | 0.15 | 2.4x |
+   | `i32vec-dot` | 0.73 | 0.33 | 2.2x |
+   | `i32vec-min` | 0.65 | 0.09 | 7.6x |
+   | `u8vec-sum` | 0.29 | 0.29 | 1.0x |
+   | `u8vec-max` | 0.74 | 0.03 | 29x |
+
+   Every result is bit-identical between the two builds -- the fixed
+   eight-lane order (N1) is what makes the flag safe to turn on. No kernel
+   got slower; the u8 sum gains nothing (its widening to 32-bit lanes is
+   the cost). Kernel code grew 20% (13.1 KB -> 15.8 KB of the module). The
+   cost is reach: an engine without wasm SIMD refuses the *whole* module,
+   not only the SIMD functions -- Chrome 91 and Firefox 89 (2021), Safari
+   16.4 (2023) and later accept it. Recommendation: on by default for both
+   builds, with a `:web :simd false` opt-out for `--target wasm`; not tied
+   to S1.
 6. Multiversioned N1 kernels on x86-64 Linux -- worth it, and does a
-   portable fallback exist for the other hosts?
+   portable fallback exist for the other hosts? **Deferred 2026-10-29.**
+   The portable spelling is not `target_clones` (glibc ifunc, Linux only)
+   but explicit dispatch: each hot kernel compiled twice in the same unit,
+   once under `__attribute__((target("avx2")))`, and a pointer chosen on
+   first call with `__builtin_cpu_supports("avx2")` -- gcc and clang on
+   Linux, macOS and Windows (MinGW). The AVX2 copy must keep the same
+   eight-lane order and no FMA (`target("avx2")` alone, not `"avx2,fma"`),
+   or the engines stop agreeing bit for bit. Revisit when a measured program
+   is kernel-bound at SSE2 width.
+7. **The store-loop gap (added 2026-10-29).** A Turmeric loop that writes
+   into an array -- `P-build`, or `P-for-index` with `P-set-unchecked!` --
+   does not vectorize on any compiler (N2 "As built", "Known limit"). Each
+   store goes through the header (`h->data[i] = x`), and under
+   `-fno-strict-aliasing` the compiler must assume the stored element could
+   be the header's own `data` word, so it reloads the pointer every
+   iteration. A probe of the C shape (`dst[i] = i * k`, `d[i] = d[i] * k`,
+   `dst[i] = src[i] + 1`), vectorized loops reported:
+
+   | | gcc `-O2` | gcc `-O3` | clang `-O2` |
+   |---|---|---|---|
+   | through the header, as today | none | none | none |
+   | data pointer loaded once into a local | none | the two maps | all three |
+
+   Loading the pointer once fixes clang and gcc `-O3`. gcc's `-O2` still
+   declines (its very-cheap cost model refuses a loop whose trip count it
+   cannot see -- the same wall N1's written-out spellings climbed). Options:
+
+   - **(a) A borrowed view.** `(f64vec-view a)` gives a `^borrow`ed handle
+     whose value *is* the data pointer; `view-ref` / `view-set!` index it
+     directly. In the emitted C it is a local, so nothing reloads it.
+     `P-build` and `P-for-index` take the view themselves, so the common
+     loops get it without the user writing it. It needs the view not to
+     outlive the array (a borrow, like `^borrow` params) and costs one more
+     type per element width.
+   - **(b) More N1 kernels** for the shapes that recur: `map!` (in place),
+     `map2!`, `build` from a function of the index. Vectorized everywhere,
+     including gcc `-O2`, but each needs a lambda per element, and a lambda
+     inside generic code hits
+     [closure-in-constrained-generic-dispatches-one-instance](../reported/closure-in-constrained-generic-dispatches-one-instance.md);
+     only a kernel with a fixed operation (`add-scalar!`, `mul!`) avoids it.
+   - **(c) Do nothing** and document the gap: a store loop runs scalar, at
+     the speed of the equivalent C loop under gcc `-O2` today.
+
+   Not yet decided.
 
 ## Appendix -- reproducing 1.1 and 1.3
 
