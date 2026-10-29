@@ -1104,6 +1104,25 @@ else
     pass "dump-cps-coloring-partition"
 fi
 
+# dump-cps-coloring-unsafe-transparent: `(unsafe ...)` is a capability
+# discharge, not a control op -- an unsafe body and its caller stay uncolored,
+# while a shift inside an unsafe still seeds (unsafe-marker-colors-its-function).
+UNSAFE_CPS_FIXTURE="tests/fixtures/cps-coloring-unsafe-transparent/input.tur"
+out=$("$TUR" --dump-cps-coloring emit-c "$UNSAFE_CPS_FIXTURE" 2>/dev/null); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "dump-cps-coloring-unsafe-transparent" "non-zero exit ($rc)"
+elif [[ "$out" != *"cps-coloring: peek uncolored"* ]]; then
+    fail "dump-cps-coloring-unsafe-transparent" "expected 'peek uncolored'"
+elif [[ "$out" != *"cps-coloring: calls-peek uncolored"* ]]; then
+    fail "dump-cps-coloring-unsafe-transparent" "expected 'calls-peek uncolored'"
+elif [[ "$out" != *"cps-coloring: shift-in-unsafe COLORED"* ]]; then
+    fail "dump-cps-coloring-unsafe-transparent" "expected 'shift-in-unsafe COLORED'"
+elif [[ "$out" != *"cps-coloring: main uncolored"* ]]; then
+    fail "dump-cps-coloring-unsafe-transparent" "expected 'main uncolored'"
+else
+    pass "dump-cps-coloring-unsafe-transparent"
+fi
+
 # dump-cps-coloring-no-output: without the flag, no coloring lines should appear.
 out=$("$TUR" emit-c "$CPS_FIXTURE" 2>/dev/null); rc=$?
 if [[ "$out" == *"cps-coloring:"* ]]; then

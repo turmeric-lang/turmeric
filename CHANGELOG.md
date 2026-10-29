@@ -48,6 +48,14 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **`(unsafe ...)` no longer sends its function, and every caller, onto the
+  CPS backend.** The may-capture coloring took the `unsafe` marker (a handle
+  discharging the `Unsafe` capability, never performed at run time) for a
+  control operator, so a function reading an array through
+  `i32vec-ref-unchecked` was colored, and so was anything that called it:
+  a loop over a class method whose instance did that ran 5x slower than the
+  same loop written inline. `unsafe` is transparent to the coloring now; a
+  control operator inside it still colors.
 - **A float associated-type value held inside a generic keeps its value.**
   In a constrained generic, `(let [t (c-get a)] (c-put a t))` with
   `(type E = float)` printed `1.25` as `4.94066e-324`: the projection
