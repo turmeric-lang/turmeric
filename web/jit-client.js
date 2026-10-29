@@ -81,7 +81,7 @@ function retire() {
     readyPromise = null;
 }
 
-async function request(type, source) {
+async function request(type, source, extra = {}) {
     if (!worker) {
         hooks.onLoading(true);
         try { await start(); } finally { hooks.onLoading(false); }
@@ -92,7 +92,7 @@ async function request(type, source) {
         const id = ++callId;
         pending.set(id, { resolve, reject, startTime: performance.now() });
         hooks.onPending();
-        worker.postMessage({ type, id, input: source });
+        worker.postMessage(Object.assign({ type, id, input: source }, extra));
     });
 }
 
@@ -109,8 +109,20 @@ export function runCompiled(source) {
  * {result, isError, trapped, execTime}, the shape eval-client.js gives an
  * interpreter turn.
  */
-export function evalCompiled(source) {
-    return request('eval', source);
+export function evalCompiled(source, { compiledTurns = false } = {}) {
+    return request('eval', source, { compiled: compiledTurns });
+}
+
+/**
+ * Start the Compile engine's prompt session afresh, failing nothing: the next
+ * request boots a new worker.  Used when compiled turns are switched, since a
+ * compiled session's definitions live in its own table.  Returns whether
+ * there was a session to drop.
+ */
+export function resetCompiledSession() {
+    if (!worker || pending.size) return false;
+    retire();
+    return true;
 }
 
 /** How many runs are outstanding, and when the oldest was sent. */

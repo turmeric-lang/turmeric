@@ -40,6 +40,8 @@
 #include "global.h"        /* :spice -- tur_installed_spice_dir */
 #include "pkg.h"           /* :spice <path> -- the manifest's :name */
 #include "spice_search.h"  /* installed-spice-libraries: the search path */
+#include "compiled_turn.h" /* aot-compiled-repl-plan C2 */
+#include "globals.h"       /* g_opt_compiled_repl */
 
 #include <ctype.h>
 #include <errno.h>
@@ -1115,6 +1117,10 @@ static TuriEnv *repl_fresh_env(LangDialect d, ReaderType r) {
     repl_setup_search_path(env);
     for (int i = 0; i < g_n_repl_spices; i++)
         (void)turi_env_attach_spice(env, g_repl_spices[i].dir, getenv("TUR_BIN"));
+    /* aot-compiled-repl-plan C2: from here on the user's turns compile, when
+     * --enable=compiled-repl is on and the host can compile.  After the
+     * preload, so the stdlib stays the interpreter's. */
+    env->compiled_repl = g_opt_compiled_repl && turi_compiled_turn_available();
     return env;
 }
 
@@ -2216,8 +2222,16 @@ int turi_repl_run(bool watch_mode) {
                         scheme_echoed = true;
                     }
                 }
-                /* 2h: for type-level forms that return nil, show a sentinel */
-                bool type_sentinel = scheme_echoed;
+                /* aot-compiled-repl-plan C2: a compiled turn rendered its own
+                 * result; it is shown as a Show result is. */
+                if (env->last_turn_printed && env->last_turn_text) {
+                    if (use_color)
+                        printf("=> " COL_RESET "%s" COL_RESET "\n", env->last_turn_text);
+                    else
+                        printf("=> %s\n", env->last_turn_text);
+                }
+                /* 2h: for type-level forms that return nil, show a sentinel. */
+                bool type_sentinel = scheme_echoed || env->last_turn_printed;
                 if (result.tag == TURI_NIL) {
                     char kind[32] = {0}, name[64] = {0};
                     if (detect_type_form(multi.data, kind, sizeof(kind),

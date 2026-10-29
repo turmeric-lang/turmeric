@@ -4,6 +4,7 @@
 #include "reader_macros.h"  /* RM Q#5: session-scoped reader-macro registry */
 #include "elab.h"           /* TR2.2b: persistent ElabSession lifecycle */
 #include "spice_loader.h"   /* RP3: env owns the loaded TurSpiceImage */
+#include "compiled_turn.h"   /* aot-compiled-repl-plan C2: the definition table */
 #include "collections_native.h"  /* Vec/Set/Map/HAMT native overrides */
 #include "string_native.h"        /* owned String type native overrides */
 #include "interpreter_natives.h"  /* option/result/str/math/seq/json/... natives */
@@ -298,6 +299,8 @@ static void env_drop_owned_include_dirs(TuriEnv *env);  /* below */
 
 void turi_env_free(TuriEnv *env) {
     if (!env) return;
+
+    turi_compiled_defs_clear(env);   /* aot-compiled-repl-plan C2 */
 
     /* RP3: drop the spice image first. dlclose runs C-side destructors
      * (atexit handlers, etc.) so it should happen before the async

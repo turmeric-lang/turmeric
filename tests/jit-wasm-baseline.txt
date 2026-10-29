@@ -20,7 +20,6 @@ async-timer-basic fail  # stdout mismatch on the interpreted path: the program s
 await-below-evicted-caller-or-nontail-resume fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 await-below-struct-capturing-lambda fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 await-in-generic-capturing-lambda fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-await-in-generic-capturing-lambda-struct fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 await-through-fn-value fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 barrier-rendezvous fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 byval-spine-drop-refused-nonscalar-param interpreted  # the program starts threads (pthread_create), which this engine cannot run

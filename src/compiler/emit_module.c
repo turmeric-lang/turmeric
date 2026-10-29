@@ -20998,6 +20998,10 @@ static const char *split_def_storage(const Binding *b) {
     return emit_split_defines(b) ? "" : "extern ";
 }
 
+static bool def_in_repl_slot(const Binding *b);
+static void emit_repl_slot_decl(Buf *file, const char *bn, const char *pre,
+                                const char *post, bool *proto_done);
+
 static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
                                           const Expr **items, uint32_t n_items) {
     const Binding **need = NULL; uint32_t n_need = 0, cap_need = 0;
@@ -21063,11 +21067,22 @@ static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
     buf_puts(out, "/* Forward declarations for globals read by an earlier-emitted item\n"
                   " * (a lifted lambda is prepended to the item list, so it can read a\n"
                   " * `def` whose storage is declared far below it). */\n");
+    bool slot_proto = false;
     for (uint32_t i = 0; i < n_need; i++) {
         char *bn = name_for_binding(ctx, (Binding *)need[i]);
         const char *fr = NULL; char *fa = NULL;
+        /* aot-compiled-repl-plan C2 step 2: a slot's forward declaration is the
+         * slot's, so an earlier-emitted reader reaches it through the macro. */
+        const bool slot = def_in_repl_slot(need[i]);
         if (emit_global_def_thin_fnptr(need[i], &fr, &fa)) {
-            buf_printf(out, "%s%s (*%s)(%s);\n", split_def_storage(need[i]), fr, bn, fa);
+            if (slot) {
+                char pre[512], post[1024];
+                snprintf(pre, sizeof pre, "%s (**", fr);
+                snprintf(post, sizeof post, ")(%s)", fa);
+                emit_repl_slot_decl(out, bn, pre, post, &slot_proto);
+            } else {
+                buf_printf(out, "%s%s (*%s)(%s);\n", split_def_storage(need[i]), fr, bn, fa);
+            }
             /* jit-fallback (global-fn-value-def): a call through this pointer
              * hoists into a temp whose C type the hoist looks up BY CALLEE
              * NAME in the signature table; a global has no forward-declared
@@ -21076,6 +21091,10 @@ static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
              * engine.  Record the pointer's result type under its name. */
             emit_sig_record_ret_ctype(bn, need[i]->type.as.fn.arity, fr);
             free(fa);
+        } else if (slot) {
+            char pre[512];
+            snprintf(pre, sizeof pre, "%s *", type_c_name(need[i]->type));
+            emit_repl_slot_decl(out, bn, pre, "", &slot_proto);
         } else {
             buf_printf(out, "%s%s %s;\n", split_def_storage(need[i]),
                        type_c_name(need[i]->type), bn);
@@ -21092,6 +21111,59 @@ static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
 bool g_emit_ffi_export_shims = false;
 static void emit_ffi_export_shims(const EmitCtx *ctx, Buf *out,
                                   const Expr *program);
+
+bool g_emit_repl_slots = false;
+
+/* aot-compiled-repl-plan C2 step 2: a def of the program's own (not the
+ * stdlib's, not an imported library's) whose storage is a host slot. */
+static bool def_in_repl_slot(const Binding *b) {
+    return g_emit_repl_slots && !b->is_from_stdlib && !b->is_from_implib &&
+           !b->is_thread_local;
+}
+
+/* Declare `bn` as the slot: a pointer the initializer binds, and a macro, so
+ * every read, `set!` and address-of of the global reaches the slot as
+ * written.  The pointer's declarator is `pre` NAME `post`. */
+static void emit_repl_slot_decl(Buf *file, const char *bn, const char *pre,
+                                const char *post, bool *proto_done) {
+    if (!*proto_done) {
+        buf_puts(file, "extern void *tur_repl_slot(const char *, const char *, size_t, int *);\n");
+        *proto_done = true;
+    }
+    buf_printf(file, "static %s__tur_slot_%s%s;\n#define %s (*__tur_slot_%s)\n",
+               pre, bn, post, bn, bn);
+}
+
+/* Open the initializer: bind the slot, and enter the block that initializes
+ * it only when it is fresh.  The caller emits the initializer, then closes
+ * with emit_repl_slot_init_close. */
+static void emit_repl_slot_init_open(Buf *sink, uint32_t indent, const Binding *b,
+                                     const char *bn, const char *ptr_cast) {
+    Buf ts;
+    buf_init(&ts);
+    type_print(&ts, b->type);
+    buf_putc(&ts, '\0');
+    indent_buf(sink, indent);
+    buf_printf(sink, "{ int __tur_fresh = 0; __tur_slot_%s = (%s)tur_repl_slot(\"", bn, ptr_cast);
+    for (const char *p = b->name->name; *p; p++)
+        buf_printf(sink, (*p == '"' || *p == '\\') ? "\\%c" : "%c", *p);
+    buf_puts(sink, "\", \"");
+    for (const char *p = ts.data; *p; p++)
+        buf_printf(sink, (*p == '"' || *p == '\\') ? "\\%c" : "%c", *p);
+    buf_printf(sink, "\", sizeof *__tur_slot_%s, &__tur_fresh);\n", bn);
+    indent_buf(sink, indent);
+    buf_puts(sink, "if (__tur_fresh) {\n");
+    buf_free(&ts);
+}
+
+/* Close it: the store is an escape store (a slot outlives every region
+ * bracket), as `set!` on a global already notes. */
+static void emit_repl_slot_init_close(Buf *sink, uint32_t indent, const char *bn) {
+    indent_buf(sink, indent);
+    buf_printf(sink, "TUR_REGION_NOTE_WORDS(&%s, sizeof %s);\n", bn, bn);
+    indent_buf(sink, indent);
+    buf_puts(sink, "} }\n");
+}
 
 /* stale-comments-emitter item 2: the declaration bands of a program unit,
  * declared in the order emit_program_assemble_decls writes them -- so the
@@ -21969,6 +22041,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     }
 
     /* Pass 2: collect all top-level defs and fn_defs. */
+    bool repl_slot_proto = false;   /* tur_repl_slot declared (C2 step 2) */
     tcg_collect_fn_exprs(&ctx, items, n_items);
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
@@ -22036,14 +22109,36 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             {
                 const char *fp_ret = NULL; char *fp_args = NULL;
                 if (emit_global_def_thin_fnptr(e->as.def_.binding, &fp_ret, &fp_args)) {
-                    buf_printf(&file, "%s%s (*%s)(%s);\n",
-                               split_def_storage(e->as.def_.binding), fp_ret, bn, fp_args);
+                    const bool slot = def_in_repl_slot(e->as.def_.binding);
+                    char slot_cast[1024];
+                    snprintf(slot_cast, sizeof slot_cast, "%s (**)(%s)", fp_ret, fp_args);
+                    if (slot) {
+                        char pre[512], post[1024];
+                        snprintf(pre, sizeof pre, "%s (**", fp_ret);
+                        snprintf(post, sizeof post, ")(%s)", fp_args);
+                        emit_repl_slot_decl(&file, bn, pre, post, &repl_slot_proto);
+                    } else {
+                        buf_printf(&file, "%s%s (*%s)(%s);\n",
+                                   split_def_storage(e->as.def_.binding), fp_ret, bn, fp_args);
+                    }
                     /* jit-fallback: see the forward-declaration pass above --
                      * the hoist temp of a call through this pointer needs the
                      * result type on record under the global's name. */
                     emit_sig_record_ret_ctype(bn, e->as.def_.binding->type.as.fn.arity,
                                               fp_ret);
-                    if (e->as.def_.init && !def_declare_only) {
+                    if (slot && !def_declare_only) {
+                        Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
+                        emit_repl_slot_init_open(init_sink, ctx.indent, e->as.def_.binding,
+                                                 bn, slot_cast);
+                        if (e->as.def_.init) {
+                            char *iv = emit_value(&ctx, init_sink, e->as.def_.init);
+                            indent_buf(init_sink, ctx.indent);
+                            buf_printf(init_sink, "%s = (%s (*)(%s))(intptr_t)(%s);\n",
+                                       bn, fp_ret, fp_args, iv);
+                            free(iv);
+                        }
+                        emit_repl_slot_init_close(init_sink, ctx.indent, bn);
+                    } else if (e->as.def_.init && !def_declare_only) {
                         Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
                         char *iv = emit_value(&ctx, init_sink, e->as.def_.init);
                         indent_buf(init_sink, ctx.indent);
@@ -22056,8 +22151,23 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                     continue;
                 }
             }
-            buf_printf(&file, "%s%s %s;\n", split_def_storage(e->as.def_.binding),
-                       type_c_name(e->as.def_.binding->type), bn);
+            const bool slot = def_in_repl_slot(e->as.def_.binding);
+            const char *def_ctype = type_c_name(e->as.def_.binding->type);
+            char slot_cast[512];
+            snprintf(slot_cast, sizeof slot_cast, "%s *", def_ctype);
+            if (slot) {
+                emit_repl_slot_decl(&file, bn, slot_cast, "", &repl_slot_proto);
+                if (!e->as.def_.init && !def_declare_only) {
+                    /* No initializer: the slot is bound all the same. */
+                    Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
+                    emit_repl_slot_init_open(init_sink, ctx.indent, e->as.def_.binding,
+                                             bn, slot_cast);
+                    emit_repl_slot_init_close(init_sink, ctx.indent, bn);
+                }
+            } else {
+                buf_printf(&file, "%s%s %s;\n", split_def_storage(e->as.def_.binding),
+                           def_ctype, bn);
+            }
             if (e->as.def_.init && !def_declare_only) {
                 /* Gap F: route to def_init_body so user-has-main programs
                  * still execute the initializer via __constructor__.
@@ -22069,6 +22179,9 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                  * run in the order they are written -- what the interpreter
                  * does, and what R7RS 5.1 requires of a Scheme program. */
                 Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
+                if (slot)
+                    emit_repl_slot_init_open(init_sink, ctx.indent, e->as.def_.binding,
+                                             bn, slot_cast);
                 char *iv = emit_value(&ctx, init_sink, e->as.def_.init);
                 /* global-def-store-misses-int-ptr-bridge: same bridge the
                  * `let` binder applies -- the def's declared carrier and the
@@ -22077,6 +22190,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                     type_c_name(e->as.def_.binding->type), iv, e->as.def_.init);
                 indent_buf(init_sink, ctx.indent);
                 buf_printf(init_sink, "%s = %s;\n", bn, biv ? biv : iv);
+                if (slot) emit_repl_slot_init_close(init_sink, ctx.indent, bn);
                 free(biv);
                 free(iv);
             }

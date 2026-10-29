@@ -204,6 +204,12 @@ void emit_abi_assert_routed_concrete(EmitCtx *ctx, const Type *recovered,
  * atexit, which is fine -- abort is abnormal exit and frees nothing anyway. */
 void emit_region_shutdown_atexit(Buf *out, int indent) {
     if (!regions_enabled()) return;
+    /* A compiled REPL turn (aot-compiled-repl-plan C2) is not the process: its
+     * atexit list is drained when the turn ends, and the shutdown would free
+     * the retired generations a slot still points into -- a `def` of a node
+     * made inside `with-region` read freed memory the next turn.  The
+     * session's generations live as long as the session. */
+    if (g_emit_repl_slots) return;
     buf_printf(out, "%*satexit(tur_region_shutdown);\n", indent, "");
 }
 

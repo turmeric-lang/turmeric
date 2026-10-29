@@ -145,7 +145,7 @@ cp "$HERE/stdatomic.h" "$HDR/sysinclude/stdatomic.h"
 cp "$ROOT/src/turi/r7rs_embed.h" "$HDR/src/turi/r7rs_embed.h"
 
 # --- 4. link -----------------------------------------------------------------
-EXPORTS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_free_string,_turi_wasm_version,_turi_wasm_jit_run,_malloc,_free
+EXPORTS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_eval,_turi_wasm_set_compiled_repl,_turi_wasm_eval_ex,_turi_wasm_free_string,_turi_wasm_version,_turi_wasm_jit_run,_malloc,_free
 METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8,ccall,cwrap,FS,ENV,wasmTable,addFunction,stackAlloc,stackSave,stackRestore
 emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" "$OUT/stubs.o" -o "$OUT/turmeric-jit.js" \
   --pre-js "$PKG/stdlib.data.js" -sFORCE_FILESYSTEM=1 \

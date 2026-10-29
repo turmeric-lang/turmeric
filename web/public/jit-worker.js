@@ -12,7 +12,9 @@
 // {input} is a prompt turn (wasm-jit-plan P6): it goes to this module's own
 // interpreter session, turi_wasm_eval, where an inline-C defn the interpreter
 // cannot run is compiled on its first call (aot-compiled-repl-plan C1), and
-// answers 'eval-result' {result} as eval-worker.js does.  Either posts the
+// answers 'eval-result' {result} as eval-worker.js does; with {compiled: true}
+// the turn runs as a compiled program instead (aot-compiled-repl-plan C2,
+// turi_wasm_set_compiled_repl).  Either posts the
 // program's output as 'print'/'printErr' lines first.
 //
 // A JavaScript exception out of the module means the instance is done for
@@ -88,6 +90,10 @@ function runProgram(msg) {
 function evalTurn(msg) {
     const id = msg.id;
     try {
+        // aot-compiled-repl-plan C2: compiled turns for this session, when
+        // the page asks (an older module has no switch, and stays off).
+        if (typeof jitModule._turi_wasm_set_compiled_repl === 'function')
+            jitModule._turi_wasm_set_compiled_repl(msg.compiled ? 1 : 0);
         const resultPtr = withString(msg.input, (srcPtr) => jitModule._turi_wasm_eval(srcPtr));
         flushStreams();
         const result = resultPtr ? jitModule.UTF8ToString(resultPtr) : '';

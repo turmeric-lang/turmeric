@@ -27,8 +27,9 @@ import { parseLangDirective } from './lang-picker.js';
 import { maybeShowDoc } from './doc-panel.js';
 import { tabs, activeId, lastRunByTab } from './tabs.js';
 import { promptSetEnabled, replSessionReset, replSessionAccept } from './repl.js';
-import { getEngine } from './engine.js';
-import { configureJitClient, runCompiled, evalCompiled, jitPendingStats, stopCompiled } from './jit-client.js';
+import { getEngine, getCompiledTurns, onCompiledTurnsChange } from './engine.js';
+import { configureJitClient, runCompiled, evalCompiled, jitPendingStats, stopCompiled,
+         resetCompiledSession } from './jit-client.js';
 
 // The eval Worker, its state and its outstanding requests live in
 // eval-client.js; these are its hooks back into the console and the Run queue.
@@ -104,7 +105,7 @@ function processQueue() {
     // runCompiledProgram.)
     if (getEngine() === 'compile') {
         const next = () => setTimeout(processQueue, 0);
-        evalCompiled(code).then((r) => {
+        evalCompiled(code, { compiledTurns: getCompiledTurns() }).then((r) => {
             if (r.trapped) {
                 r.result += '\nthe Compile engine\'s session is gone; the next turn starts a fresh one';
             }
@@ -241,6 +242,16 @@ export function resetWasm() {
  *                                 closure while it defines `main`, before invoking it.
  * @returns {{ isError: boolean }} Whether the evaluation reported an error.
  */
+// aot-compiled-repl-plan C2: a compiled session keeps its definitions in a
+// table of its own, so switching compiled turns starts the Compile engine's
+// prompt session afresh rather than mixing the two.
+onCompiledTurnsChange((on) => {
+    if (resetCompiledSession()) {
+        appendToConsole(`<span class="console-engine">Compiled prompt turns ${on ? 'on' : 'off'}; `
+                        + 'the Compile engine\'s prompt session starts afresh.</span>');
+    }
+});
+
 export async function executeCode(source, promptHtml, showTiming = false, echoSource = true, suppressResult = false) {
     const consoleLoading = showTiming ? document.getElementById('console-loading') : null;
     if (consoleLoading) consoleLoading.style.display = 'flex';

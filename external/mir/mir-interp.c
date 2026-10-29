@@ -2086,9 +2086,9 @@ static void interp_init (MIR_context_t ctx) {
   arg_vals = VARR_ADDR (MIR_val_t, arg_vals_varr);
   VARR_CREATE (_MIR_arg_desc_t, call_arg_descs_varr, alloc, 0);
   call_arg_descs = VARR_ADDR (_MIR_arg_desc_t, call_arg_descs_varr);
-  HTAB_CREATE_WITH_FREE_FUNC (ff_interface_t, ff_interface_tab, alloc, 1000, ff_interface_hash,
+  HTAB_CREATE_WITH_FREE_FUNC (ff_interface_t, ff_interface_tab, alloc, 64, ff_interface_hash,
                               ff_interface_eq, ff_interface_clear, alloc);
-  HTAB_CREATE (MIR_item_t, thunk_func_tab, alloc, 1000, thunk_func_hash, thunk_func_eq, NULL);
+  HTAB_CREATE (MIR_item_t, thunk_func_tab, alloc, 64, thunk_func_hash, thunk_func_eq, NULL);
 #if MIR_INTERP_TRACE
   trace_insn_ident = 0;
 #endif
