@@ -943,16 +943,33 @@ nothing to cache).
 **Live since the sync of turmeric-lang/mir#19** (`external/mir/` at
 `a43e5b2`). The engine compiles the cache in only against a c2mir with
 `prepro_defines_p` (`C2MIR_PREPRO_DEFINES`); built against an older one it is
-absent, and `repl-compiled.sh` skips its cache checks. The page has not been
-measured with it yet.
+absent, and `repl-compiled.sh` skips its cache checks.
+
+**On the page** (the browser JIT module through `turi_wasm_eval`, as the
+prompt calls it; `node tools/wasm-jit/run.js --compiled-turns --time`, same
+sessions as the native benchmark, the module's c2mir and MIR interpreter in
+wasm under node):
+
+| defs | median turn, off | on | p90, off | on | first turn, off | on |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 104 ms | 82 ms | 148 ms | 109 ms | 263 ms | 441 ms |
+| 50 | 122 ms | 77 ms | 153 ms | 96 ms | 246 ms | 413 ms |
+| 200 | 142 ms | 84 ms | 182 ms | 86 ms | 233 ms | 468 ms |
+
+c2mir goes from ~75 to ~36 ms a turn (`TUR_JIT_TIMING`, 50 definitions); the
+rest of a page turn is the front end in wasm, ~40 ms. The first turn of a
+session pays for the fill, ~190 ms once. The same `open_memstream` path works
+in the module, so nothing is specific to the page.
+
 `tests/turi/repl-compiled.sh` checks that a session fills the cache once,
 that header macros reach a turn's inline C through it, and that a failing
 turn's diagnostics are the same with it and without.
 
 **Left before C2 can leave prototype:** nothing on latency -- the gate is
-200 ms and a 200-definition session's turn is ~86 ms. What remains of a
-turn is the front end re-elaborating the stdlib and the session (~20 ms, C4
-item 1) and c2mir parsing the expanded declarations (~25 ms). Split images
+200 ms and a 200-definition session's turn is ~86 ms natively and ~84 ms on
+the page. What remains of a turn is the front end re-elaborating the stdlib
+and the session (~20 ms natively, ~40 on the page; C4 item 1) and c2mir
+parsing the expanded declarations (~25 ms natively, ~36 on the page). Split images
 (C5) stay deferred until a measured large session shows its own definitions
 dominating.
 

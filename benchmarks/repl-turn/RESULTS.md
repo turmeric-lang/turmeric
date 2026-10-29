@@ -1,5 +1,27 @@
 # repl-turn results
 
+## 2026-10-29, Try Turmeric's module under node, the preamble cache
+
+The browser JIT module (`build-wasm/wasm-jit`, `external/mir/` at `a43e5b2`),
+driven through `turi_wasm_eval` as the page's prompt drives it: the same
+sessions (N `defn`s, then 30 expression turns), one per `---`-separated turn,
+`node tools/wasm-jit/run.js --compiled-turns --time`, with
+`TUR_JIT_PREAMBLE_CACHE=0` and then `=1`:
+
+| preamble cache | defs | median turn | p90 | first turn |
+| --- | --- | --- | --- | --- |
+| off | 1 | 104 ms | 148 ms | 263 ms |
+| on | 1 | 82 ms | 109 ms | 441 ms |
+| off | 50 | 122 ms | 153 ms | 246 ms |
+| on | 50 | 77 ms | 96 ms | 413 ms |
+| off | 200 | 142 ms | 182 ms | 233 ms |
+| on | 200 | 84 ms | 86 ms | 468 ms |
+
+c2mir goes from ~75 to ~36 ms a turn (`TUR_JIT_TIMING=1`, 50 definitions); the
+rest is the front end in wasm, ~40 ms. The first turn fills the cache, ~190 ms
+once a session. Node's wasm engine is V8, as in Chrome; other browsers will
+differ.
+
 ## 2026-10-29, x86-64 Linux, 4 cores, Release, the preamble cache
 
 `python3 benchmarks/repl-turn/run.py --tur build-pc/tur` (30 expression

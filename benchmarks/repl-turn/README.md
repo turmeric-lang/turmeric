@@ -24,4 +24,11 @@ prints one markdown row: the median and p90 wall time of an expression turn
 The rest of a turn's wall time is the REPL's own elaboration of the turn,
 before the compile. Measure a Release build, alone on the machine.
 
+The page (Try Turmeric's browser JIT module) is timed the same way through
+`tools/wasm-jit/run.js`: write the session's turns to a file separated by
+lines of `---` and run
+`node tools/wasm-jit/run.js --compiled-turns --time session.tur`, which prints
+each turn's wall time on stderr (`TUR_JIT_*` reaches the module, so
+`TUR_JIT_TIMING=1` gives the phases).
+
 Results: [RESULTS.md](RESULTS.md).
