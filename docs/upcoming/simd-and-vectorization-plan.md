@@ -9,7 +9,9 @@
 > **Open questions reviewed 2026-10-29** (section 6): the class is `NumArray`
 > with `na-` methods (Q2, decided); D and E deferred (Q3); wasm `-msimd128`
 > measured at 1.0-29x on the kernels, bit-identical results (Q5, decision
-> pending); multiversioning deferred (Q6); the store-loop gap is the new Q7.
+> pending); multiversioning deferred (Q6); the store-loop gap is the new Q7,
+> decided as views plus a few fixed-operation kernels (needs an emitter
+> change too).
 > Proposed 2026-10-24. Written in response to
 > "are (1) SIMD functions for manual calling and (2) vectorization
 > optimizations, likely in MIR, useful or viable for Turmeric?", with Racket's
@@ -605,7 +607,8 @@ N1 vectorization check.
   be the array's own header, and reloads the data pointer every iteration.
   Fix directions: an N1 kernel for the common shape, or a way to hand a loop
   the data pointer once (a borrowed view type) so the header is not re-read.
-  Probed and laid out as open question 7.
+  Probed and decided as open question 7 (views, plus dropping the post-call
+  panic test after the store; that test blocks the loop as well).
 
 Also in N2, as a separate small decision: whether `tur build` (not only
 `--release`) should pass `-fvect-cost-model=cheap`, so unknown-trip-count
@@ -812,8 +815,9 @@ Results identical in every cell.
    store goes through the header (`h->data[i] = x`), and under
    `-fno-strict-aliasing` the compiler must assume the stored element could
    be the header's own `data` word, so it reloads the pointer every
-   iteration. A probe of the C shape (`dst[i] = i * k`, `d[i] = d[i] * k`,
-   `dst[i] = src[i] + 1`), vectorized loops reported:
+   iteration. A probe of the bare C shape (`dst[i] = i * k`,
+   `d[i] = d[i] * k`, `dst[i] = src[i] + 1`; no emitter output yet -- see the
+   second blocker below), vectorized loops reported:
 
    | | gcc `-O2` | gcc `-O3` | clang `-O2` |
    |---|---|---|---|
@@ -840,7 +844,56 @@ Results identical in every cell.
    - **(c) Do nothing** and document the gap: a store loop runs scalar, at
      the speed of the equivalent C loop under gcc `-O2` today.
 
-   Not yet decided.
+   **Decided 2026-10-29: (a), plus a few fixed-operation kernels from (b).**
+   The audience that matters is macOS (clang) and `--release` builds, where
+   (a) pays off fully; default gcc `-O2` builds keep the kernels.
+
+   **A second blocker, found while deciding.** The emitted loop (`tur
+   emit-c` of a `f64vec-for-index` that stores through
+   `f64vec-set-unchecked!`) has an `if (tur_panicking) return;` after the
+   store call, and under `-fno-strict-aliasing` a `double` store may write
+   that flag, so the test cannot leave the loop. (In a read-only loop
+   nothing writes it and it is hoisted -- why N2 needed no emitter change.)
+   That C, with the function kept out of line, edited by hand:
+
+   | the emitted store loop | gcc `-O2` | gcc `-O3` | clang `-O2` |
+   |---|---|---|---|
+   | as emitted | no | no | no |
+   | post-store panic tests removed | no | no | no |
+   | tests removed and the data pointer in a local | no | yes | yes |
+
+   Both have to go. (When the array is built in the same function the loop
+   can vectorize already: the compiler then knows its block is fresh.) So
+   the work is:
+
+   1. **Emitter: no post-call panic test after a call that cannot panic.**
+      At least the unchecked store; the general rule is an inline-C callee
+      whose body cannot reach `tur_panic` -- whether the emitter infers that
+      from the body or the generator marks the accessors is the first design
+      call. A first version of this change was written during N2 and
+      reverted because it bought nothing for read loops; it is what store
+      loops need.
+   2. **Views.** A `defopaque` per width (`F64View` ...) whose carrier is
+      the data pointer, from `(P-view a)` (`^borrow` on `a`), with
+      `P-view-ref` / `P-view-set!` under `#fx{Unsafe}` like the unchecked
+      accessors. An N0 array never resizes, so a view stays valid exactly as
+      long as its array; nothing checks that, which is why making one is
+      `#fx{Unsafe}`. A store writes a number, not a pointer, so no region
+      note is needed. turi: the view can be the array handle itself, with
+      the interpreter twins keeping their bounds check, as `P-ref-unchecked`
+      does.
+   3. **Macros that store through a view**, so users get it without writing
+      one: `P-build` switches to a view, plus `P-map!` (`(P-map! [x v]
+      expr)`, in place) and `P-map2!` (`(P-map2! dst [x a y b] expr)`).
+      Because they are macros the per-element expression is inlined into the
+      loop -- no lambda, so the closure-dispatch report above does not apply
+      to them.
+   4. **A few fixed-operation N1 kernels**, vectorized at gcc `-O2` too:
+      `sub!`, `mul!` (element-wise), `add-scalar!`. Pick the rest by use.
+
+   Acceptance: each new macro's loop reports `loop vectorized` under clang
+   `-O2` and gcc `-O3` in the vectorization check, cc, turi and `tur jit`
+   agree bit for bit, and a timed store loop (the probe above) improves.
 
 ## Appendix -- reproducing 1.1 and 1.3
 
