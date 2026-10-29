@@ -34,8 +34,8 @@
 //                        font_links). The app bundles its own fonts.
 //   data: (img, font)    Monaco's and the bundle's small inlined icons/fonts.
 //
-// connect-src is 'self' only: /api/ci-timings and /api/ci-loc are proxied by
-// the Worker, so the browser never talks to raw.githubusercontent.com itself.
+// connect-src is 'self' only: /ci reads /api/ci/* from the Worker, so the
+// browser never talks to another origin for its data.
 export const CONTENT_SECURITY_POLICY = [
     "default-src 'self'",
     "script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/",

@@ -69,7 +69,7 @@ export default defineConfig({
     testDir: './tests',
     timeout: 60_000,
     // Retries on CI only, and the number is measured rather than defensive.
-    // From the web_desktop / web_mobile rows on the `ci-metrics` branch over
+    // From the web_desktop / web_mobile rows of the /ci store over
     // 266 commits: the suites failed on 42 and 73 of them, which sounds far
     // too flaky to gate on -- but collapsing CONSECUTIVE failures gives only
     // 10 and 7 episodes, the longest running 21 and 49 commits. Nearly all of

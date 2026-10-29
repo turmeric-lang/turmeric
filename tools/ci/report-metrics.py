@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Report one CI run's metrics rows to the /ci store (D1, behind the site's
-Worker), or backfill the history the `ci-metrics` branch holds.
+Worker), or backfill the history the retired `ci-metrics` branch holds.
 
-docs/upcoming/ci-metrics-d1-plan.md. Reads the same files
-tools/ci/publish-timings.sh appends to the branch and POSTs them, as one JSON
+docs/archive/ci-metrics-d1-plan.md. Reads the JSONL files the collectors in
+tools/ci/ and benchmarks/audit/bench-rows.py write and POSTs them, as one JSON
 body, to /api/ci/report (web/ci-api.js), which writes them in one D1
 transaction. The endpoint is idempotent -- rows are keyed on run, attempt,
 environment and suite -- so a retried or repeated report overwrites rather
@@ -14,8 +14,10 @@ Usage:
                       [--bench bench.jsonl]
     report-metrics.py --backfill <checkout of the ci-metrics branch>
 
-The flags match publish-timings.sh, so a workflow step changes only its
-command. A missing or empty input file is a warning, not a failure: each array
+The branch was the store before D1 and is no longer written. --backfill is
+kept for one last top-up from it before it is deleted; it is idempotent.
+
+A missing or empty input file is a warning, not a failure: each array
 is optional, and a docs-only push has counts but no timings. Nothing to report
 at all exits 0.
 

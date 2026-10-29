@@ -1,14 +1,6 @@
 name: CI
 
 on:
-  # `branches: [main]` is load-bearing beyond the obvious: it is what keeps this
-  # workflow off the `ci-metrics` orphan branch, which tools/ci/publish-timings.sh
-  # pushes to on every green `main` run.  That branch carries no source at all
-  # (one JSONL file per year plus a README), so a build there would be both
-  # meaningless and self-perpetuating -- each publish would trigger a run whose
-  # own publish triggers another.  Do NOT widen this to `branches-ignore` or an
-  # unfiltered `push:` without excluding ci-metrics explicitly.  The publish
-  # commits additionally carry [skip ci] as a second, independent layer.
   push:
     branches: [main]
   pull_request:
@@ -16,11 +8,9 @@ on:
   # One full run of `main` a day, macOS legs included.  A push to main skips
   # every macOS job (see MACOS_LEGS below), so this is what still tests main's
   # own tip on macOS -- two PRs green on their own can still break each other
-  # once both land -- and what keeps the macOS series on ci-metrics fed.
+  # once both land -- and what keeps the macOS series on /ci fed.
   # 11:17 UTC: no CI run started between 10:00 and 14:00 UTC in the two weeks
   # to 2026-10-16, and it clears the nightly macOS workflows (04:30-06:10).
-  # A schedule always runs on the default branch, so ci-metrics stays out of
-  # reach as the note above requires.
   schedule:
     - cron: "17 11 * * *"
 
@@ -28,8 +18,8 @@ on:
 # token is already `read`, so this block grants nothing new today -- it moves
 # that guarantee out of a web-UI setting, where one checkbox silently re-widens
 # every job in this file and no diff records it, and into the tree where a
-# change to it has to survive review.  `publish-timings` raises itself to
-# `contents: write` locally; nothing else here needs more than read.
+# change to it has to survive review.  No job here needs more than read: the
+# metrics publisher reports to /ci over HTTPS with its own token.
 permissions:
   contents: read
 
@@ -42,7 +32,7 @@ permissions:
 # PR runs group by PR number, so a new push cancels the old run.  `main` runs
 # get a group of their own (the run id), so they are NEVER cancelled or
 # serialized: every merge is tested on its own, and its `publish-timings` rows
-# reach ci-metrics.  (A shared `main` group would also silently drop queued
+# reach /ci.  (A shared `main` group would also silently drop queued
 # runs -- GitHub keeps only the newest pending run per group.)
 #
 # MACOS_LEGS: but a push to main runs its Linux and Windows jobs only.  The
@@ -188,7 +178,7 @@ jobs:
     # ~7-12 min (docs/archive/ci-aux-suite-latency-plan.md section 11).  The
     # "~13 min" that used to be here was measured too, and went stale in two
     # days, so a number in this comment is worth only as much as its date --
-    # re-check it against branch `ci-metrics` (suite-timings-2026.jsonl).
+    # re-check it against /ci (the Tests tab, this suite's history).
     #
     # The parts must between them run every registered test, and that is no
     # longer something to verify by hand: every pattern below comes from
@@ -1445,14 +1435,15 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ccache-fnsan-${{ runner.os }}-${{ github.sha }}
 
-  # Phase 3A/4 of docs/archive/suite-timing-trends-plan.md.
+  # Phase 3A/4 of docs/archive/suite-timing-trends-plan.md; the store is the
+  # D1 database behind /ci (docs/archive/ci-metrics-d1-plan.md).
   #
   # A SEPARATE job, not a step on `test`, specifically because of the
-  # concurrency group.  `group: ci-metrics` serializes publishers so two runs
-  # cannot race the same branch -- but hung on the `test` job it would serialize
-  # the whole build-and-test matrix across runs, which is an enormous cost for a
-  # metrics feature.  Isolated here it serializes only an artifact download and
-  # a git push.
+  # concurrency group.  `group: ci-metrics` serializes publishers, which keeps
+  # the store's ingest ids in run order -- but hung on the `test` job it would
+  # serialize the whole build-and-test matrix across runs, which is an enormous
+  # cost for a metrics feature.  Isolated here it serializes only an artifact
+  # download and one POST.
   publish-timings:
     name: Publish suite timings
     # `changes` for its `code` output only: on a docs-only push the three jobs
@@ -1466,16 +1457,12 @@ jobs:
     # read-only -- collect and upload artifacts but must never write.
     if: always() && (github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    permissions:
-      # Scoped to this job rather than declared workflow-wide: a top-level block
-      # would silently re-scope every other job's token too.
-      contents: write
     concurrency:
       group: ci-metrics
       cancel-in-progress: false
     steps:
-      # Full history: the publish script pushes a branch, and a shallow clone
-      # can have a push rejected with "shallow update not allowed".
+      # Full history: collect-docs.py walks main's first parents for the
+      # reports filed / archived totals, which are null in a shallow clone.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -1524,7 +1511,7 @@ jobs:
           # No suite rows is expected on a docs-only push (`changes` said
           # code=false, so nothing ran to time) and a fault anywhere else.
           # Either way the line and doc counts above are still this commit's,
-          # and publish-timings.sh publishes them without suite rows -- a
+          # and report-metrics.py reports them without suite rows -- a
           # docs-only merge is exactly the commit that moves the doc counts.
           if [ -s all-timings.jsonl ]; then
             echo "collected $(wc -l < all-timings.jsonl) rows from $(find timings-artifacts -name timings.jsonl | wc -l) leg(s)"
@@ -1534,20 +1521,13 @@ jobs:
             echo "::warning::no suite timings collected; publishing the line and doc counts alone"
           fi
 
-      # The store /ci reads (docs/upcoming/ci-metrics-d1-plan.md): one POST to
+      # The store /ci reads (docs/archive/ci-metrics-d1-plan.md): one POST to
       # the site's Worker, which writes D1 in one transaction. Idempotent, so a
       # re-run of this job overwrites its rows rather than doubling them.
       - name: Report to the /ci store
         env:
           CI_METRICS_TOKEN: ${{ secrets.CI_METRICS_TOKEN }}
         run: python3 tools/ci/report-metrics.py all-timings.jsonl --loc repo-loc.jsonl --docs docs-counts.jsonl
-
-      # The ci-metrics branch keeps being appended until the D1 store has run
-      # in production for a while (the plan's retirement phase). Independent of
-      # the step above: either one failing leaves the other's copy whole.
-      - name: Append to the ci-metrics branch
-        if: always()
-        run: bash tools/ci/publish-timings.sh all-timings.jsonl --loc repo-loc.jsonl --docs docs-counts.jsonl
 
   windows:
     needs: changes
@@ -2372,7 +2352,7 @@ jobs:
       # waits for. Informational: never blocking, never retried (a retry would
       # report the faster attempt). The numbers go to the job summary, the
       # web-perf artifact, and -- through the collector below -- web_perf:*
-      # rows on ci-metrics, which the suite views leave out (kind: web-perf).
+      # rows on /ci, which the suite views leave out (kind: web-perf).
       # Timing bounds, if any, belong to WP6's trend, not to one hosted run.
       - name: Measure the web bundle (WP5, informational)
         if: ${{ !cancelled() }}

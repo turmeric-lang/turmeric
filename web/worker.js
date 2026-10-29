@@ -125,75 +125,13 @@ Turmeric \$VER installed.
 EOF
 `;
 
-const TIMINGS_BASE = `https://raw.githubusercontent.com/${GH_REPO}/ci-metrics`;
-
-// Both files on the `ci-metrics` branch are append-only NDJSON partitioned by
-// year (tools/ci/publish-timings.sh), so one proxy serves both.
-//
-// On Jan 1 the current year's file does not exist until the first push to main
-// lands, so a miss falls back to the previous year rather than 502ing. The year
-// actually served comes back in X-Metrics-Year, because "which partition is
-// this" is not derivable from the body.
-async function proxyMetricsNDJSON(url, stem, missing) {
-  const asked = url.searchParams.get('year') ?? '';
-  const year = /^\d{4}$/.test(asked)
-    ? asked
-    : String(new Date().getUTCFullYear());
-
-  for (const y of [year, String(Number(year) - 1)]) {
-    const res = await fetch(`${TIMINGS_BASE}/${stem}-${y}.jsonl`, {
-      cf: { cacheTtl: 300, cacheEverything: true },
-    });
-    if (res.ok) {
-      return new Response(res.body, {
-        headers: {
-          'Content-Type': 'application/x-ndjson; charset=utf-8',
-          'Cache-Control': 'public, max-age=300',
-          'X-Metrics-Year': y,
-          'Content-Security-Policy': CONTENT_SECURITY_POLICY,
-        },
-      });
-    }
-  }
-
-  return new Response(`${missing}\n`, {
-    status: 502,
-    headers: {
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Content-Security-Policy': CONTENT_SECURITY_POLICY,
-    },
-  });
-}
-
-async function proxyMetricsFile(name, missing) {
-  const res = await fetch(`${TIMINGS_BASE}/${name}`, {
-    cf: { cacheTtl: 300, cacheEverything: true },
-  });
-  if (res.ok) {
-    return new Response(res.body, {
-      headers: {
-        'Content-Type': 'application/x-ndjson; charset=utf-8',
-        'Cache-Control': 'public, max-age=300',
-        'Content-Security-Policy': CONTENT_SECURITY_POLICY,
-      },
-    });
-  }
-  return new Response(`${missing}\n`, {
-    status: 502,
-    headers: {
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Content-Security-Policy': CONTENT_SECURITY_POLICY,
-    },
-  });
-}
-
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const { hostname, pathname } = url;
 
     // The D1 store behind /ci: CI reports here, the page reads from here
-    // (ci-api.js, docs/upcoming/ci-metrics-d1-plan.md).
+    // (ci-api.js, docs/archive/ci-metrics-d1-plan.md).
     if (pathname.startsWith('/api/ci/')) {
       return handleCiApi(request, env, ctx);
     }
@@ -206,41 +144,6 @@ export default {
           'Content-Security-Policy': CONTENT_SECURITY_POLICY,
         },
       });
-    }
-
-    // CI suite timings, proxied from the `ci-metrics` orphan branch so the
-    // browser stays same-origin and the payload has one place to be shrunk.
-    // TODO: once suite-timings-<year>.jsonl passes ~5 MB, aggregate here
-    // (group by run x suite, drop the raw rows) instead of streaming it whole.
-    if (pathname === '/api/ci-timings') {
-      // ?window=recent: the last few days only (suite-timings-recent.jsonl,
-      // rewritten by every publish). The full year is 40+ MB, and the page opens
-      // on a 7-day range, so it asks for the window first and the whole log only
-      // when a wider range is picked. No year fallback: the file is not
-      // partitioned. A 502 here tells the page to fall back to the full log.
-      if (url.searchParams.get('window') === 'recent') {
-        return proxyMetricsFile('suite-timings-recent.jsonl', 'no recent timings available');
-      }
-      return proxyMetricsNDJSON(url, 'suite-timings', 'no timings available');
-    }
-
-    // Tracked line counts, one row per push to main. Far smaller than the
-    // timings (one row a push, not one per suite per leg), so it never needs
-    // the aggregation the TODO above describes.
-    if (pathname === '/api/ci-loc') {
-      return proxyMetricsNDJSON(url, 'repo-loc', 'no line counts available');
-    }
-
-    // Open plans and reports, one row per push to main. Same shape as the
-    // line counts: a property of the commit, no runner dimension.
-    if (pathname === '/api/ci-docs') {
-      return proxyMetricsNDJSON(url, 'docs-counts', 'no doc counts available');
-    }
-
-    // The nightly benchmark rows (performance-audit-plan WP6): a few dozen
-    // a night, in their own file so the suite views never see them.
-    if (pathname === '/api/ci-bench') {
-      return proxyMetricsNDJSON(url, 'bench', 'no benchmark rows available');
     }
 
     // Rewrite try.turmeric-lang.com/* -> turmeric-lang.com/try/*

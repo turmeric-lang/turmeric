@@ -124,7 +124,7 @@ each push's rows into it through `POST /api/ci/report` with
 `tools/ci/report-metrics.py`. `ci-aggregate.js` holds the data rules (env
 order, series names, daily medians, the test-count carry-forward) that the
 Worker, the page and the page tests all share. Design and rationale:
-`docs/upcoming/ci-metrics-d1-plan.md`.
+`docs/archive/ci-metrics-d1-plan.md`.
 
 Every read except `/api/ci/meta` carries the newest ingest id (`?v=`). Those
 responses are immutable, and a stale `v` is redirected to the current one.
@@ -136,7 +136,8 @@ Locally, `npm run dev` runs the Worker against a local D1 under
 npx wrangler d1 migrations apply ci-metrics --local
 echo 'CI_METRICS_TOKEN=dev' > .dev.vars      # the report endpoint's token
 npx vite --port 3100 --strictPort           # any port but 3000
-# From the repo root, with a checkout of the ci-metrics branch in /tmp/cim:
+# From the repo root, with a checkout of the retired ci-metrics branch (no
+# longer written; for as long as it exists) in /tmp/cim:
 CI_METRICS_TOKEN=dev CI_METRICS_URL=http://localhost:3100/api/ci/report \
   python3 tools/ci/report-metrics.py --backfill /tmp/cim
 ```
