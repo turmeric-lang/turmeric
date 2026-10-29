@@ -40,3 +40,24 @@ with `(defn h ...)`.
   defines it. Cheap: one more root, in the turns that define something.
 - Then give the existing test a name that cannot collide (`(defn bad ...)`),
   so it asserts the behaviour rather than the accident.
+
+## Resolution (2026-10-29)
+
+The first fix direction. `turi_compiled_turn_run` (`src/turi/compiled_turn.c`)
+collects the C names of the functions the turn defines (its `EX_FN_DEF`
+items, named by `emit_c_function_name`, the emitter's own
+`raw_name_for_binding`). It hands them to the JIT pruner as extra roots for
+that turn's compile only (`jit_prune_set_extra_roots`,
+`src/compiler/jit_prune.c`). A defn's inline C is compiled, and a mistake in
+it reported, in the turn that defines it, whatever its name. Functions
+defined in earlier turns are still pruned when nothing reaches them, so a
+session pays for its own new code, not its whole table.
+
+The root check reads the function's name from the chunk's own text: the
+pruner's name map grows as it fills, so the `NameEnt` a chunk points at may
+have moved. The first draft read it through that pointer and ASan caught it.
+
+`tests/turi/repl-compiled.sh`'s rejection check now uses `(defn bad ...)`,
+and a new case checks that a hyphenated name (`get-it`) is rejected where it
+is defined and that the session goes on (33/33).
+`tests/check-jit-prune-baggage.sh` is unchanged (8/8).

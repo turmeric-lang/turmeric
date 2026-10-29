@@ -151,6 +151,11 @@ bool emit_inst_method_wants_external(const struct FnDef *fd);
  * method's definition -- "__attribute__((weak)) " when it arrived by a
  * `(load ...)` of a user file (every loading TU defines it), else "". */
 const char *emit_inst_method_linkage_attr(const struct FnDef *fd);
+/* The C name the emitter gives a top-level function's definition
+ * (raw_name_for_binding).  Malloc'd; the caller frees.  For a caller outside
+ * the emitter that must name one in emitted C: the compiled REPL roots a
+ * turn's new defns for the JIT pruner by it. */
+char *emit_c_function_name(const Binding *b);
 
 int emit_header(Buf *out, const char *module_name, const Expr *program,
                 bool separate_compilation,

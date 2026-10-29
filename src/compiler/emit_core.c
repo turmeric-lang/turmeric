@@ -3648,6 +3648,8 @@ size_t binding_module_prefix(const Binding *b, char *out, size_t cap) {
  * C name is prefixed with the mangled module name: geom/vector → geom__vector__,
  * so binding `add2` in module `geom/vector` → `geom__vector__add2`.
  * Phase M6: If b->c_export_name is set, use it directly (bypasses mangling). */
+char *emit_c_function_name(const Binding *b) { return raw_name_for_binding(b); }
+
 char *raw_name_for_binding(const Binding *b) {
     if (b->c_export_name) {
         return strdup(b->c_export_name);

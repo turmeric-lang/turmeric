@@ -62,4 +62,11 @@ bool jit_prune_split_source(Buf *src, JitPruneStats *stats);
  * end-of-preamble marker is a root and no include is dropped. */
 bool jit_prune_full_source(Buf *src, JitPruneStats *stats);
 
+/* compiled-repl-inline-c-defn-errors-deferred-to-first-call: C names to keep
+ * as roots in the program half whether or not anything names them -- the
+ * functions a compiled REPL turn defines, so their C is compiled, and any
+ * error reported, in the turn that defines them rather than at their first
+ * call.  `names` is borrowed until the next call; NULL / 0 clears it. */
+void jit_prune_set_extra_roots(const char *const *names, size_t n);
+
 #endif

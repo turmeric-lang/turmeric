@@ -34,11 +34,10 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
-## Found matching the compiled REPL's printer (filed 2026-10-29)
+## Found fixing the REPL display reports (filed 2026-10-29)
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [compiled-repl-inline-c-defn-errors-deferred-to-first-call](compiled-repl-inline-c-defn-errors-deferred-to-first-call.md) | low (REPL diagnostics) | Under `--enable=compiled-repl` the JIT pruner drops a defn no turn has called yet, so its inline C is first compiled -- and rejected -- at its first call, not in the turn that defines it; a one-letter name is kept by an identifier collision, which is the only reason `repl-compiled.sh`'s rejection check sees the error at definition |
 | [vec-literal-option-none-after-some-mistyped](vec-literal-option-none-after-some-mistyped.md) | low (refusal) | `[(some 3) (none)]` is TUR-E0001 (`vec-push!` arg 2: expected `(Option int)`, got `(Option A)`) on every engine; `[(none) (some 3)]` compiles. The later element is not elaborated against the type the earlier one fixed |
 
 ## Found landing simd-and-vectorization-plan N0 (filed 2026-10-28)
