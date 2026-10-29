@@ -636,6 +636,27 @@ bool binding_private_elsewhere(const Elab *e, const Binding *b) {
     return true;
 }
 
+/* exported-name-collision-ignores-refer: does module code being elaborated
+ * name global binding `b` on purpose -- defined by this module, or brought in
+ * by one of its imports' `:refer` lists? */
+static bool binding_chosen_by_module(const Elab *e, const Binding *b) {
+    const DefModule *mod = e->current_module;
+    if (!mod) return false;
+    if (b->defining_module_name == e->current_module_name) return true;
+    for (uint32_t i = 0; i < mod->n_imports; i++) {
+        const ImportSpec *imp = &mod->imports[i];
+        bool refers = false;
+        for (uint32_t k = 0; k < imp->n_refer && !refers; k++)
+            refers = imp->refer_syms[k] == b->name;
+        if (!refers) continue;
+        const ElabModule *lm = elab_find_loaded_module((Elab *)e, imp->module_name);
+        if (!lm) continue;
+        for (uint32_t k = 0; k < lm->n_exports; k++)
+            if (lm->exports[k] == b) return true;
+    }
+    return false;
+}
+
 /* The newest binding of `name` that the module being elaborated can see.
  * Every module's top-level defns share the global scope, private ones
  * included, so two modules with a private helper of the same name stack two
@@ -645,24 +666,51 @@ bool binding_private_elsewhere(const Elab *e, const Binding *b) {
  * binding for its own forward declaration and rewrote its signature).  This
  * skips bindings private to another module; when nothing visible remains it
  * falls back to the newest binding of any kind, so the caller can still
- * report a private one.  NULL when `name` is unbound. */
+ * report a private one.  NULL when `name` is unbound.
+ *
+ * exported-name-collision-ignores-refer: two modules EXPORTING the same name
+ * stack the same way, and the newest still answered -- so a module that
+ * wrote `(:refer [f])` from one got the other's `f` whenever the other was
+ * imported after it.  When more than one global binding is visible, the one
+ * the module defines or refers wins; otherwise the newest still does. */
 Binding *scope_lookup_visible(const Elab *e, Scope *s, const Symbol *name) {
     Binding *first = NULL;
     for (Scope *cur = s; cur; cur = cur->parent) {
+        bool global = cur == &e->global;
+        Binding *visible = NULL;
+        bool contested = false;
         if (cur->idx) {
             for (uint32_t i = scope_idx_newest(cur, name); i; i = cur->prev[i - 1]) {
                 Binding *b = cur->bindings[i - 1];
                 if (!first) first = b;
-                if (!binding_private_elsewhere(e, b)) return b;
+                if (binding_private_elsewhere(e, b)) continue;
+                if (!global || !e->current_module) return b;
+                if (!visible) { visible = b; continue; }
+                if (b == visible) continue;
+                if (!contested) {
+                    contested = true;
+                    if (binding_chosen_by_module(e, visible)) return visible;
+                }
+                if (binding_chosen_by_module(e, b)) return b;
             }
+            if (visible) return visible;
             continue;
         }
         for (uint32_t i = cur->n; i > 0; i--) {
             Binding *b = cur->bindings[i - 1];
             if (b->name != name) continue;
             if (!first) first = b;
-            if (!binding_private_elsewhere(e, b)) return b;
+            if (binding_private_elsewhere(e, b)) continue;
+            if (!global || !e->current_module) return b;
+            if (!visible) { visible = b; continue; }
+            if (b == visible) continue;
+            if (!contested) {
+                contested = true;
+                if (binding_chosen_by_module(e, visible)) return visible;
+            }
+            if (binding_chosen_by_module(e, b)) return b;
         }
+        if (visible) return visible;
     }
     return first;
 }

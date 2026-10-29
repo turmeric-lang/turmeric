@@ -1,0 +1,6 @@
+;; exported-name-collision-ignores-refer: which `f` a bare use meant would
+;; depend on the import order, so referring it from both is an error.
+(defmodule main
+  (import lib/a :refer [f])
+  (import lib/b :refer [f])
+  (defn main [] : int (println (f)) 0))

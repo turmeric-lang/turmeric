@@ -1,0 +1,13 @@
+;; lib/b -- its own Attr and Shape, with the same constructor names: renamed
+;; lib/b/Attr, lib/b/Shape, lib/b/Circle, lib/b/Square because lib/a loaded
+;; first.
+(defmodule lib/b
+  (export Attr mk-b attr-k Shape Circle Square area-b)
+  (defstruct ^copy Attr [s : cstr k : int])
+  (defn mk-b [k : int] : Attr (Attr "b" k))
+  (defn attr-k [a : Attr] : int (.k a))
+  (defdata ^copy Shape (Circle int int) (Square int))
+  (defn area-b [s : Shape] : int
+    (match s
+      (Circle x y) (+ x y)
+      (Square w) (* 10 w))))

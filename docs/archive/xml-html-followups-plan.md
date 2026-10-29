@@ -873,7 +873,7 @@ What building C, A1-A2 and D1 changed against the text above.
   `HAttrName`, `HRawBody` (and D2's `HCommentBody`, `HCdataBody`,
   `HPiBody`): a type name is global, and tur-dom-core's SAX `Attr` and ecs's
   `Tag` were taken
-  ([module-type-names-collide-across-modules](../reported/module-type-names-collide-across-modules.md)).
+  ([module-type-names-collide-across-modules](module-type-names-collide-across-modules.md)).
 - Content holes go through a new `ToHtml` class rather than `ToChild`, so a
   nested `Html` stays a tree (through `ToChild` it would be flattened to
   markup); `ToHtml` has `ToChild`'s instances plus `Html`, `Node` and

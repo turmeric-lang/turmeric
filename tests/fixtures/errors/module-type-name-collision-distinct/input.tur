@@ -1,0 +1,6 @@
+;; module-type-names-collide-across-modules: lib/a's Attr and lib/b's (renamed
+;; lib/b/Attr) are two types, so one is not accepted for the other.
+(defmodule main
+  (import lib/a :refer [attr-n])
+  (import lib/b :refer [mk-b])
+  (defn main [] : int (println (attr-n (mk-b 1))) 0))

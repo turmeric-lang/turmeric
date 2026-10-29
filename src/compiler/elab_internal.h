@@ -191,6 +191,11 @@ typedef struct ElabModule {
      * reading the file a second time. */
     const Symbol *path_key;
     bool          from_load;
+    /* module-type-names-collide-across-modules: the module's renamed type
+     * and constructor names (DefModule.rename_from / rename_to). */
+    const Symbol **rename_from;
+    const Symbol **rename_to;
+    uint32_t       n_renames;
 } ElabModule;
 
 /* Forward-declared so this header doesn't drag in reader_macros.h. */

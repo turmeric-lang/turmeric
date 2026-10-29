@@ -1,0 +1,6 @@
+;; lib/s -- a String of its own, like a spice's ABI mirror of stdlib String.
+(defmodule lib/s
+  (export String s-new s-len)
+  (defopaque String :ptr<void>)
+  (defn s-new [] : String (:: 0 String))
+  (defn s-len [x : String] : int 7))
