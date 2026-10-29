@@ -357,9 +357,10 @@ writes generic code over it:
   work (fixed 2026-10-29,
   [operator-on-constrained-tyvar-refused](../archive/operator-on-constrained-tyvar-refused.md)).
   A literal at `(Elem V)` is refused
-  ([literal-at-associated-type-unchecked](../archive/literal-at-associated-type-unchecked.md)),
-  and `as` has no class to go through, so conversions and constants are class
-  methods (`na-elem->float`, `na-zero`).
+  ([literal-at-associated-type-unchecked](../archive/literal-at-associated-type-unchecked.md));
+  conversions and constants go through `NumCast` (stdlib/typeclass.tur, added
+  2026-10-29): under `(NumCast (Elem V))`, `(as float x)` reads as
+  `(to-float x)`, and a constant is `(from-int 0)` / `(from-float 0.5)`.
 - An instance body does not inherit the class method's `#fx{Unsafe}`; it
   writes its own `(unsafe ...)`.
 - Constructors stay per type (item 3).

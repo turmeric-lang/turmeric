@@ -6,6 +6,14 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`NumCast`: conversions for generic numeric code** (`stdlib/typeclass.tur`,
+  beside `Num`): `to-float`, `to-int`, `from-int`, `from-float`, with
+  instances for every numeric type `Num` covers. Under a `(NumCast A)`
+  constraint, `(as float x)` on an `x : A` now reads as `(to-float x)` (and a
+  narrower target casts that), resolved per instantiation the way `{x + y}`
+  reads as `add`; a constant of type `A` is `(from-int 0)`, since a literal is
+  not an `A`. Without the constraint, `as` on a type variable is refused with
+  a note naming it.
 - **Typed numeric arrays: `F64Vec`, `F32Vec`, `I64Vec`, `I32Vec`, `U8Vec`**
   (`(load "stdlib/numvec.tur")`; phase N0 of
   `docs/upcoming/simd-and-vectorization-plan.md`). Fixed-length, unboxed,
@@ -48,6 +56,11 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A return-dispatched method at another class's associated type picks the
+  right instance.** `(from-float 2.75)` at `(Elem V)` came back as 2 compiled
+  at a float element (the int instance), and under turi a value built with
+  `from-int` in a generic called from a generic carried the int instance's
+  runtime type.
 - **Operators work on a constrained type variable.** Inside `[A] [(Num A)]`,
   `{x + y}` was "operator lookup failed ... first arg type tyvar" though
   `(add x y)` compiled; the same for `<`/`>`/`<=`/`>=` under `Ord`, and for an
