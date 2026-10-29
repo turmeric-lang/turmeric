@@ -86,6 +86,9 @@ factory({
   preRun: [(mod) => {
     mod.ENV.TUR_STDLIB_DIR = '/stdlib';
     if (dumpC) mod.ENV.TUR_JIT_DUMP_FULL = '/tmp/tur-jit-full.c';
+    // TUR_JIT_* knobs (TUR_JIT_TIMING, ...) reach the module as they reach `tur jit`.
+    for (const [k, v] of Object.entries(process.env))
+      if (k.startsWith('TUR_JIT_')) mod.ENV[k] = v;
     mod.FS.init(
       () => (stdinPos < stdinBytes.length ? stdinBytes[stdinPos++] : null),
       (c) => out.put(c),

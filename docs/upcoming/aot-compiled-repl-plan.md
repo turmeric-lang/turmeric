@@ -814,12 +814,50 @@ is point 5 on this target: the program runs on MIR's interpreter, which reads
 its IR, so the whole context stays; there is no generator state to drop, which
 is why it is smaller than the native 1.3 MB was.
 
-**Left before C2 can leave prototype:** point 5 on the page -- a kept
-context's IR is the program there, so (a) has nothing to carve; dropping
-what the interpreter does not read (the symbol and string tables, the
-scanner) needs MIR's help, or (b). Option (b) stays available natively too if
-a session's own definitions, rather than its turn count, ever make the kept
-code too much.
+#### Point 5 on the page, measured (2026-10-29)
+
+Heap in use (`mallinfo`, wasm32) per turn of a one-defn session of `(f i)`
+turns, through `tools/wasm-jit/run.js --compiled-turns`:
+
+| where | per turn |
+| --- | --- |
+| a kept MIR context | ~567 KB |
+| -- of which `MIR_init`'s tables | ~190 KB |
+| -- of which the functions' register tables | ~185 KB (37 functions x ~5 KB) |
+| -- of which IR (1,034 insns, 2,247 operands) and the rest | ~190 KB |
+| the REPL's per-turn eval arena (its first 64 KB slab) | ~64 KB |
+| everything else | ~12 KB |
+| **total** | **~654 KB** (138 MB at turn 200) |
+
+- **Most of it was table floors.** Every context made its string, alias,
+  item, value, thunk and interface tables at 512-1,000 entries, and every
+  function three register tables at 100/10/100 plus 50 descriptors. MIR's
+  tables double when full, so the floor only wastes memory for a small
+  program, which is what every turn is. A fork change starts them at 64 per
+  context and 8/4/8 per function: a turn then keeps **~394 KB** (87 MB at
+  turn 200), and the program is the same. Natively it is the same saving on
+  every `tur jit` context.
+- **The rest is the program itself.** Of the 37 functions a turn's program
+  holds, 2 ran (`main`, the module's init); most of the others are the
+  stdlib's constructors (`Tuple2`..`Tuple8`, `Grid`, `Slice`, `Pair`,
+  `Schema`), address-taken so the pruner keeps them, and identical in every
+  turn. Shrinking that is C4 item 3 (a definitions image plus a small turn
+  image) or option (b), freeing a turn's whole context when it left nothing
+  behind. (b) needs more than the store hooks: a program's static init
+  registers drop functions and dictionaries with the runtime, and on wasm a
+  freed context's function-table slots are reused, so a missed registration
+  would call the wrong function silently. That is an audit, not a patch.
+- **The 64 KB eval arena is not C2's.** `turi_eval_impl` gives each turn an
+  arena it keeps for the session (the interpreter's provenance rule), and its
+  first slab is 64 KB. An interpreted session pays it too; it is mostly
+  untouched, so resident memory barely moves (`tur repl`, 1,000 interpreted
+  turns: 21 MB).
+
+**Left before C2 can leave prototype:** the fork change above (one PR against
+turmeric-lang/mir), then a decision between C4 item 3 and (b) for the
+remaining ~0.3 MB a turn on the page. Option (b) stays available natively too
+if a session's own definitions, rather than its turn count, ever make the
+kept code too much.
 
 #### Investigation (2026-10-02)
 
