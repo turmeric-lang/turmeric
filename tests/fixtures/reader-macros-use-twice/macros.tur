@@ -1,0 +1,2 @@
+; Sidecar loaded twice by input.tur.
+(reader-macros/define 'twice :datum-bracket '(+ $body))

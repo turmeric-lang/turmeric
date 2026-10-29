@@ -7217,20 +7217,24 @@ static Form *sx_arg(TuriValue *a, uint32_t n, uint32_t i) {
     return a[i].as_syntax;
 }
 
+/* The forms whose payload is a list of items.  The brace data literals
+ * (`#map{...}`, `#set{...}`, and the `#fx{...}` / bare `#{...}` map) carry the
+ * same payload as F_LIST, so syntax-len / -nth / -first / -rest read their
+ * items too: a macro taking `#map{:k v ...}` walks it as k, v, ... */
 static bool sx_is_seq(const Form *f) {
-    return f && (f->tag == F_LIST || f->tag == F_VEC);
+    return f && (f->tag == F_LIST || f->tag == F_VEC || f->tag == F_MAP ||
+                 f->tag == F_SET || f->tag == F_MAP_LITERAL ||
+                 f->tag == F_SET_LITERAL);
 }
 
-static TuriValue native_read_string(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
-    (void)ud;
-    if (n < 1 || a[0].tag != TURI_CSTR || !a[0].as_cstr)
-        return turi_errorf("read-string: expected a string, got %s",
-                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+/* Read the first form of `text` the way read-string does; NULL when it does
+ * not parse.  Spans are relative to `text` (file id 0). */
+static Form *sx_read_first(TuriEnv *e, const char *text) {
     /* Copy the source into the env-lifetime arena so any Form slices that
      * borrow from it stay valid after the caller's string dies. */
-    size_t len = strlen(a[0].as_cstr);
+    size_t len = strlen(text);
     char *src = (char *)arena_alloc(&e->sym_arena, len + 1);
-    memcpy(src, a[0].as_cstr, len + 1);
+    memcpy(src, text, len + 1);
 
     /* The reader reports through the diagnostic file registry, which the
      * enclosing eval (or, when called from a defmacro* body, the enclosing
@@ -7259,10 +7263,147 @@ static TuriValue native_read_string(TuriEnv *e, TuriValue *a, uint32_t n, void *
     diag_reset();
     diag_files_replace(saved_files, n_saved);
     if (saved_had) diag_force_had_error();
-    if (bad)
-        return turi_errorf("read-string: could not parse \"%s\"", src);
     /* First form only (Clojure read-string semantics). */
-    return turi_syntax_val(forms[0]);
+    return bad ? NULL : forms[0];
+}
+
+static TuriValue native_read_string(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_CSTR || !a[0].as_cstr)
+        return turi_errorf("read-string: expected a string, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    Form *f = sx_read_first(e, a[0].as_cstr);
+    if (!f) return turi_errorf("read-string: could not parse \"%s\"", a[0].as_cstr);
+    return turi_syntax_val(f);
+}
+
+/* ---- read-string-at (xml-html-followups-plan A5) ------------------------
+ *
+ * A macro that reads code out of a string literal -- tur-html's `${...}`
+ * holes -- gets forms whose spans point into "<read-string>", so a type
+ * error in the code is reported nowhere useful.  read-string-at moves them
+ * to where the text sits in the user's file. */
+
+/* Children of a form, for the span walk: the forms carrying a list payload. */
+static bool sx_has_items(const Form *f) {
+    switch (f->tag) {
+        case F_LIST: case F_VEC: case F_MAP: case F_SET:
+        case F_MAP_LITERAL: case F_SET_LITERAL:
+        case F_QUOTE: case F_QUASIQUOTE:
+        case F_UNQUOTE: case F_UNQUOTE_SPLICING:
+        case F_TYPE_ANN: case F_CONTRACT_TYPE:
+        case F_READER_COND: case F_RANGE_VAR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* Give every form under f the span `s` (the fallback). */
+static void sx_set_span_all(Form *f, Span s) {
+    if (!f) return;
+    f->span = s;
+    if (sx_has_items(f))
+        for (uint32_t i = 0; i < f->as.list.len; i++)
+            sx_set_span_all(f->as.list.items[i], s);
+}
+
+typedef struct {
+    const SourceFile *sf;
+    Span anchor;
+    const uint32_t *map;   /* source offset of each byte of the text, and one past */
+    uint32_t n;            /* bytes of text */
+} SxSpanMap;
+
+/* Line and column of source offset p, counted from the anchor's start. */
+static void sx_line_col(const SxSpanMap *m, uint32_t p, uint32_t *line, uint32_t *col) {
+    uint32_t l = m->anchor.line, last_nl = UINT32_MAX;
+    for (uint32_t q = m->anchor.off_start; q < p && q < m->sf->len; q++)
+        if (m->sf->src[q] == '\n') { l++; last_nl = q; }
+    *line = l;
+    *col = last_nl == UINT32_MAX ? m->anchor.col_start + (p - m->anchor.off_start)
+                                 : p - last_nl;
+}
+
+static void sx_respan(Form *f, const SxSpanMap *m) {
+    if (!f) return;
+    uint32_t lo = f->span.off_start <= m->n ? f->span.off_start : m->n;
+    uint32_t hi = f->span.off_end <= m->n ? f->span.off_end : m->n;
+    if (hi < lo) hi = lo;
+    Span s = m->anchor;
+    s.off_start = m->map[lo];
+    s.off_end   = m->map[hi];
+    uint32_t el, ec;
+    sx_line_col(m, s.off_start, &s.line, &s.col_start);
+    sx_line_col(m, s.off_end, &el, &ec);
+    s.col_end = (el == s.line && ec > s.col_start) ? ec : s.col_start + 1;
+    f->span = s;
+    if (sx_has_items(f))
+        for (uint32_t i = 0; i < f->as.list.len; i++)
+            sx_respan(f->as.list.items[i], m);
+}
+
+/* Map bytes k..k+n of the anchor literal's VALUE to source offsets.  The
+ * anchor is a "..." literal (its simple escapes are two source bytes for
+ * one value byte) or a raw reader-macro call `#name{...}` (a backslash
+ * escapes the next byte the same way).  False when the source is not the
+ * anchor's, or an escape the walk does not model (\x.., \u{..}) comes
+ * first. */
+static bool sx_map_text(const SourceFile *sf, Span anchor, uint64_t k,
+                        uint32_t n, uint32_t *map) {
+    if (!sf || !sf->src || anchor.off_end > sf->len ||
+        anchor.off_start >= anchor.off_end)
+        return false;
+    const char *src = sf->src;
+    uint32_t p = anchor.off_start, end = anchor.off_end;
+    bool str = src[p] == '"';
+    if (str) {
+        p++;
+    } else if (src[p] == '#') {
+        while (p < end && src[p] != '{' && src[p] != '(' && src[p] != '[') p++;
+        if (p >= end) return false;
+        p++;
+    } else {
+        return false;
+    }
+    uint64_t t = 0;
+    while (t <= k + n) {
+        if (t >= k) map[t - k] = p;
+        if (t == k + n) break;
+        if (p >= end) return false;
+        if (src[p] == '\\') {
+            if (p + 1 >= end) return false;
+            if (str && !strchr("ntr0\\\"'abfve", src[p + 1])) return false;
+            p += 2;
+        } else {
+            p++;
+        }
+        t++;
+    }
+    return true;
+}
+
+static TuriValue native_read_string_at(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *anchor = sx_arg(a, n, 1);
+    if (n < 3 || a[0].tag != TURI_CSTR || !a[0].as_cstr || !anchor || a[2].tag != TURI_INT)
+        return turi_errorf("read-string-at: expected (read-string-at text anchor-syntax offset)");
+    const char *text = a[0].as_cstr;
+    int64_t k = a[2].as_int;
+    /* The user's file, looked up while the enclosing compile's registry is
+     * still in place (sx_read_first swaps it out). */
+    const SourceFile *sf = diag_source_file(anchor->span.file_id);
+    Form *f = sx_read_first(e, text);
+    if (!f) return turi_errorf("read-string-at: could not parse \"%s\"", text);
+    uint32_t tn = (uint32_t)strlen(text);
+    uint32_t *map = (uint32_t *)arena_alloc(&e->sym_arena, sizeof(uint32_t) * (tn + 1));
+    if (k >= 0 && map && sx_map_text(sf, anchor->span, (uint64_t)k, tn, map)) {
+        SxSpanMap m = { sf, anchor->span, map, tn };
+        sx_respan(f, &m);
+    } else {
+        sx_set_span_all(f, anchor->span);
+    }
+    return turi_syntax_val(f);
 }
 
 static TuriValue native_syntax_tag(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
@@ -7584,6 +7725,7 @@ static TuriValue native_syntax_error(TuriEnv *e, TuriValue *a, uint32_t n, void 
 
 static void wk_register_syntax_natives(TuriEnv *env) {
     turi_env_register_native_typed(env, "read-string",     native_read_string,     NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "read-string-at",  native_read_string_at,  NULL, TUR_NRT_SYNTAX);
     turi_env_register_native_typed(env, "syntax-tag",      native_syntax_tag,      NULL, TUR_NRT_CSTR);
     turi_env_register_native_typed(env, "syntax-len",      native_syntax_len,      NULL, TUR_NRT_INT);
     turi_env_register_native_typed(env, "syntax-first",    native_syntax_first,    NULL, TUR_NRT_SYNTAX);

@@ -244,7 +244,31 @@ static bool sym_is_hash_attr(const Symbol *sym) {
     return sym->len > 1 && sym->name[0] == '#';
 }
 
+/* fmt-expands-user-reader-macros: the source of the file being formatted,
+ * for printing a user reader macro's invocation back as written.  Set by
+ * fmt_print for its duration (the flat printer has no FmtState). */
+static const char *g_fmt_src     = NULL;
+static size_t      g_fmt_src_len = 0;
+
+/* Is f the expansion of a user reader macro whose source we have?  Then
+ * *p / *n are the invocation's text. */
+static bool rm_verbatim(const Form *f, const char **p, size_t *n) {
+    if (!f->rm_src || !g_fmt_src) return false;
+    if (f->span.off_end <= f->span.off_start || f->span.off_end > g_fmt_src_len)
+        return false;
+    *p = g_fmt_src + f->span.off_start;
+    *n = (size_t)(f->span.off_end - f->span.off_start);
+    return true;
+}
+
 static void fmt_form_flat(Buf *b, const Form *f) {
+    {
+        const char *rp; size_t rn;
+        if (rm_verbatim(f, &rp, &rn)) {
+            for (size_t i = 0; i < rn; i++) buf_putc(b, rp[i]);
+            return;
+        }
+    }
     switch (f->tag) {
         case F_NIL:   buf_puts(b, "nil"); break;
         case F_BOOL:  buf_puts(b, f->as.b ? "true" : "false"); break;
@@ -1471,6 +1495,10 @@ static void fmt_list(FmtState *s, const Form *f) {
  */
 
 static void fmt_form(FmtState *s, const Form *f) {
+    {
+        const char *rp; size_t rn;
+        if (rm_verbatim(f, &rp, &rn)) { fs_write(s, rp, rn); return; }
+    }
     switch (f->tag) {
         case F_NIL:   fs_puts(s, "nil");                               break;
         case F_BOOL:  fs_puts(s, f->as.b ? "true" : "false");         break;
@@ -1678,6 +1706,26 @@ static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off
             if (same_line) fs_putc(s, ' ');
             else           EMIT_GAP_BLANKS((uint32_t)(p - src));
             fs_write(s, p, (size_t)(line_end - p));
+            emitted = true;
+            p = line_end;
+            prev_end = (uint32_t)(p - src);
+            continue;
+        }
+
+        /* fmt-expands-user-reader-macros: a `#use-reader-macros "path"`
+         * directive between top-level forms is consumed by the reader and
+         * has no form; re-emit its line verbatim, like a comment, or
+         * formatting the file deletes it (and every `#name{...}` it enables
+         * then fails to read). */
+        if (*p == '#' && (size_t)(end - p) >= 19 &&
+            memcmp(p, "#use-reader-macros", 18) == 0 &&
+            (p[18] == ' ' || p[18] == '\t' || p[18] == '"')) {
+            const char *line_end = p;
+            while (line_end < end && *line_end != '\n') line_end++;
+            const char *trim_end = line_end;
+            while (trim_end > p && (trim_end[-1] == '\r' || trim_end[-1] == ' ')) trim_end--;
+            EMIT_GAP_BLANKS((uint32_t)(p - src));
+            fs_write(s, p, (size_t)(trim_end - p));
             emitted = true;
             p = line_end;
             prev_end = (uint32_t)(p - src);
@@ -1962,6 +2010,10 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts) {
     s.buf  = buf;
     s.col  = 0;
     s.opts = opts;
+    const char *saved_src     = g_fmt_src;
+    size_t      saved_src_len = g_fmt_src_len;
+    g_fmt_src     = opts.src;
+    g_fmt_src_len = opts.src ? (size_t)opts.src_len : 0;
 
     if (s.opts.indent_width == 0) s.opts.indent_width = 2;
     if (s.opts.line_width   == 0) s.opts.line_width   = 80;
@@ -2026,6 +2078,8 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts) {
         buf_putc(buf, '\n');
     }
 
+    g_fmt_src     = saved_src;
+    g_fmt_src_len = saved_src_len;
     return 0;
 }
 
