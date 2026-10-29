@@ -954,8 +954,21 @@ const TuriInlineCJitHook g_repl_inline_c_jit_hook = {
  * the program's own globals are host slots (g_emit_repl_slots), and the
  * program stays resident (tur_jit_set_keep_contexts), since a slot may hold a
  * pointer into it. */
+static double repl_turn_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1.0e6;
+}
+
 static int repl_compiled_turn_here(const char *src, size_t len, int *out_rc) {
     *out_rc = 0;
+    /* TUR_REPL_TURN_TIMING=1: one line per turn on stderr, where the time
+     * went (benchmarks/repl-turn reads it).  front = compile_to_c (read,
+     * elaborate, emit C); prep = the split, the prune and the autolink scan;
+     * jit = c2mir, MIR link and generation; run = the program. */
+    const char *tt = getenv("TUR_REPL_TURN_TIMING");
+    bool timing = tt && *tt && strcmp(tt, "0") != 0;
+    double t_enter = timing ? repl_turn_now_ms() : 0, t_front = 0, t_prep = 0;
     const char *tmp = getenv("TMPDIR");
     if (!tmp || !*tmp) tmp = getenv("TEMP");
     if (!tmp || !*tmp) tmp = getenv("TMP");
@@ -996,6 +1009,7 @@ static int repl_compiled_turn_here(const char *src, size_t len, int *out_rc) {
     g_interpret_mode = saved_interp;
     g_emit_for_link = saved_efl;
     unlink(path);
+    if (timing) t_front = repl_turn_now_ms();
 
     if (rc == 0) {
         hoist_tur_include_directives(&csrc);
@@ -1018,6 +1032,7 @@ static int repl_compiled_turn_here(const char *src, size_t len, int *out_rc) {
         char *argv[] = { (char *)"repl", NULL };
         bool was_quiet = tur_jit_set_quiet_warnings(true);
         bool was_kept = tur_jit_set_keep_contexts(true);
+        if (timing) t_prep = repl_turn_now_ms();
         if (!scan_autolink_markers(&csrc, &autolink)) {
             rc = -1;
         } else {
@@ -1035,6 +1050,14 @@ static int repl_compiled_turn_here(const char *src, size_t len, int *out_rc) {
         buf_free(&autolink);
     }
     buf_free(&csrc);
+    if (timing) {
+        double jit_ms = 0, run_ms = 0;
+        if (rc == 0) tur_jit_last_timings(&jit_ms, &run_ms);
+        fprintf(stderr, "TUR_REPL_TURN_TIMING\tfront=%.1f\tprep=%.1f\tjit=%.1f\trun=%.1f\ttotal=%.1f\n",
+                t_front - t_enter, t_prep ? t_prep - t_front : 0, jit_ms, run_ms,
+                repl_turn_now_ms() - t_enter);
+        fflush(stderr);
+    }
 
     diag_reset();
     diag_files_replace(saved_files, n_saved);
