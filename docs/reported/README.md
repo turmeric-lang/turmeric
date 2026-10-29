@@ -34,6 +34,13 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found probing separate compilation for split REPL images (filed 2026-10-29)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [sepcomp-module-def-initializers-never-run](sepcomp-module-def-initializers-never-run.md) | high (silent wrong value) | Under separate compilation (`tur build --shared`, the spice REPL's library, `emit-c --output-dir`) a module's `def` initializers are emitted into `body` and then dropped: no `main` writes them. `(def ^mut counter 5)` reads `0` through the library. Executables are unaffected (built whole-program) |
+| [sepcomp-exported-global-header-name-mismatch](sepcomp-exported-global-header-name-mismatch.md) | medium | An exported `def` is defined as `counter_N` but declared in its header as `glob__counter`, and an importing module reads its own `counter_N` with nothing declaring it: a two-module `--shared` build fails to compile, and a C host cannot link the header's name. Exported `defn`s are spelled module-qualified on both sides and work |
+
 ## Found matching the compiled REPL's printer (filed 2026-10-29)
 
 | Report | Severity | One line |
