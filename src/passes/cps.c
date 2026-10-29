@@ -717,9 +717,20 @@ static bool cps_control_walk(const Expr *e, bool callcc_only) {
         case EX_SERIAL_RESET:
         case EX_SERIAL_SHIFT:
         case EX_PERFORM:
-        case EX_HANDLE:
         case EX_RESUME:
         case EX_DISCONTINUE:
+            return !callcc_only;
+        /* unsafe-marker-colors-its-function: `(unsafe ...)` desugars to a
+         * handle whose one case resumes -- the static discharge of the
+         * `Unsafe` capability, which nothing performs at run time.  As a seed
+         * it colored every function with an `unsafe` in it, and through
+         * cps_body_calls_colored every caller of one: a loop calling a class
+         * method whose instance reads `(unsafe (i32vec-ref-unchecked ...))`
+         * was lowered onto the DK backend and ran 5x slower than the same
+         * loop written inline.  It is transparent: only its body counts. */
+        case EX_HANDLE:
+            if (e->as.handle_.handle && e->as.handle_.handle->is_unsafe_marker)
+                return cps_control_walk(e->as.handle_.handle->body, callcc_only);
             return !callcc_only;
         /* (call/cc f) / (escape f): the native CT-IR path (build_callcc /
          * emit_callcc) lowers these on the DK-threaded backend, so a function that

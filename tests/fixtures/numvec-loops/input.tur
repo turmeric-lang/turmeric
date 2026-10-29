@@ -1,0 +1,46 @@
+;; numvec-loops: the N2 element-iteration macros of stdlib/numvec.tur --
+;; `-for` over one array and two, `-for-index`, `-fold` and `-build`.  No index
+;; the program can get wrong is in scope, so the reads are unchecked and the
+;; loop carries no bounds or panic test.  An array argument that is not a name
+;; is evaluated once and freed after the loop (leak-checked).
+(load "stdlib/numvec.tur")
+
+;; counts how often its body runs, so "evaluated once" is observable
+(defn made [op : int] : int
+  ```c
+  static int64_t n = 0;
+  if (op == 0) return ++n;
+  return n;
+  ```)
+
+(defn fresh [] : F64Vec
+  (made 0)
+  (f64vec-of 1.5 2.5 7.1))
+
+(defn main [] : int
+  (let [v (f64vec-of 1.5 3.25 7.1)
+        w (f64vec-of 2.0 4.0 0.5)]
+    ;; one array
+    (f64vec-for [x v] (println x))
+    ;; two, walked together
+    (f64vec-for [x v y w] (println {x * y}))
+    ;; with the index
+    (f64vec-for-index [i x v] (println {(* i 10) + 1}))
+    ;; a fold: the element count and the strict left sum
+    (println (f64vec-fold [n 0 x v] {n + 1}))
+    (println (f64vec-fold [s 0.0 x v] {s + x})))
+  ;; build: element i is i squared
+  (let [sq (i64vec-build 6 [i] {i * i})]
+    (i64vec-for [x sq] (println x))
+    (println (i64vec-fold [s 0 x sq] {s + x})))
+  ;; a call as the array: evaluated once, freed after
+  (f64vec-for [x (fresh)] (println x))
+  (println (made 1))
+  (println (f64vec-fold [s 0.0 x (fresh)] {s + x}))
+  (println (made 1))
+  ;; bytes, and an empty array runs no passes
+  (let [b (u8vec-build 4 [i] (as uint8 {i * 100}))
+        e (u8vec-new 0 (as uint8 0))]
+    (println (u8vec-fold [s 0 x b] {s + (as int x)}))
+    (u8vec-for [x e] (println "never")))
+  0)

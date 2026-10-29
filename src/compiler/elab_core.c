@@ -3500,10 +3500,26 @@ bool return_type_applied_scalar_conflict(const Type *declared_app,
  * apart and marked open by the call (generic-call-result-leaks-callee-tyvar-
  * names), so an open slot or an unreduced associated-type projection is never
  * rigid either. */
+static bool rt_mentions_rigid(const char *const *rigid, uint8_t n_rigid, const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_APP)
+        return rt_mentions_rigid(rigid, n_rigid, t->as.app.fn) ||
+               rt_mentions_rigid(rigid, n_rigid, t->as.app.arg);
+    if (t->kind != TY_TYVAR || !t->as.tyvar_.name || t->as.tyvar_.open_slot) return false;
+    for (uint8_t k = 0; rigid && k < n_rigid; k++)
+        if (rigid[k] && strcmp(rigid[k], t->as.tyvar_.name) == 0)
+            return true;
+    return false;
+}
 static bool rt_is_rigid(const char *const *rigid, uint8_t n_rigid, const Type *t) {
-    if (!t || t->kind != TY_TYVAR || !t->as.tyvar_.name ||
-        t->as.tyvar_.open_slot || t->as.tyvar_.assoc_of)
+    if (!t || t->kind != TY_TYVAR || !t->as.tyvar_.name || t->as.tyvar_.open_slot)
         return false;
+    /* literal-at-associated-type-unchecked: a projection over the defn's own
+     * variables, `(Elem V)`, is as rigid as `V` -- it is whatever V's instance
+     * binds, not something the body may pick.  A generic declared `: (Elem V)`
+     * returned `1.5`, and the int32 instance's emitted C truncated it. */
+    if (t->as.tyvar_.assoc_of)
+        return rt_mentions_rigid(rigid, n_rigid, t->as.tyvar_.assoc_arg);
     for (uint8_t k = 0; rigid && k < n_rigid; k++)
         if (rigid[k] && strcmp(rigid[k], t->as.tyvar_.name) == 0)
             return true;

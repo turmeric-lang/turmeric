@@ -1,0 +1,7 @@
+;; operator-on-constrained-tyvar-refused: an operator on a type variable the
+;; generic does not constrain is still refused, and the note names the
+;; constraint that would make it dispatch.
+(defn plus [A] [x : A y : A] : A {x + y})
+(defn main [] : int
+  (println (plus 1 2))
+  0)

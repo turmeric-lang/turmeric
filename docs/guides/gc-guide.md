@@ -237,6 +237,19 @@ Prefer the typed style (`nxt : Link`, `(Vec Link)`, a `^copy` sum) over
 erasing to `:int`: a typed value is refused by the result walk where it must
 be, keeps its rewinds where it can, and never takes the erasure note.
 
+A store whose slot holds a **number** is not a hooked store, and does not
+need to be. The typed numeric arrays (`stdlib/numvec.tur`: `f64vec-set!`,
+`i64vec-set!`, `u8vec-set!`, ...) carry no `TUR_REGION_NOTE`: a `double`, an
+`int32` or a byte cannot be region memory, and an `int64` element can hold a
+node only if the node was erased to get there -- written `(:: node :int)`, or
+a typed node passed to the setter's `int` parameter, which the elaborator
+turns into the same erasing ascription. Both are noted at the erasure, so the
+generation retires before the word reaches the array.
+`tests/fixtures/region-escape-via-numvec-store` stores both shapes into an
+`I64Vec` from inside a bracket and reads them after; with the notes compiled
+out it segfaults. Only a slot that holds a carrier word -- a `Vec`, a map
+value, a cell -- gets the hook.
+
 The generation stack is **per-thread** (like the trail and the panic state);
 ownership -- what `tur_region_free` refuses to `free()` -- is process-wide
 through a registry, so a node that crosses threads is still safe to drop

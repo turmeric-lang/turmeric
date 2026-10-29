@@ -1,0 +1,9 @@
+;; numvec-use-after-free: an array is `^affine`, and `-free` consumes it, so a
+;; read after the free is a compile-time error, not a use-after-free.
+(load "stdlib/numvec.tur")
+
+(defn main [] : int
+  (let [a (f64vec-new 4 7.1)]
+    (f64vec-free a)
+    (println (f64vec-ref a 0))
+    0))

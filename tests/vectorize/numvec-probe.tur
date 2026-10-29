@@ -1,0 +1,107 @@
+;; numvec-probe.tur -- the program tests/check-numvec-vectorized.py compiles
+;; with `gcc -O3 -fopt-info-vec-optimized` to prove the loops that should
+;; vectorize do (simd-and-vectorization-plan N1 and N2).  Every N1 kernel is
+;; called, so each is emitted; the probe-* functions are the N2 acceptance
+;; shapes -- loops a program writes itself over an array.
+(load "stdlib/numvec.tur")
+
+;; a length gcc cannot see through: with a constant one it unrolls the whole
+;; loop instead of vectorizing it, and the check would measure the probe
+(defn len [] : int
+  ```c
+  volatile int64_t n = 64;
+  return n;
+  ```)
+
+;; N2: an integer sum through -fold
+(defn probe-int-fold [^borrow v : I64Vec] : int
+  (i64vec-fold [s 0 x v] {s + x}))
+
+;; N2: an int32 sum through -for and a ^mut accumulator, widening as it goes
+(defn probe-int-for [^borrow v : I32Vec] : int
+  (let [^mut s 0]
+    (i32vec-for [x v] (set! s {s + (as int x)}))
+    s))
+
+;; N2: a float sum written with explicit partial sums over the unchecked
+;; accessor -- the programmer chose the reassociation, so gcc may vectorize it
+(defn probe-float-partials [^borrow v : F64Vec] : float
+  (let [n       (f64vec-len v)
+        ^mut i  0
+        ^mut s0 0.0
+        ^mut s1 0.0]
+    (while (< {i + 1} n)
+      (set! s0 {s0 + (unsafe (f64vec-ref-unchecked v i))})
+      (set! s1 {s1 + (unsafe (f64vec-ref-unchecked v {i + 1}))})
+      (set! i {i + 2}))
+    {s0 + s1}))
+
+;; N2: an elementwise map written with -for-index and an unchecked store
+(defn probe-map [^borrow dst : F64Vec ^borrow src : F64Vec] : nil
+  (f64vec-for-index [i x src] (unsafe (f64vec-set-unchecked! dst i {x * 2.5}))))
+
+(defn f64s [] : float
+  (let [a (f64vec-new (len) 7.1)
+        b (f64vec-new (len) 3.25)]
+    (f64vec-fill! a 7.1)
+    (f64vec-copy! b a)
+    (f64vec-scale! a 1.5)
+    (f64vec-add! a b)
+    (f64vec-axpy! a 0.5 b)
+    (probe-map b a)
+    {(f64vec-sum a) + (f64vec-sum-ordered a) + (f64vec-dot a b)
+     + (f64vec-min a) + (f64vec-max a) + (probe-float-partials a)}))
+
+(defn f32s [] : float
+  (let [a (f32vec-new (len) (:: 7.1 float32))
+        b (f32vec-new (len) (:: 3.25 float32))]
+    (f32vec-fill! a (:: 7.1 float32))
+    (f32vec-copy! b a)
+    (f32vec-scale! a (:: 1.5 float32))
+    (f32vec-add! a b)
+    (f32vec-axpy! a (:: 0.5 float32) b)
+    (as float {(f32vec-sum a) + (f32vec-sum-ordered a) + (f32vec-dot a b)
+               + (f32vec-min a) + (f32vec-max a)})))
+
+(defn i64s [] : int
+  (let [a (i64vec-new (len) 7)
+        b (i64vec-new (len) 3)]
+    (i64vec-fill! a 7)
+    (i64vec-copy! b a)
+    (i64vec-scale! a 3)
+    (i64vec-add! a b)
+    (i64vec-axpy! a 2 b)
+    {(i64vec-sum a) + (i64vec-dot a b) + (i64vec-min a) + (i64vec-max a)
+     + (probe-int-fold a)}))
+
+(defn i32s [] : int
+  (let [a (i32vec-new (len) (as int32 7))
+        b (i32vec-new (len) (as int32 3))]
+    (i32vec-fill! a (as int32 7))
+    (i32vec-copy! b a)
+    (i32vec-scale! a (as int32 3))
+    (i32vec-add! a b)
+    (i32vec-axpy! a (as int32 2) b)
+    {(i32vec-sum a) + (i32vec-dot a b) + (as int (i32vec-min a))
+     + (as int (i32vec-max a)) + (probe-int-for a)}))
+
+(defn u8s [] : int
+  (let [a (u8vec-new (len) (as uint8 7))
+        b (u8vec-new (len) (as uint8 3))]
+    (u8vec-fill! a (as uint8 7))
+    (u8vec-copy! b a)
+    (u8vec-add! a b)
+    {(u8vec-sum a) + (as int (u8vec-min a)) + (as int (u8vec-max a))}))
+
+;; called from a loop: code gcc estimates runs once (only from main) is
+;; optimized for size, and its loops are not vectorized at all
+(defn main [] : int
+  (let [^mut k 0]
+    (while (< k 3)
+      (println (f64s))
+      (println (f32s))
+      (println (i64s))
+      (println (i32s))
+      (println (u8s))
+      (set! k {k + 1})))
+  0)

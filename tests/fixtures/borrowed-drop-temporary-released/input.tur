@@ -1,0 +1,38 @@
+;; borrowed-drop-temporary-released: a fresh move-only Drop value passed
+;; straight to a `^borrow` parameter -- `(f64vec-len (f64vec-new 4 0.0))` --
+;; has no owner: the callee only borrows it and no binding holds it.  It is now
+;; bound to a temp and released after the call, when that is plainly safe: the
+;; call's result is a scalar (it cannot point into the temp) and every argument
+;; before it is effect-free (hoisting it reorders nothing).  The last line is
+;; the case outside that rule, pinned as it stands: an effectful argument
+;; precedes the temporary, so it is not hoisted and stays live (a leak, never a
+;; dangling borrow).
+;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
+(defn ctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (ctr 0) (:: 1 Widget))
+(defn rel [w : Widget] : void (ctr 1) (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn peek [^borrow w : Widget] : int 1)
+(defn peek2 [k : int ^borrow w : Widget] : int k)
+(defn peekc [^borrow w : Widget] : int
+  ```c
+  return 5;
+  ```)
+(defn live [] : nil (println (- (ctr 2) (ctr 3))))
+
+(defn main [] : int
+  (println (peek (mk)))        (live)   ;; 1 0
+  (println (peekc (mk)))       (live)   ;; 5 0
+  (let [k 3]
+    (println (peek2 k (mk))))  (live)   ;; 3 0
+  (println (+ (peek (mk)) (peek (mk)))) (live)   ;; 2 0
+  (println (peek2 (ctr 2) (mk))) (live) ;; 5 1 -- effectful prefix: not hoisted
+  0)

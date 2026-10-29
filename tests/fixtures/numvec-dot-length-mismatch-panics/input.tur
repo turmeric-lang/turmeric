@@ -1,0 +1,12 @@
+;; numvec-dot-length-mismatch-panics: a kernel over two arrays checks their
+;; lengths once, before its loop (so the loop has no control flow), and a
+;; mismatch panics at the caller's line on every engine.
+(load "stdlib/numvec.tur")
+
+(defn main [] : int
+  (let [a (f64vec-of 1.5 3.25 7.1)
+        b (f64vec-of 1.5 3.25)]
+    (println (f64vec-dot a a))
+    (println (f64vec-dot a b))
+    (println "unreachable")
+    0))
