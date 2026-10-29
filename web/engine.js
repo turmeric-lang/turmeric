@@ -15,6 +15,7 @@
 // opening the popover.
 
 const STORAGE_KEY = 'tur-try-engine';
+const TURNS_KEY = 'tur-try-compiled-turns';
 export const ENGINES = ['interpret', 'compile'];
 
 let current = (() => {
@@ -26,10 +27,36 @@ let current = (() => {
     }
 })();
 
+// aot-compiled-repl-plan C2 (`--enable=compiled-repl`, prototype): under
+// Compile, the prompt's turns can run as compiled programs too -- the
+// session's definitions plus the turn -- instead of on the module's
+// interpreter.  Off unless asked for; kept like the engine choice.
+let compiledTurns = (() => {
+    try { return localStorage.getItem(TURNS_KEY) === '1'; } catch (_) { return false; }
+})();
+
 const listeners = [];
+const turnsListeners = [];
 
 export function getEngine() {
     return current;
+}
+
+/** Whether Compile runs every prompt turn as a compiled program. */
+export function getCompiledTurns() {
+    return compiledTurns;
+}
+
+export function setCompiledTurns(on) {
+    on = !!on;
+    if (on === compiledTurns) return;
+    compiledTurns = on;
+    try { localStorage.setItem(TURNS_KEY, on ? '1' : '0'); } catch (_) { /* session only */ }
+    for (const fn of turnsListeners) fn(on);
+}
+
+export function onCompiledTurnsChange(fn) {
+    turnsListeners.push(fn);
 }
 
 export function setEngine(engine) {
@@ -63,9 +90,24 @@ function render() {
             </label>`).join('');
         host.querySelectorAll('input[type=radio]').forEach(r =>
             r.addEventListener('change', () => { if (r.checked) setEngine(r.value); }));
+        host.insertAdjacentHTML('beforeend', `
+            <label class="lang-row engine-row engine-turns-row" id="engine-turns-row"
+                   title="every prompt turn compiles the session's definitions plus the turn">
+                <input type="checkbox" id="engine-turns">
+                <span class="engine-row-text">
+                    <span class="engine-row-name">Compile prompt turns too</span>
+                    <span class="engine-row-note">experimental (compiled-repl); a change starts the prompt's session afresh</span>
+                </span>
+            </label>`);
+        const box = host.querySelector('#engine-turns');
+        box.addEventListener('change', () => setCompiledTurns(box.checked));
     }
     if (host) {
         host.querySelectorAll('input[type=radio]').forEach(r => { r.checked = (r.value === current); });
+        const row = host.querySelector('#engine-turns-row');
+        if (row) row.hidden = current !== 'compile';
+        const box = host.querySelector('#engine-turns');
+        if (box) box.checked = compiledTurns;
     }
     const chip = document.getElementById('engine-chip');
     if (chip) chip.hidden = current !== 'compile';
@@ -75,4 +117,5 @@ function render() {
 export function initEnginePicker() {
     render();
     onEngineChange(render);
+    onCompiledTurnsChange(render);
 }

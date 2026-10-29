@@ -67,6 +67,8 @@ static int tur_main_inner(int argc, char **argv) {
     /* aot-compiled-repl-plan C1: the interpreter's compiler for inline-C
      * defns it cannot run.  Inert under TUR_REPL_JIT_INLINE_C=0. */
     turi_set_inline_c_jit_hook(&g_repl_inline_c_jit_hook);
+    /* aot-compiled-repl-plan C2: compiled REPL turns (--enable=compiled-repl). */
+    turi_set_compiled_turn_hook(&g_repl_compiled_turn_hook);
 #endif
 
     /* Phase 8: the global flags, wherever they appear before `--`.  A flag

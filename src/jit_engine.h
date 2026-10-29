@@ -125,4 +125,21 @@ void tur_jit_image_free(TurJitImage *img);
  * an inline-C defn on its first call.  Off by default; `tur jit` keeps them. */
 bool tur_jit_set_quiet_warnings(bool quiet);
 
+/* aot-compiled-repl-plan C2 step 2: keep each program tur_jit_execute runs
+ * resident instead of tearing its MIR context down when main returns, and
+ * generate its code eagerly (a function of an earlier program may be called
+ * by a later one, after lazy generation has moved on to another context).  A
+ * compiled REPL turn's globals live in host slots that may point into the
+ * program -- a string literal, a function -- so the program must outlive its
+ * turn.  Returns the previous setting.  Off by default. */
+bool tur_jit_set_keep_contexts(bool keep);
+
+/* aot-compiled-repl-plan C2: preprocess the first part every program shares
+ * (JIT_PRELUDE, the hoisted prefix, the committed declarations region) once
+ * and reuse it while it stays the same, instead of preprocessing it in every
+ * compile -- ~45 ms of a REPL turn.  Returns the previous setting.  Off by
+ * default: a one-shot run would only pay for it.  TUR_JIT_PREAMBLE_CACHE=1/0
+ * overrides either way; not on Windows. */
+bool tur_jit_set_preamble_cache(bool on);
+
 #endif /* TUR_JIT_ENGINE_H */

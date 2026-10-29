@@ -78,6 +78,13 @@ bool emit_split_refused_on_sigs(void);
  * false everywhere else so ordinary emission stays byte-identical. */
 extern bool g_emit_ffi_export_shims;
 
+/* aot-compiled-repl-plan C2 step 2: emit each of the program's own top-level
+ * `def`s as a pointer into a host slot (tur_repl_slot) instead of storage of
+ * its own, and run its initializer only when the slot is fresh.  Set only by
+ * a compiled REPL turn's compile; false everywhere else, so ordinary emission
+ * stays byte-identical. */
+extern bool g_emit_repl_slots;
+
 /* DEDUP-4b (docs/archive/gc-cycle-collection-plan.md): declare, rather than define, the
  * rc<T>/GC runtime in the emitted preamble, because the program will link
  * libturt_runtime.a (which carries src/runtime/{rc,gc,rc_free_queue}.c).

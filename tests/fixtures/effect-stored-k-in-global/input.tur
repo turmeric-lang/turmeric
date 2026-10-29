@@ -1,0 +1,16 @@
+;; A handler case stores its `k` in a top-level `^mut` global, and main resumes
+;; it after the `handle` has returned.  The store emitted `*saved = ...` -- the
+;; by-reference cell spelling of a captured local -- so the program did not
+;; compile at all ("invalid type argument of unary *").  A global is written in
+;; place, with the same copy-on-store as a cell.  The second line checks that
+;; resuming the copy runs the rest of w4: 1 + 5.
+(defeffect Ask [] : int)
+
+(defn w4 [] : int (+ 1 (perform (Ask))))
+
+(def ^mut saved 0)
+
+(defn main [] : int
+  (println (handle (w4) (Ask [] k) (do (set! saved k) 0)))
+  (println (resume saved 5))
+  0)

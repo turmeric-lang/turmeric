@@ -18,13 +18,14 @@ Unlike `-X`, which conflated "in development", "stable but opt-in", and
 every flag carries a hard expiry by which it must graduate or be removed.
 
 > **The registry is small by design.** Run `tur experiments` for the
-> authoritative current set (at the time of writing it holds five rows:
+> authoritative current set (at the time of writing it holds six rows:
 > `reflected-measures` -- `^reflect` on a defn admits a total measure's
 > defining equation to the refinement solver, see
 > [reflected-measures-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/reflected-measures-plan.md)
 > and the refinement guide's "Reflected measures" section -- plus
-> `discontinue`, `quote-data`, `script-deps`, and `refined-fn-types`, which
-> lets a `(fn ...)` type carry refinements.
+> `discontinue`, `quote-data`, `script-deps`, `refined-fn-types`, which
+> lets a `(fn ...)` type carry refinements, and `compiled-repl`, which runs
+> each `tur repl` turn as a compiled program (aot-compiled-repl-plan C2).
 > `r7rs-segmented-stack` graduated on 2026-10-25 and is always on, see the
 > r7rs guide's "Recursion depth" notes); this guide describes how the
 > mechanism behaves for whatever rows are present.

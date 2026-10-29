@@ -1615,6 +1615,8 @@ html.pwa {
 .engine-row-name { font-size: 13px; }
 .engine-row-note { font-size: 11px; color: var(--text-dim); white-space: normal; }
 .engine-chip { margin-inline-start: 6px; }
+.engine-turns-row { padding-inline-start: 22px; }
+.engine-turns-row[hidden] { display: none; }
 /* The engine line a Compile run ends with (session.js): which engine ran the
    program and what it cost, quieter than the program's own output. */
 .console-engine { color: var(--text-dim); font-size: 12px; }
