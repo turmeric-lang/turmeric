@@ -6,6 +6,15 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`NumArray`: generic numeric-array code.** One class over `F64Vec`,
+  `F32Vec`, `I64Vec`, `I32Vec` and `U8Vec` (`stdlib/numvec.tur`), with the
+  element type as the associated type `Elem` (`Sum` for `na-sum`, `View` for
+  views): `na-len`, `na-ref`, `na-set!`, `na-sum`, `na-min`, `na-max`,
+  `na-add!`, `na-fill!`, ... and the loops `na-for`, `na-fold`, `na-map!`.
+  A function written once over `[V] [(NumArray V)]` is specialized per type
+  and its loops vectorize like the per-type ones. A generic-typed local is
+  not dropped yet, so free `na-copy`'s result with `na-free`.
+
 - **Numvec store loops vectorize.** `P-map!` stores an expression into an
   array element by element, from one source array or two, in place or into
   another array: `(f64vec-map! v [x v] {x * 2.5})`. It and `P-build` now
@@ -18,13 +27,25 @@ All notable changes to Turmeric are documented here.
   vectorized at every level: `P-sub!`, `P-add-scalar!`, and except on
   `U8Vec` `P-mul!` (element-wise).
 
+### Fixed
+
+- **A generic call whose receiver has the class's associated type** --
+  `(m w)` with `w : (View V)` -- called the representative instance's method
+  in every specialization instead of each type's own. It now dispatches on
+  `V`.
+
 ### Changed
 
+- **A method argument at an associated type is inferred from it**:
+  `(na-add-scalar! c (from-int 1))` in a generic no longer needs
+  `(:: (from-int 1) (Elem V))`.
 - **No panic check after a call that cannot panic.** The emitter used to
   write `if (tur_panicking) ...` after every call; it now omits it after a
   call to an inline-C function whose body makes no call, never names
   `tur_panic` and evaluates no Turmeric sub-expression -- `list-head`,
-  `f64vec-set-unchecked!` and the like. Besides the smaller C, that check
+  `f64vec-set-unchecked!` and the like -- and after a Turmeric function
+  built only from such calls, arithmetic and `unsafe`, class-method
+  instances included. Besides the smaller C, that check
   was what kept a store loop from vectorizing: a store might write the flag,
   so the test could not leave the loop.
 

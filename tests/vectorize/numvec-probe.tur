@@ -70,6 +70,16 @@
     {(f64vec-sum a) + (f64vec-sum-ordered a) + (f64vec-dot a b)
      + (f64vec-min a) + (f64vec-max a) + (probe-float-partials a)}))
 
+;; NumArray: the same store loop written once, generically -- each
+;; specialization calls the instance methods, which inline down to the view
+;; store, with no panic check left between them
+(defn probe-generic-map [V] [(NumArray V) (Num (Elem V))] [^borrow v : V] : nil
+  (na-map! v [x v] {x * x}))
+
+;; NumArray: a generic read loop
+(defn probe-generic-fold [V] [(NumArray V) (Num (Elem V)) (NumCast (Elem V))] [^borrow v : V] : (Elem V)
+  (na-fold [s (:: (from-int 0) (Elem V)) x v] {s + x}))
+
 ;; Q7's store loops and kernels, apart from f64s: adding them there changed
 ;; how gcc inlines the probes f64s calls
 (defn f64-stores [] : float
@@ -80,6 +90,7 @@
     (f64vec-sub! a b)
     (f64vec-mul! a b)
     (f64vec-add-scalar! a 0.25)
+    (probe-generic-map a)
     (f64vec-sum a)))
 
 (defn f32s [] : float
@@ -94,6 +105,7 @@
     (f32vec-mul! a b)
     (f32vec-add-scalar! a (:: 0.25 float32))
     (probe-map-in-place a)
+    (probe-generic-map a)
     (as float {(f32vec-sum a) + (f32vec-sum-ordered a) + (f32vec-dot a b)
                + (f32vec-min a) + (f32vec-max a)})))
 
@@ -125,6 +137,12 @@
     {(i32vec-len (probe-build)) + (i32vec-sum a) + (i32vec-dot a b) + (as int (i32vec-min a))
      + (as int (i32vec-max a)) + (probe-int-for a)}))
 
+;; the generic probes at int32, apart from i32s for the reason f64-stores is
+(defn i32-generic [] : int
+  (let [a (i32vec-new (len) (as int32 7))]
+    (probe-generic-map a)
+    (as int (probe-generic-fold a))))
+
 (defn u8s [] : int
   (let [a (u8vec-new (len) (as uint8 7))
         b (u8vec-new (len) (as uint8 3))]
@@ -145,6 +163,7 @@
       (println (f32s))
       (println (i64s))
       (println (i32s))
+      (println (i32-generic))
       (println (u8s))
       (set! k {k + 1})))
   0)

@@ -67,6 +67,9 @@ O3_ONLY = ["i64vec-axpy!", "u8vec-sum", "u8vec-min", "u8vec-max"]
 # (its -O2 cost model refuses a loop whose trip count it cannot see); clang,
 # checked below when it is installed, at -O2.
 STORE_PROBES = ["probe-map-view", "probe-map2", "probe-map-in-place", "probe-build"]
+# NumArray: a loop written once over the class.  Every specialization
+# (`probe_generic_map__spec__...`) must vectorize, at gcc -O3 and clang -O2.
+GENERIC_PROBES = ["probe-generic-map", "probe-generic-fold"]
 PROBES = ["probe-int-fold", "probe-int-for", "probe-float-partials"] + STORE_PROBES
 
 
@@ -157,9 +160,9 @@ def main():
     # the inner loop's line, so it does not pass.
     runs = [("-O2", BOTH, "head"),
             ("-O3", BOTH + O3_ONLY, "loop"),
-            ("-O3", PROBES, "function")]
+            ("-O3", PROBES + GENERIC_PROBES, "function")]
     if "clang -O2" in reports:
-        runs.append(("clang -O2", STORE_PROBES, "function"))
+        runs.append(("clang -O2", STORE_PROBES + GENERIC_PROBES, "function"))
     else:
         print("check-numvec-vectorized: no clang; its -O2 store probes are not checked")
     for level, names, where in runs:
@@ -168,6 +171,18 @@ def main():
         for name in names:
             total += 1
             cn = mangle(name)
+            if name in GENERIC_PROBES:
+                specs = [fn for fn in spans if fn.startswith(name.replace("-", "_") + "__spec__")]
+                missed = [fn for fn in specs if fn not in got]
+                if not specs:
+                    print("FAIL %s %s -- no specialization emitted" % (level, name))
+                    fails += 1
+                elif missed:
+                    print("FAIL %s %s -- not vectorized: %s" % (level, name, ", ".join(missed)))
+                    fails += 1
+                else:
+                    print("PASS %s %s (%d specializations)" % (level, name, len(specs)))
+                continue
             if cn not in spans:
                 print("FAIL %s %s -- not emitted (is it still called in %s?)" % (level, name, PROBE))
                 fails += 1

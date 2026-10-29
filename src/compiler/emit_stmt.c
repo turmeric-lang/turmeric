@@ -953,7 +953,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * goes here, after the call -- unless the callee cannot panic
                  * (emit_call_cannot_panic), which is what lets a loop of
                  * `f64vec-set-unchecked!` stores vectorize (simd plan Q7). */
-                if (!emit_call_cannot_panic(e)) emit_panic_signal_return(ctx, body);
+                if (!emit_call_cannot_panic(ctx, e)) emit_panic_signal_return(ctx, body);
             } else {
                 buf_printf(body, "(void)(%s);\n", v);
                 /* A `!` call has no value to hoist either: under catch-unwind

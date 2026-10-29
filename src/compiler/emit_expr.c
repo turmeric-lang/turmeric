@@ -8461,7 +8461,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         buf_printf(body, "if (tur_panicking) TUR_REGION_RETIRE_TO(__tur_rgn_%d - 1);\n", rgn_id);
     }
     /* A callee that cannot panic leaves nothing to check (simd plan Q7). */
-    if (!emit_call_cannot_panic(e)) emit_panic_signal_return(ctx, body);
+    if (!emit_call_cannot_panic(ctx, e)) emit_panic_signal_return(ctx, body);
     /* gcc14-int-conversion (carrier-representation-tracking): record this call
      * temp's representation C type when it is a concrete pointer, so a later
      * `int64_t z = __ps_N;` straddle site (binder init, tail-backedge arg) can

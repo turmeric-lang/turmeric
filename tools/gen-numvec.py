@@ -84,6 +84,10 @@ HDR = """;;; tur/numvec -- typed numeric arrays: F64Vec, F32Vec, I64Vec, I32Vec,
 ;;; - more kernels for common store loops, vectorized at -O2 on every
 ;;;   compiler: `P-sub!`, `P-add-scalar!`, and except on U8Vec `P-mul!`.
 ;;;
+;;; Generic code over all five types goes through the `NumArray` class at the
+;;; end of the module: `na-len`, `na-ref`, `na-sum`, ... and the loops
+;;; `na-for`, `na-fold`, `na-map!`, with the element type as `(Elem V)`.
+;;;
 ;;; Ownership: each type is `^affine` with a `Drop` instance, so a let-bound
 ;;; array is freed at scope exit, exactly once, and moving it (returning it,
 ;;; passing it to a consumer) hands that duty on.  The accessors take it
@@ -1195,6 +1199,233 @@ def render_kernels(t, d):
     return "".join(out)
 
 
+
+# ---- the generic layer: one NumArray class over the five types ----
+# (simd-and-vectorization-plan section 3.1, "2026-10-29", and open question 2:
+# the class is NumArray, its methods `na-`.)  Each instance method delegates
+# to the per-type function of the same name, so the C is still the per-type
+# kernel; constructors stay per type (3.1 item 3: a length alone cannot pick
+# an instance).  Only the operations every type has are methods: `scale!`,
+# `axpy!`, `dot` and `mul!` do not exist on U8Vec.
+# (method, params after the receiver as "name : type", result, unsafe, summary)
+NA_METHODS = [
+    ("len", ["^borrow a : v"], "int", False, "the element count"),
+    ("ref", ["^borrow a : v", "i : int"], "Elem", False, "the element at i (bounds-checked)"),
+    ("set!", ["^borrow a : v", "i : int", "x : Elem"], "nil", False, "store x at i (bounds-checked)"),
+    ("ref-unchecked", ["^borrow a : v", "i : int"], "Elem", True, "the element at i, NOT bounds-checked"),
+    ("set-unchecked!", ["^borrow a : v", "i : int", "x : Elem"], "nil", True, "store x at i, NOT bounds-checked"),
+    ("view", ["^borrow a : v"], "View", True, "a view of a's elements (see `-view`)"),
+    # The array rides along as the receiver: a method whose only class-typed
+    # argument is an associated type (`w : View`) cannot be dispatched by the
+    # elaborator yet (docs/reported/assoc-typed-receiver-not-a-dispatch-arg.md).
+    # The instance ignores it.
+    ("view-ref", ["^borrow a : v", "w : View", "i : int"], "Elem", True,
+     "the element at i of a's view w, NOT bounds-checked"),
+    ("view-set!", ["^borrow a : v", "w : View", "i : int", "x : Elem"], "nil", True,
+     "store x at i of a's view w, NOT bounds-checked"),
+    ("fill!", ["^borrow a : v", "x : Elem"], "nil", False, "store x in every slot"),
+    ("copy!", ["^borrow dst : v", "^borrow src : v"], "nil", False, "copy src into dst (same length)"),
+    ("add!", ["^borrow dst : v", "^borrow src : v"], "nil", False, "dst[i] += src[i] (same length)"),
+    ("sub!", ["^borrow dst : v", "^borrow src : v"], "nil", False, "dst[i] -= src[i] (same length)"),
+    ("add-scalar!", ["^borrow a : v", "s : Elem"], "nil", False, "add s to every element"),
+    ("sum", ["^borrow a : v"], "Sum", False, "the sum (eight-lane order for floats; integers wrap)"),
+    ("min", ["^borrow a : v"], "Elem", False, "the smallest element (an empty array panics)"),
+    ("max", ["^borrow a : v"], "Elem", False, "the largest element (an empty array panics)"),
+    ("copy", ["^borrow a : v"], "v", False,
+     "a fresh copy, owned by the caller -- free it with `na-free` (a generic local is not dropped yet)"),
+    ("free", ["a : v"], "nil", False, "release an array now, consuming it"),
+    ("show", ["^borrow a : v"], "String", False, "an owned \"#P[a b c]\" String"),
+]
+
+
+def render_class():
+    out = [""";; ===== NumArray: one generic layer over the five types =====
+;;; NumArray -- the operations every typed numeric array has, as one class.
+;;;
+;;; Write a numeric algorithm once, over `[V] [(NumArray V)]`, and it runs on
+;;; F64Vec, F32Vec, I64Vec, I32Vec and U8Vec, each call going straight to that
+;;; type's own function (one specialization per type, no runtime dispatch).
+;;; The element type is the associated type `Elem` -- `(Elem V)` in a
+;;; signature -- so a method returns the honest `float32` or `uint8`, not a
+;;; carrier word.  `Sum` is what `na-sum` returns (`int` for the integer
+;;; types, the element type for the floats) and `View` the type of
+;;; `na-view`'s result.  Arithmetic on an element needs `(Num (Elem V))`, and
+;;; a conversion or a constant `(NumCast (Elem V))` (`stdlib/typeclass.tur`).
+;;; Constructors stay per type (`f64vec-new` ...): a length alone cannot pick
+;;; an instance.  The loops `na-for`, `na-fold` and `na-map!` below work
+;;; inside such a generic.
+;;;
+;;; Parameters:
+;;;   v -- the array type
+;;;
+;;; Methods:"""]
+    for (m, ps, r, uns, summ) in NA_METHODS:
+        out.append(";;;   na-%s -- %s%s" % (m, summ, " (`#fx{Unsafe}`)" if uns else ""))
+    out.append(""";;;
+;;; Example:
+;;;   (defn mean [V] [(NumArray V) (NumCast (Sum V))] [^borrow a : V] : float
+;;;     {(to-float (na-sum a)) / (as float (na-len a))})
+;;;   (mean (f64vec-of 1.5 2.5))   ; => 2.0
+;;;
+;;; Since: Phase N2
+(defclass NumArray [v]
+  (type Elem : Type)
+  (type Sum : Type)
+  (type View : Type)""")
+    for (m, ps, r, uns, summ) in NA_METHODS:
+        out.append("  (na-%s [%s]%s : %s)" % (m, " ".join(ps), " #fx{Unsafe}" if uns else "", r))
+    out[-1] += ")"
+    for t in TYPES:
+        out.append(";;; NumArray [%s] -- delegates to the %s-* functions." % (t["T"], t["p"]))
+        out.append("")
+        out.append("(definstance NumArray [%s]" % t["T"])
+        out.append("  (type Elem = %s)" % t["E"])
+        out.append("  (type Sum = %s)" % SUM_RET[t["p"]])
+        out.append("  (type View = %s)" % t["W"])
+        for (m, ps, r, uns, summ) in NA_METHODS:
+            names = [q.replace("^borrow ", "").split(" : ")[0] for q in ps]
+            args = names[1:] if m in ("view-ref", "view-set!") else names
+            call = "(%s-%s %s)" % (t["p"], m, " ".join(args))
+            if uns:
+                call = "(unsafe %s)" % call
+            out.append("  (na-%s [%s] %s)" % (m, " ".join(names), call))
+        out[-1] += ")"
+    out.append(NA_MACROS)
+    return "\n".join(out) + "\n"
+
+
+NA_MACROS = r''';;; na-same-len__ -- internal: the common length of two arrays, or a panic.
+
+(defn na-same-len__ [V] [(NumArray V)] [^borrow a : V ^borrow b : V] : int
+  (if (= (na-len a) (na-len b))
+    (na-len a)
+    (do
+      (panic "na-for: length mismatch")
+      0)))
+;;; na-for -- run body once per element of one or two arrays, in a generic.
+;;;
+;;; `-for` over the class: `(na-for [x v] body...)`, or `(na-for [x v y w]
+;;; body...)` to walk two together (same length, or a panic first).  The
+;;; enclosing function needs `(NumArray V)`; x is an `(Elem V)`.
+;;;
+;;; Parameters:
+;;;   bindings -- `[x v]` or `[x v y w]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (defn count-pos [V] [(NumArray V) (Ord (Elem V)) (NumCast (Elem V))]
+;;;     [^borrow a : V] : int
+;;;     (let [^mut n 0]
+;;;       (na-for [x a] (when (> x (:: (from-int 0) (Elem V))) (set! n {n + 1})))
+;;;       n))
+;;;
+;;; Since: Phase N2
+
+(defmacro na-for [bv & body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        x    (first bv)
+        v    (second bv)
+        more (rest (rest bv))]
+    (if (empty? more)
+      `(let [^mut ~i 0
+             ~n      (na-len ~v)]
+         (while (< ~i ~n)
+           (let [~x (unsafe (na-ref-unchecked ~v ~i))]
+             ~@body)
+           (set! ~i (+ ~i 1))))
+      (let [y (first more)
+            w (second more)]
+        `(let [^mut ~i 0
+               ~n      (na-same-len__ ~v ~w)]
+           (while (< ~i ~n)
+             (let [~x (unsafe (na-ref-unchecked ~v ~i))
+                   ~y (unsafe (na-ref-unchecked ~w ~i))]
+               ~@body)
+             (set! ~i (+ ~i 1))))))))
+;;; na-fold -- fold the elements of an array into an accumulator, in a generic.
+;;;
+;;; `-fold` over the class: `(na-fold [acc init x v] body)`.
+;;;
+;;; Parameters:
+;;;   bindings -- `[acc init x v]`
+;;;   body     -- the new accumulator
+;;;
+;;; Returns:
+;;;   The final accumulator.
+;;;
+;;; Example:
+;;;   (na-fold [n 0 x a] {n + 1})   ; => the length, in a generic over a
+;;;
+;;; Since: Phase N2
+
+(defmacro na-fold [bv body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        acc  (first bv)
+        init (second bv)
+        x    (first (rest (rest bv)))
+        v    (second (rest (rest bv)))]
+    `(let [^mut ~i   0
+           ~n        (na-len ~v)
+           ^mut ~acc ~init]
+       (while (< ~i ~n)
+         (let [~x (unsafe (na-ref-unchecked ~v ~i))]
+           (set! ~acc ~body))
+         (set! ~i (+ ~i 1)))
+       ~acc)))
+;;; na-map! -- store expr into dst[i] for every i, in a generic.
+;;;
+;;; `-map!` over the class: `(na-map! dst [x src] expr)` or `(na-map! dst
+;;; [x a y b] expr)`; dst may be a source.  Stores through views.
+;;;
+;;; Parameters:
+;;;   dst      -- the array stored into (borrowed)
+;;;   bindings -- `[x src]` or `[x a y b]`
+;;;   expr     -- the new element, an `(Elem V)`
+;;;
+;;; Example:
+;;;   (defn double! [V] [(NumArray V) (Num (Elem V))] [^borrow a : V] : nil
+;;;     (na-map! a [x a] {x + x}))
+;;;
+;;; Since: Phase N2
+
+(defmacro na-map! [dst bv expr]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        e    (gensym "e")
+        wd   (gensym "wd")
+        wa   (gensym "wa")
+        wb   (gensym "wb")
+        x    (first bv)
+        a    (second bv)
+        more (rest (rest bv))]
+    (if (empty? more)
+      `(let [~n      (na-same-len__ ~dst ~a)
+             ~wd     (unsafe (na-view ~dst))
+             ~wa     (unsafe (na-view ~a))
+             ^mut ~i 0]
+         (while (< ~i ~n)
+           (let [~x (unsafe (na-view-ref ~a ~wa ~i))
+                 ~e ~expr]
+             (unsafe (na-view-set! ~dst ~wd ~i ~e)))
+           (set! ~i (+ ~i 1))))
+      (let [y (first more)
+            b (second more)]
+        `(let [~n      (do (na-same-len__ ~a ~b) (na-same-len__ ~dst ~a))
+               ~wd     (unsafe (na-view ~dst))
+               ~wa     (unsafe (na-view ~a))
+               ~wb     (unsafe (na-view ~b))
+               ^mut ~i 0]
+           (while (< ~i ~n)
+             (let [~x (unsafe (na-view-ref ~a ~wa ~i))
+                   ~y (unsafe (na-view-ref ~b ~wb ~i))
+                   ~e ~expr]
+               (unsafe (na-view-set! ~dst ~wd ~i ~e)))
+             (set! ~i (+ ~i 1))))))))
+'''
+
+
 def render():
     out = [HDR]
     for t in TYPES:
@@ -1206,6 +1437,7 @@ def render():
             "u8vec": ("1", "2")}[t["p"]]
         out.append(TEMPLATE.format(**d))
         out.append(render_kernels(t, d))
+    out.append(render_class())
     return "".join(out)
 
 

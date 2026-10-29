@@ -7289,6 +7289,39 @@ static bool method_arg_scalar_at_abstract_ok(Elab *e, const Expr *obj,
     return false;
 }
 
+/* The type a method argument is expected to have when its parameter is one of
+ * the class's ASSOCIATED types -- `(na-add-scalar! a (from-int 1))` against
+ * `(na-add-scalar! [^borrow a : v s : Elem] ...)`.  In a generic over V it is
+ * the projection `(Elem V)`, exactly what `(:: (from-int 1) (Elem V))` would
+ * have said; on a concrete receiver it is that instance's binding (`float`).
+ * Without it a return-directed argument such as `from-int` had nothing to
+ * infer from.  False when the parameter is not an associated type. */
+static bool method_arg_assoc_expected(Elab *e, const Expr *obj,
+                                      const TypeClassMethod *cm,
+                                      const TypeClassInstance *inst,
+                                      uint32_t slot, Type *out) {
+    if (!obj || !cm || !inst || !inst->typeclass || slot >= cm->n_params ||
+        !cm->param_types)
+        return false;
+    const TypeClass *tc = inst->typeclass;
+    const Type *pt = &cm->param_types[slot];
+    if (pt->kind != TY_TYVAR || !pt->as.tyvar_.name || pt->as.tyvar_.assoc_of) return false;
+    int k = -1;
+    for (uint8_t a = 0; a < tc->n_assoc_types && k < 0; a++)
+        if (tc->assoc_type_names[a] &&
+            strcmp(tc->assoc_type_names[a]->name, pt->as.tyvar_.name) == 0)
+            k = a;
+    if (k < 0) return false;
+    if (obj->type.kind == TY_TYVAR && obj->type.as.tyvar_.name)
+        return elab_assoc_projection(e, tc->assoc_type_names[k], &obj->type, 1, out);
+    if (k < inst->n_assoc_types && inst->assoc_types &&
+        !tc_type_mentions_tyvar(&inst->assoc_types[k])) {
+        *out = inst->assoc_types[k];
+        return true;
+    }
+    return false;
+}
+
 /* A class method's `^borrow` parameter reads its argument without spending
  * it.  The var-use elaboration of the argument just recorded a use (a second
  * one would have been refused there), so undo it for a borrowed slot, right
@@ -9618,9 +9651,13 @@ resolved_user_fallback:;
             lam_push->as.fn.result_full_type = rinst;
         }
         Type *lam_saved = e->expected_type;
+        Type assoc_exp;
         if (lam_push) e->expected_type = lam_push;
+        else if (lam_cm && best_inst &&
+                 method_arg_assoc_expected(e, obj, lam_cm, best_inst, 1 + i, &assoc_exp))
+            e->expected_type = &assoc_exp;
         args[i] = elab_form(e, af);
-        if (lam_push) e->expected_type = lam_saved;
+        e->expected_type = lam_saved;
         if (!args[i]) return NULL;
         method_arg_release_if_borrowed(e, call, 1 + i, args[i]);
         if (lam_cm && best_inst &&

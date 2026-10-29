@@ -7680,33 +7680,25 @@ static bool __inst_Eq_eq_qu_Char(int64_t x, int64_t y) {
 
 static bool __inst_Ord_lt_qu_Char(int64_t x, int64_t y) {
         int64_t __ps_10 = (char_hy_gtint(x));
-        if (tur_panicking) return ((bool)0);
         int64_t __ps_11 = (char_hy_gtint(y));
-        if (tur_panicking) return ((bool)0);
         return (__ps_10) < (__ps_11);
 }
 
 static bool __inst_Ord_lte_qu_Char(int64_t x, int64_t y) {
         int64_t __ps_12 = (char_hy_gtint(x));
-        if (tur_panicking) return ((bool)0);
         int64_t __ps_13 = (char_hy_gtint(y));
-        if (tur_panicking) return ((bool)0);
         return (__ps_12) <= (__ps_13);
 }
 
 static bool __inst_Ord_gt_qu_Char(int64_t x, int64_t y) {
         int64_t __ps_14 = (char_hy_gtint(x));
-        if (tur_panicking) return ((bool)0);
         int64_t __ps_15 = (char_hy_gtint(y));
-        if (tur_panicking) return ((bool)0);
         return (__ps_14) > (__ps_15);
 }
 
 static bool __inst_Ord_gte_qu_Char(int64_t x, int64_t y) {
         int64_t __ps_16 = (char_hy_gtint(x));
-        if (tur_panicking) return ((bool)0);
         int64_t __ps_17 = (char_hy_gtint(y));
-        if (tur_panicking) return ((bool)0);
         return (__ps_16) >= (__ps_17);
 }
 
@@ -8704,17 +8696,13 @@ static int64_t char_hylit(int64_t i) {
 
 static bool char_eq_qu(int64_t a, int64_t b) {
         int64_t __ps_95 = (char_hy_gtint(a));
-        if (tur_panicking) return ((bool)0);
         int64_t __ps_96 = (char_hy_gtint(b));
-        if (tur_panicking) return ((bool)0);
         return (__ps_95) == (__ps_96);
 }
 
 static bool char_lt_qu(int64_t a, int64_t b) {
         int64_t __ps_97 = (char_hy_gtint(a));
-        if (tur_panicking) return ((bool)0);
         int64_t __ps_98 = (char_hy_gtint(b));
-        if (tur_panicking) return ((bool)0);
         return (__ps_97) < (__ps_98);
 }
 
@@ -8722,15 +8710,12 @@ static bool char_hybetween_qu(int64_t c, int64_t lo, int64_t hi) {
         bool __t99;
         {
             int64_t __ps_100 = (char_hy_gtint(c));
-            if (tur_panicking) return ((bool)0);
             int64_t n_1000882 = __ps_100;
             (void)n_1000882;
             int64_t __ps_102 = (char_hy_gtint(lo));
-            if (tur_panicking) return ((bool)0);
             bool __t101 = (n_1000882) >= (__ps_102);
             if (__t101) {
                 int64_t __ps_103 = (char_hy_gtint(hi));
-                if (tur_panicking) return ((bool)0);
                 __t101 = (n_1000882) <= (__ps_103);
             }
             __t99 = __t101;
@@ -8752,7 +8737,6 @@ static bool lower_qu(int64_t c) {
 
 static bool alpha_qu(int64_t c) {
         bool __ps_104 = (upper_qu(c));
-        if (tur_panicking) return ((bool)0);
         if ((__ps_104)) {
             return true;
         }
@@ -8762,7 +8746,6 @@ static bool alpha_qu(int64_t c) {
 
 static bool alnum_qu(int64_t c) {
         bool __ps_105 = (alpha_qu(c));
-        if (tur_panicking) return ((bool)0);
         if ((__ps_105)) {
             return true;
         }
@@ -8772,7 +8755,6 @@ static bool alnum_qu(int64_t c) {
 
 static bool space_qu(int64_t c) {
         bool __ps_106 = (char_eq_qu(c, INT64_C(32)));
-        if (tur_panicking) return ((bool)0);
         if ((__ps_106)) {
             return true;
         }
@@ -8781,11 +8763,9 @@ static bool space_qu(int64_t c) {
 
 static bool punct_qu(int64_t c) {
         bool __ps_108 = (char_hybetween_qu(c, INT64_C(33), INT64_C(126)));
-        if (tur_panicking) return ((bool)0);
         bool __t107 = __ps_108;
         if (__t107) {
             bool __ps_109 = (alnum_qu(c));
-            if (tur_panicking) return ((bool)0);
             __t107 = !(__ps_109);
         }
         return __t107;
@@ -8793,10 +8773,8 @@ static bool punct_qu(int64_t c) {
 
 static int64_t char_hyupcase(int64_t c) {
         bool __ps_110 = (lower_qu(c));
-        if (tur_panicking) return ((int64_t)0);
         if (__ps_110) {
             int64_t __ps_111 = (char_hy_gtint(c));
-            if (tur_panicking) return ((int64_t)0);
             TUR_MUSTTAIL_SELF(char_hyupcase);
             TUR_MUSTTAIL return int_hy_gtchar((__ps_111) - (INT64_C(32)));
         } else {
@@ -8806,10 +8784,8 @@ static int64_t char_hyupcase(int64_t c) {
 
 static int64_t char_hydowncase(int64_t c) {
         bool __ps_112 = (upper_qu(c));
-        if (tur_panicking) return ((int64_t)0);
         if (__ps_112) {
             int64_t __ps_113 = (char_hy_gtint(c));
-            if (tur_panicking) return ((int64_t)0);
             TUR_MUSTTAIL_SELF(char_hydowncase);
             TUR_MUSTTAIL return int_hy_gtchar((__ps_113) + (INT64_C(32)));
         } else {
@@ -8820,12 +8796,9 @@ static int64_t char_hydowncase(int64_t c) {
 static int64_t char_hy_gtdigit(int64_t c) {
         int64_t __t114;
         bool __ps_115 = (digit_qu(c));
-        if (tur_panicking) return ((int64_t)0);
         if (__ps_115) {
             int64_t __ps_116 = (char_hy_gtint(c));
-            if (tur_panicking) return ((int64_t)0);
             int64_t __ps_117 = (char_hy_gtint(INT64_C(48)));
-            if (tur_panicking) return ((int64_t)0);
             __t114 = (__ps_116) - (__ps_117);
         } else {
             __t114 = INT64_C(-1);
@@ -9362,25 +9335,13 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
     int64_t __t6;
     int64_t __t7;
     bool __ps_142 = (null_qu(l1));
-    if (tur_panicking) {
-        { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
-        return ((int64_t)0);
-    }
     __t0 = __ps_142;
     if (__t0) {
         bool __ps_143 = (null_qu(l2));
-        if (tur_panicking) {
-            { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
-            return ((int64_t)0);
-        }
         __t1 = __ps_143;
         return dk_run(__kont, (tur_dkw)(__t1));
     } else {
         bool __ps_144 = (null_qu(l2));
-        if (tur_panicking) {
-            { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
-            return ((int64_t)0);
-        }
         __t2 = __ps_144;
         if (__t2) {
             return dk_run(__kont, (tur_dkw)(false));
@@ -9435,15 +9396,12 @@ static bool cons_hyeq_hygo(int64_t c1, int64_t c2) {
                 (void)t2_1001349;
                 bool __t152;
                 bool __ps_153 = (tnil_qu(t1_1001348));
-                if (tur_panicking) return ((bool)0);
                 if (__ps_153) {
                     bool __ps_154 = (tnil_qu(t2_1001349));
-                    if (tur_panicking) return ((bool)0);
                     __t152 = __ps_154;
                 } else {
                     bool __t155;
                     bool __ps_156 = (tnil_qu(t2_1001349));
-                    if (tur_panicking) return ((bool)0);
                     if (__ps_156) {
                         __t155 = false;
                     } else {
@@ -9481,10 +9439,6 @@ static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
     int64_t __t1;
     int64_t __t3;
     bool __ps_158 = (null_qu(cell));
-    if (tur_panicking) {
-        { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
-        return ((int64_t)0);
-    }
     __t0 = __ps_158;
     if (__t0) {
         return dk_run(__kont, (tur_dkw)(INT64_C(0)));
@@ -9540,7 +9494,6 @@ static int64_t list_hytail(int64_t l) {
 static int64_t list_hyconcat(int64_t l1, int64_t l2) {
         int64_t __t162;
         bool __ps_163 = (null_qu(l1));
-        if (tur_panicking) return ((int64_t)0);
         if (__ps_163) {
             __t162 = l2;
         } else {
