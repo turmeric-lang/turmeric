@@ -32,7 +32,7 @@ typedef struct {
     void  *ptr;
 } ReplSlot;
 
-static ReplSlot *g_slots;
+static ReplSlot *g_repl_slots;
 static uint32_t  g_n_slots, g_cap_slots;
 /* The defs the running turn (re)defines: their slots initialize again. */
 static char    **g_redefined;
@@ -43,7 +43,7 @@ void *tur_repl_slot(const char *name, const char *typesig, size_t size, int *fre
     for (uint32_t i = 0; i < g_n_redefined; i++)
         if (strcmp(g_redefined[i], name) == 0) redefined = true;
     for (uint32_t i = 0; i < g_n_slots; i++) {
-        ReplSlot *s = &g_slots[i];
+        ReplSlot *s = &g_repl_slots[i];
         if (strcmp(s->name, name) != 0) continue;
         if (strcmp(s->typesig, typesig) == 0 && s->size == size) {
             *fresh = redefined;
@@ -63,12 +63,12 @@ void *tur_repl_slot(const char *name, const char *typesig, size_t size, int *fre
     }
     if (g_n_slots == g_cap_slots) {
         uint32_t cap = g_cap_slots ? g_cap_slots * 2 : 32;
-        ReplSlot *grown = (ReplSlot *)realloc(g_slots, cap * sizeof *grown);
+        ReplSlot *grown = (ReplSlot *)realloc(g_repl_slots, cap * sizeof *grown);
         if (!grown) { fprintf(stderr, "tur: out of memory for a REPL slot\n"); abort(); }
-        g_slots = grown;
+        g_repl_slots = grown;
         g_cap_slots = cap;
     }
-    ReplSlot *s = &g_slots[g_n_slots++];
+    ReplSlot *s = &g_repl_slots[g_n_slots++];
     s->name = strdup(name);
     s->typesig = strdup(typesig);
     s->size = size;
@@ -100,11 +100,11 @@ static void slots_clear(void) {
     /* The storage itself stays: images of the session that is ending may
      * still name it, and none of them is freed either. */
     for (uint32_t i = 0; i < g_n_slots; i++) {
-        free(g_slots[i].name);
-        free(g_slots[i].typesig);
+        free(g_repl_slots[i].name);
+        free(g_repl_slots[i].typesig);
     }
-    free(g_slots);
-    g_slots = NULL;
+    free(g_repl_slots);
+    g_repl_slots = NULL;
     g_n_slots = g_cap_slots = 0;
 }
 
