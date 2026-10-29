@@ -4,7 +4,7 @@
 (default) `defdata` segfaults at runtime with no diagnostic, and `list-of`
 with such elements fails in cc. The same programs work with the type
 declared `:heap`. Found 2026-10-16 prototyping hiccup vector rewriting
-([xml-html-followups-plan](../upcoming/spices/xml-html-followups-plan.md), D-1); reproduced on the
+([xml-html-followups-plan](xml-html-followups-plan.md), D-1); reproduced on the
 v0.65.2 release and on `main` at `d60c40f6`.
 
 ## Repro
