@@ -396,7 +396,8 @@ static void string_init (MIR_alloc_t alloc, VARR (string_t) * *strs, HTAB (strin
 
   VARR_CREATE (string_t, *strs, alloc, 0);
   VARR_PUSH (string_t, *strs, string); /* don't use 0th string */
-  HTAB_CREATE (string_t, *str_tab, alloc, 1000, str_hash, str_eq, NULL);
+  /* Grows as it fills; 1000 to start cost every context ~24 KB per table. */
+  HTAB_CREATE (string_t, *str_tab, alloc, 64, str_hash, str_eq, NULL);
 }
 
 static int string_find (VARR (string_t) * *strs MIR_UNUSED, HTAB (string_t) * *str_tab,
@@ -533,12 +534,16 @@ static void func_regs_init (MIR_context_t ctx, MIR_func_t func) {
 
   if ((func_regs = func->internal = MIR_malloc (ctx->alloc, sizeof (struct func_regs))) == NULL)
     MIR_get_error_func (ctx) (MIR_alloc_error, "Not enough memory for func regs info");
-  VARR_CREATE (reg_desc_t, func_regs->reg_descs, ctx->alloc, 50);
+  /* Small to start: every function of a module has these for as long as the
+     context lives, most functions have few registers, and the tables double
+     as they fill.  At 50/100/10/100 a context of a few dozen small functions
+     held ~5 KB a function in them. */
+  VARR_CREATE (reg_desc_t, func_regs->reg_descs, ctx->alloc, 8);
   VARR_PUSH (reg_desc_t, func_regs->reg_descs, rd); /* for 0 reg */
-  HTAB_CREATE (size_t, func_regs->name2rdn_tab, ctx->alloc, 100, name2rdn_hash, name2rdn_eq,
+  HTAB_CREATE (size_t, func_regs->name2rdn_tab, ctx->alloc, 8, name2rdn_hash, name2rdn_eq,
                func_regs);
-  HTAB_CREATE (size_t, func_regs->hrn2rdn_tab, ctx->alloc, 10, hrn2rdn_hash, hrn2rdn_eq, func_regs);
-  HTAB_CREATE (size_t, func_regs->reg2rdn_tab, ctx->alloc, 100, reg2rdn_hash, reg2rdn_eq,
+  HTAB_CREATE (size_t, func_regs->hrn2rdn_tab, ctx->alloc, 4, hrn2rdn_hash, hrn2rdn_eq, func_regs);
+  HTAB_CREATE (size_t, func_regs->reg2rdn_tab, ctx->alloc, 8, reg2rdn_hash, reg2rdn_eq,
                func_regs);
 }
 
@@ -784,7 +789,7 @@ MIR_context_t _MIR_init (MIR_alloc_t alloc, MIR_code_alloc_t code_alloc) {
   VARR_CREATE (MIR_module_t, modules_to_link, alloc, 0);
   VARR_CREATE (MIR_op_t, temp_ops, alloc, 0);
   init_module (ctx, &environment_module, ".environment");
-  HTAB_CREATE (MIR_item_t, module_item_tab, ctx->alloc, 512, item_hash, item_eq, NULL);
+  HTAB_CREATE (MIR_item_t, module_item_tab, ctx->alloc, 64, item_hash, item_eq, NULL);
   setjmp_addr = NULL;
   code_init (ctx);
   wrapper_end_addr = _MIR_get_wrapper_end (ctx); /* should be after code_init */
@@ -3290,7 +3295,7 @@ static int val_eq (val_t v1, val_t v2, void *arg) {
 static void simplify_init (MIR_context_t ctx) {
   if ((ctx->simplify_ctx = MIR_malloc (ctx->alloc, sizeof (struct simplify_ctx))) == NULL)
     MIR_get_error_func (ctx) (MIR_alloc_error, "Not enough memory for ctx");
-  HTAB_CREATE (val_t, val_tab, ctx->alloc, 512, val_hash, val_eq, ctx);
+  HTAB_CREATE (val_t, val_tab, ctx->alloc, 64, val_hash, val_eq, ctx);
   VARR_CREATE (MIR_insn_t, temp_insns, ctx->alloc, 0);
   VARR_CREATE (MIR_insn_t, cold_insns, ctx->alloc, 0);
   VARR_CREATE (MIR_insn_t, labels, ctx->alloc, 0);

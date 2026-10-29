@@ -347,4 +347,14 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     process_inlines when inlined, and is no longer inlined
     (docs/archive/mir-inliner-asserts-on-function-with-no-return.md).
     Covered by wasm-tests/ffi-test.c and c-tests/new/inline-no-return.c.
+
+  59e2c31 (merged as efc50f6, turmeric-lang/mir#18) -- every context made
+    its string, alias, item, value, thunk and interface hash tables at
+    512-1,000 entries, and every function three register tables at
+    100/10/100 plus 50 descriptors.  They double as they fill, so the size
+    was only a floor, and a context kept per compiled REPL turn
+    (aot-compiled-repl-plan C2) paid ~190 KB of floors plus ~5 KB a
+    function.  They start at 64 per context and 8/4/8 per function: a kept
+    one-defn turn in the browser module goes from ~654 KB to ~394 KB of
+    heap.  No behaviour change; run-jit.sh is the same before and after.
 ```

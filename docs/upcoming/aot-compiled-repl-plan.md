@@ -833,9 +833,9 @@ turns, through `tools/wasm-jit/run.js --compiled-turns`:
   item, value, thunk and interface tables at 512-1,000 entries, and every
   function three register tables at 100/10/100 plus 50 descriptors. MIR's
   tables double when full, so the floor only wastes memory for a small
-  program, which is what every turn is. A fork change starts them at 64 per
-  context and 8/4/8 per function: a turn then keeps **~394 KB** (87 MB at
-  turn 200), and the program is the same. Natively it is the same saving on
+  program, which is what every turn is. turmeric-lang/mir#18 (synced
+  2026-10-29) starts them at 64 per context and 8/4/8 per function: a turn
+  then keeps **~394 KB** (87 MB at turn 200), and the program is the same. Natively it is the same saving on
   every `tur jit` context.
 - **The rest is the program itself.** Of the 37 functions a turn's program
   holds, 2 ran (`main`, the module's init); most of the others are the
@@ -853,9 +853,8 @@ turns, through `tools/wasm-jit/run.js --compiled-turns`:
   untouched, so resident memory barely moves (`tur repl`, 1,000 interpreted
   turns: 21 MB).
 
-**Left before C2 can leave prototype:** the fork change above (one PR against
-turmeric-lang/mir), then a decision between C4 item 3 and (b) for the
-remaining ~0.3 MB a turn on the page. Option (b) stays available natively too
+**Left before C2 can leave prototype:** a decision between C4 item 3 and (b)
+for the remaining ~0.3 MB a turn on the page. Option (b) stays available natively too
 if a session's own definitions, rather than its turn count, ever make the
 kept code too much.
 
