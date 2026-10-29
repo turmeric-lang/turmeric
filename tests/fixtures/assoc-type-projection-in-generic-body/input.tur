@@ -1,0 +1,65 @@
+;; generic-let-of-assoc-float-truncated: a value of an associated type,
+;; `(E V)`, held inside a constrained generic.  A call binds the projection
+;; for its spec only when the CALLEE'S SIGNATURE mentions it, so a projection
+;; that appears only in a body -- a `let` of a method result, a `^mut` binder,
+;; an `if` -- stayed the int64 carrier in the float spec, and a float element
+;; was value-converted on the way in and bit-read on the way out: 1.25 printed
+;; as 4.94066e-324.  A generic calling a generic that returns `(E V)` typed
+;; the call `int` outright.  Both emitter type resolvers now reduce such a
+;; projection through the instance once the spec grounds its argument, and the
+;; call keeps the caller's projection as its type.
+;;
+;; Each shape runs at a `float` and a `float32` instance, with fractional
+;; values.  Every line matches `tur --interpret`.
+
+(defopaque W :int)
+(defopaque W32 :int)
+(defclass C [v]
+  (type E : Type)
+  (c-get [a : v] : E)
+  (c-put [a : v x : E] : nil)
+  (c-pick [a : v x : E y : E] : E))
+(definstance C [W] (type E = float)
+  (c-get [a] 1.25)
+  (c-put [a x] (println x))
+  (c-pick [a x y] (if (< x y) x y)))
+(definstance C [W32] (type E = float32)
+  (c-get [a] (:: 3.25 float32))
+  (c-put [a x] (println (as float x)))
+  (c-pick [a x y] (if (< x y) x y)))
+
+;; a let of a method result
+(defn via-let [V] [(C V)] [a : V] : nil
+  (let [t (c-get a)] (c-put a t)))
+;; the control: straight through
+(defn direct [V] [(C V)] [a : V] : nil
+  (c-put a (c-get a)))
+;; the projection in the signature (bound by the call)
+(defn tail-let [V] [(C V)] [a : V] : (E V)
+  (let [t (c-get a)] t))
+;; an annotated binder
+(defn ann-let [V] [(C V)] [a : V] : nil
+  (let [t : (E V) (c-get a)] (c-put a t)))
+;; a mutable binder, reassigned
+(defn mut-let [V] [(C V)] [a : V] : nil
+  (let [^mut t (c-get a)]
+    (set! t (c-pick a t (c-get a)))
+    (c-put a t)))
+;; an if yielding the projection
+(defn if-let [V] [(C V)] [a : V b : bool] : nil
+  (let [t (if b (c-get a) (c-get a))] (c-put a t)))
+;; a generic calling a generic that returns the projection
+(defn outer [U] [(C U)] [a : U] : nil
+  (let [t (tail-let a)] (c-put a t)))
+
+(defn main [] : int
+  (let [w : W (:: 0 W)
+        x : W32 (:: 0 W32)]
+    (via-let w) (via-let x)
+    (direct w) (direct x)
+    (c-put w (tail-let w)) (c-put x (tail-let x))
+    (ann-let w) (ann-let x)
+    (mut-let w) (mut-let x)
+    (if-let w true) (if-let x false)
+    (outer w) (outer x)
+    0))

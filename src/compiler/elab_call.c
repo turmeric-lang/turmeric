@@ -12320,9 +12320,22 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         asc->as.ascribe_.inner = out;
         return asc;
     }
+    /* generic-let-of-assoc-float-truncated: an associated-type projection over
+     * the enclosing signature's variables -- `(Elem U)`, from a generic whose
+     * result is `(Elem V)` called at `V := U` -- is the caller's type exactly
+     * as `U` is, though its own name is not in the signature. */
+    bool result_is_sig_projection = false;
+    if (wrap_generic_result && result_type.kind == TY_TYVAR &&
+        result_type.as.tyvar_.assoc_of && result_type.as.tyvar_.assoc_arg) {
+        const char *pn[16];
+        uint8_t n_pn = 0;
+        call_collect_tyvar_names(result_type.as.tyvar_.assoc_arg, pn, &n_pn, 16);
+        for (uint8_t pi = 0; pi < n_pn && !result_is_sig_projection; pi++)
+            result_is_sig_projection = ng_tyvar_in_sig(e, pn[pi]);
+    }
     if (wrap_generic_result && result_type.kind == TY_TYVAR &&
         result_type.as.tyvar_.name &&
-        ng_tyvar_in_sig(e, result_type.as.tyvar_.name)) {
+        (ng_tyvar_in_sig(e, result_type.as.tyvar_.name) || result_is_sig_projection)) {
         /* generic-call-result-in-generic-collapses-to-int: the result is the
          * ENCLOSING signature's own type variable -- `(vec-get v 0)` inside
          * `(defn first-of [A] [v : (Vec A)] : A ...)`.  The size-keyed wrap

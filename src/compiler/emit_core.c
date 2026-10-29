@@ -234,6 +234,53 @@ void emit_region_note_lvalue(Buf *body, int indent, const char *ctype, const cha
     buf_printf(body, "%*sTUR_REGION_NOTE_WORDS(&(%s), sizeof(%s));\n", indent, "", lv, lv);
 }
 
+/* Does `t` still mention a named type variable? */
+bool emit_type_mentions_named_tyvar(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR: return t->as.tyvar_.name != NULL;
+        case TY_APP:   return emit_type_mentions_named_tyvar(t->as.app.fn) ||
+                              emit_type_mentions_named_tyvar(t->as.app.arg);
+        default:       return false;
+    }
+}
+
+/* generic-let-of-assoc-float-truncated: the associated type `assoc` that the
+ * program's instance at the GROUND type `arg` binds.  A generic call binds a
+ * projection `(Elem V)` by name only when the CALLEE'S SIGNATURE mentions it
+ * (elab_call.c call_bind_assoc_projections).  One that appears only in a body
+ * -- a `let` of a method result, `(let [t (nv-ref a i)] ...)`, or a call to
+ * another generic that returns it -- got no binding, stayed the int64
+ * carrier, and a float element was value-converted at one site and bit-read
+ * at the next (1.25 printed as 4.9e-324).  So both type resolvers, the active
+ * spec's (emit_resolve_type) and a callee's (emit_abi_instantiate_type),
+ * reduce such a projection here once its argument is ground. */
+bool emit_assoc_projection_reduce(const Expr *program, const Symbol *assoc,
+                                  const Type *arg, Type *out) {
+    if (!program || !assoc || !arg || emit_type_mentions_named_tyvar(arg)) return false;
+    uint32_t n_items = 0;
+    const Expr **items = flatten_program_items(program, &n_items);
+    if (!items) return false;
+    bool found = false;
+    for (uint32_t i = 0; i < n_items && !found; i++) {
+        if (items[i]->kind != EX_INSTANCE_DEF) continue;
+        const TypeClassInstance *inst = items[i]->as.instance_def_.instance;
+        if (!inst || !inst->typeclass || inst->n_type_args != 1) continue;
+        if (!type_eq(inst->type_args[0], *arg)) continue;
+        const TypeClass *tc = inst->typeclass;
+        for (uint8_t k = 0; k < tc->n_assoc_types && k < inst->n_assoc_types; k++) {
+            const Symbol *nk = tc->assoc_type_names[k];
+            if (nk && (nk == assoc || strcmp(nk->name, assoc->name) == 0)) {
+                *out = inst->assoc_types[k];
+                found = true;
+                break;
+            }
+        }
+    }
+    free((void *)items);
+    return found;
+}
+
 Type emit_resolve_type(EmitCtx *ctx, Type t) {
     const EmitAbiSpecialization *spec = ctx ? ctx->current_abi_specialization : NULL;
     if (!spec) return t;
@@ -242,6 +289,13 @@ Type emit_resolve_type(EmitCtx *ctx, Type t) {
             uint8_t idx = 0;
             if (t.as.tyvar_.name && emit_find_abi_binding(spec, t.as.tyvar_.name, &idx)) {
                 return spec->bindings[idx].type;
+            }
+            if (t.as.tyvar_.assoc_of && t.as.tyvar_.assoc_arg) {
+                Type a = emit_resolve_type(ctx, *t.as.tyvar_.assoc_arg);
+                Type reduced;
+                if (emit_assoc_projection_reduce(ctx->program_root, t.as.tyvar_.assoc_of,
+                                                 &a, &reduced))
+                    return reduced;
             }
             return t;
         }
