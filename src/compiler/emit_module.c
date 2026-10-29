@@ -4181,6 +4181,61 @@ static Type emit_abi_instantiate_type(const Type *t,
     }
 }
 
+/* generic-callee-tyvar-captured-by-caller: are `bindings` the call's real
+ * answer rather than carrier collapse?  They are when the call's elaborated
+ * result type is ground and is what the callee's declared result becomes
+ * under them -- `(tnil)` returning `(Cons int)` with `A := int`.  An `int`
+ * binding then IS `int`, and must not be "rehydrated" by name from an
+ * enclosing spec whose own, unrelated variable happens to be spelled `A`. */
+static bool emit_abi_bindings_pin_call_result(const Expr *call,
+                                              const AbiTypeBinding *bindings,
+                                              uint8_t n_bindings, Arena *arena) {
+    const Binding *cb = call->as.call_.fn_binding;
+    if (!cb || cb->type.kind != TY_FN || !cb->type.as.fn.result_full_type ||
+        n_bindings == 0)
+        return false;
+    if (call->type.kind != TY_APP || emit_abi_type_has_any_tyvar(&call->type))
+        return false;
+    Type inst = emit_abi_instantiate_type(cb->type.as.fn.result_full_type,
+                                          bindings, n_bindings, arena);
+    return !emit_abi_type_has_any_tyvar(&inst) && type_eq(inst, call->type);
+}
+
+/* Does type `t` mention the type variable `name`? */
+static bool emit_abi_type_mentions_tyvar(const Type *t, const char *name) {
+    if (!t || !name) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
+        case TY_APP:
+            return emit_abi_type_mentions_tyvar(t->as.app.fn, name) ||
+                   emit_abi_type_mentions_tyvar(t->as.app.arg, name);
+        case TY_FN:
+            if (emit_abi_type_mentions_tyvar(t->as.fn.result_full_type, name)) return true;
+            if (t->as.fn.arg_full_types)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                    if (emit_abi_type_mentions_tyvar(t->as.fn.arg_full_types[i], name))
+                        return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
+/* Is `name` a variable of callee `cb` that no parameter carries -- bound, if
+ * at all, from the call's result, never from an argument an erasing
+ * ascription could have collapsed to the carrier? */
+static bool emit_abi_tyvar_is_result_only(const Binding *cb, const char *name) {
+    if (!cb || cb->type.kind != TY_FN || !name) return false;
+    const Type *ft = &cb->type;
+    if (!ft->as.fn.arg_full_types) return ft->as.fn.arity == 0;
+    for (uint32_t i = 0; i < ft->as.fn.arity; i++) {
+        if (!ft->as.fn.arg_full_types[i]) return false;
+        if (emit_abi_type_mentions_tyvar(ft->as.fn.arg_full_types[i], name)) return false;
+    }
+    return true;
+}
+
 /* nested-construct-byvalue: structurally unify a generic pattern (carrying named
  * tyvars, e.g. `(Result A B)`) against a concrete type (`Result__Option__cstr__cstr`,
  * a monomorphized struct, or `(Result (Option cstr) cstr)`) and collect the
@@ -6908,6 +6963,15 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         } else if (n_bindings <= ABI_TYPE_BINDINGS_MAX) {
             /* (2) re-hydrate carrier-collapsed bindings by name. */
             bool any = false;
+            /* generic-callee-tyvar-captured-by-caller: a binding of a
+             * variable no parameter carries came from the call's result, and
+             * when that result is ground and is the callee's under these
+             * bindings, an `int` there IS int -- `(tnil)` at `(Cons int)`
+             * inside `lens [A]` -- not a carrier-collapsed `A` to take from
+             * the enclosing spec.  A variable a parameter carries may still be
+             * a collapse (`(tcons (:: x :int) ...)` in `list-cons [A]`). */
+            bool result_pins = emit_abi_bindings_pin_call_result(
+                call, bindings, n_bindings, ctx->type_arena);
             /* instance-method-call-inside-an-instance-body-takes-the-enclosing-
              * result-type: the rehydration below matches by NAME, and a class's
              * type parameter carries ONE name across every instance of that
@@ -6993,6 +7057,10 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                             break;
                         }
                 }
+                if (result_pins &&
+                    emit_abi_tyvar_is_result_only(call->as.call_.fn_binding,
+                                                  bindings[i].name))
+                    continue;
                 if (bindings[i].name && !value_is_spec_tyvar &&
                     bindings[i].type.kind != TY_APP &&
                     strcmp(type_c_name(bindings[i].type), "int64_t") == 0) {

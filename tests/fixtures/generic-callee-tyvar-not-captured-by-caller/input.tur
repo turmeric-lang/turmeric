@@ -1,0 +1,13 @@
+;; generic-callee-tyvar-captured-by-caller: inside `lens [A]`, `(tnil)` at
+;; `(Cons int)` binds tnil's own `A` to int.  The spec of `lens` at A = cstr
+;; must not hand tnil the CALLER's `A` -- the C returned a `Cons__cstr` from a
+;; `Cons__int` function (an error on gcc 14 / clang 15+).
+(defn lens [A] [xs : (Cons A)] : (Cons int)
+  (if (tnil? xs) (tnil) (tcons-of 1 (lens (ttail xs)))))
+(defn empty-of [A] [xs : (Cons A)] : (Cons int) (tnil))
+(defn main [] : int
+  (let [r (lens (tcons-of "a" (tcons-of "b" (tnil))))]
+    (println (thead r))
+    (println (thead (ttail r))))
+  (println (tnil? (empty-of (tcons-of 2.5 (tnil)))))
+  0)

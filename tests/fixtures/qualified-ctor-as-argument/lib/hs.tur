@@ -1,0 +1,4 @@
+(defmodule lib/hs
+  (export HShape HCircle HSquare Pt)
+  (defdata ^heap ^copy HShape (HCircle int) (HSquare int))
+  (defstruct ^copy Pt [x : int y : int]))

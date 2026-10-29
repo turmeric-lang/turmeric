@@ -5739,6 +5739,14 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     bool fn_qual_err = false;
     Binding *fn_binding = elab_lookup_sym(e, name, head->span, &fn_qual_err);
     if (!fn_binding && fn_qual_err) return NULL;
+    /* qualified-adt-constructor-mistyped-as-argument: `(lib/shapes/Square 4)`
+     * resolves to the constructor's binding, but every constructor lookup
+     * below is by the name the call spells, and no constructor is named
+     * `lib/shapes/Square`, so the call typed as a function returning an ADT
+     * with no definition (`<adt>`).  Go on under the constructor's own name. */
+    if (fn_binding && fn_binding->name != name && fn_binding->is_global &&
+        memchr(name->name, '/', name->len) && elab_lookup_ctor(e, fn_binding->name))
+        name = fn_binding->name;
     /* compiled-closure-copies-a-captured-mut: a call through a `^mut` moved
      * into a shared cell calls what the cell holds. */
     if (fn_binding && fn_binding->cell_hidden_sym) {
