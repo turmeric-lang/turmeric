@@ -7978,7 +7978,9 @@ static void byref_scan(const CTerm *t) {
     switch (t->kind) {
         case CT_LETRAW: {
             const Binding *tgt = byref_set_target(t->as.letraw.e);
-            if (tgt && !is_byref_mut(tgt) && g_byref_muts_n < 64)
+            /* A global is shared storage already: its continuation store
+             * writes it directly (emit_letraw), with no cell to promote it to. */
+            if (tgt && !tgt->is_global && !is_byref_mut(tgt) && g_byref_muts_n < 64)
                 g_byref_muts[g_byref_muts_n++] = tgt;
             byref_scan(t->as.letraw.body); return;
         }
@@ -10640,18 +10642,36 @@ static void emit_letraw(CE *ce, const CTerm *t) {
      * reaches this lowering.  Only the CONTINUATION store is special, for its
      * value side. */
     const Binding *bref = byref_set_target(t->as.letraw.e);
-    if (bref && is_byref_mut(bref)) {
+    if (bref && (is_byref_mut(bref) || bref->is_global)) {
         const Expr *se = t->as.letraw.e;
         while (se && se->kind == EX_ASCRIBE) se = se->as.ascribe_.inner;
+        /* A compiled REPL turn's global lives in a host slot and outlives the
+         * turn, but the reaper below frees the chain when the turn's entry
+         * returns: resumed from a later turn it would run freed memory
+         * (aot-compiled-repl-plan C2, "continuations crossing turns"). */
+        if (bref->is_global && g_emit_repl_slots)
+            diag_emit(DIAG_ERROR, se->span,
+                      "a continuation stored in the top-level `%s` would outlive this "
+                      "REPL turn, and a compiled turn's continuation ends with it; "
+                      "resume it within the turn that captured it, or run without "
+                      "--enable=compiled-repl",
+                      bref->name ? bref->name->name : "?");
         int si = ce->ctx->indent; ce->ctx->indent = ce->indent;
         char *val = emit_value(ce->ctx, ce->out, se->as.set_.value);
         ce->ctx->indent = si;
         char *cell = name_for_binding(ce->ctx, bref);
         /* __dk_reap_keep registers the cloned chain for a boundary dk_free (chain
          * walk) -- the stored continuation is resumed before the outermost entry
-         * returns, then reaped, so it neither dangles nor leaks. */
-        ce_line(ce, "*%s = (int64_t)(intptr_t)__dk_reap_keep(dk_copy_range((DK *)(intptr_t)(%s), NULL));",
-                cell, val ? val : "0");
+         * returns, then reaped, so it neither dangles nor leaks.  A cell is
+         * written through its pointer; a global is written in place, and its
+         * store notes the word (CLAUDE.md, region store hooks). */
+        if (bref->is_global)
+            ce_line(ce, "%s = (int64_t)(intptr_t)__dk_reap_keep(dk_copy_range((DK *)(intptr_t)(%s), NULL)); "
+                        "TUR_REGION_NOTE_WORDS(&%s, sizeof %s);",
+                    cell, val ? val : "0", cell, cell);
+        else
+            ce_line(ce, "*%s = (int64_t)(intptr_t)__dk_reap_keep(dk_copy_range((DK *)(intptr_t)(%s), NULL));",
+                    cell, val ? val : "0");
         char *bn2 = letraw_binder_name(ce, t);
         ce_line(ce, "%s = 0;", bn2);
         free(bn2); free(cell); free(val);
@@ -14285,8 +14305,15 @@ static void emit_resume(CE *ce, const CTerm *t) {
      * `^multishot` k can still be invoked after a resume, so it stays live
      * (effect-continuation-followups Part A). */
     if (!(t->as.resume.k.kind == CA_VAR && t->as.resume.k.var
-          && t->as.resume.k.var->type.copy_kind == CK_MULTISHOT))
+          && t->as.resume.k.var->type.copy_kind == CK_MULTISHOT)) {
+        /* A k read from a mutable can still be its initial 0 -- `(def ^mut
+         * saved 0)` before any handler stored one: a panic, not a store
+         * through NULL. */
+        if (t->as.resume.k.kind == CA_VAR && t->as.resume.k.var
+            && t->as.resume.k.var->is_mut)
+            ce_line(ce, "if (!(%s)) tur_panic(\"resume: not a continuation (0)\");", kk);
         ce_line(ce, "((DK *)(%s))->consumed = 1;", kk);
+    }
     if (ce->handler_case_mode && ce->case_tail_resume && resume_is_tail(t)) {
         char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
         ce_line(ce, "return dk_tail_resume((DK *)(%s), %s);", kk, sv);

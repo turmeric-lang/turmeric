@@ -310,7 +310,10 @@ static bool has_show(const TuriEnv *env, const Type *t) {
     if (is_scalar(t->kind)) return true;
     const char *hn = head_name(t);
     const TypeClass *show = show_class(env);
-    if (!show || t->kind == TY_TYVAR || t->kind == TY_UNKNOWN) return false;
+    /* ptr<void>'s instance reads the pointer as a Result carrier; the
+     * interpreter's display skips it for any other pointer (show_tag_is_skipped)
+     * and so does this. */
+    if (!show || t->kind == TY_TYVAR || t->kind == TY_UNKNOWN || t->kind == TY_PTR_VOID) return false;
     const TypeClassEnv *tc = (const TypeClassEnv *)env->last_tc_env;
     bool found = false;
     for (const TypeClassInstance *i = tc->instances; i && !found; i = i->next) {
@@ -750,7 +753,9 @@ TuriValue turi_compiled_turn_run(TuriEnv *env, Form **forms, uint32_t first, uin
     if (hrc != 0) {
         result = turi_error("the turn did not compile");
     } else if (rc != 0) {
-        result = turi_error("the turn's program exited non-zero");
+        char msg[64];
+        snprintf(msg, sizeof msg, "the turn's program exited with status %d", rc);
+        result = turi_error(msg);
     } else {
         for (uint32_t i = env->n_compiled_defs; stale && i-- > 0;)
             if (stale[i]) table_drop(env, i);

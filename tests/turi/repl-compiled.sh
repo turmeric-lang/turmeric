@@ -233,6 +233,58 @@ same "an unrelated def stays, and the dropped one can be defined again" \
      "$(printf '=> #<struct-type S>\n=> S { a = 1 }\n=> 7\n=> #<struct-type S>\n=> 7\n=> S { a = 2, b = 3 }\n=> S { a = 2, b = 3 }')" \
      "$(results "$out")"
 
+# --- A panic, exit or abort ends the turn, not the REPL ------------------------
+# The turn's program runs in the REPL's process; its exit/abort and the
+# runtime's panic unwind to the entry thread's landing (jit_turn_unwind).
+out="$(repl_out --enable=compiled-repl <<'EOF'
+(+ 1 2)
+(panic "boom")
+(defn bye [] : int ```c exit(3); return 0; ```)
+(bye)
+(defn ab [] : int ```c abort(); return 0; ```)
+(ab)
+(panic "again")
+(* 7 7)
+EOF
+)"
+same "each turn after a panic, an exit and an abort still runs" \
+     "$(printf '=> 3\n=> #<fn bye>\n=> #<fn ab>\n=> 49')" "$(results "$out")"
+has "a panic reports its message" "boom" "$out"
+has "exit reports its status" "exited with status 3" "$out"
+has "abort reports 134" "exited with status 134" "$out"
+has "a second panic is not a double panic" "again" "$out"
+
+# --- A continuation cannot outlive its turn; a fiber can --------------------------
+# The compiled backend frees a stored continuation's chain when the turn's
+# entry returns, so storing one in a top-level def is refused.  Resuming the
+# def's initial 0 then panics instead of faulting.  A fiber's stack is plain
+# heap memory and its code is kept, so it resumes from a later turn.
+out="$(repl_out --enable=compiled-repl <<'EOF'
+(defeffect Ask [] : int)
+(defn w4 [] : int (+ 1 (perform (Ask))))
+(def ^mut saved 0)
+(handle (w4) (Ask [] k) (do (set! saved k) 0))
+(resume saved 5)
+(handle (w4) (Ask [] k) (resume k 10))
+EOF
+)"
+has "storing k in a top-level def is refused" \
+    "a continuation stored in the top-level \`saved\` would outlive this REPL turn" "$out"
+has "resuming the def's 0 panics" "resume: not a continuation (0)" "$out"
+has "a continuation resumed within its turn works" "=> 11" "$out"
+
+out="$(repl_out --enable=compiled-repl <<'EOF'
+(defn fiber-body [] : nil ```c tur_fiber_block_yield(42); tur_fiber_block_yield(43); ```)
+(defn fiber-new-fn [fn : ptr<void> stack-size : int] : ptr<void> ```c return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size); ```)
+(defn fiber-resume-fn [f : ptr<void> arg : int] : int ```c return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg); ```)
+(def f (fiber-new-fn fiber-body 0))
+(fiber-resume-fn f 0)
+(fiber-resume-fn f 0)
+EOF
+)"
+same "a fiber made in one turn resumes in the next two" \
+     "$(printf '=> #<ptr<void>>\n=> 42\n=> 43')" "$(results "$out" | tail -3)"
+
 # --- Off by default ----------------------------------------------------------------
 out="$(repl_out <<'EOF'
 (def ^mut n 5)

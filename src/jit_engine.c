@@ -891,11 +891,24 @@ static bool jit_wasm_refuses (const char *name) {
 static char jit_wasm_setjmp_import;
 #endif
 
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+static void jit_turn_exit (int code);
+static void jit_turn__exit (int code);
+static void jit_turn_abort (void);
+#endif
+
 static void *jit_import_resolver (const char *name) {
 #ifdef __EMSCRIPTEN__
   if (jit_wasm_refuses (name)) return NULL;
   if (strcmp (name, "setjmp") == 0 || strcmp (name, "_setjmp") == 0)
     return &jit_wasm_setjmp_import;
+#endif
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+  if (g_jit_keep_contexts) {   /* a REPL turn ends, not the REPL */
+    if (strcmp (name, "exit") == 0) return (void *) jit_turn_exit;
+    if (strcmp (name, "_exit") == 0 || strcmp (name, "_Exit") == 0) return (void *) jit_turn__exit;
+    if (strcmp (name, "abort") == 0) return (void *) jit_turn_abort;
+  }
 #endif
   for (size_t i = 0; i < sizeof JIT_SHIMS / sizeof JIT_SHIMS[0]; i++)
     if (strcmp (name, JIT_SHIMS[i].name) == 0) return JIT_SHIMS[i].addr;
@@ -1089,6 +1102,67 @@ static void jit_entry_fault_restore (void) {
   sigaction (SIGBUS, &g_jit_prev_bus, NULL);
 }
 
+/* A compiled REPL turn (tur_jit_set_keep_contexts) runs inside the REPL's own
+ * process, so its program's exit, _exit or abort -- and a runtime panic, which
+ * ends in the host's abort() -- must end the turn, not the session.  As the
+ * browser engine does for the page (5.7, jit_wasm_unwind), they unwind to a
+ * landing jit_run_entry sets before main, and the turn reports the status a
+ * shell would have seen: the exit code, or 134 for an abort.  The program's
+ * calls resolve to the shims below (jit_import_resolver); the host's own
+ * abort() arrives as SIGABRT on the entry thread.  `tur jit` keeps libc's,
+ * so a program run whole still ends the process as it would natively. */
+static sigjmp_buf g_jit_turn_jb;
+static volatile sig_atomic_t g_jit_turn_armed;
+static volatile int g_jit_turn_code, g_jit_turn_drain;
+static pthread_t g_jit_turn_thread;
+static struct sigaction g_jit_prev_abrt;
+
+static int jit_turn_landing_here (void) {
+  return g_jit_turn_armed && pthread_equal (pthread_self (), g_jit_turn_thread);
+}
+
+static void MIR_NO_RETURN jit_turn_unwind (int code, int drain) {
+  if (!jit_turn_landing_here ()) {
+    if (drain) exit (code);
+    _Exit (code);
+  }
+  g_jit_turn_code = code;
+  g_jit_turn_drain = drain;
+  siglongjmp (g_jit_turn_jb, 1);
+}
+static void jit_turn_exit (int code) { jit_turn_unwind (code, 1); }
+static void jit_turn__exit (int code) { jit_turn_unwind (code, 0); }
+static void jit_turn_abort (void) {
+  fflush (stdout);
+  fputs ("Aborted\n", stderr);
+  jit_turn_unwind (134, 0);
+}
+
+static void jit_turn_sigabrt (int sig) {
+  if (jit_turn_landing_here ()) {
+    g_jit_turn_code = 134;
+    g_jit_turn_drain = 0;
+    siglongjmp (g_jit_turn_jb, 1);
+  }
+  sigaction (sig, &g_jit_prev_abrt, NULL);
+  raise (sig);
+}
+
+static void jit_turn_abrt_install (void) {
+  struct sigaction sa;
+  memset (&sa, 0, sizeof sa);
+  sa.sa_handler = jit_turn_sigabrt;
+  sigemptyset (&sa.sa_mask);
+  sigaction (SIGABRT, &sa, &g_jit_prev_abrt);
+}
+
+static void jit_turn_abrt_restore (void) { sigaction (SIGABRT, &g_jit_prev_abrt, NULL); }
+
+/* main under the landing.  A function of its own so the landing's frame holds
+ * nothing a longjmp could clobber. */
+struct jit_entry_box;
+static void jit_turn_run (struct jit_entry_box *box, char **envp);
+
 /* On the entry thread: find its stack's low end and give it an alternate
  * stack to report from.  Returns the alternate stack to free, or NULL; *old
  * receives the one it replaced (ASan gives every thread its own, and frees
@@ -1141,12 +1215,40 @@ static void jit_entry_guard_leave (void *alt, const stack_t *old) {
 #endif
 
 #ifndef __EMSCRIPTEN__
+#ifndef _WIN32
+static void jit_turn_run (struct jit_entry_box *box, char **envp) {
+  extern int tur_panic_in_progress;
+  struct jit_entry_box *volatile vbox = box;
+  g_jit_turn_thread = pthread_self ();
+  if (sigsetjmp (g_jit_turn_jb, 1) == 0) {
+    g_jit_turn_armed = 1;
+    vbox->rc = vbox->fn (vbox->argc, vbox->argv, envp);
+    g_jit_turn_armed = 0;
+    jit_atexit_drain ();
+  } else {
+    g_jit_turn_armed = 0;
+    vbox->rc = g_jit_turn_code;
+    if (g_jit_turn_drain) jit_atexit_drain ();
+    tur_panic_in_progress = 0;   /* the next turn's panic is not a double one */
+  }
+  fflush (stdout);
+  fflush (stderr);
+}
+#endif
+
 static void *jit_run_entry (void *p) {
   struct jit_entry_box *box = (struct jit_entry_box *) p;
   char *fake_envp[] = {NULL};
 #ifndef _WIN32
   stack_t old_alt;
   void *alt = jit_entry_guard_enter (&old_alt);
+#endif
+#ifndef _WIN32
+  if (g_jit_keep_contexts) {   /* a REPL turn: see jit_turn_unwind */
+    jit_turn_run (box, fake_envp);
+    jit_entry_guard_leave (alt, &old_alt);
+    return NULL;
+  }
 #endif
   box->rc = box->fn (box->argc, box->argv, fake_envp);
   jit_atexit_drain ();
@@ -1339,9 +1441,9 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
   free (prelude_win_owned);
 #endif
   memcpy (full + sizeof JIT_PRELUDE - 1 + prelude_win_len, csrc, csrc_len);
-#ifdef __EMSCRIPTEN__
   /* wasm-jit-plan P1: the text c2mir is handed, with the prelude, so a
-   * <tur-jit>:LINE diagnostic can be looked up from the page. */
+   * <tur-jit>:LINE diagnostic can be looked up -- from the page, or from a
+   * compiled REPL turn, whose C is never written anywhere else. */
   {
     const char *dump = getenv ("TUR_JIT_DUMP_FULL");
     if (dump && *dump) {
@@ -1349,7 +1451,6 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
       if (df) { fwrite (full, 1, full_len, df); fclose (df); }
     }
   }
-#endif
   full[full_len] = '\0';
 
   g_src = full;
@@ -1612,10 +1713,12 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   pthread_attr_setstacksize (&attr, stack_mb << 20);
 #ifndef _WIN32
   jit_entry_fault_install ();
+  if (g_jit_keep_contexts) jit_turn_abrt_install ();
 #endif
   if (pthread_create (&entry_thread, &attr, jit_run_entry, &box) != 0) {
 #ifndef _WIN32
     jit_entry_fault_restore ();
+    if (g_jit_keep_contexts) jit_turn_abrt_restore ();
 #endif
     pthread_attr_destroy (&attr);
     jit_forget_lazy_ctx (ctx);
@@ -1656,6 +1759,7 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
 #ifndef _WIN32
   pthread_sigmask (SIG_SETMASK, &host_prev, NULL);
   jit_entry_fault_restore ();
+  if (g_jit_keep_contexts) jit_turn_abrt_restore ();
 #endif
   g_jit_stat_run_ms = jit_now_ms () - t_run;
   pthread_attr_destroy (&attr);

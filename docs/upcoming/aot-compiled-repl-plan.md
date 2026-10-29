@@ -20,7 +20,7 @@
 > draft planned to build, and the draft had design flaws this version fixes
 > (see "Why not the 2026-06-28 draft"). The file name is historical: nothing
 > here is ahead-of-time compiled any more.
-> **Last Updated:** 2026-10-29 (C2: the result printer; type redefinition)
+> **Last Updated:** 2026-10-29 (C2: continuations, fibers and panics across turns)
 > **Track:** post-v1. C0 (a bug fix) and C1 (graduated) have landed.
 > **Type:** REPL / interpreter (`src/turi/`) / JIT (`src/jit_engine.c`) /
 > emitter (REPL-mode globals).
@@ -737,11 +737,50 @@ its old shape; compiled code has one layout per name, the new one.) A `defn`
 that no longer compiles against the new type still fails the turn that
 redefines it; redefine both in one turn.
 
-**Left before C2 can leave prototype:** continuations crossing turns; the
-page (the browser JIT module installs the same hook, as for C1, and there
-point 5 is still open: the interpreter needs the IR). Option (b) stays
-available if a session's own definitions, rather than its turn count, ever
-make the kept code too much.
+#### Continuations, fibers and panics across turns, as built (2026-10-29)
+
+**A continuation stays in its turn.** A handler case's `(set! saved k)`
+copies the chain (`dk_copy_range`) and registers it with the reaper, which
+frees it when the program's entry returns -- for a REPL turn, at the end of
+the turn. So a continuation stored in a top-level `def` is refused at compile
+time: `a continuation stored in the top-level saved would outlive this REPL
+turn ...`. Resuming one within the turn that captured it works. Probing this
+found an emitter bug outside the REPL: that store, into any top-level `^mut`
+global, was emitted as `*saved = ...` (a promoted local's cell spelling), so
+the program did not compile at all. A global is now written in place
+(`tests/fixtures/effect-stored-k-in-global`). Resuming a mutable that still
+holds its initial `0` panics (`resume: not a continuation (0)`) instead of
+storing through NULL. The interpreter has a bug of its own here:
+[turi-repl-continuation-resumed-in-later-turn-reads-freed-frames](../reported/turi-repl-continuation-resumed-in-later-turn-reads-freed-frames.md).
+
+**A region's retired generations live for the session.** A turn's program
+registered `atexit(tur_region_shutdown)` like any program, and a turn drains
+its atexit list when it ends, so the shutdown freed the retired generation a
+`def` of a `with-region` node pointed into: the next turn read freed memory.
+Only the Release build showed it (`tests/turi/repl-compiled.sh` with
+`TUR=./build-release/tur`; the Debug build read the right value); the
+emitter now leaves the shutdown out of a compiled turn.
+
+**A fiber crosses turns.** Its stack is heap memory and its code is kept
+(point 5), so a fiber made in one turn and stored in a `def` resumes from the
+next, under ASan.
+
+**A panic, `exit` or `abort` ends the turn, not the REPL** (Open question 3,
+in part). The turn's program runs in the REPL's process, on an entry thread
+(`jit_run_entry`); for a kept context that thread runs `main` under a
+`sigsetjmp` landing. The program's `exit`, `_exit` and `abort` resolve to
+shims that unwind to it, and the host's `abort()` -- where a runtime `panic`
+ends -- arrives as SIGABRT on that thread and does the same. The turn fails
+with the status a shell would see (`exited with status 3`, `134`), and the
+next turn runs; the runtime's panic flag is reset so a second panic is not a
+"double panic". This is the browser engine's 5.7 landing, natively and only
+for REPL turns: `tur jit` keeps libc's. A segfault in compiled code still
+ends the session.
+
+**Left before C2 can leave prototype:** the page (the browser JIT module
+installs the same hook, as for C1, and there point 5 is still open: the
+interpreter needs the IR). Option (b) stays available if a session's own
+definitions, rather than its turn count, ever make the kept code too much.
 
 #### Investigation (2026-10-02)
 
@@ -976,6 +1015,9 @@ The C2 transcript corpus covers:
    or extend `--engine`, which today only chooses how a spice is built.
 3. **Crash isolation.** Either accept that a crashing turn ends the session,
    or run turns in a child process. A child process cannot cheaply share the
-   host's slots.
-4. **Continuations and fibers across turns** (see "Differences from the
-   interpreter").
+   host's slots. *Since 2026-10-29* a panic, `exit` or `abort` ends only the
+   turn (C2, "Continuations, fibers and panics across turns"); a fault in
+   compiled code still ends the session.
+4. ~~**Continuations and fibers across turns**~~ **Decided 2026-10-29:** a
+   continuation stored in a top-level def is refused at compile time; a fiber
+   carries across (C2, "Continuations, fibers and panics across turns").
