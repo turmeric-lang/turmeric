@@ -1,0 +1,2 @@
+warning: defdata 'Stack' supersedes the same-named struct 'Stack'
+uses of ':Stack' resolve to the new type

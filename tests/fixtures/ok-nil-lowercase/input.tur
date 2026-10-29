@@ -1,0 +1,18 @@
+;; ok-nil-lowercase -- docs/archive/ok-nil-lowercase-miscompiles.md.  `nil`
+;; at a generic function's type variable (`ok`, `some`, `id`) or at a declared
+;; `: nil` parameter used to spell the C parameter `void x`, which cc refuses.
+(defdata E (Bad int))
+(defn f [n : int] : (Result nil E) (if (> n 0) (ok nil) (err (Bad n))))
+(defn opt [n : int] : (Option nil) (if (> n 0) (some nil) (none)))
+(defn g [x : nil] : int 3)
+(defn id [A] [x : A] : A x)
+(defn noisy [] : nil (println "side effect"))
+(defn main [] : int
+  (println (if (ok? (f 1)) "ok" "err"))
+  (println (if (ok? (f 0)) "ok" "err"))
+  (println (if (some? (opt 1)) "some" "none"))
+  (println (if (some? (opt 0)) "some" "none"))
+  (println (g nil))
+  (println (g (noisy)))
+  (id nil)
+  0)

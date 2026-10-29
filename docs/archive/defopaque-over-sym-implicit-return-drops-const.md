@@ -45,3 +45,17 @@ compiles clean, which is the workaround the crdt spice uses.
 - Or lower an opaque over a const-pointer representation to `const void *`,
   so the qualifier survives; the `(:: r Sym)` direction would then need no
   cast either.
+
+## Resolution (2026-10-29)
+
+Fixed the first way the report suggested, at the return. `emit_fn_return_spelling`
+(`src/compiler/emit_fns.c`) writes `return (void *)(v);` when the function's
+C return is `void *` and the tail value's own C spelling is a const-qualified
+pointer (`fn_tail_ctype_is_const_ptr`), which is what the `(:: s Rid)`
+ascription already emits. The argument and `let` positions the report
+guessed at do not apply: the checker refuses an implicit `Sym -> Rid` there
+(`TUR-E0001`), so only the return needed the cast.
+
+Pinned by `tests/fixtures/defopaque-sym-return-keeps-const`, whose
+`unexpected.stderr` fails the fixture if cc's "discards" warning comes back.
+That fixture failed with the fix stashed and passes with it.

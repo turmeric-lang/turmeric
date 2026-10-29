@@ -65,7 +65,26 @@ from fconv_lint import (MARK, find_clang, lint_c)  # noqa: E402
 from shard_util import parse_shard, shard_label, shard_slice  # noqa: E402
 
 
+def fixture_flags(path):
+    """The fixture's own `flags` file, split as tests/run.sh splits it
+    (unquoted word splitting).  A gated fixture linted without its
+    `--enable=` failed to emit and silently dropped out, and one whose flags
+    change codegen was linted as C the suite never runs
+    (float-conversion-check-ignores-fixture-flags)."""
+    d = os.path.dirname(os.path.abspath(path))
+    fixtures = os.path.join(REPO, "tests", "fixtures")
+    if os.path.commonpath([d, fixtures]) != fixtures:
+        return []
+    f = os.path.join(d, "flags")
+    if not os.path.isfile(f):
+        return []
+    with open(f) as fh:
+        return fh.read().split()
+
+
 def lint_tur(path, tur, clang, workdir):
+    """(path, hits, emitted): hits is None when the input is not a program
+    this check applies to; emitted is False when `emit-c` itself failed."""
     # A UNIQUE file per input: inputs are linted concurrently, and two from
     # one directory once shared a name, so one program was linted as the
     # other's C (or not at all) and reported clean.
@@ -74,14 +93,17 @@ def lint_tur(path, tur, clang, workdir):
     env = dict(os.environ)
     env.pop("TUR_STDLIB_DIR", None)
     env["ASAN_OPTIONS"] = "detect_leaks=0"
-    r = subprocess.run([tur, "emit-c", path], capture_output=True, text=True,
+    r = subprocess.run([tur] + fixture_flags(path) + ["emit-c", path],
+                       capture_output=True, text=True,
                        cwd=REPO, env=env, timeout=120)
-    if r.returncode != 0 or MARK not in r.stdout:
-        return path, None       # not a program this check applies to
+    if r.returncode != 0:
+        return path, None, False
+    if MARK not in r.stdout:
+        return path, None, True     # not a program this check applies to
     with open(cfile, "w") as f:
         f.write(r.stdout)
     try:
-        return path, lint_c(cfile, clang)
+        return path, lint_c(cfile, clang), True
     finally:
         try:
             os.unlink(cfile)
@@ -181,7 +203,7 @@ def main():
             return 0
 
     if args.c:
-        findings = [(f, lint_c(f, clang)) for f in args.files]
+        findings = [(f, lint_c(f, clang), True) for f in args.files]
     else:
         # The shard slices the CORPUS enumeration only.  An explicit file list
         # is something a caller typed and expects to be honoured whole; a
@@ -211,7 +233,10 @@ def main():
 
     n = 0
     checked = 0
-    for path, hits in findings:
+    emit_failed = []
+    for path, hits, emitted in findings:
+        if not emitted:
+            emit_failed.append(path)
         if hits is None:
             continue
         checked += 1
@@ -222,6 +247,13 @@ def main():
             print("    %s" % text)
     print("check-emitted-float-conversions: %d program(s) checked%s, %d finding(s)"
           % (checked, shard_label(shard_index, shard_total), n))
+    # A corpus fixture whose emit-c failed checked nothing.  Say how many, so
+    # one dropping out (a missing flag, a compiler regression) is visible.
+    if args.corpus and emit_failed:
+        print("check-emitted-float-conversions: %d corpus fixture(s) NOT "
+              "checked -- emit-c failed:" % len(emit_failed))
+        for p in emit_failed:
+            print("    %s" % os.path.relpath(p, REPO))
     # Files the caller named, none of which turned out to be a program this
     # check applies to: that checked nothing, so it must not read as a pass.
     if args.files and not args.corpus and checked == 0:

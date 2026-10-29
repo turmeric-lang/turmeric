@@ -1453,6 +1453,14 @@ void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_par
                                  const char *ctype);
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);
 int emit_sig_lookup_n_params(const char *cname);
+/* ok-nil-lowercase-miscompiles: the C spelling of a PARAMETER whose type is
+ * `pc`.  `nil` c-names to `void`, which no parameter can be -- `(ok nil)`
+ * monomorphised `ok` at `A := nil` as `ok__spec__..._void(void x)`.  A nil
+ * parameter rides the int64 word slot a nil payload already uses
+ * (adt_field_c_type), and a call site passes it 0 (emit_nil_arg_word). */
+static inline const char *emit_param_c_spell(const char *pc) {
+    return (pc && pc[0] == 'v' && __builtin_strcmp(pc, "void") == 0) ? "int64_t" : pc;
+}
 void ensure_musttail_macro(EmitCtx *ctx);
 /* r7rs-raise-musttail-fails-under-clang-x86-64: write the self-reference a
  * function making a `TUR_MUSTTAIL` call needs ahead of that call (see the

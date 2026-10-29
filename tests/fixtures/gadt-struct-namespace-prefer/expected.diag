@@ -1,2 +1,0 @@
-warning: GADT 'Stack' shadows existing struct 'Stack'
-uses of ':Stack' in type annotations resolve to the GADT
