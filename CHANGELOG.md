@@ -48,6 +48,12 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **Operators work on a constrained type variable.** Inside `[A] [(Num A)]`,
+  `{x + y}` was "operator lookup failed ... first arg type tyvar" though
+  `(add x y)` compiled; the same for `<`/`>`/`<=`/`>=` under `Ord`, and for an
+  associated type under `(Num (Elem V))`, whose constraint was recorded with
+  no variable at all. They dispatch through the class now; without the
+  constraint the error says which one to add.
 - **A literal can no longer stand for a generic's type variable or associated
   type.** `(defn f [V] [(C V)] [a : V] : (E V) 1.5)` compiled, and an
   `int32` instance truncated it to 1; so did `(c-put a 1.5)` at an

@@ -1,0 +1,63 @@
+;; operator-on-constrained-tyvar-refused: inside a generic, `+ - * /` and
+;; `< <= > >=` on an operand of an abstract type -- the generic's own variable
+;; `A`, or an associated-type projection `(Elem V)` -- dispatch through `Num`
+;; / `Ord` when the generic is constrained by that class.  They were refused
+;; ("operator lookup failed ... first arg type tyvar") although `(add x y)`
+;; was accepted, and a `(Num (Elem V))` constraint was recorded with no
+;; variable at all.  Each runs at a float and an int32 instance, with
+;; fractional values.  Every line matches `tur --interpret`.
+(load "stdlib/numvec.tur")
+(load "stdlib/math.tur")
+
+(defclass NA [v]
+  (type Elem : Type)
+  (na-ref [^borrow a : v i : int] : Elem))
+(definstance NA [F64Vec] (type Elem = float) (na-ref [a i] (f64vec-ref a i)))
+(definstance NA [I32Vec] (type Elem = int32) (na-ref [a i] (i32vec-ref a i)))
+
+;; arithmetic at a projection
+(defn sum2 [V] [(NA V) (Num (Elem V))] [^borrow a : V] : (Elem V)
+  {(na-ref a 0) + (na-ref a 1)})
+(defn sum3 [V] [(NA V) (Num (Elem V))] [^borrow a : V] : (Elem V)
+  (+ (na-ref a 0) (na-ref a 1) (na-ref a 2)))
+(defn spread [V] [(NA V) (Num (Elem V))] [^borrow a : V] : (Elem V)
+  {{(na-ref a 2) - (na-ref a 0)} * (na-ref a 1)})
+(defn negate0 [V] [(NA V) (Num (Elem V))] [^borrow a : V] : (Elem V)
+  (- (na-ref a 0)))
+;; a running total through a ^mut
+(defn total [V] [(NA V) (Num (Elem V))] [^borrow a : V n : int] : (Elem V)
+  (let [^mut s (na-ref a 0)
+        ^mut i 1]
+    (while (< i n)
+      (set! s {s + (na-ref a i)})
+      (set! i {i + 1}))
+    s))
+;; comparisons at a projection
+(defn descending? [V] [(NA V) (Ord (Elem V))] [^borrow a : V] : bool
+  (< (na-ref a 1) (na-ref a 0)))
+(defn rising? [V] [(NA V) (Ord (Elem V))] [^borrow a : V] : bool
+  (>= (na-ref a 1) (na-ref a 0)))
+;; the generic's own variable
+(defn plus [A] [(Num A)] [x : A y : A] : A {x + y})
+(defn bigger [A] [(Ord A)] [x : A y : A] : A (if (> x y) x y))
+
+(defn main [] : int
+  (let [a (f64vec-build 3 [i] {(int->float i) + 1.25})
+        b (i32vec-build 3 [i] (as int32 {i + 7}))]
+    (println (sum2 a))
+    (println (as int (sum2 b)))
+    (println (sum3 a))
+    (println (as int (sum3 b)))
+    (println (spread a))
+    (println (as int (spread b)))
+    (println (negate0 a))
+    (println (as int (negate0 b)))
+    (println (total a 3))
+    (println (as int (total b 3)))
+    (println (descending? a))
+    (println (rising? b))
+    (println (plus 1.25 2.5))
+    (println (plus 3 4))
+    (println (bigger 1.25 2.5))
+    (println (bigger 9 4))
+    0))

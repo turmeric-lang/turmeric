@@ -4422,18 +4422,62 @@ static bool elab_num_instance_matches(Elab *e, const TypeClass *num,
  * Returns NULL (having consumed nothing) when the call is not arithmetic, no
  * `Num` class is in scope, or no instance dispatches on the receiver -- the
  * caller then proceeds to its usual operator-lookup-failed diagnostic. */
+/* operator-on-constrained-tyvar-refused: does the enclosing generic constrain
+ * the abstract type `t` -- its own variable `A`, or a projection over one,
+ * `(Elem V)` -- by `cls` (or a class that entails it)?  Matched by the
+ * constraint's variable name, which for a projection is its printed form. */
+static bool elab_tyvar_constrained_by(Elab *e, const TypeClass *cls, const Type *t) {
+    if (!cls || !t || t->kind != TY_TYVAR || !t->as.tyvar_.name) return false;
+    for (uint8_t ci = 0; ci < e->cur_fn_n_constraints; ci++) {
+        const TypeConstraint *con = &e->cur_fn_constraints[ci];
+        if (!con->typeclass || !typeclass_entails(&e->typeclass_env, con->typeclass, cls))
+            continue;
+        if (con->tyvar && con->tyvar->name &&
+            strcmp(con->tyvar->name, t->as.tyvar_.name) == 0)
+            return true;
+        if (con->param_idx < 0 && type_eq(con->type_arg, *t)) return true;
+    }
+    return false;
+}
+
+/* operator-on-constrained-tyvar-refused: map a comparison operator onto the
+ * `Ord` method that implements it, or NULL. */
+static const char *ord_method_for_operator(const Symbol *name, uint32_t n_args) {
+    if (!name || n_args != 2) return NULL;
+    if (name->len == 1 && name->name[0] == '<') return "lt?";
+    if (name->len == 1 && name->name[0] == '>') return "gt?";
+    if (name->len == 2 && memcmp(name->name, "<=", 2) == 0) return "lte?";
+    if (name->len == 2 && memcmp(name->name, ">=", 2) == 0) return "gte?";
+    return NULL;
+}
+
 static Expr *elab_try_num_operator_dispatch(Elab *e, const Form *call,
                                             const Form *head,
                                             const Symbol *name,
                                             const Type *first_t,
                                             uint32_t n_args) {
     const char *method = num_method_for_operator(name, n_args);
-    if (!method) return NULL;
+    const char *cls_name = "Num";
+    if (!method) {
+        /* A comparison reaches here only for an abstract operand: an
+         * instance-matched concrete type has its own rows or `Ord` already. */
+        method = ord_method_for_operator(name, n_args);
+        cls_name = "Ord";
+        if (!method || first_t->kind != TY_TYVAR) return NULL;
+    }
 
     TypeClass *num = typeclass_env_lookup_typeclass(
-        &e->typeclass_env, symtab_intern(e->st, strslice("Num", 3)));
+        &e->typeclass_env, symtab_intern(e->st, strslice(cls_name, (uint32_t)strlen(cls_name))));
     if (!num) return NULL;
-    if (!elab_num_instance_matches(e, num, first_t)) return NULL;
+    /* operator-on-constrained-tyvar-refused: an abstract operand -- the
+     * generic's own variable or a projection over it -- dispatches through
+     * the class when the generic is constrained by it: `{x + y}` under
+     * `(Num (Elem V))`, `(< x y)` under `(Ord A)`.  It used to be refused
+     * ("operator lookup failed ... first arg type tyvar") though `(add x y)`
+     * was accepted. */
+    if (!elab_num_instance_matches(e, num, first_t) &&
+        !elab_tyvar_constrained_by(e, num, first_t))
+        return NULL;
 
     char dotbuf[8];
     int dotlen = snprintf(dotbuf, sizeof(dotbuf), ".%s", method);
@@ -6745,6 +6789,17 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                                 "operator lookup failed for '%s': got %u arg(s), first arg type %s",
                                 name->name, n_args,
                                 n_args > 0 ? type_name(first_t) : "<none>");
+            /* operator-on-constrained-tyvar-refused: on an abstract operand
+             * the operator dispatches through the class once the generic is
+             * constrained by it -- say which. */
+            if (n_args > 0 && first_t.kind == TY_TYVAR && first_t.as.tyvar_.name) {
+                const char *cls = num_method_for_operator(name, n_args) ? "Num"
+                                : ord_method_for_operator(name, n_args) ? "Ord" : NULL;
+                if (cls)
+                    diag_emit(DIAG_NOTE, call->span,
+                              "on a type variable, '%s' needs a (%s %s) constraint "
+                              "on the generic", name->name, cls, first_t.as.tyvar_.name);
+            }
 
             const BuiltinSpec *overloads[32];
             uint32_t n_overloads = builtin_collect_with_name(name, overloads, 32);
@@ -14428,3 +14483,4 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
     }
     return out;
 }
+

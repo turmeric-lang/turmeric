@@ -10521,6 +10521,24 @@ Expr *elab_defn(Elab *e, const Form *call) {
             if (cf->as.list.len >= 2 && cf->as.list.items[1]->tag == F_SYM) {
                 tyvar_sym = cf->as.list.items[1]->as.sym;
             }
+            /* operator-on-constrained-tyvar-refused: a constraint on an
+             * associated-type projection, `(Num (Elem V))`, quantifies over
+             * the projection.  Record it under the projection's own name --
+             * `(Elem V)`, the name elab_assoc_projection gives that type -- so
+             * a lookup by the operand's type finds it; it was recorded with no
+             * variable at all.  Only a two-symbol projection spells one. */
+            else if (cf->as.list.len == 2 && cf->as.list.items[1]->tag == F_LIST &&
+                     cf->as.list.items[1]->as.list.len == 2 &&
+                     cf->as.list.items[1]->as.list.items[0]->tag == F_SYM &&
+                     cf->as.list.items[1]->as.list.items[1]->tag == F_SYM) {
+                const Form *pf = cf->as.list.items[1];
+                char nb[128];
+                int nl = snprintf(nb, sizeof nb, "(%s %s)",
+                                  pf->as.list.items[0]->as.sym->name,
+                                  pf->as.list.items[1]->as.sym->name);
+                if (nl > 0 && (size_t)nl < sizeof nb)
+                    tyvar_sym = symtab_intern(e->st, strslice(nb, (uint32_t)nl));
+            }
             new_list[ci].typeclass = tc;
             new_list[ci].type_arg = TYPE_UNKNOWN;
             new_list[ci].param_idx = -1;

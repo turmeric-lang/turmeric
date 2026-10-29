@@ -352,9 +352,14 @@ writes generic code over it:
   `P-for` / `P-fold` / `P-build` expand to loops, not closures -- but a
   generic `na-map!` taking a function, or user generic code with a local
   lambda, would hit it. Fix it before shipping anything higher-order.
-- No arithmetic on an `(Elem V)` value in generic code (`(as int x)` is
-  refused at a type variable): the class carries what a generic algorithm
-  needs as methods (`na-sum`, `na-scale!`, a widening `na-ref-int`, ...).
+- Arithmetic and comparison on an `(Elem V)` value need `(Num (Elem V))` /
+  `(Ord (Elem V))` in the generic's constraints; then `{x + y}` and `(< x y)`
+  work (fixed 2026-10-29,
+  [operator-on-constrained-tyvar-refused](../archive/operator-on-constrained-tyvar-refused.md)).
+  A literal at `(Elem V)` is refused
+  ([literal-at-associated-type-unchecked](../archive/literal-at-associated-type-unchecked.md)),
+  and `as` has no class to go through, so conversions and constants are class
+  methods (`na-elem->float`, `na-zero`).
 - An instance body does not inherit the class method's `#fx{Unsafe}`; it
   writes its own `(unsafe ...)`.
 - Constructors stay per type (item 3).
