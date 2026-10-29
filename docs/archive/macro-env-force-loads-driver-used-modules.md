@@ -9,7 +9,7 @@ macro env's stdlib preload and every expansion fail with
 of unrelated stdlib errors. turmeric-spices is such a workspace -- the
 `frame` spice's `frame/interop` has `^used` defns -- so nothing there could
 use `defmacro*`. Found 2026-10-28 starting follow-up A of
-[xml-html-followups-plan](../upcoming/spices/xml-html-followups-plan.md).
+[xml-html-followups-plan](xml-html-followups-plan.md).
 
 ## Repro
 

@@ -1,24 +1,17 @@
 # Plan: XML/HTML spice follow-ups -- markup literals, CSS selectors, hiccup
 
-> Status: all phases built (2026-10-29), awaiting merge. Done: C1-C4 (`dom/select`; turmeric-spices
-> branch `claude/ecstatic-cori-ikodwq`), A1-A2 (`dom/holes`, `dom/markupc`,
-> tur-html `html/markup`, tur-xml `xml/markup`), A3-A4 (`html->dom`,
-> `#html-live{...}` and `tpl-update!`) and D1-D3 (tur-html `html/hiccup`:
-> the macro, result-position rewriting, `hiccup->dom` / `hiccup->xml-string`
-> / `hiccup->xml-dom`, `node->hiccup`), all on turmeric-spices branch
-> `claude/ecstatic-cori-ikodwq-markup`, since D builds on A2's hole classes.
-> D2's `RenderHtml` and tourist's `html-response` (A-3) are on the same
-> branch; A5 (`read-string-at`) is on turmeric's `claude/ecstatic-cori-ikodwq`.
-> A6 (holes in JavaScript, CSS and srcdoc) is on the markup branch too.
-> Nothing is left unbuilt; the plan moves to `docs/archive/` once both
-> branches have merged.
-> What changed against the plan while
-> building it is under "Implementation notes (2026-10-28)" at the end. The
-> compiler fixes A and D needed are on turmeric's
-> `claude/ecstatic-cori-ikodwq`; the spices markup branch's CI builds against
-> turmeric `main`, so it goes green once those land.
+> Status: done and merged (2026-10-29), archived. C1-C4 (`dom/select`) is
+> turmeric-spices #121. A1-A6 (`dom/holes`, `dom/markupc`, tur-html
+> `html/markup`, tur-xml `xml/markup`, `html->dom`, `#html-live{...}` and
+> `tpl-update!`, holes in JavaScript, CSS and srcdoc), D1-D3 (tur-html
+> `html/hiccup`: the macro, result-position rewriting, `hiccup->dom` /
+> `hiccup->xml-string` / `hiccup->xml-dom`, `node->hiccup`), D2's
+> `RenderHtml` and tourist's `html-response` (A-3) are turmeric-spices #122.
+> The compiler side, including A5's `read-string-at`, is turmeric #1419.
+> What changed against the plan while building it is under "Implementation
+> notes (2026-10-28)" at the end.
 > Planned 2026-10-11 (A, C) and 2026-10-16 (D) as
-> follow-ups to [xml-html-parsers-plan](../../archive/xml-html-parsers-plan.md), which shipped
+> follow-ups to [xml-html-parsers-plan](xml-html-parsers-plan.md), which shipped
 > `tur-xml`, `tur-html` and `tur-dom-core` and is archived with its follow-up
 > B (the editable tree, turmeric-spices #106). Split out 2026-10-25; the
 > letters A, C and D are kept so the spices' comments and the filed reports
@@ -35,7 +28,7 @@
 Three additions on top of the shipped spices. Each is its own
 `turmeric-spices` PR, branched from `main`. PRs are never stacked (see
 CLAUDE.md). "B" below is the archived plan's
-[follow-up B](../../archive/xml-html-parsers-plan.md#follow-up-b-an-editable-tree): the
+[follow-up B](xml-html-parsers-plan.md#follow-up-b-an-editable-tree): the
 `dom/edit` mutators (`node-clone`, `node-import`, the `EditError` checks),
 now merged.
 
@@ -216,7 +209,7 @@ type error at the call site.
 resulting nodes are spliced in. So it can never unbalance the surrounding
 template. It is still not sanitized: a `<script>` in it survives, and the
 docstring says so in the words the archived plan's
-[Security](../../archive/xml-html-parsers-plan.md#security-not-optional) section uses.
+[Security](xml-html-parsers-plan.md#security-not-optional) section uses.
 
 **URL attributes are scheme-checked** (decided under A-1). Escaping alone
 would leave `href=${x}` with `x = "javascript:..."` a correctly escaped
@@ -544,7 +537,7 @@ string or a tree with A's escaping guarantees:
 A writes markup and splices values into it. D goes the other way: the tree
 *is* a Turmeric value (`Html`) that ordinary functions build, map, filter
 and `match` on before it is rendered. That is what A cannot give, and why
-B's [options table](../../archive/xml-html-parsers-plan.md#options-weighed) sends "rebuild from a
+B's [options table](xml-html-parsers-plan.md#options-weighed) sends "rebuild from a
 Turmeric-side value" here.
 
 ### What the reader hands a macro (checked 2026-10-16)
@@ -762,7 +755,7 @@ cannot do that (they go through `read-string`).
 
 - **Mutual recursion at macro time.** A call to a function defined later
   is typed `int`, both in a `letrec` and across a `:for-macros` module's
-  `defn`s ([macro-time-forward-reference-typed-int](../../archive/macro-time-forward-reference-typed-int.md),
+  `defn`s ([macro-time-forward-reference-typed-int](macro-time-forward-reference-typed-int.md),
   resolved 2026-10-17).
   The walker is therefore one self-recursive function that dispatches on a
   mode argument. It works, but it reads worse than three functions would.
@@ -777,11 +770,11 @@ cannot do that (they go through `read-string`).
   `syntax-list->vec`.
 - **`Html` must be `:heap`.** A by-value `defdata` as a `(List A)`
   element segfaults in `list-map` and fails in cc in `list-of`
-  ([typed-list-byvalue-adt-element-unboxed](../../archive/typed-list-byvalue-adt-element-unboxed.md),
+  ([typed-list-byvalue-adt-element-unboxed](typed-list-byvalue-adt-element-unboxed.md),
   resolved 2026-10-17). With
   `:heap`, both `(list-map rows item)` through a `ToChild (List Html)`
   instance and the fold rewrite work. The cost is the one noted in the
-  archived plan's [Outcome](../../archive/xml-html-parsers-plan.md#outcome-2026-10-10): every `:heap`
+  archived plan's [Outcome](xml-html-parsers-plan.md#outcome-2026-10-10): every `:heap`
   constructor call allocates a node nothing frees, so rendering an `Html` tree per request needs a `with-region`
   bracket around it, or a string mode that does not materialize the tree.
 
@@ -835,7 +828,7 @@ What building C, A1-A2 and D1 changed against the text above.
   stage skips it; it is compiled through every module that imports it.
 - Four compiler problems had to be fixed first (turmeric branch
   `claude/ecstatic-cori-ikodwq`):
-  [macro-env-force-loads-driver-used-modules](../../archive/macro-env-force-loads-driver-used-modules.md)
+  [macro-env-force-loads-driver-used-modules](macro-env-force-loads-driver-used-modules.md)
   (no `defmacro*` compiled in turmeric-spices at all); re-registering an
   identical reader macro (`#use-reader-macros` plus the import) was an
   error; `tur fmt` printed a user reader macro's expansion instead of the
@@ -866,7 +859,7 @@ What building C, A1-A2 and D1 changed against the text above.
   `dom/hiccup`: rendering a `raw-html` hole needs lexbor, and so does
   `ToChild Html`. The expansion calls wrapper functions (`mk-elem`, ...)
   rather than the qualified constructors, which mistype as arguments
-  ([qualified-adt-constructor-mistyped-as-argument](../../reported/qualified-adt-constructor-mistyped-as-argument.md)).
+  ([qualified-adt-constructor-mistyped-as-argument](../reported/qualified-adt-constructor-mistyped-as-argument.md)).
 - `ToChild` gained one constrained instance for `(Cons T)` (and `Child` a
   `ChildList` case) in place of per-type list instances: an instance for
   `(Cons Html)` in `html/hiccup` would be an orphan. D2's `hiccup->xml-string` will need the types moved down
@@ -880,7 +873,7 @@ What building C, A1-A2 and D1 changed against the text above.
   `HAttrName`, `HRawBody` (and D2's `HCommentBody`, `HCdataBody`,
   `HPiBody`): a type name is global, and tur-dom-core's SAX `Attr` and ecs's
   `Tag` were taken
-  ([module-type-names-collide-across-modules](../../reported/module-type-names-collide-across-modules.md)).
+  ([module-type-names-collide-across-modules](../reported/module-type-names-collide-across-modules.md)).
 - Content holes go through a new `ToHtml` class rather than `ToChild`, so a
   nested `Html` stays a tree (through `ToChild` it would be flattened to
   markup); `ToHtml` has `ToChild`'s instances plus `Html`, `Node` and
@@ -890,7 +883,7 @@ What building C, A1-A2 and D1 changed against the text above.
   `match`es over `Option`, not through the `for` macro: its `.pure` looks
   for an instance on the body's type when that is concrete, and takes the
   monad only from a `defn`'s return type
-  ([for-comprehension-pure-picks-the-payload-type](../../reported/for-comprehension-pure-picks-the-payload-type.md)).
+  ([for-comprehension-pure-picks-the-payload-type](../reported/for-comprehension-pure-picks-the-payload-type.md)).
   An inline `fn` given to `list-map` needs a typed parameter. tur-html
   cannot load `stdlib/list-typed.tur` today (its `String` collides with
   dom/ownstr's), so the test supplies `list-foldl`.
