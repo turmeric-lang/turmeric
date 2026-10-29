@@ -1,5 +1,18 @@
 # c2mir mis-lexes a `##` operand that starts with `u8`
 
+> **Resolved 2026-10-29** -- already fixed in the turmeric-lang/mir fork by
+> mir#19 (commit 07b8207, part of "-E -fdump-defines"), which `main` vendors
+> since `7e498f5e3` ("MIR: sync turmeric-lang/mir#19").  Filed from a branch
+> that predated that sync.  Root cause, for the record: in
+> `get_next_pptoken_1`'s `L`/`u`/`U` prefix branch, `u8` not followed by `"`
+> had already set `wide_type = '8'`, and the identifier then restarted from
+> `curr_c = wide_type` -- so EVERY identifier starting `u8` lexed as `88...`.
+> Ordinary uses agreed with each other, which hid it; stringification, a
+> pasted operand, `-E` output and external symbol names did not (turmeric's
+> own `u8vec_*` functions were `88vec_*` under the JIT).  A regression test,
+> `c-tests/new/u8-prefixed-identifier.c`, is on the fork branch
+> `c2mir-u8-identifier-prefix`.
+
 **Severity:** low (a compile error under `tur jit`, which then falls back to
 cc). MIR's C front end (`external/mir/c2mir/c2mir.c`) re-lexes the result of a
 token paste as if a leading `u8` were a C11 string-literal prefix (`u8"..."`):

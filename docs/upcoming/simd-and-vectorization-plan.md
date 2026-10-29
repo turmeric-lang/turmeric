@@ -745,11 +745,11 @@ What it settles for S1:
 5. **The struct-of-lanes lowering is correct, and slow**: on gcc the dot ran
    at 3.8 ns/elem (17x the vector form), the blend at scalar speed. Right for
    `tur jit`'s run-edit-run loop, as planned.
-6. **Two toolchain issues to clear first:** c2mir mis-lexes a `##` operand
-   starting `u8` -- S1's JIT preamble would paste `u8x16`
-   ([c2mir-paste-of-u8-prefixed-token](../reported/c2mir-paste-of-u8-prefixed-token.md));
-   and `tur jit` does not pass a spice's `:c-includes` to c2mir, so an S0
-   kernel runs on the cc fallback under it
+6. **Toolchain:** c2mir lexed every identifier starting `u8` as `88...`, so
+   a pasted `u8x16` broke -- already fixed on `main` by the mir#19 sync
+   ([archived](../archive/c2mir-paste-of-u8-prefixed-token.md)); and
+   `tur jit` does not pass a spice's `:c-includes` to c2mir, so an S0 kernel
+   runs on the cc fallback under it
    ([jit-ignores-spice-c-includes](../reported/jit-ignores-spice-c-includes.md)).
 
 ### S1 -- compiler-known vector types (`--enable=simd`)
