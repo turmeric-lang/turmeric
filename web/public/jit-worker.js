@@ -23,6 +23,10 @@
 // MIR's interpreter reaches at ~1,700 frames) leaves the linear stack pointer
 // and the interpreter's frames mid-call.  The answer then carries `trapped`,
 // and jit-client.js terminates this worker; the next Compile boots a fresh one.
+// The other stack can run out first -- the 16 MiB linear stack, under a large
+// local or allocas that pile up -- and the module is linked to abort then
+// (STACK_OVERFLOW_CHECK=2, tools/wasm-jit/build-module.sh), so both are
+// reported as the stack overflow they are.
 
 let jitModule = null;
 let ready = false;
@@ -53,6 +57,15 @@ function flushStreams() {
     if (stderrStream.bytes.length) emitStreamLine(stderrStream);
 }
 
+// Emscripten's abort when the linear stack's bound check fires; it also prints
+// this text through printErr, which the answer's reason already covers.
+const LINEAR_STACK_ABORT = 'Aborted(stack overflow';
+
+function isStackOverflow(err) {
+    if (err instanceof RangeError) return true;   // the JS stack limit
+    return String(err && err.message ? err.message : err).startsWith(LINEAR_STACK_ABORT);
+}
+
 function withString(str, fn) {
     const len = jitModule.lengthBytesUTF8(str) + 1;
     const ptr = jitModule._malloc(len);
@@ -74,7 +87,7 @@ function runProgram(msg) {
         self.postMessage({ type: 'jit-result', id, answer });
     } catch (err) {
         flushStreams();
-        const stackOverflow = err instanceof RangeError;
+        const stackOverflow = isStackOverflow(err);
         const first = String(err && err.message ? err.message : err).split('\n')[0];
         self.postMessage({
             type: 'jit-result', id,
@@ -101,7 +114,7 @@ function evalTurn(msg) {
         self.postMessage({ type: 'eval-result', id, result });
     } catch (err) {
         flushStreams();
-        const reason = err instanceof RangeError
+        const reason = isStackOverflow(err)
             ? 'stack overflow: recursion too deep'
             : `the compiled code trapped: ${String(err && err.message ? err.message : err).split('\n')[0]}`;
         self.postMessage({ type: 'eval-result', id, result: `Error: ${reason}`, trapped: true });
@@ -133,7 +146,9 @@ self.addEventListener('message', function (e) {
         }
         factory({
             print:    (text) => self.postMessage({ type: 'print', text }),
-            printErr: (text) => self.postMessage({ type: 'printErr', text }),
+            printErr: (text) => {
+                if (!String(text).startsWith(LINEAR_STACK_ABORT)) self.postMessage({ type: 'printErr', text });
+            },
             stdout:   (byte) => streamByte(stdoutStream, byte),
             stderr:   (byte) => streamByte(stderrStream, byte),
         }).then(function (mod) {

@@ -69,7 +69,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [ilp32-word-slots-truncate-64-bit-carriers](ilp32-word-slots-truncate-64-bit-carriers.md) | high (wasm JIT, `tur build --target wasm`) | On wasm32, carriers kept in `intptr_t`/`void *` slots (`tur_hamt_get`'s values; the CPS backend's `DK` slots were fixed in P5) or declared at the wrong width (`tur_hamt_count`) lose their top 32 bits. Doubles and large ints come back wrong with no diagnostic: 44 corpus fixtures printed a wrong answer, and more once mir#16 let former traps run to the end |
+| [ilp32-word-slots-truncate-64-bit-carriers](ilp32-word-slots-truncate-64-bit-carriers.md) | high (wasm JIT, `tur build --target wasm`) | On wasm32, carriers kept in `intptr_t`/`void *` slots (`tur_hamt_get`'s values; the CPS backend's `DK` slots were fixed in P5) or declared at the wrong width (`tur_hamt_count`) lose their top 32 bits. Doubles and large ints come back wrong with no diagnostic: 44 corpus fixtures printed a wrong answer, and more once mir#16 let former traps run to the end. Shape 4 (2026-10-29): `stdlib/list.tur` reads a `(Cons A)` cell's 4-byte `tail` and its padding as one `int64_t`, so a nil tail can read as a cell and the walk reads address 0 |
 | [wasm-jit-comparator-result-varies-between-runs](wasm-jit-comparator-result-varies-between-runs.md) | medium (browser JIT) | `typed/list-concat` and `eq-carrier-capturing-comparator` print `false` for `true` on some runs of one module instance and not others (`run.js --repeat 4`); native is right. Present on `main` before P5; not the DK word, the call stubs, `setjmp` or the register fix |
 
 ## Found adding the instance-variance warning (filed 2026-10-27)
@@ -125,7 +125,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [wasm-linear-stack-overflow-unchecked](wasm-linear-stack-overflow-unchecked.md) | medium (planned wasm JIT) | The wasm link has no `-sSTACK_OVERFLOW_CHECK`, so a linear-stack overflow is an OOB trap or memory corruption. The JS limit binds first only for plain small-frame recursion; a 16 KiB local overflows near depth 1,000. `=2` turns every measured case into a clean `stack overflow` abort |
+| [wasm-linear-stack-overflow-unchecked](wasm-linear-stack-overflow-unchecked.md) | low (stock `tur_wasm` only) | **The JIT module is fixed 2026-10-29**: it links with `-sSTACK_OVERFLOW_CHECK=2`, and the page reports the abort as a stack overflow (pinned by `jit-engine.spec.js`). Still open: the stock `tur_wasm` links without the check, so a linear-stack overflow there would be an OOB trap or memory corruption; whether anything reaches it is not measured |
 | [diag-file0-registrations-outlive-their-frame](diag-file0-registrations-outlive-their-frame.md) | low (latent) | The open residue of the archived manifest file-0 fix: `pkg_lock_read`, `fmt_format_buffer`, `cmd_format`, `cmd_explain` and the driver's `compile_to_*` leave `files_[0]` naming a dead frame. No caller trips it. `global.c` is not affected (it saves and restores) |
 
 ## Found checking tvm's installer rc choice (filed 2026-10-24)

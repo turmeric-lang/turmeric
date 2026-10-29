@@ -147,6 +147,20 @@ cp "$ROOT/src/turi/r7rs_embed.h" "$HDR/src/turi/r7rs_embed.h"
 # --- 4. link -----------------------------------------------------------------
 EXPORTS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_eval,_turi_wasm_set_compiled_repl,_turi_wasm_eval_ex,_turi_wasm_free_string,_turi_wasm_version,_turi_wasm_jit_run,_malloc,_free
 METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8,ccall,cwrap,FS,ENV,wasmTable,addFunction,stackAlloc,stackSave,stackRestore
+# STACK_OVERFLOW_CHECK=2 bounds-checks every write of the stack pointer.  At -O2
+# nothing else does, and a program can reach the bottom of the 16 MiB linear
+# stack before the JS stack limit: a large local in a recursion, the allocas a
+# MIR tail call keeps, c2mir's per-call va buffers.  Unchecked, that overwrote
+# memory below the stack and trapped later as an out-of-bounds access or a
+# signature mismatch; checked, it aborts with "stack overflow", which the page
+# reports as one (web/public/jit-worker.js).  See
+# docs/reported/wasm-linear-stack-overflow-unchecked.md.
+# The check also turns on CHECK_NULL_WRITES, which plants a canary word at
+# address 0, so a program that READS through a null pointer sees that word
+# instead of the 0 it saw before and its answer changes.  The reads it found
+# are a defect of their own, shape 4 of
+# docs/reported/ilp32-word-slots-truncate-64-bit-carriers.md, so the canary
+# stays off here rather than turning a stack check into a behaviour change.
 emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" "$OUT/stubs.o" -o "$OUT/turmeric-jit.js" \
   --pre-js "$PKG/stdlib.data.js" -sFORCE_FILESYSTEM=1 \
   --embed-file "$HDR/sysinclude@/sysinclude" \
@@ -155,6 +169,7 @@ emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" "$OUT/stubs.o" -o "$OUT/t
   -sALLOW_MEMORY_GROWTH=1 -sALLOW_TABLE_GROWTH=1 -sWASM=1 \
   -pthread -sPTHREAD_POOL_SIZE_STRICT=0 -sEXIT_RUNTIME=0 \
   -sSTACK_SIZE=16777216 -sDEFAULT_PTHREAD_STACK_SIZE=8388608 \
+  -sSTACK_OVERFLOW_CHECK=2 -sCHECK_NULL_WRITES=0 \
   -sINITIAL_MEMORY=134217728 \
   -sEXPORTED_FUNCTIONS="$EXPORTS" \
   -sEXPORTED_RUNTIME_METHODS="$METHODS" \

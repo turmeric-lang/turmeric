@@ -22,7 +22,7 @@ the top half of the carrier is dropped on the way through. A pointer survives
 (its top half is zero), an int below 2^31 survives, and **every double and
 every large int does not**.
 
-Three shapes, all measured on the module:
+Four shapes, all measured on the module:
 
 1. **The CPS backend's slots are `intptr_t`.** *Fixed 2026-10-28
    (wasm-jit-plan P5):* the DK machine's word is `tur_dkw`, `intptr_t` where
@@ -49,6 +49,42 @@ Three shapes, all measured on the module:
    and callee disagree on the return type (i64 against i32). It is listed from
    reading the code; which fixture rows it accounts for was not separated from
    shape 2.
+
+4. **A struct's pointer field read through a 64-bit cell view.** *Found
+   2026-10-29* (raylib-web-playground-plan prerequisite 2), by Emscripten's
+   null-write canary. `stdlib/list.tur` declares
+   `(defstruct ^heap Cons [A] (head A) (tail (Cons A)))`, which emits
+   `struct { int64_t head; tur_adt_Cons__... *tail; }`, but `list-tail`,
+   `list-head` and `list-length` read a cell as
+   `struct __tur_cell_t { int64_t head; int64_t tail; }`
+   (`stdlib/list.tur:188`, `:383`, `:390`). On wasm32 the real `tail` is 4
+   bytes followed by 4 bytes of padding, and the view reads both. When the
+   padding is not zero (a reused region or malloc block), a nil tail reads as a
+   non-zero carrier, `null?` calls it a cell, and the next step's
+   `(intptr_t)` cast truncates it back to 0 and reads **address 0**. Address 0
+   holds 0 in a module linked without the canary, so the walk saw a zero
+   cell and, by luck, usually the right answer; with
+   `-sSTACK_OVERFLOW_CHECK` (which turns `CHECK_NULL_WRITES` on, writing
+   `0x63736d65`, "emsc", at address 0) the same program printed `1668509029`.
+   Repro, on a module linked with `-sSTACK_OVERFLOW_CHECK=2` and the canary on:
+
+   ```turmeric
+   (load "stdlib/list-typed.tur")
+   (defn main [] : int
+     (let [fs (list-of 7.1 2.25)]
+       (println (list-first (list-map fs (fn [f : float] : int 7))))   ; 7, printed 1668509029
+       0))
+   ```
+
+   The fix is the view, not the struct: read the tail as `void *` and widen it
+   (`(int64_t)(intptr_t)cell->tail`). That matches the `defstruct` layout on
+   both targets, and still reads the carrier-built cells (`__tur_cons_of`, the
+   `*args*` list) right: they store the pointer widened to 64 bits, and on
+   little-endian wasm32 its low half, the part a `void *` read takes, is the
+   pointer. `tests/fixtures/generic-forward-nullary-arg-tyvar-name` is
+   the corpus row; the module linked today keeps the canary off
+   (`-sCHECK_NULL_WRITES=0`, `tools/wasm-jit/build-module.sh`), so the
+   baseline does not show it.
 
 The Option/Result boxes are probably the same family:
 `inline-c-result-builder` returns `47685760` (a heap address) where it expects

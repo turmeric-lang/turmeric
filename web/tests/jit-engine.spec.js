@@ -85,6 +85,29 @@ test.describe('The Compile engine', () => {
         await expect(consoleEl(page).locator('.console-engine')).toContainText('compiled');
     });
 
+    test('a linear-stack overflow is reported as one, not as a memory fault', async ({ page }) => {
+        // A 1 MiB local reaches the bottom of the module's 16 MiB stack at
+        // about depth 16, long before the JS stack limit (a 64 KiB one, at
+        // depth 250, still met Chromium's worker limit first).  Unchecked, that
+        // wrote below the stack and trapped as "memory access out of bounds";
+        // the link's STACK_OVERFLOW_CHECK=2 makes it an abort the worker
+        // reports as the overflow (docs/reported/wasm-linear-stack-overflow-unchecked.md).
+        await gotoTry(page);
+        await pickEngine(page, 'compile');
+        await clearConsole(page);
+        await run(page, '(defn deep [n : int] : int ```c volatile char buf[1048576]; '
+                      + 'buf[n % 1048576] = (char)n; if (n == 0) return 0; '
+                      + 'return deep(n - 1) + (buf[n % 1048576] & 1); ```)\n'
+                      + '(println (deep 100000))');
+        await expect(consoleEl(page)).toContainText('stack overflow: recursion too deep', { timeout: 60_000 });
+        await expect(consoleEl(page)).not.toContainText('memory access out of bounds');
+        await expect(consoleEl(page)).not.toContainText('Aborted(');
+
+        await clearConsole(page);
+        await run(page, '(println (* 6 7))');
+        await expect(consoleEl(page)).toContainText('42', { timeout: 60_000 });
+    });
+
     test('an inline-C defn at the prompt compiles under Compile (P6)', async ({ page }) => {
         // wasm-jit-plan P6: with Compile picked, a prompt turn goes to the
         // Compile engine's own session, where an inline-C defn the interpreter
