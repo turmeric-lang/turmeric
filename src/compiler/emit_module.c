@@ -24970,6 +24970,19 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
         buf_puts(out, "    if (tur_panicking) tur_panic_root_exit();\n");
         buf_puts(out, "    return 0;\n");
         buf_puts(out, "}\n");
+    } else if (separate_compilation && !user_has_main && body.len) {
+        /* sepcomp-module-def-initializers-never-run: a library module has no
+         * main to put its def initializers in, and `body` used to be freed
+         * unwritten, so every `def` read zero.  Run them as emit_program runs
+         * a library unit's: from __tur_module_def_init, in the
+         * STATIC_INIT_DEFS band of this TU's __tur_static_init, whose
+         * constructor wrapper fires at dlopen.  The module-level defers above
+         * register in the ATEXIT band, which runs first; they fire at exit,
+         * after these. */
+        buf_puts(out, "static void __tur_module_def_init(void) {\n");
+        buf_write(out, body.data, body.len);
+        buf_puts(out, "}\n\n");
+        static_init_register("__tur_module_def_init", STATIC_INIT_DEFS);
     }
 
     /* fn-value-fat-normalization: this TU's box definitions, then the fill

@@ -1,0 +1,12 @@
+;; sepcomp-module-def-initializers-never-run: a library module's `def`s are
+;; initialized when the library is loaded -- `counter` starts at 5, and the
+;; initializer with an effect runs exactly once.
+;; sepcomp-exported-global-header-name-mismatch: `counter` is exported, so it
+;; is `glob__counter` in this module, in glob.h, and in user.tur's reads and
+;; writes.  tests/run-build-shared.sh.
+(defmodule glob
+  (export get-counter bump (mut counter) loads)
+  (def ^mut counter 5)
+  (def loads (do (println "glob: initialized") 1))
+  (defn get-counter [] : int counter)
+  (defn bump [] : int (do (set! counter (+ counter 1)) counter)))

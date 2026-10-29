@@ -1,0 +1,8 @@
+;; Reads and writes another module's exported global.
+(defmodule user
+  (import glob :refer [counter])
+  (export read-it poke)
+  (def unrelated 1)
+  (def other 2)
+  (defn read-it [] : int counter)
+  (defn poke [n : int] : int (do (set! counter n) counter)))

@@ -1164,10 +1164,10 @@ Only needed if C2 misses its latency budget. Candidates, safest first:
 > drops definitions a turn does not reach, so a turn image would have carried
 > the same baggage. Pruning that baggage (C2, "The stdlib baggage, pruned")
 > took the memory C5 was for. Probing the module boundary C5 would build on
-> also found two separate-compilation bugs, now reported:
-> [sepcomp-module-def-initializers-never-run](../reported/sepcomp-module-def-initializers-never-run.md)
+> also found two separate-compilation bugs, both fixed since:
+> [sepcomp-module-def-initializers-never-run](../archive/sepcomp-module-def-initializers-never-run.md)
 > and
-> [sepcomp-exported-global-header-name-mismatch](../reported/sepcomp-exported-global-header-name-mismatch.md).
+> [sepcomp-exported-global-header-name-mismatch](../archive/sepcomp-exported-global-header-name-mismatch.md).
 > The design stays here for a session whose definitions do dominate.
 
 C2 compiles the whole session every turn: the definition table, the stdlib

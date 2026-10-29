@@ -67,3 +67,18 @@ so only libraries (and `emit-c --output-dir`) are affected.
   runs exactly once.
 - Module-level `defer`s in the same file are handled after Pass 1b; check
   they still order after the initializers.
+
+## Resolution (2026-10-29)
+
+`emit_implementation_inner` (`src/compiler/emit_module.c`) now writes `body`
+as `static void __tur_module_def_init(void)` when compiling separately with no
+user `main`, and registers it in the `STATIC_INIT_DEFS` band. This TU's
+`__tur_static_init` runs that band, and its constructor wrapper fires at
+`dlopen`. The module's stdlib `def`s (`SCHEMA_*` and friends) were
+uninitialized the same way and are now set too. Module-level `defer`s
+register in the earlier `ATEXIT` band and fire at exit, after the
+initializers.
+
+Pinned by `tests/fixtures/build-shared-def-init` through
+`tests/run-build-shared.sh`: a library's `counter` reads 5 and then 6 through
+its exports, and an initializer that prints runs exactly once at load.

@@ -5163,6 +5163,18 @@ char *name_for_binding(EmitCtx *ctx, const Binding *b) {
     if (b->c_export_name) {
         return strdup(b->c_export_name);
     }
+    /* sepcomp-exported-global-header-name-mismatch: under separate
+     * compilation an exported global is linked across TUs, and its header
+     * declares it module-qualified (`extern int64_t glob__counter;`,
+     * emit_header_inner).  Spell it so here too -- the definition in the
+     * owning module and every importer's reference -- as an exported defn
+     * already is.  The id suffix below is per elaboration, so an importer's
+     * `counter_N` only matched the owner's by accident, and nothing declared
+     * it.  Whole-program builds keep the suffixed name: one TU, no header. */
+    if (ctx->separate_compilation && b->is_global && b->is_exported &&
+        b->defining_module_name) {
+        return raw_name_for_binding(b);
+    }
     /* `<name>_<id>` with non-id-safe chars mangled to underscores. We append
      * the unique id so different bindings with the same source name don't
      * collide in C. */
