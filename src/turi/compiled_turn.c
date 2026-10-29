@@ -6,6 +6,8 @@
 #include "compiler/forms.h"
 #include "compiler/types.h"
 #include "compiler/typeclass.h"
+#include "compiler/emit.h"       /* emit_c_function_name */
+#include "compiler/jit_prune.h"  /* jit_prune_set_extra_roots */
 #include "runtime/buf.h"
 #include "runtime/experiments.h"
 
@@ -753,10 +755,27 @@ TuriValue turi_compiled_turn_run(TuriEnv *env, Form **forms, uint32_t first, uin
     g_redefined = redefined;
     g_n_redefined = n_redefined;
 
+    /* compiled-repl-inline-c-defn-errors-deferred-to-first-call: the JIT
+     * pruner drops a function nothing reaches, which a defn no turn has
+     * called yet is -- so its inline C was first compiled, and a mistake in
+     * it first reported, at its first call.  The functions this turn defines
+     * are roots of this turn's program. */
+    char **roots = n_items ? (char **)calloc(n_items, sizeof *roots) : NULL;
+    size_t n_roots = 0;
+    for (uint32_t k = 0; roots && k < n_items; k++) {
+        const Expr *it = items[k];
+        if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn && it->as.fn_def_.fn->binding)
+            roots[n_roots++] = emit_c_function_name(it->as.fn_def_.fn->binding);
+    }
+    jit_prune_set_extra_roots((const char *const *)roots, n_roots);
+
     int rc = 0;
     fflush(stdout);
     result_reset();
     int hrc = g_hook->run(prog.data, prog.len, &rc);
+    jit_prune_set_extra_roots(NULL, 0);
+    for (size_t k = 0; k < n_roots; k++) free(roots[k]);
+    free(roots);
     g_redefined = NULL;
     g_n_redefined = 0;
     free(redefined);

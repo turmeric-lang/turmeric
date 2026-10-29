@@ -713,6 +713,24 @@ static size_t find_bytes(const char *hay, size_t n, const char *needle, size_t m
     return (size_t)-1;
 }
 
+static const char *const *g_extra_roots;
+static size_t g_n_extra_roots;
+
+void jit_prune_set_extra_roots(const char *const *names, size_t n) {
+    g_extra_roots = n ? names : NULL;
+    g_n_extra_roots = names ? n : 0;
+}
+
+/* Is the function chunk s[0..n) one of g_extra_roots?  Read from the chunk's
+ * own text: its NameEnt may have moved since (the map grows as it fills). */
+static int is_extra_root(const char *s, size_t n) {
+    Tok nm = chunk_defines(s, n);
+    for (size_t i = 0; nm.len && i < g_n_extra_roots; i++)
+        if (strlen(g_extra_roots[i]) == nm.len && memcmp(g_extra_roots[i], nm.p, nm.len) == 0)
+            return 1;
+    return 0;
+}
+
 static int prune_disabled(void) {
     const char *off = getenv("TUR_JIT_NO_PRUNE");
     return off && *off && strcmp(off, "0") != 0;
@@ -800,7 +818,10 @@ static void prune_program_half(Buf *src, size_t dpos, size_t pstart,
      * program-half chunk that is not a removable definition or declaration. */
     for_each_ident(s, pstart, mark_ident, &m);
     for (size_t c = 0; c < cv.n; c++)
-        if (!cv.v[c].defines) push_work(&m, (unsigned)c);
+        if (!cv.v[c].defines ||
+            (!cv.v[c].is_macro && g_n_extra_roots &&
+             is_extra_root(s + cv.v[c].start, cv.v[c].end - cv.v[c].start)))
+            push_work(&m, (unsigned)c);
     while (m.n_work) {
         unsigned c = m.work[--m.n_work];
         if (cv.v[c].live) continue;

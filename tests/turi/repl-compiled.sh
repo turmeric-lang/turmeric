@@ -102,13 +102,26 @@ out="$(repl_out --enable=compiled-repl <<'EOF'
 (defn g [x : int] : int (+ x 1))
 (defn g [x : int] : int (+ x "a"))
 (g 1)
-(defn h [] : int ```c this is not C; ```)
+(defn bad [] : int ```c this is not C; ```)
 (g 2)
 EOF
 )"
 same "a turn that fails to elaborate or compile leaves the table as it was" \
      "$(printf '=> #<fn g>\n=> 2\n=> 3')" "$(results "$out")"
 has "the c2mir rejection is reported" "the turn did not compile" "$out"
+# compiled-repl-inline-c-defn-errors-deferred-to-first-call: an inline-C defn
+# is compiled in the turn that defines it, whatever its name.  `bad` above
+# used to be `h`, which only failed there because the pruner kept it for an
+# unrelated `h` in the program; a longer name compiled fine until its first
+# call.  A hyphenated one too:
+out="$(repl_out --enable=compiled-repl <<'EOF'
+(defn get-it [] : int ```c not C either; ```)
+(+ 1 2)
+EOF
+)"
+has "an inline-C defn's C error is reported where it is defined" \
+    "the turn did not compile" "$out"
+same "and the session goes on without it" "=> 3" "$(results "$out")"
 
 # --- Globals live in slots: mutation, redefinition, closures, strings -----------
 cat > "$WORK/t2" <<'EOF'
@@ -296,7 +309,6 @@ cache_session() {
 (defn imax [] : int ```c return INT64_MAX > 0 && EOF == -1 && sizeof (struct timespec) == 2 * sizeof (long); ```)
 (imax)
 (defn bad [] : int ```c this is not C; ```)
-(bad)
 (+ 1 2)
 (imax)
 EOF
@@ -308,9 +320,9 @@ else
 on="$(cache_session env TUR_JIT_TIMING=1)"
 off="$(cache_session env TUR_JIT_TIMING=1 TUR_JIT_PREAMBLE_CACHE=0)"
 same "header macros reach a turn's inline C through the cache" \
-     "$(printf '=> #<fn imax>\n=> 1\n=> #<fn bad>\n=> 3\n=> 1')" "$(results "$on")"
+     "$(printf '=> #<fn imax>\n=> 1\n=> 3\n=> 1')" "$(results "$on")"
 has "a turn that does not compile says so" "the turn did not compile" "$on"
-same "the preamble is preprocessed once in six turns" \
+same "the preamble is preprocessed once in five turns" \
      "1" "$(grep -c 'preamble_cache_fill' <<< "$on")"
 same "a turn's errors read the same with and without the cache" \
      "$(grep -E '^<tur-jit>|^=> ' <<< "$off")" "$(grep -E '^<tur-jit>|^=> ' <<< "$on")"

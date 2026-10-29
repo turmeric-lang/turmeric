@@ -79,3 +79,19 @@ fails because nothing declares the name it uses.
   through the header.
 - Pairs with the initializer report: once both land, the value is right as
   well as reachable.
+
+## Resolution (2026-10-29)
+
+`name_for_binding` (`src/compiler/emit_core.c`) spells an exported global
+module-qualified under separate compilation (`ctx->separate_compilation`),
+through `raw_name_for_binding`, the spelling the header's `extern` already
+used. That one rule covers the definition in the owning module and every
+importer's reads and writes, since an importer's binding is the owner's.
+Whole-program builds keep the id-suffixed name: they are one TU with no
+header, and no snapshot moves.
+
+Pinned by `tests/fixtures/build-shared-def-init` through
+`tests/run-build-shared.sh`. A second module reads the first's exported
+`(mut counter)` and `set!`s it, and the C harness reads the variable by its
+header name, `glob__counter`. The test also checks that `glob.h` declares
+that name.

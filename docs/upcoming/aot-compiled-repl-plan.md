@@ -725,9 +725,9 @@ Two fixes fell out of matching the transcripts. A positional field, `(Some
 A)`'s, printed as `(null) = 3` in the interpreter; both now print `Some { 3 }`.
 And a `#map{...}` / `#set{...}` literal's form span started at its `{`, so
 the definition table copied `{:a 1}`, a curly-infix call; the reader now
-spans the whole lexeme. The interpreter's display has two bugs of its own
-the compiled printer does not share:
-[repl-show-uses-wrong-instance-for-vec-elements](../reported/repl-show-uses-wrong-instance-for-vec-elements.md).
+spans the whole lexeme. The interpreter's display had two bugs of its own
+the compiled printer did not share, since fixed:
+[repl-show-uses-wrong-instance-for-vec-elements](../archive/repl-show-uses-wrong-instance-for-vec-elements.md).
 
 **Redefining a type.** The table re-elaborates every definition's source
 against the latest types, and that can change what a `def` means: once `S`
@@ -757,8 +757,9 @@ global, was emitted as `*saved = ...` (a promoted local's cell spelling), so
 the program did not compile at all. A global is now written in place
 (`tests/fixtures/effect-stored-k-in-global`). Resuming a mutable that still
 holds its initial `0` panics (`resume: not a continuation (0)`) instead of
-storing through NULL. The interpreter has a bug of its own here:
-[turi-repl-continuation-resumed-in-later-turn-reads-freed-frames](../reported/turi-repl-continuation-resumed-in-later-turn-reads-freed-frames.md).
+storing through NULL. The interpreter had a bug of its own here, since fixed:
+it resumed such a continuation through poisoned frames
+([turi-repl-continuation-resumed-in-later-turn-reads-freed-frames](../archive/turi-repl-continuation-resumed-in-later-turn-reads-freed-frames.md)).
 
 **A region's retired generations live for the session.** A turn's program
 registered `atexit(tur_region_shutdown)` like any program, and a turn drains
@@ -1164,10 +1165,10 @@ Only needed if C2 misses its latency budget. Candidates, safest first:
 > drops definitions a turn does not reach, so a turn image would have carried
 > the same baggage. Pruning that baggage (C2, "The stdlib baggage, pruned")
 > took the memory C5 was for. Probing the module boundary C5 would build on
-> also found two separate-compilation bugs, now reported:
-> [sepcomp-module-def-initializers-never-run](../reported/sepcomp-module-def-initializers-never-run.md)
+> also found two separate-compilation bugs, both fixed since:
+> [sepcomp-module-def-initializers-never-run](../archive/sepcomp-module-def-initializers-never-run.md)
 > and
-> [sepcomp-exported-global-header-name-mismatch](../reported/sepcomp-exported-global-header-name-mismatch.md).
+> [sepcomp-exported-global-header-name-mismatch](../archive/sepcomp-exported-global-header-name-mismatch.md).
 > The design stays here for a session whose definitions do dominate.
 
 C2 compiles the whole session every turn: the definition table, the stdlib
