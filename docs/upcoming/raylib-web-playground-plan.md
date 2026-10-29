@@ -9,7 +9,7 @@
 > browser can compile it from source: the static spice image of the old A1 and
 > the build service of the old B are both unnecessary for raylib. The
 > recommendation therefore flips to **the JIT engine first (section 3, "J"),
-> gated by a one-to-two day spike (P0); the interpreter-with-baked-images
+> gated by a spike of about a week (P0); the interpreter-with-baked-images
 > architecture (A) is kept as the fallback if the spike fails.** What the spike
 > must answer, and the prerequisite work that should land before it, is
 > [section 7](#prerequisites-before-p0). The decision this plan needs from its
@@ -97,10 +97,12 @@ Three facts from that table shape everything below:
    that with `run-main-loop` or Asyncify. An interpreted blocking `while`
    loop needs Asyncify too. **Neither wasm module is linked with
    `-sASYNCIFY` today** (`src/CMakeLists.txt` and `tools/wasm-jit/build-module.sh`
-   name none), and 49 corpus fixtures fail on the JIT module for exactly that
-   (`emscripten_fiber_swap`, an unowned family in wasm-jit-plan P5). So the
-   blocking style is an open question for the JIT arm, not a given; the
-   callback style (`with-web-game-loop`, `run-main-loop`) needs no Asyncify.
+   name none); that alone is why 49 corpus fixtures fail on the JIT module
+   (`emscripten_fiber_swap`, an unowned family in wasm-jit-plan P5). Those
+   failures say nothing yet about whether Asyncify *would* work under the MIR
+   interpreter: nobody has linked the module with it. So the blocking style is
+   an open question for the JIT arm, not a given; the callback style
+   (`with-web-game-loop`, `run-main-loop`) needs no Asyncify.
 3. **raylib needs the main thread.** Its GLFW port wants the canvas and DOM
    input events, which a worker lacks. The browser JIT runs in a worker today.
 
@@ -147,15 +149,18 @@ is compiled into the module with emcc like raylib itself.
   frames, not the tree-walker's heap-bounded depth (wasm-jit-plan 5.8); the
   engine toggle already says so. (2) A program the engine refuses (threads,
   an autolink) falls back to the tree-walker, which in *this* module has no
-  raylib, so for the arcade the fallback is an error that names the reason, not
-  a silent second engine. (3) The ~125-180 ms front half and ~110-170 ms c2mir
+  raylib, so for the arcade the fallback must be an error that names the reason,
+  not a second engine. Today `turi_wasm_jit_run` falls back unconditionally
+  (`run_interpreted` in `src/web/wasm_jit_glue.c`), so the arcade needs a
+  switch to turn that off (J3). (3) The ~125-180 ms front half and ~110-170 ms c2mir
   are a fixed cost on every Run; a spice's inline C adds to c2mir's share. (4)
   The corpus still has 254 failures; the ones that matter here are
   [ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md)
   shapes 2-3 (`vec`/HAMT values, `life.tur`'s grid) and the open Asyncify family.
 - **What nobody has measured**, so it is P0's job and not an assumption: calling
   a C function that takes a struct by value (`DrawCircleV`, `DrawRectangleRec`,
-  `DrawText` with a `Color`) from MIR-interpreted wasm32 code; an interpreted
+  `DrawText` with a `Color`) from MIR-interpreted wasm32 code (expected to work,
+  J1 says why); an interpreted
   function as the frame callback `emscripten_set_main_loop` calls (a thunk is a
   table entry since mir#16, so it should work); `simulate_infinite_loop=1`
   unwinding out of a `main` that is running *inside* the MIR interpreter's
@@ -163,10 +168,21 @@ is compiled into the module with emcc like raylib itself.
   main thread of an iframe. Section 7 lists them with the prerequisites.
 - **The blocking `while` style is the real fork inside J.** raylib's web
   `WindowShouldClose` and `EndDrawing` yield through `emscripten_sleep`, which
-  needs Asyncify, which cannot unwind through a JS frame. The JIT module's
-  runtime calls no longer cross JS (5.5's stubs), but the interpreter's
-  interpreted-to-interpreted and native-to-interpreted re-entry paths still do,
-  which is the 49-fixture family. Two outcomes: Asyncify works under the MIR
+  needs Asyncify. What sits between `main` and that sleep, read from the code
+  on 2026-10-29: the glue enters `main` through `MIR_interp_arr` (no JS frame
+  at the bottom, `src/jit_engine.c`), and an interpreted-to-interpreted call is
+  dispatched in C (`wasm_ff_dispatch`). But on wasm the interpreter's `eval`
+  calls `setjmp` in its own frame (`INTERP_SETJMP`, `mir-interp.c:47`,
+  turmeric-lang/mir#17), and LLVM's SjLj lowering then routes the calls `eval`
+  makes through Emscripten's `invoke_*` wrappers -- JS frames, under every
+  native call the program makes, 5.5's stubs included. Asyncify has to unwind
+  through those. (That assumes the link's SjLj is Emscripten's JS-based one: it
+  passes no `-fwasm-exceptions`, and wasm-native SjLj is incompatible with
+  Asyncify outright. P0 confirms by looking for `invoke_` imports in the
+  module.) The other JS frame, the one-import instance a host-to-interpreted
+  call goes through (`mir_wasm_set_interp_entry`, `mir-wasm.c`), Asyncify does
+  not instrument; the blocking style never sleeps under one, but a sleep inside
+  a comparator or a frame callback would. Two outcomes: Asyncify works under the MIR
   interpreter (then the blocking examples run unchanged, at the measured ~16 ms
   a frame), or it does not (then the playground teaches the callback form,
   `with-web-game-loop`, the form a shipping game uses anyway, and section 8's
@@ -175,8 +191,8 @@ is compiled into the module with emcc like raylib itself.
 ### A. Interpreter + a baked spice image (fallback)
 
 Everything the previous draft of this section said, kept because it is the
-plan if J's spike fails (most likely cause: struct-by-value calls from MIR on
-wasm32, or the main-thread/iframe boot). One module links `libturi_wasm` with
+plan if J's spike fails (most likely cause: the frame loop -- the callback
+outliving `main`, or no workable Asyncify -- or the main-thread/iframe boot). One module links `libturi_wasm` with
 the web `libraylib.a`, raygui's TU and the AOT-compiled exports of a curated
 spice set. At startup it installs those exports as interpreter natives through
 the existing `ffi_thunk` shim and embeds the spices' `.tur` sources next to the
@@ -328,7 +344,10 @@ drag handle between them. On a narrow viewport the three stack
   pure or inline-C spice (`math`, `ecs`, `ecs-raylib`, `linalg`, `json`'s
   Turmeric half, `raylib` itself, `raygui`) needs **no module relink**; only
   the native deps they call do (`libraylib.a`, raygui's TU, any cmake dep), and
-  those are in the module and its import table. Whether a package can be
+  those are in the module and its import table. A spice's package set is its
+  closure: `raylib` pulls in `math` (its `build.tur` `:spices`), and `raygui`'s
+  inline C finds `raygui.h` through its manifest's `:c-includes`, which the page
+  never reads, so the header goes to `/sysinclude` (J1). Whether a package can be
   mounted after the module has started is a P0 check; if not, the arcade
   builds one package of every offered spice, which is still a data rebuild and
   not a relink.
@@ -355,7 +374,7 @@ drag handle between them. On a narrow viewport the three stack
 The LSP worker (`web/public/lsp-worker.js` pattern) is rebuilt as an arcade
 variant that mounts the offered spices' `src/` trees (the same packages the
 runtime fetches), so completion and hover know `draw-circle`. It runs the
-interpreter module's elaboration only (`web/wasm_lsp.c`), so it needs no
+interpreter module's elaboration only (`src/web/wasm_lsp.c`), so it needs no
 raylib and no JIT. Diagnostics come from the same elaboration the front half
 runs, so a program the LSP accepts is one the compiler accepts.
 
@@ -387,10 +406,14 @@ are cut down to what survives.
   value** (`Color` is four bytes, `Vector2` two floats, `Rectangle` four;
   `Texture2D`, `Camera3D` are bigger), which the wasm C ABI passes
   indirectly. The exact-signature stubs (5.5, `--stubs`) are generated per wasm
-  signature, so they have to be generated from the same prototypes, and c2mir's
-  wasm32 target (`c2mir/wasm32/`) has to pass and return aggregates the way
-  clang does. **This is the first thing P0 tests**, because it is the one place
-  the browser JIT has not been exercised. `raylib.h` (and `raygui.h`) join
+  signature, so they have to be generated from the same prototypes. The
+  calling side is already designed for it: c2mir's wasm32 ABI passes every
+  aggregate by address and returns one through an sret pointer
+  (`c2mir/wasm32/cwasm32-ABI-code.c`), and `mir-wasm.c` passes a block argument
+  as an `i32` address, which is what clang does too. The one known mismatch is a
+  **single-element** struct, which clang passes as its scalar and c2mir passes by
+  address; check `raylib.h` for one passed by value. P0 step 1 is one call to
+  confirm, not the likeliest failure. `raylib.h` (and `raygui.h`) join
   `/sysinclude` through `headers.txt`'s mechanism.
   Also check how the autolink works for a spice's `:cmake-deps`: the JIT arm
   has no `dlopen` and turns a `-l<name>` marker into a refusal that names the
@@ -420,11 +443,15 @@ are cut down to what survives.
   create-then-join code must run on the caller's stack as it already does on
   Emscripten (wasm-jit-plan P4, "the emitter deadlocked in the browser"); any
   other create-then-join in code the page reaches would hang the same way.
+  (e) The glue's fallback to the tree-walker (`run_interpreted`) is switched
+  off for the arcade, whose interpreter has no raylib: a refusal is reported
+  with its reason instead.
 - **J4. Asyncify, if P0 says it works.** Link the arcade module with
   `-sASYNCIFY` so `WindowShouldClose`'s sleep yields and the blocking `while`
-  runs unchanged. It needs the interpreter's re-entry paths to stop putting
-  JS frames on the stack (the 49-fixture family in wasm-jit-plan P5 is the
-  same defect), and its cost is code size and a slower interpreter. If P0
+  runs unchanged. It needs Asyncify to unwind through the `invoke_*` frames
+  `eval`'s `setjmp` brings (section 3, J), and its cost is code size and a
+  slower interpreter (Asyncify instruments `eval`, the hottest function in the
+  module). The 49 fiber fixtures are a side benefit if it works. If P0
   says no, J4 is "document the callback form and rewrite the examples", and
   `with-web-game-loop` becomes the front door.
 - **J5. `*args*`.** `turi_wasm_jit_run(src, args)` already takes a
@@ -523,16 +550,16 @@ later, and where it is tracked. Nothing here needs the arcade repo to exist.
 |---|---|---|---|---|
 | 1 | **Decide J over A, and the repo.** The owner confirms section 3's flip and section 4's own-repo choice. | P0 | P0's scope is different under each: J tests struct-by-value calls and the main-thread boot, A tests `ffi_thunk` shims under Asyncify. | this plan |
 | 2 | **`-sSTACK_OVERFLOW_CHECK=2` on the JIT link.** One flag, one test. | P0 | An iframe runs arbitrary user programs. Without the check a linear-stack overflow writes past the 16 MiB stack instead of stopping, and the spike's numbers (and the first user bug report) are of a corrupted module. | [wasm-linear-stack-overflow-unchecked](../reported/wasm-linear-stack-overflow-unchecked.md) |
-| 3 | **Decide how Asyncify gets measured on the MIR interpreter.** Neither wasm module is linked with it, and 49 corpus fixtures fail on `emscripten_fiber_swap`. Link a throwaway JIT module with `-sASYNCIFY` and run a compiled program that calls `emscripten_sleep`; that is P0 step 3 and the answer to whether the blocking style survives. | P0 | The whole examples section (8) is written in the blocking style. | wasm-jit-plan P5 (the family is "unowned"); J4 |
+| 3 | **Decide how Asyncify gets measured on the MIR interpreter.** Neither wasm module is linked with it, and 49 corpus fixtures fail on `emscripten_fiber_swap`. Link a throwaway JIT module with `-sASYNCIFY` and run a compiled program that calls `emscripten_sleep`; that is P0 step 3 and the answer to whether the blocking style survives. The question is the `invoke_*` frames that `eval`'s own `setjmp` (mir#17) puts under every call it makes (section 3, J), not the stubs. | P0 | The whole examples section (8) is written in the blocking style. | wasm-jit-plan P5 (the family is "unowned"); J4 |
 | 4 | **Diagnose [wasm-jit-comparator-result-varies-between-runs](../reported/wasm-jit-comparator-result-varies-between-runs.md).** A list comparison gives a different answer on alternate runs of one module instance; present before P5, not the DK word, stubs, `setjmp` or register fix. Root cause unknown. | P1 | A frame loop is the longest-lived use the engine has had. A nondeterminism in the MIR interpreter's state on wasm is the kind of defect that shows up on frame 4,000, not in a 10-ms corpus run. Find out whether it is a MIR bug or a Turmeric one before building a site on it. | `docs/reported/` |
 | 5 | **Close ILP32 shapes 2 and 3** ([ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md)): `tur_hamt_get`'s `void *` values (a double stored in a map comes back denormal) and `stdlib/hamt.tur`'s `tur_hamt_count` declared at the wrong width, plus the `typed/vec-*` fixtures. Shape 1 (the DK word) is done. | P1 for correctness, P3 for the examples | `life.tur` is a `vec` of 0/1 ints, which survive; but any program that keeps a float (a position, a velocity) in a `vec` or a map is silently wrong on the page, and P3 has to audit each example for that shape. The same defect is in `tur build --target wasm`. | the report |
-| 6 | **Variadic calls inside a loop** ([c2mir-wasm-vararg-buffer-allocas-per-call](../reported/c2mir-wasm-vararg-buffer-allocas-per-call.md)): c2mir allocas a variadic call's buffer at the call site and keeps it until the function returns, 16 B an iteration. | P2 (the page), not P0 | A `println` of an int inside a per-entity loop of a 200-entity scene is 12,000 prints a second; a million overflows 16 MiB in about 80 seconds, with signs of memory corruption. Fix in the fork, or have the emitter hoist the buffer. | the report |
-| 7 | **Tail calls through a frame that allocated** ([wasm-mir-interp-tail-call-keeps-allocas](../reported/wasm-mir-interp-tail-call-keeps-allocas.md)): ~350 B per call, a trap after about 24,000 calls. Self tail calls are loops and unaffected; a frame function that tail-calls a *different* function each frame is the shape. | P2 | A game written as mutually tail-recursive states (menu -> play -> menu) traps after about 7 minutes at 60 fps. Know it, and keep the examples off the shape until it is fixed. | the report |
+| 6 | **Variadic calls inside a loop** ([c2mir-wasm-vararg-buffer-allocas-per-call](../reported/c2mir-wasm-vararg-buffer-allocas-per-call.md)): c2mir allocas a variadic call's buffer at the call site and keeps it until the function returns, 16 B an iteration. | P3 (examples); know it in P2 | Only a function that never returns accumulates, so the callback style (the frame function returns every frame) and any helper `defn` are safe. The exposure is the blocking style with a `println` written inline in `main`'s own loop: once a frame is 60 a second (a million takes over four hours), but inside an inline per-entity loop of 200 entities it is 12,000 a second and overflows 16 MiB in about 80 seconds, with signs of memory corruption. Fix in the fork, or have the emitter hoist the buffer. | the report |
+| 7 | **Tail calls through a frame that allocated** ([wasm-mir-interp-tail-call-keeps-allocas](../reported/wasm-mir-interp-tail-call-keeps-allocas.md)): ~350 B per call, a trap after about 24,000 calls, counting only tail calls from a function with an address-taken or aggregate local. Self tail calls are loops and unaffected. | P3 (examples) | Only a chain that never returns accumulates, so it is the blocking style written as mutual tail recursion *per frame* (`tick` -> `render` -> `tick`, two calls a frame: a trap after about 3 minutes at 60 fps). State changes alone (menu -> play) are too rare to matter, and the callback style returns to the browser every frame. Keep the examples off the shape until it is fixed. | the report |
 | 8 | **A main-thread entry for the JIT module.** `jit-worker.js` and `web/jit-client.js` assume a worker; the glue's `main` runs to completion on the calling thread; the module instance is retired on a trap. The iframe needs: instantiate on the main thread, keep the context after `main` returns (J3), and a trap handler that tells a `set_main_loop` unwind from a real trap. Spike it in P0; build it in P1. | P0 (spike), P1 | raylib's GLFW port needs the canvas. | J3 |
 | 9 | **Spice roots on the compile path.** `turi_wasm_jit_run` compiles with no include or spice directories. | P1 | `(import raylib/core)` cannot resolve without it; this is also what `defscript` needs. | J2 |
 | 10 | **The import table for a non-runtime library**, including struct-by-value prototypes and `raylib.h` in `/sysinclude`. | P0 (spike by hand), P1 | The first import set that is not the runtime or libc. | J1 |
 | 11 | **`:web :supported` stubs** in turmeric-spices (wasm-spices-plan W0) for the Spices menu, and a decision about assets (shapes and text only, or a small package). | P2 / P3 | The picker reads them. | B0 |
-| 12 | **Emscripten pin.** CI's "Set up Emscripten" step pins 6.0.10; the browser JIT corpus and the P0 numbers here were measured with 6.0.13. Bring them to one version before P0 so a number is comparable to CI. | P0 | wasm-jit-plan risk 6. | `.github/workflows/ci.yml` |
+| 12 | **Emscripten pin.** CI's "Set up Emscripten" step pins 6.0.10; the browser JIT corpus and the P0 numbers here were measured with 6.0.13. Bring them to one version so a P0 number is comparable to CI. | nothing (comparability only) | wasm-jit-plan risk 6. | `.github/workflows/ci.yml` |
 | 13 | **Headless WebGL2 in CI.** Confirm the Playwright Chromium CI uses gives the arcade module a WebGL2 context (software GL is fine); the smoke test and every example's "first frame drawn" check depend on it. | P1 | wasm-spices-plan section 12 measured 60 fps in Chromium, not necessarily headless-on-CI. | P1's smoke test |
 
 What is **not** a prerequisite, so nobody waits on it: the interpreter-side
@@ -541,29 +568,32 @@ JIT module (it already takes them, J5), the build service (cut), and C2 of
 [aot-compiled-repl-plan](aot-compiled-repl-plan.md) (the page's REPL session;
 the arcade is a program runner, and C1's per-defn images are already there).
 
-Rows 1-3 and 8-10 are P0's own inputs and fit in the spike's two days; rows
+Rows 1-3 and 8-10 are P0's own inputs and are the spike's work; rows
 2 and 12 are an hour each; rows 4-5 are the real work and are worth doing
 whichever architecture wins, because they fix the browser JIT and
 `tur build --target wasm` for everyone.
 
-### P0 -- Spike (this repo, 1-2 days)
+### P0 -- Spike (this repo, 3-5 days)
 
 Hand-link one module -- `turmeric-jit` + the web `libraylib.a` + `rl_web_loop.c`
 + a hand-written import table for the raylib calls the section 1 program makes --
-and drive it from a plain main-thread page, then from a sandboxed iframe.
-Record, in this order (each step gates the next):
+and drive it from a plain main-thread page, then from a sandboxed iframe. (The
+first draft said two days; building raylib's web archive, the hand import
+table, spice roots in the glue and two links, with and without Asyncify, make
+it nearer a week.) Record, in this order (each step gates the next):
 
 1. **Struct by value.** A compiled `draw-circle-v` / `draw-rectangle-rec` / a
-   `draw-text` with a `Color` draws what it should. If MIR on wasm32 cannot pass
-   an aggregate the way clang does, that is the finding, A moves first, and the
-   fix to c2mir's wasm32 target is a separate item.
+   `draw-text` with a `Color` draws what it should. Expected to pass (J1); if
+   it does not, the fix is in c2mir's wasm32 target, and J waits on one fork
+   PR rather than moving to A.
 2. **Callback mode.** The section 1 program written with `with-web-game-loop`
    keeps drawing after `main` has unwound: `requestAnimationFrame` fires, the
    interpreted frame function runs, the context survives, and a `println` per
    frame reaches the console. Also: Stop (iframe teardown) leaves the editor
    page alone.
 3. **Blocking mode under `-sASYNCIFY`.** The `while (not (window-should-close))`
-   form from section 1: does it yield, how much bigger is the module, how
+   form from section 1. First check the module's imports for `invoke_*` (which
+   SjLj lowering it got); then: does it yield, how much bigger is the module, how
    much slower is the interpreter, and what fps. Run it with and without a
    `call/cc` that also draws. If it does not work, record why (the JS frame
    that blocks the unwind) and J4 becomes "teach the callback form".
@@ -749,16 +779,17 @@ against the spices' sources (under J they are compiled with the program), and
    per-pixel loop is the edge (the plasma example). P0 measures 8.5's grid step
    and the plasma inner loop. The lever past it is wasm-jit-plan section 8's
    T2, a MIR-to-wasm generator; the build service is not the lever any more.
-2. **Asyncify and the MIR interpreter together.** Asyncify cannot unwind
-   through a JS frame; the interpreter's re-entry paths still have them (the
-   49-fixture family). If P0 step 3 fails, the playground is callback-first,
+2. **Asyncify and the MIR interpreter together.** On wasm `eval` calls `setjmp`
+   itself, so its calls go through Emscripten's `invoke_*` JS wrappers, and
+   Asyncify must unwind through them (section 3, J). If P0 step 3 fails, the playground is callback-first,
    which changes the examples and the pitch ("paste the README quick start")
    but not the architecture. This is the largest single unknown.
 3. **Struct-by-value calls from MIR on wasm32.** raylib passes `Color`,
-   `Vector2`, `Rectangle`, `Texture2D` and `Camera3D` by value. The runtime half
-   the JIT has been exercised against has no such calls. P0 step 1. A failure
-   sends the work to A, or to a c2mir wasm32 fix in the fork (one PR at a time,
-   per CLAUDE.md).
+   `Vector2`, `Rectangle`, `Texture2D` and `Camera3D` by value. Both c2mir's
+   wasm32 ABI and `mir-wasm.c` pass aggregates by address, as clang does, so this
+   is expected to work; the known gap is a single-element struct (J1). P0 step 1
+   confirms. A failure is a c2mir wasm32 fix in the fork (one PR at a time, per
+   CLAUDE.md), not a reason to move to A.
 4. **A callback that outlives `main`.** `emscripten_set_main_loop(..., 1)`
    unwinds out of `main`, which is running inside MIR's `eval` frames, and the
    browser then calls an interpreted function whose context must still be
