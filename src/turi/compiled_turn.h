@@ -89,6 +89,11 @@ void turi_compiled_defs_clear(TuriEnv *env);
  * while a session runs: a function from an earlier turn may still read one. */
 void *tur_repl_slot(const char *name, const char *typesig, size_t size, int *fresh);
 
+/* The turn's program renders its result through this, piece by piece, into
+ * env->last_turn_text: the host shows it -- `tur repl` as its `=> ` line, the
+ * page as the prompt's result -- after the program's own output. */
+void tur_repl_result_piece(const char *s);
+
 #ifdef __cplusplus
 }
 #endif

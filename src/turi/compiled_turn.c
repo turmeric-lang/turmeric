@@ -81,6 +81,21 @@ void *tur_repl_slot(const char *name, const char *typesig, size_t size, int *fre
     return s->ptr;
 }
 
+/* ---- the result's text (tur_repl_result_piece) ------------------------- */
+
+static Buf g_result;            /* the running turn's result, as rendered */
+static bool g_result_inited;
+
+void tur_repl_result_piece(const char *s) {
+    if (!g_result_inited) { buf_init(&g_result); g_result_inited = true; }
+    if (s) buf_puts(&g_result, s);
+}
+
+static void result_reset(void) {
+    if (!g_result_inited) { buf_init(&g_result); g_result_inited = true; }
+    g_result.len = 0;
+}
+
 static void slots_clear(void) {
     /* The storage itself stays: images of the session that is ending may
      * still name it, and none of them is freed either. */
@@ -103,6 +118,8 @@ void turi_compiled_defs_clear(TuriEnv *env) {
     }
     free(env->compiled_defs);
     env->compiled_defs = NULL;
+    free(env->last_turn_text);
+    env->last_turn_text = NULL;
     env->n_compiled_defs = env->cap_compiled_defs = 0;
 }
 
@@ -187,58 +204,53 @@ static char *form_key(const Form *f, const char *src, bool *is_import) {
  * use the type's Show instance or its struct repr, which step 1 does not
  * reproduce yet (a documented difference). */
 
+/* The result printers.  Each renders its piece of the REPL's `=> ...` text
+ * into the host (tur_repl_result_piece); the host adds the `=> ` and shows the
+ * line after the program's own output.  `put_*` is a whole result, `raw_*` a
+ * piece of a structured one (emit_repr) -- the same thing now that the host
+ * owns the line, kept apart so the emitted program reads as it does. */
 static const char k_printers[] =
-    "(defn __tur_repl_put_int [x : int] : int\n"
-    "  ```c\n"
-    "  printf(\"=> %lld\\n\", (long long)x);\n"
-    "  return 0;\n"
-    "  ```)\n"
-    "(defn __tur_repl_put_float [x : float] : int\n"
-    "  ```c\n"
-    "  printf(\"=> %g\\n\", x);\n"
-    "  return 0;\n"
-    "  ```)\n"
-    "(defn __tur_repl_put_cstr [s : cstr] : int\n"
-    "  ```c\n"
-    "  printf(\"=> \\\"%s\\\"\\n\", s ? s : \"\");\n"
-    "  return 0;\n"
-    "  ```)\n"
-    "(defn __tur_repl_put_bool [b : bool] : int\n"
-    "  ```c\n"
-    "  printf(\"=> %s\\n\", b ? \"true\" : \"false\");\n"
-    "  return 0;\n"
-    "  ```)\n"
-    "(defn __tur_repl_put_line [s : cstr] : int\n"
-    "  ```c\n"
-    "  printf(\"=> %s\\n\", s);\n"
-    "  return 0;\n"
-    "  ```)\n"
-    /* The pieces of a structured result (emit_repr): no prefix, no newline. */
     "(defn __tur_repl_raw [s : cstr] : int\n"
     "  ```c\n"
-    "  fputs(s, stdout);\n"
+    "  void tur_repl_result_piece(const char *);\n"
+    "  tur_repl_result_piece(s ? s : \"\");\n"
     "  return 0;\n"
     "  ```)\n"
     "(defn __tur_repl_raw_int [x : int] : int\n"
     "  ```c\n"
-    "  printf(\"%lld\", (long long)x);\n"
+    "  void tur_repl_result_piece(const char *);\n"
+    "  char b[32];\n"
+    "  snprintf(b, sizeof b, \"%lld\", (long long)x);\n"
+    "  tur_repl_result_piece(b);\n"
     "  return 0;\n"
     "  ```)\n"
     "(defn __tur_repl_raw_float [x : float] : int\n"
     "  ```c\n"
-    "  printf(\"%g\", x);\n"
+    "  void tur_repl_result_piece(const char *);\n"
+    "  char b[64];\n"
+    "  snprintf(b, sizeof b, \"%g\", x);\n"
+    "  tur_repl_result_piece(b);\n"
     "  return 0;\n"
     "  ```)\n"
     "(defn __tur_repl_raw_bool [b : bool] : int\n"
     "  ```c\n"
-    "  fputs(b ? \"true\" : \"false\", stdout);\n"
+    "  void tur_repl_result_piece(const char *);\n"
+    "  tur_repl_result_piece(b ? \"true\" : \"false\");\n"
     "  return 0;\n"
     "  ```)\n"
     "(defn __tur_repl_raw_qcstr [s : cstr] : int\n"
     "  ```c\n"
-    "  printf(\"\\\"%s\\\"\", s ? s : \"\");\n"
+    "  void tur_repl_result_piece(const char *);\n"
+    "  tur_repl_result_piece(\"\\\"\");\n"
+    "  tur_repl_result_piece(s ? s : \"\");\n"
+    "  tur_repl_result_piece(\"\\\"\");\n"
     "  return 0;\n"
-    "  ```)\n";
+    "  ```)\n"
+    "(defn __tur_repl_put_int [x : int] : int (__tur_repl_raw_int x))\n"
+    "(defn __tur_repl_put_float [x : float] : int (__tur_repl_raw_float x))\n"
+    "(defn __tur_repl_put_cstr [s : cstr] : int (__tur_repl_raw_qcstr s))\n"
+    "(defn __tur_repl_put_bool [b : bool] : int (__tur_repl_raw_bool b))\n"
+    "(defn __tur_repl_put_line [s : cstr] : int (__tur_repl_raw s))\n";
 
 /* Show's module, and the printer of a `show` result (an owned String, printed
  * and released), for a program that prints through Show or uses it itself.
@@ -501,9 +513,9 @@ static void emit_print(Buf *b, ReprCtx *rc, const char *expr, const Type *t) {
     } else if (k == TY_NIL || k == TY_NEVER) {
         buf_printf(b, "  %s\n  (__tur_repl_put_line \"nil\")\n", expr);
     } else {
-        buf_printf(b, "  (let [__tur_v %s]\n    (do (__tur_repl_raw \"=> \")\n      ", expr);
+        buf_printf(b, "  (let [__tur_v %s]\n    ", expr);
         emit_repr(b, rc, "__tur_v", t, 4, NULL, 0);
-        buf_puts(b, "\n      (__tur_repl_raw \"\\n\")))\n");
+        buf_puts(b, ")\n");
     }
 }
 
@@ -611,6 +623,8 @@ TuriValue turi_compiled_turn_run(TuriEnv *env, Form **forms, uint32_t first, uin
         warned = true;
     }
     env->last_turn_printed = false;
+    free(env->last_turn_text);
+    env->last_turn_text = NULL;
 
     uint32_t n_new = n > first ? n - first : 0;
     NewDef *nd = (NewDef *)calloc(n_new ? n_new : 1, sizeof *nd);
@@ -741,6 +755,7 @@ TuriValue turi_compiled_turn_run(TuriEnv *env, Form **forms, uint32_t first, uin
 
     int rc = 0;
     fflush(stdout);
+    result_reset();
     int hrc = g_hook->run(prog.data, prog.len, &rc);
     g_redefined = NULL;
     g_n_redefined = 0;
@@ -764,6 +779,10 @@ TuriValue turi_compiled_turn_run(TuriEnv *env, Form **forms, uint32_t first, uin
             nd[j].key = nd[j].text = nd[j].type = NULL;
         }
         env->last_turn_printed = printed;
+        if (printed) {
+            buf_putc(&g_result, '\0');
+            env->last_turn_text = strdup(g_result.data);
+        }
         if (dropped.len) {
             fwrite(dropped.data, 1, dropped.len, stderr);
             fflush(stderr);

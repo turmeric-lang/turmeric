@@ -2222,9 +2222,15 @@ int turi_repl_run(bool watch_mode) {
                         scheme_echoed = true;
                     }
                 }
-                /* 2h: for type-level forms that return nil, show a sentinel.
-                 * aot-compiled-repl-plan C2: a compiled turn printed its own
-                 * `=> ...` line already. */
+                /* aot-compiled-repl-plan C2: a compiled turn rendered its own
+                 * result; it is shown as a Show result is. */
+                if (env->last_turn_printed && env->last_turn_text) {
+                    if (use_color)
+                        printf("=> " COL_RESET "%s" COL_RESET "\n", env->last_turn_text);
+                    else
+                        printf("=> %s\n", env->last_turn_text);
+                }
+                /* 2h: for type-level forms that return nil, show a sentinel. */
                 bool type_sentinel = scheme_echoed || env->last_turn_printed;
                 if (result.tag == TURI_NIL) {
                     char kind[32] = {0}, name[64] = {0};

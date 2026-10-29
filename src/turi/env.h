@@ -550,12 +550,14 @@ typedef struct TuriEnv {
      * compile.  `compiled_defs` is the definition table -- the latest source
      * of each top-level definition, in first-definition order, and the
      * imports -- that every turn's program is built from.  A compiled turn
-     * prints its own `=> ...` line and sets `last_turn_printed`, so the REPL
-     * does not print the (nil) result again. */
+     * renders its own result (`last_turn_text`, the part after `=> `) and
+     * sets `last_turn_printed`; the REPL, or the page, shows that text in
+     * place of the turn's (nil) value. */
     bool         compiled_repl;
     struct TuriCompiledDef *compiled_defs;
     uint32_t     n_compiled_defs, cap_compiled_defs;
     bool         last_turn_printed;
+    char        *last_turn_text;
     /* RM Q#5: session-scoped reader-macro registry. Persists across REPL
      * turns so `(reader-macros/define ...)` on one line is visible to the
      * reader on the next. Allocated from sym_arena; entries' templates

@@ -52,6 +52,7 @@
 #include "compiler/refine_discharge.h"
 #include "runtime/globals.h"   /* g_interpret_mode */
 #include "turi/inline_c_jit.h"
+#include "turi/compiled_turn.h"
 #include "wasm_glue.h"
 
 /* Where c2mir finds headers: the musl subset (tools/wasm-jit/headers.txt and
@@ -359,8 +360,108 @@ static const TuriInlineCJitHook k_wasm_inline_c_jit_hook = {
     wasm_inline_c_jit_build, wasm_inline_c_jit_sym,
 };
 
+/* ------------------------------------------------------------------------
+ * aot-compiled-repl-plan C2 at the page's prompt: with compiled turns on
+ * (turi_wasm_set_compiled_repl, which the Compile engine's worker sets from
+ * the page's checkbox), every prompt turn runs as a compiled program -- the
+ * session's definition table plus the turn (turi/compiled_turn.c builds it).
+ * The driver's repl_compiled_turn_here (src/driver/jit.c), as C1's hook is
+ * the driver's repl_inline_c_jit_build: compile_to_c with the globals in host
+ * slots, the S2 split and the pruner, then tur_jit_execute with the program
+ * kept for the session.  Here the program runs on MIR's interpreter, which
+ * reads its IR, so the whole context stays (point 5's carving is native
+ * only), and an exit, abort or panic unwinds to the landing
+ * tur_jit_execute already sets for a Compile Run (5.7).  No full-preamble
+ * retry, as in turi_wasm_jit_run above.
+ * ---------------------------------------------------------------------- */
+static int wasm_compiled_turn_run(const char *src, size_t len, int *out_rc) {
+    *out_rc = 0;
+    mkdir("/tmp", 0777);
+    const char *path = "/tmp/tur-repl-turn.tur";
+    FILE *f = fopen(path, "wb");
+    if (!f || fwrite(src, 1, len, f) != len) {
+        if (f) fclose(f);
+        fprintf(stderr, "tur: compiled-repl: cannot write %s\n", path);
+        return -1;
+    }
+    fclose(f);
+
+    size_t cap = diag_files_capacity();
+    const SourceFile **saved_files =
+        (const SourceFile **)calloc(cap ? cap : 1, sizeof *saved_files);
+    if (!saved_files) { remove(path); return -1; }
+    size_t n_saved = diag_files_save(saved_files, cap);
+    bool had_error = diag_had_error();
+
+    bool saved_efl = g_emit_for_link;
+    bool saved_wasm = g_emit_for_wasm;
+    bool saved_interp = g_interpret_mode;
+    bool saved_slots = g_emit_repl_slots;
+    Buf csrc;
+    buf_init(&csrc);
+    g_emit_for_link = true;
+    g_emit_for_wasm = false;   /* the runtime is resident in this module */
+    g_interpret_mode = false;
+    g_emit_repl_slots = true;
+    int rc = compile_to_c(path, &csrc, NULL, 0, NULL, 0);
+    g_emit_repl_slots = saved_slots;
+    g_interpret_mode = saved_interp;
+    g_emit_for_wasm = saved_wasm;
+    g_emit_for_link = saved_efl;
+    remove(path);
+
+    if (rc == 0) {
+        hoist_tur_include_directives(&csrc);
+        Buf autolink, reduced;
+        buf_init(&autolink);
+        buf_init(&reduced);
+        JitPruneStats ps;
+        memset(&ps, 0, sizeof ps);
+        if (jit_try_split_preamble(&csrc, &reduced)) {
+            jit_prune_split_source(&reduced, &ps);
+        } else {
+            buf_write(&reduced, csrc.data, csrc.len);
+            if (!jit_prune_full_source(&reduced, &ps)) {
+                buf_free(&reduced);
+                buf_init(&reduced);
+                buf_write(&reduced, csrc.data, csrc.len);
+            }
+        }
+        char *argv[] = { (char *)"repl", NULL };
+        bool was_quiet = tur_jit_set_quiet_warnings(true);
+        bool was_kept = tur_jit_set_keep_contexts(true);
+        if (!scan_autolink_markers(&csrc, &autolink)) {
+            rc = -1;
+        } else if (tur_jit_execute(reduced.data, reduced.len,
+                                   autolink.len ? autolink.data : NULL,
+                                   (const char **)k_include_dirs,
+                                   (int)(sizeof k_include_dirs / sizeof k_include_dirs[0]),
+                                   1, argv, out_rc) != TUR_JIT_OK) {
+            const char *why = tur_jit_last_error();
+            if (why && *why) fprintf(stderr, "tur: jit: %s\n", why);
+            rc = -1;
+        }
+        tur_jit_set_keep_contexts(was_kept);
+        tur_jit_set_quiet_warnings(was_quiet);
+        buf_free(&reduced);
+        buf_free(&autolink);
+    }
+    buf_free(&csrc);
+    fflush(stdout);
+    fflush(stderr);
+
+    diag_reset();
+    diag_files_replace(saved_files, n_saved);
+    free(saved_files);
+    if (had_error) diag_force_had_error();
+    return rc == 0 ? 0 : -1;
+}
+
+static const TuriCompiledTurnHook k_wasm_compiled_turn_hook = { wasm_compiled_turn_run };
+
 /* Installed before anything can evaluate: only this module links this file,
  * and the playground's interpreter module has no engine to compile with. */
 __attribute__((constructor)) static void wasm_install_inline_c_jit_hook(void) {
     turi_set_inline_c_jit_hook(&k_wasm_inline_c_jit_hook);
+    turi_set_compiled_turn_hook(&k_wasm_compiled_turn_hook);
 }

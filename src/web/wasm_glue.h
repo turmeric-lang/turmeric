@@ -59,6 +59,10 @@ const char *turi_wasm_version(void);
  */
 char *turi_wasm_eval(const char *input);
 
+/* aot-compiled-repl-plan C2: compiled prompt turns on or off for the session;
+ * returns whether they are on (never, in a module with no engine). */
+int turi_wasm_set_compiled_repl(int on);
+
 /* Evaluate a Turmeric source string and return both result and any error.
  * 
  * Arguments:

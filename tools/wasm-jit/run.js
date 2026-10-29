@@ -3,7 +3,7 @@
 // (wasm-jit-plan P3).
 //
 //   node tools/wasm-jit/run.js [--module DIR] [--result FILE] [--repeat N]
-//                              [--dump-c FILE] [--turns] program.tur [arg ...]
+//                              [--dump-c FILE] [--turns [--compiled-turns]] program.tur [arg ...]
 //
 // The program's stdout and stderr bytes go to this process's stdout and
 // stderr unchanged; its stdin is this process's stdin.  The module's answer
@@ -22,6 +22,9 @@
 // engine's worker makes for a prompt submission, and its result is printed
 // as `=> RESULT`.  One session, as at the page's prompt, so a defn in one
 // turn is there in the next; C1 compiles an inline-C defn on its first call.
+// --compiled-turns runs each turn as a compiled program instead
+// (aot-compiled-repl-plan C2, turi_wasm_set_compiled_repl), as the page does
+// with "Compile prompt turns too" ticked.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -32,6 +35,7 @@ let resultFile = null;
 let repeat = 1;
 let dumpC = null;
 let turns = false;
+let compiledTurns = false;
 while (argv.length && argv[0].startsWith('--')) {
   const flag = argv.shift();
   if (flag === '--module') moduleDir = path.resolve(argv.shift());
@@ -39,10 +43,11 @@ while (argv.length && argv[0].startsWith('--')) {
   else if (flag === '--repeat') repeat = parseInt(argv.shift(), 10);
   else if (flag === '--dump-c') dumpC = argv.shift();
   else if (flag === '--turns') turns = true;
+  else if (flag === '--compiled-turns') { turns = true; compiledTurns = true; }
   else { console.error(`run.js: unknown flag ${flag}`); process.exit(2); }
 }
 if (!argv.length) {
-  console.error('usage: node run.js [--module DIR] [--result FILE] [--repeat N] [--dump-c FILE] [--turns] program.tur [arg ...]');
+  console.error('usage: node run.js [--module DIR] [--result FILE] [--repeat N] [--dump-c FILE] [--turns [--compiled-turns]] program.tur [arg ...]');
   process.exit(2);
 }
 const programPath = argv.shift();
@@ -90,6 +95,9 @@ factory({
   if (turns) {
     if (mod._turi_wasm_init() !== 0) { console.error('run.js: turi_wasm_init failed'); process.exit(1); }
     const evalTurn = mod.cwrap('turi_wasm_eval', 'number', ['string']);
+    if (compiledTurns && !mod._turi_wasm_set_compiled_repl(1)) {
+      console.error('run.js: this module cannot compile prompt turns'); process.exit(1);
+    }
     for (const turn of source.split(/^---$/m)) {
       if (!turn.trim()) continue;
       let ptr = 0, text;

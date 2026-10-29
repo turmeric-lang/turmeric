@@ -52,6 +52,7 @@
 /* turi/compiled_turn.h, by its one declaration: the engine does not need the
  * interpreter's headers. */
 extern void *tur_repl_slot (const char *name, const char *typesig, size_t size, int *fresh);
+extern void tur_repl_result_piece (const char *s);
 
 /* ------------------------------------------------------------------ */
 /* I0 SPIKE INSTRUMENTATION (mir-interp-tier-plan phase I0)            */
@@ -573,6 +574,31 @@ static void jit_wasm_abort (void) {
   fputs ("Aborted\n", stderr);
   jit_wasm_unwind (134, 0);
 }
+
+/* A compiled REPL turn's panic (aot-compiled-repl-plan C2) ends the turn, as
+ * natively (jit_turn_unwind): the program's root reports it and would call the
+ * module's abort, which throws out through JavaScript and loses the worker.
+ * So the two ways a program ends in a panic -- tur_panic_root_exit, where an
+ * unwound `(panic ...)` lands, and tur_panic, the runtime's direct one --
+ * report it as the runtime does and unwind to the landing.  The panic state
+ * is this thread's, and every turn runs on this one, so it is cleared. */
+extern void tur_panic_root_print (void);
+extern int *tur_tls_panicking_ptr (void);
+extern int tur_panic_in_progress;
+static void jit_wasm_panic_clear_and_unwind (void) {
+  fflush (NULL);
+  *tur_tls_panicking_ptr () = 0;
+  tur_panic_in_progress = 0;
+  jit_wasm_unwind (134, 0);
+}
+static void jit_wasm_panic_root_exit (void) {
+  tur_panic_root_print ();
+  jit_wasm_panic_clear_and_unwind ();
+}
+static void jit_wasm_panic (const char *msg) {
+  fprintf (stderr, "panic: %s\n", msg ? msg : "(no message)");
+  jit_wasm_panic_clear_and_unwind ();
+}
 #endif
 
 static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
@@ -606,6 +632,7 @@ static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
    * host's slots (turi/compiled_turn.c); named here so the wasm module, which
    * has no dlsym, resolves it as tur does. */
   {"tur_repl_slot", (void *) tur_repl_slot},
+  {"tur_repl_result_piece", (void *) tur_repl_result_piece},
   {"_OSSwapInt16", (void *) jit_osswap16},
   {"_OSSwapInt32", (void *) jit_osswap32},
   {"_OSSwapInt64", (void *) jit_osswap64},
@@ -900,6 +927,10 @@ static void jit_turn_abort (void);
 static void *jit_import_resolver (const char *name) {
 #ifdef __EMSCRIPTEN__
   if (jit_wasm_refuses (name)) return NULL;
+  if (g_jit_keep_contexts) {   /* a REPL turn's panic ends the turn */
+    if (strcmp (name, "tur_panic_root_exit") == 0) return (void *) jit_wasm_panic_root_exit;
+    if (strcmp (name, "tur_panic") == 0) return (void *) jit_wasm_panic;
+  }
   if (strcmp (name, "setjmp") == 0 || strcmp (name, "_setjmp") == 0)
     return &jit_wasm_setjmp_import;
 #endif

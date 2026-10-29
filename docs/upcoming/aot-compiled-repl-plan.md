@@ -13,14 +13,16 @@
 > image-memory decision went to option (a) on 2026-10-29: a turn keeps only its
 > program's code and data, not its MIR context (C2, "Point 5, option (a), as
 > built"); results print through Show or their constructors, and redefining a
-> type drops the defs holding its values (C2, "Point 8 and type redefinition"). **Rewritten 2026-09-29.** The 2026-06-28 draft (in
+> type drops the defs holding its values (C2, "Point 8 and type redefinition");
+> a panic ends only its turn, a continuation cannot outlive one, and Try
+> Turmeric has compiled turns behind a checkbox under Compile (C2, "The page"). **Rewritten 2026-09-29.** The 2026-06-28 draft (in
 > git history) proposed compiling each prompt form with a `cc` subprocess into
 > a `.so` and `dlopen`ing it. It predates the in-process MIR JIT (graduated
 > 0.34.0). The JIT and the spice REPL now provide most of the machinery the
 > draft planned to build, and the draft had design flaws this version fixes
 > (see "Why not the 2026-06-28 draft"). The file name is historical: nothing
 > here is ahead-of-time compiled any more.
-> **Last Updated:** 2026-10-29 (C2: continuations, fibers and panics across turns)
+> **Last Updated:** 2026-10-29 (C2 on the page)
 > **Track:** post-v1. C0 (a bug fix) and C1 (graduated) have landed.
 > **Type:** REPL / interpreter (`src/turi/`) / JIT (`src/jit_engine.c`) /
 > emitter (REPL-mode globals).
@@ -777,10 +779,47 @@ next turn runs; the runtime's panic flag is reset so a second panic is not a
 for REPL turns: `tur jit` keeps libc's. A segfault in compiled code still
 ends the session.
 
-**Left before C2 can leave prototype:** the page (the browser JIT module
-installs the same hook, as for C1, and there point 5 is still open: the
-interpreter needs the IR). Option (b) stays available if a session's own
-definitions, rather than its turn count, ever make the kept code too much.
+#### The page, as built (2026-10-29)
+
+Try Turmeric's Compile engine has C2 behind a checkbox under Compile in the
+language menu, "Compile prompt turns too" (experimental, kept in
+localStorage like the engine). With it ticked, the worker turns compiled turns
+on for the JIT module's session (`turi_wasm_set_compiled_repl`), and every
+prompt turn runs as a compiled program there. Switching it starts that session
+afresh, since a compiled session's definitions are its own table.
+
+- **The hook** is the driver's, again: `wasm_compiled_turn_run`
+  (`src/web/wasm_jit_glue.c`) installs beside C1's, and compiles with the
+  globals in slots, the split and the prune, then `tur_jit_execute` with the
+  program kept. No full-preamble retry, as for a Compile Run.
+- **The result's text** is now the host's, on both: the printers render into
+  `tur_repl_result_piece`, the turn leaves it in `env->last_turn_text`, and
+  `tur repl` prints it as its `=> ` line while `turi_wasm_eval` returns it as
+  the prompt's result. Before, a compiled turn printed `=> ...` to stdout,
+  which the page would have shown as program output.
+- **A panic** ends the turn there too. The module's `abort()` throws out
+  through JavaScript and would lose the worker, so under keep a program's
+  `tur_panic_root_exit` and `tur_panic` resolve to shims that report as the
+  runtime does, clear the thread's panic state (every turn runs on the one
+  thread) and unwind to the landing a Compile Run already has (5.7). `exit`
+  and `abort` called by the program took that landing already.
+- **Tests:** `tools/wasm-jit/run.js --compiled-turns` drives the module from
+  Node, and `web/tests/jit-engine.spec.js` ticks the box in the page: a
+  global bumped across turns, `[1 2 3]` and a struct printed, a panic
+  survived.
+
+Measured under Node, a one-defn session costs about 130 ms a turn, and the
+module grows about 0.45 MB a turn (347 MB at 20 turns, 429 MB at 200). That
+is point 5 on this target: the program runs on MIR's interpreter, which reads
+its IR, so the whole context stays; there is no generator state to drop, which
+is why it is smaller than the native 1.3 MB was.
+
+**Left before C2 can leave prototype:** point 5 on the page -- a kept
+context's IR is the program there, so (a) has nothing to carve; dropping
+what the interpreter does not read (the symbol and string tables, the
+scanner) needs MIR's help, or (b). Option (b) stays available natively too if
+a session's own definitions, rather than its turn count, ever make the kept
+code too much.
 
 #### Investigation (2026-10-02)
 
