@@ -45,6 +45,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [compiled-repl-inline-c-defn-errors-deferred-to-first-call](compiled-repl-inline-c-defn-errors-deferred-to-first-call.md) | low (REPL diagnostics) | Under `--enable=compiled-repl` the JIT pruner drops a defn no turn has called yet, so its inline C is first compiled -- and rejected -- at its first call, not in the turn that defines it; a one-letter name is kept by an identifier collision, which is the only reason `repl-compiled.sh`'s rejection check sees the error at definition |
 | [turi-repl-continuation-resumed-in-later-turn-reads-freed-frames](turi-repl-continuation-resumed-in-later-turn-reads-freed-frames.md) | medium (REPL, use-after-poison) | At the interpreter prompt, a `k` stored in a `^mut` global by one turn and resumed by a later one walks frames from a slab the first turn's end poisoned: ASan stops in `frame_release`; Release prints the right answer by luck. In one file, resumed within the run, it is fine |
 | [repl-show-uses-wrong-instance-for-vec-elements](repl-show-uses-wrong-instance-for-vec-elements.md) | medium-low (REPL display) | At the interpreter prompt a `Vec` of structs with no `Show` shows through another struct's instance (`[P! P!]` for `[(Q 1) (Q 2)]`) or as an address, and a `(def w [1 2 3])` turn prints an address: `Show [Vec]`'s `[(Show A)]` is never checked, and a def turn's display gets the unit-typed def node. `--enable=compiled-repl` prints them right |
 

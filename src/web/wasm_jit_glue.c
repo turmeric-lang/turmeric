@@ -430,6 +430,7 @@ static int wasm_compiled_turn_run(const char *src, size_t len, int *out_rc) {
         char *argv[] = { (char *)"repl", NULL };
         bool was_quiet = tur_jit_set_quiet_warnings(true);
         bool was_kept = tur_jit_set_keep_contexts(true);
+        bool was_cached = tur_jit_set_preamble_cache(true);
         if (!scan_autolink_markers(&csrc, &autolink)) {
             rc = -1;
         } else if (tur_jit_execute(reduced.data, reduced.len,
@@ -441,6 +442,7 @@ static int wasm_compiled_turn_run(const char *src, size_t len, int *out_rc) {
             if (why && *why) fprintf(stderr, "tur: jit: %s\n", why);
             rc = -1;
         }
+        tur_jit_set_preamble_cache(was_cached);
         tur_jit_set_keep_contexts(was_kept);
         tur_jit_set_quiet_warnings(was_quiet);
         buf_free(&reduced);

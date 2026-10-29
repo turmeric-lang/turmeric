@@ -1032,6 +1032,7 @@ static int repl_compiled_turn_here(const char *src, size_t len, int *out_rc) {
         char *argv[] = { (char *)"repl", NULL };
         bool was_quiet = tur_jit_set_quiet_warnings(true);
         bool was_kept = tur_jit_set_keep_contexts(true);
+        bool was_cached = tur_jit_set_preamble_cache(true);
         if (timing) t_prep = repl_turn_now_ms();
         if (!scan_autolink_markers(&csrc, &autolink)) {
             rc = -1;
@@ -1044,6 +1045,7 @@ static int repl_compiled_turn_here(const char *src, size_t len, int *out_rc) {
                 jrc = tur_jit_execute(csrc.data, csrc.len, al, incs, n_incs, 1, argv, out_rc);
             if (jrc != TUR_JIT_OK) rc = -1;
         }
+        tur_jit_set_preamble_cache(was_cached);
         tur_jit_set_keep_contexts(was_kept);
         tur_jit_set_quiet_warnings(was_quiet);
         buf_free(&reduced);

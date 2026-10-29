@@ -285,6 +285,39 @@ EOF
 same "a fiber made in one turn resumes in the next two" \
      "$(printf '=> #<ptr<void>>\n=> 42\n=> 43')" "$(results "$out" | tail -3)"
 
+# --- The shared preamble is preprocessed once a session ----------------------------
+# Every turn's program starts with the same prelude and declarations; the
+# engine preprocesses them once (jit_pre_cache_fill) and compiles later turns
+# from that.  Header macros still reach a turn's inline C, and a turn's errors
+# read as they do without the cache, line numbers included.
+cache_session() {
+    TUR_NO_AUTO_SPICE=1 TMPDIR="$WORK" "$@" "$TUR" repl --enable=compiled-repl 2>&1 <<'EOF' \
+        | sed 's/\x1b\[[0-9;]*m//g'
+(defn imax [] : int ```c return INT64_MAX > 0 && EOF == -1 && sizeof (struct timespec) == 2 * sizeof (long); ```)
+(imax)
+(defn bad [] : int ```c this is not C; ```)
+(bad)
+(+ 1 2)
+(imax)
+EOF
+}
+if ! grep -qa 'preamble_cache_fill' "$TUR"; then
+    # Built against a c2mir without prepro_defines_p (C2MIR_PREPRO_DEFINES).
+    echo "SKIP: preamble cache (not in this binary)"
+else
+on="$(cache_session env TUR_JIT_TIMING=1)"
+off="$(cache_session env TUR_JIT_TIMING=1 TUR_JIT_PREAMBLE_CACHE=0)"
+same "header macros reach a turn's inline C through the cache" \
+     "$(printf '=> #<fn imax>\n=> 1\n=> #<fn bad>\n=> 3\n=> 1')" "$(results "$on")"
+has "a turn that does not compile says so" "the turn did not compile" "$on"
+same "the preamble is preprocessed once in six turns" \
+     "1" "$(grep -c 'preamble_cache_fill' <<< "$on")"
+same "a turn's errors read the same with and without the cache" \
+     "$(grep -E '^<tur-jit>|^=> ' <<< "$off")" "$(grep -E '^<tur-jit>|^=> ' <<< "$on")"
+same "TUR_JIT_PREAMBLE_CACHE=0 turns it off" \
+     "0" "$(grep -c 'preamble_cache' <<< "$off")"
+fi
+
 # --- Off by default ----------------------------------------------------------------
 out="$(repl_out <<'EOF'
 (def ^mut n 5)

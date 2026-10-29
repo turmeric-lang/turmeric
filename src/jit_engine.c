@@ -90,6 +90,7 @@ bool tur_jit_set_quiet_warnings (bool quiet) {
 }
 
 static bool g_jit_keep_contexts;   /* tur_jit_set_keep_contexts */
+static bool g_jit_preamble_cache;  /* tur_jit_set_preamble_cache */
 
 /* A kept program's footprint (aot-compiled-repl-plan C2, point 5).
  *
@@ -235,6 +236,12 @@ static void jit_finish_kept_context (MIR_context_t ctx) { (void) ctx; }
 bool tur_jit_set_keep_contexts (bool keep) {
   bool was = g_jit_keep_contexts;
   g_jit_keep_contexts = keep;
+  return was;
+}
+
+bool tur_jit_set_preamble_cache (bool on) {
+  bool was = g_jit_preamble_cache;
+  g_jit_preamble_cache = on;
   return was;
 }
 
@@ -1415,6 +1422,201 @@ static char *jit_prelude_win_shadowed (const char *csrc, size_t csrc_len,
 #endif /* _WIN32 */
 
 /* ------------------------------------------------------------------ */
+/* the preamble cache (aot-compiled-repl-plan C2)                       */
+/* ------------------------------------------------------------------ */
+/* Every program the emitter writes starts the same way: JIT_PRELUDE, the
+ * hoisted prefix, and the committed declarations region the S2 split swaps
+ * in, which ends at JIT_PRE_CACHE_END.  c2mir preprocesses that part --
+ * mostly the system headers it includes -- in every compile, ~45 of the ~85
+ * ms a REPL turn spends in c2mir.  So the first compile preprocesses it once
+ * (c2mir -E -fdump-defines: the expanded text, then the #pragma pack state
+ * and every macro still defined, as directives), and a compile whose first
+ * part is the same text feeds c2mir [that output][#line][the rest] instead,
+ * which reads back as the original did.  The program half keeps its line
+ * numbers: the #line puts it where it was.
+ *
+ * One entry, keyed by the text itself and the include dirs: a REPL session's
+ * turns all share it.  A compile from the cached form that fails is done
+ * again from the original text, silently first, so a program's own error is
+ * reported once and as before; if the original compiles, the cache is turned
+ * off for the process and TUR_JIT_TIMING says so.  Off unless
+ * tur_jit_set_preamble_cache turned it on (a compiled REPL session) or
+ * TUR_JIT_PREAMBLE_CACHE=1 -- a one-shot `tur jit` would pay the extra
+ * preprocessing pass and never reuse it; TUR_JIT_PREAMBLE_CACHE=0 turns it off.
+ * Needs open_memstream, so not on Windows, and a c2mir with
+ * prepro_defines_p (MIR fork, C2MIR_PREPRO_DEFINES). */
+#if !defined(_WIN32) && defined(C2MIR_PREPRO_DEFINES)
+#define JIT_PRE_CACHE 1
+static const char JIT_PRE_CACHE_END[] = "/* ==== S2: host-resident runtime; declarations only ==== */\n";
+static char *g_pre_key;            /* the first part it was made from */
+static size_t g_pre_key_len;
+static char *g_pre_key_incs;       /* the include dirs, each ending in \n */
+static char *g_pre_out;            /* its -E -fdump-defines output; NULL when it did not preprocess */
+static size_t g_pre_out_len;
+static size_t g_pre_key_lines;     /* newlines in the key: the rest starts on the next line */
+static bool g_pre_cache_broken;    /* a compile from it failed that the original did not */
+
+static bool jit_pre_cache_on (void) {
+  const char *e = getenv ("TUR_JIT_PREAMBLE_CACHE");
+  if (e != NULL && *e) return strcmp (e, "0") != 0 && !g_pre_cache_broken;
+  return g_jit_preamble_cache && !g_pre_cache_broken;
+}
+
+static size_t jit_pre_cache_find_end (const char *s, size_t len) {
+  const size_t m = sizeof JIT_PRE_CACHE_END - 1;
+  for (const char *p = s; p != NULL && (size_t) (p - s) + m <= len;
+       p = memchr (p + 1, '/', len - (size_t) (p + 1 - s))) {
+    if (memcmp (p, JIT_PRE_CACHE_END, m) == 0) return (size_t) (p - s) + m;
+  }
+  return 0;
+}
+
+static char *jit_pre_cache_incs (const char **include_dirs, int n_include_dirs) {
+  Buf b;
+  buf_init (&b);
+  for (int i = 0; i < n_include_dirs; i++) {
+    buf_puts (&b, include_dirs[i]);
+    buf_putc (&b, '\n');
+  }
+  buf_putc (&b, '\0');
+  return b.data;
+}
+
+/* Preprocess full[0, key_len) into the cache.  The output stays NULL when
+ * c2mir refuses it; the normal compile then reports why. */
+static void jit_pre_cache_fill (const char *full, size_t key_len, char *incs,
+                                const char **include_dirs, int n_include_dirs) {
+  free (g_pre_key);
+  free (g_pre_key_incs);
+  free (g_pre_out);
+  g_pre_key = (char *) malloc (key_len);
+  g_pre_key_len = key_len;
+  g_pre_key_incs = incs;
+  g_pre_out = NULL;
+  g_pre_out_len = 0;
+  g_pre_key_lines = 0;
+  if (g_pre_key == NULL) {
+    g_pre_key_len = 0;
+    return;
+  }
+  memcpy (g_pre_key, full, key_len);
+  for (size_t i = 0; i < key_len; i++) g_pre_key_lines += full[i] == '\n';
+
+  char *out = NULL;
+  size_t out_len = 0;
+  FILE *f = open_memstream (&out, &out_len);
+  if (f == NULL) return;
+  MIR_context_t ctx = MIR_init ();
+  c2mir_init (ctx);
+  struct c2mir_options ops;
+  memset (&ops, 0, sizeof ops);
+  ops.message_file = NULL;
+  ops.prepro_only_p = 1;
+  ops.prepro_defines_p = 1;
+  ops.prepro_output_file = f;
+  ops.include_dirs_num = (size_t) (n_include_dirs > 0 ? n_include_dirs : 0);
+  ops.include_dirs = include_dirs;
+  g_src = full;
+  g_src_len = key_len;
+  g_src_pos = 0;
+  int ok = c2mir_compile (ctx, &ops, jit_getc, NULL, "<tur-jit>", NULL);
+  c2mir_finish (ctx);
+  MIR_finish (ctx);
+  fclose (f);
+  if (ok) {
+    g_pre_out = out;
+    g_pre_out_len = out_len;
+  } else {
+    free (out);
+  }
+}
+
+/* The cached form of full, or NULL to compile full itself: the cached first
+ * part's output, a #line, and the rest. */
+static char *jit_pre_cache_source (const char *full, size_t full_len, size_t prelude_len,
+                                   const char **include_dirs, int n_include_dirs,
+                                   size_t *out_len) {
+  if (!jit_pre_cache_on ()) return NULL;
+  size_t end = jit_pre_cache_find_end (full + prelude_len, full_len - prelude_len);
+  if (end == 0) return NULL;   /* not a split TU: no committed region */
+  size_t key_len = prelude_len + end;
+  char *incs = jit_pre_cache_incs (include_dirs, n_include_dirs);
+  if (incs == NULL) return NULL;
+  if (g_pre_key != NULL && g_pre_key_len == key_len && strcmp (g_pre_key_incs, incs) == 0
+      && memcmp (g_pre_key, full, key_len) == 0) {
+    free (incs);
+  } else {
+    jit_pre_cache_fill (full, key_len, incs, include_dirs, n_include_dirs);
+    jit_timing_mark ("preamble_cache_fill");
+  }
+  if (g_pre_out == NULL) return NULL;
+  char line[64];
+  int ll = snprintf (line, sizeof line, "#line %zu \"<tur-jit>\"\n", g_pre_key_lines + 1);
+  size_t rest = full_len - key_len;
+  char *s = (char *) malloc (g_pre_out_len + (size_t) ll + rest + 1);
+  if (s == NULL) return NULL;
+  memcpy (s, g_pre_out, g_pre_out_len);
+  memcpy (s + g_pre_out_len, line, (size_t) ll);
+  memcpy (s + g_pre_out_len + ll, full + key_len, rest);
+  *out_len = g_pre_out_len + (size_t) ll + rest;
+  s[*out_len] = '\0';
+  return s;
+}
+#endif /* JIT_PRE_CACHE */
+
+static MIR_context_t jit_new_context (void) {
+#if JIT_KEEP_CARVE
+  return g_jit_keep_contexts ? MIR_init2 (NULL, &jit_keep_code_alloc) : MIR_init ();
+#else
+  return MIR_init ();
+#endif
+}
+
+#ifdef JIT_PRE_CACHE
+/* Compile the cached form: the context, c2mir still live in it, or NULL and
+ * the caller compiles the original.  Its messages are held back until it is
+ * known to have compiled, so a failure says nothing. */
+static MIR_context_t jit_pre_cache_compile (const char *src, size_t len,
+                                            const char **include_dirs, int n_include_dirs) {
+  char *msgs = NULL;
+  size_t msgs_len = 0;
+  FILE *mf = open_memstream (&msgs, &msgs_len);
+  if (mf == NULL) return NULL;
+  MIR_context_t ctx = jit_new_context ();
+  MIR_set_error_func (ctx, jit_mir_error);
+  g_jit_err_active = 1;
+  if (setjmp (g_jit_err_jb) != 0) {   /* the context is left, as on any longjmp'd error */
+    g_jit_err_active = 0;
+    fclose (mf);
+    free (msgs);
+    return NULL;
+  }
+  c2mir_init (ctx);
+  struct c2mir_options ops;
+  memset (&ops, 0, sizeof ops);
+  ops.message_file = mf;
+  ops.ignore_warnings_p = g_jit_quiet_warnings;
+  ops.include_dirs_num = (size_t) (n_include_dirs > 0 ? n_include_dirs : 0);
+  ops.include_dirs = include_dirs;
+  g_src = src;
+  g_src_len = len;
+  g_src_pos = 0;
+  int ok = c2mir_compile (ctx, &ops, jit_getc, NULL, "<tur-jit>", NULL);
+  g_jit_err_active = 0;
+  fclose (mf);
+  if (!ok) {
+    c2mir_finish (ctx);
+    MIR_finish (ctx);
+    free (msgs);
+    return NULL;
+  }
+  if (msgs_len) fwrite (msgs, 1, msgs_len, stderr);
+  free (msgs);
+  return ctx;
+}
+#endif
+
+/* ------------------------------------------------------------------ */
 /* shared front half: compile + load + link one emitted TU              */
 /* ------------------------------------------------------------------ */
 /* Everything up to "the program is linked and generated": prelude concat,
@@ -1484,10 +1686,6 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
   }
   full[full_len] = '\0';
 
-  g_src = full;
-  g_src_len = full_len;
-  g_src_pos = 0;
-
   jit_timing_begin ();
 #ifdef __EMSCRIPTEN__
   /* wasm-jit-plan 5.5: the program half's calls into the runtime take exact
@@ -1503,11 +1701,25 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
     }
   }
 #endif
-#if JIT_KEEP_CARVE
-  MIR_context_t ctx = g_jit_keep_contexts ? MIR_init2 (NULL, &jit_keep_code_alloc) : MIR_init ();
-#else
-  MIR_context_t ctx = MIR_init ();
+  MIR_context_t ctx = NULL;
+#ifdef JIT_PRE_CACHE
+  bool cache_failed = false;
+  {
+    size_t cached_len = 0;
+    char *cached = jit_pre_cache_source (full, full_len, full_len - csrc_len,
+                                         include_dirs, n_include_dirs, &cached_len);
+    if (cached != NULL) {
+      ctx = jit_pre_cache_compile (cached, cached_len, include_dirs, n_include_dirs);
+      cache_failed = ctx == NULL;
+      free (cached);
+    }
+  }
 #endif
+  const bool compiled = ctx != NULL;
+  if (!compiled) ctx = jit_new_context ();
+  g_src = full;
+  g_src_len = full_len;
+  g_src_pos = 0;
   MIR_set_error_func (ctx, jit_mir_error);
   g_jit_err_active = 1;
   if (setjmp (g_jit_err_jb) != 0) {
@@ -1515,23 +1727,33 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
     free (full);
     return TUR_JIT_ERR_LINK;
   }
-  c2mir_init (ctx);
+  if (!compiled) {
+    c2mir_init (ctx);
 
-  struct c2mir_options ops;
-  memset (&ops, 0, sizeof ops);
-  ops.message_file = stderr;
-  ops.ignore_warnings_p = g_jit_quiet_warnings;
+    struct c2mir_options ops;
+    memset (&ops, 0, sizeof ops);
+    ops.message_file = stderr;
+    ops.ignore_warnings_p = g_jit_quiet_warnings;
 
-  ops.include_dirs_num = (size_t) (n_include_dirs > 0 ? n_include_dirs : 0);
-  ops.include_dirs = include_dirs;
+    ops.include_dirs_num = (size_t) (n_include_dirs > 0 ? n_include_dirs : 0);
+    ops.include_dirs = include_dirs;
 
-  int ok = c2mir_compile (ctx, &ops, jit_getc, NULL, "<tur-jit>", NULL);
-  if (!ok) {
-    g_jit_err_active = 0;
-    c2mir_finish (ctx);
-    MIR_finish (ctx);
-    free (full);
-    return TUR_JIT_ERR_COMPILE;
+    int ok = c2mir_compile (ctx, &ops, jit_getc, NULL, "<tur-jit>", NULL);
+    if (!ok) {
+      g_jit_err_active = 0;
+      c2mir_finish (ctx);
+      MIR_finish (ctx);
+      free (full);
+      return TUR_JIT_ERR_COMPILE;
+    }
+#ifdef JIT_PRE_CACHE
+    if (cache_failed) {   /* the cached form failed and the original did not */
+      g_pre_cache_broken = true;
+      const char *v = getenv ("TUR_JIT_TIMING");
+      if (v && *v && strcmp (v, "0") != 0)
+        fprintf (stderr, "TUR_JIT_TIMING\tpreamble_cache\tbroken\toff for this process\n");
+    }
+#endif
   }
 
   /* I0 SPIKE (mir-interp-tier-plan section 3, phase I0): TUR_JIT_GEN=interp
