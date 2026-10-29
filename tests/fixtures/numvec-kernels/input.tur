@@ -32,7 +32,9 @@
 
 ;; NaN propagates through min/max, and the result is the FIRST NaN by index:
 ;; two NaNs with different bit patterns, the second in an earlier lane and in
-;; the eight-wide main loop, the first in the tail.  An empty sum is zero.
+;; the eight-wide main loop, the first in the tail.  Both infinities and no
+;; NaN: the kernel's NaN detector (a running sum, inf + -inf) fires anyway,
+;; finds no NaN, and the lanes answer.  An empty sum is zero.
 (defn f64-edges [] : nil
   (let [nan-a (bits->float 9221120237041090561)
         nan-b (bits->float 9221120237041090562)
@@ -44,6 +46,10 @@
     (println (float->bits (f64vec-max a)))
     (f64vec-set! a 3 3.25)
     (println (float->bits (f64vec-min a)))
+    (f64vec-set! a 10 (bits->float 9218868437227405312))
+    (f64vec-set! a 5 (bits->float -4503599627370496))
+    (println (float->bits (f64vec-min a)))
+    (println (float->bits (f64vec-max a)))
     (pf (f64vec-sum e))))
 
 (defn f32-part [] : nil

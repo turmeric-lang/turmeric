@@ -668,20 +668,26 @@
   int64_t n = y->len;
   const double *yd = y->data;
   const double *xd = x->data;
-  double s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, s5 = 0, s6 = 0, s7 = 0;
   int64_t i = 0;
   for (; i + 8 <= n; i += 8) {
-    { double m = yd[i] * xd[i]; s[0] = s[0] + m; }
-    { double m = yd[i + 1] * xd[i + 1]; s[1] = s[1] + m; }
-    { double m = yd[i + 2] * xd[i + 2]; s[2] = s[2] + m; }
-    { double m = yd[i + 3] * xd[i + 3]; s[3] = s[3] + m; }
-    { double m = yd[i + 4] * xd[i + 4]; s[4] = s[4] + m; }
-    { double m = yd[i + 5] * xd[i + 5]; s[5] = s[5] + m; }
-    { double m = yd[i + 6] * xd[i + 6]; s[6] = s[6] + m; }
-    { double m = yd[i + 7] * xd[i + 7]; s[7] = s[7] + m; }
+    { double m = yd[i] * xd[i]; s0 = s0 + m; }
+    { double m = yd[i + 1] * xd[i + 1]; s1 = s1 + m; }
+    { double m = yd[i + 2] * xd[i + 2]; s2 = s2 + m; }
+    { double m = yd[i + 3] * xd[i + 3]; s3 = s3 + m; }
+    { double m = yd[i + 4] * xd[i + 4]; s4 = s4 + m; }
+    { double m = yd[i + 5] * xd[i + 5]; s5 = s5 + m; }
+    { double m = yd[i + 6] * xd[i + 6]; s6 = s6 + m; }
+    { double m = yd[i + 7] * xd[i + 7]; s7 = s7 + m; }
   }
-  for (; i < n; i++) { double m = yd[i] * xd[i]; s[i & 7] = s[i & 7] + m; }
-  return ((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7]));
+  if (i < n) { double m = yd[i] * xd[i]; s0 = s0 + m; }
+  if (i + 1 < n) { double m = yd[i + 1] * xd[i + 1]; s1 = s1 + m; }
+  if (i + 2 < n) { double m = yd[i + 2] * xd[i + 2]; s2 = s2 + m; }
+  if (i + 3 < n) { double m = yd[i + 3] * xd[i + 3]; s3 = s3 + m; }
+  if (i + 4 < n) { double m = yd[i + 4] * xd[i + 4]; s4 = s4 + m; }
+  if (i + 5 < n) { double m = yd[i + 5] * xd[i + 5]; s5 = s5 + m; }
+  if (i + 6 < n) { double m = yd[i + 6] * xd[i + 6]; s6 = s6 + m; }
+  return ((s0 + s1) + (s2 + s3)) + ((s4 + s5) + (s6 + s7));
   ```)
 ;;; f64vec-min -- the smallest element (an empty array panics).
 ;;;
@@ -712,24 +718,32 @@
       return 0;
     }
   const double *d = a->data;
-  double m[8];
-  int64_t bad[8];
-  for (int k = 0; k < 8; k++) { m[k] = d[0]; bad[k] = 0; }
+  double m0 = d[0], m1 = d[0], m2 = d[0], m3 = d[0], m4 = d[0], m5 = d[0], m6 = d[0], m7 = d[0];
+  double z0 = 0, z1 = 0;
   int64_t i = 0;
-  for (; i + 8 <= n; i += 8)
-    for (int k = 0; k < 8; k++) {
-      double x = d[i + k];
-      m[k] = x < m[k] ? x : m[k];
-      bad[k] = bad[k] | (int64_t)(x != x);
-    }
+  for (; i + 8 <= n; i += 8) {
+    double x0 = d[i], x1 = d[i + 1], x2 = d[i + 2], x3 = d[i + 3], x4 = d[i + 4], x5 = d[i + 5], x6 = d[i + 6], x7 = d[i + 7];
+    m0 = x0 < m0 ? x0 : m0;
+    m1 = x1 < m1 ? x1 : m1;
+    m2 = x2 < m2 ? x2 : m2;
+    m3 = x3 < m3 ? x3 : m3;
+    m4 = x4 < m4 ? x4 : m4;
+    m5 = x5 < m5 ? x5 : m5;
+    m6 = x6 < m6 ? x6 : m6;
+    m7 = x7 < m7 ? x7 : m7;
+    double p0 = (x0 + x2) + (x4 + x6);
+    double p1 = (x1 + x3) + (x5 + x7);
+    z0 = z0 + p0;
+    z1 = z1 + p1;
+  }
+  double m[8] = {m0, m1, m2, m3, m4, m5, m6, m7};
+  double z = z0 + z1;
   for (; i < n; i++) {
     double x = d[i];
     m[i & 7] = x < m[i & 7] ? x : m[i & 7];
-    bad[i & 7] = bad[i & 7] | (int64_t)(x != x);
+    z = z + x;
   }
-  int64_t any = 0;
-  for (int k = 0; k < 8; k++) any = any | bad[k];
-  if (any) {
+  if (z != z) {
     for (int64_t j = 0; j < n; j++) if (d[j] != d[j]) return d[j];
   }
   for (int w = 4; w >= 1; w /= 2)
@@ -765,24 +779,32 @@
       return 0;
     }
   const double *d = a->data;
-  double m[8];
-  int64_t bad[8];
-  for (int k = 0; k < 8; k++) { m[k] = d[0]; bad[k] = 0; }
+  double m0 = d[0], m1 = d[0], m2 = d[0], m3 = d[0], m4 = d[0], m5 = d[0], m6 = d[0], m7 = d[0];
+  double z0 = 0, z1 = 0;
   int64_t i = 0;
-  for (; i + 8 <= n; i += 8)
-    for (int k = 0; k < 8; k++) {
-      double x = d[i + k];
-      m[k] = x > m[k] ? x : m[k];
-      bad[k] = bad[k] | (int64_t)(x != x);
-    }
+  for (; i + 8 <= n; i += 8) {
+    double x0 = d[i], x1 = d[i + 1], x2 = d[i + 2], x3 = d[i + 3], x4 = d[i + 4], x5 = d[i + 5], x6 = d[i + 6], x7 = d[i + 7];
+    m0 = x0 > m0 ? x0 : m0;
+    m1 = x1 > m1 ? x1 : m1;
+    m2 = x2 > m2 ? x2 : m2;
+    m3 = x3 > m3 ? x3 : m3;
+    m4 = x4 > m4 ? x4 : m4;
+    m5 = x5 > m5 ? x5 : m5;
+    m6 = x6 > m6 ? x6 : m6;
+    m7 = x7 > m7 ? x7 : m7;
+    double p0 = (x0 + x2) + (x4 + x6);
+    double p1 = (x1 + x3) + (x5 + x7);
+    z0 = z0 + p0;
+    z1 = z1 + p1;
+  }
+  double m[8] = {m0, m1, m2, m3, m4, m5, m6, m7};
+  double z = z0 + z1;
   for (; i < n; i++) {
     double x = d[i];
     m[i & 7] = x > m[i & 7] ? x : m[i & 7];
-    bad[i & 7] = bad[i & 7] | (int64_t)(x != x);
+    z = z + x;
   }
-  int64_t any = 0;
-  for (int k = 0; k < 8; k++) any = any | bad[k];
-  if (any) {
+  if (z != z) {
     for (int64_t j = 0; j < n; j++) if (d[j] != d[j]) return d[j];
   }
   for (int w = 4; w >= 1; w /= 2)
@@ -1578,20 +1600,26 @@
   int64_t n = y->len;
   const float *yd = y->data;
   const float *xd = x->data;
-  float s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  float s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, s5 = 0, s6 = 0, s7 = 0;
   int64_t i = 0;
   for (; i + 8 <= n; i += 8) {
-    { float m = yd[i] * xd[i]; s[0] = s[0] + m; }
-    { float m = yd[i + 1] * xd[i + 1]; s[1] = s[1] + m; }
-    { float m = yd[i + 2] * xd[i + 2]; s[2] = s[2] + m; }
-    { float m = yd[i + 3] * xd[i + 3]; s[3] = s[3] + m; }
-    { float m = yd[i + 4] * xd[i + 4]; s[4] = s[4] + m; }
-    { float m = yd[i + 5] * xd[i + 5]; s[5] = s[5] + m; }
-    { float m = yd[i + 6] * xd[i + 6]; s[6] = s[6] + m; }
-    { float m = yd[i + 7] * xd[i + 7]; s[7] = s[7] + m; }
+    { float m = yd[i] * xd[i]; s0 = s0 + m; }
+    { float m = yd[i + 1] * xd[i + 1]; s1 = s1 + m; }
+    { float m = yd[i + 2] * xd[i + 2]; s2 = s2 + m; }
+    { float m = yd[i + 3] * xd[i + 3]; s3 = s3 + m; }
+    { float m = yd[i + 4] * xd[i + 4]; s4 = s4 + m; }
+    { float m = yd[i + 5] * xd[i + 5]; s5 = s5 + m; }
+    { float m = yd[i + 6] * xd[i + 6]; s6 = s6 + m; }
+    { float m = yd[i + 7] * xd[i + 7]; s7 = s7 + m; }
   }
-  for (; i < n; i++) { float m = yd[i] * xd[i]; s[i & 7] = s[i & 7] + m; }
-  return ((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7]));
+  if (i < n) { float m = yd[i] * xd[i]; s0 = s0 + m; }
+  if (i + 1 < n) { float m = yd[i + 1] * xd[i + 1]; s1 = s1 + m; }
+  if (i + 2 < n) { float m = yd[i + 2] * xd[i + 2]; s2 = s2 + m; }
+  if (i + 3 < n) { float m = yd[i + 3] * xd[i + 3]; s3 = s3 + m; }
+  if (i + 4 < n) { float m = yd[i + 4] * xd[i + 4]; s4 = s4 + m; }
+  if (i + 5 < n) { float m = yd[i + 5] * xd[i + 5]; s5 = s5 + m; }
+  if (i + 6 < n) { float m = yd[i + 6] * xd[i + 6]; s6 = s6 + m; }
+  return ((s0 + s1) + (s2 + s3)) + ((s4 + s5) + (s6 + s7));
   ```)
 ;;; f32vec-min -- the smallest element (an empty array panics).
 ;;;
@@ -1622,24 +1650,32 @@
       return 0;
     }
   const float *d = a->data;
-  float m[8];
-  int32_t bad[8];
-  for (int k = 0; k < 8; k++) { m[k] = d[0]; bad[k] = 0; }
+  float m0 = d[0], m1 = d[0], m2 = d[0], m3 = d[0], m4 = d[0], m5 = d[0], m6 = d[0], m7 = d[0];
+  float z0 = 0, z1 = 0;
   int64_t i = 0;
-  for (; i + 8 <= n; i += 8)
-    for (int k = 0; k < 8; k++) {
-      float x = d[i + k];
-      m[k] = x < m[k] ? x : m[k];
-      bad[k] = bad[k] | (int32_t)(x != x);
-    }
+  for (; i + 8 <= n; i += 8) {
+    float x0 = d[i], x1 = d[i + 1], x2 = d[i + 2], x3 = d[i + 3], x4 = d[i + 4], x5 = d[i + 5], x6 = d[i + 6], x7 = d[i + 7];
+    m0 = x0 < m0 ? x0 : m0;
+    m1 = x1 < m1 ? x1 : m1;
+    m2 = x2 < m2 ? x2 : m2;
+    m3 = x3 < m3 ? x3 : m3;
+    m4 = x4 < m4 ? x4 : m4;
+    m5 = x5 < m5 ? x5 : m5;
+    m6 = x6 < m6 ? x6 : m6;
+    m7 = x7 < m7 ? x7 : m7;
+    float p0 = (x0 + x2) + (x4 + x6);
+    float p1 = (x1 + x3) + (x5 + x7);
+    z0 = z0 + p0;
+    z1 = z1 + p1;
+  }
+  float m[8] = {m0, m1, m2, m3, m4, m5, m6, m7};
+  float z = z0 + z1;
   for (; i < n; i++) {
     float x = d[i];
     m[i & 7] = x < m[i & 7] ? x : m[i & 7];
-    bad[i & 7] = bad[i & 7] | (int32_t)(x != x);
+    z = z + x;
   }
-  int32_t any = 0;
-  for (int k = 0; k < 8; k++) any = any | bad[k];
-  if (any) {
+  if (z != z) {
     for (int64_t j = 0; j < n; j++) if (d[j] != d[j]) return d[j];
   }
   for (int w = 4; w >= 1; w /= 2)
@@ -1675,24 +1711,32 @@
       return 0;
     }
   const float *d = a->data;
-  float m[8];
-  int32_t bad[8];
-  for (int k = 0; k < 8; k++) { m[k] = d[0]; bad[k] = 0; }
+  float m0 = d[0], m1 = d[0], m2 = d[0], m3 = d[0], m4 = d[0], m5 = d[0], m6 = d[0], m7 = d[0];
+  float z0 = 0, z1 = 0;
   int64_t i = 0;
-  for (; i + 8 <= n; i += 8)
-    for (int k = 0; k < 8; k++) {
-      float x = d[i + k];
-      m[k] = x > m[k] ? x : m[k];
-      bad[k] = bad[k] | (int32_t)(x != x);
-    }
+  for (; i + 8 <= n; i += 8) {
+    float x0 = d[i], x1 = d[i + 1], x2 = d[i + 2], x3 = d[i + 3], x4 = d[i + 4], x5 = d[i + 5], x6 = d[i + 6], x7 = d[i + 7];
+    m0 = x0 > m0 ? x0 : m0;
+    m1 = x1 > m1 ? x1 : m1;
+    m2 = x2 > m2 ? x2 : m2;
+    m3 = x3 > m3 ? x3 : m3;
+    m4 = x4 > m4 ? x4 : m4;
+    m5 = x5 > m5 ? x5 : m5;
+    m6 = x6 > m6 ? x6 : m6;
+    m7 = x7 > m7 ? x7 : m7;
+    float p0 = (x0 + x2) + (x4 + x6);
+    float p1 = (x1 + x3) + (x5 + x7);
+    z0 = z0 + p0;
+    z1 = z1 + p1;
+  }
+  float m[8] = {m0, m1, m2, m3, m4, m5, m6, m7};
+  float z = z0 + z1;
   for (; i < n; i++) {
     float x = d[i];
     m[i & 7] = x > m[i & 7] ? x : m[i & 7];
-    bad[i & 7] = bad[i & 7] | (int32_t)(x != x);
+    z = z + x;
   }
-  int32_t any = 0;
-  for (int k = 0; k < 8; k++) any = any | bad[k];
-  if (any) {
+  if (z != z) {
     for (int64_t j = 0; j < n; j++) if (d[j] != d[j]) return d[j];
   }
   for (int w = 4; w >= 1; w /= 2)

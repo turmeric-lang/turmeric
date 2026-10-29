@@ -11,7 +11,7 @@ compute-bound. Every program printed the same total, `2.68684e+09`.
 |---|---|---|
 | [bench-vec-dot.tur](bench-vec-dot.tur) -- `(Vec float)`, `vec-get` per element | 2.17s | 2.18s |
 | [bench-f64vec-dot.tur](bench-f64vec-dot.tur) -- `f64vec-dot` (N1), gcc | 0.18s (12x) | 0.18s (12x) |
-| the same, `CC=clang` | 0.32s | 0.32s |
+| the same, `CC=clang` | 0.18s | 0.18s |
 | [baseline](bench-f64vec-dot-baseline.c) `lanes` -- the kernel's eight-lane loop in C | 0.31s | 0.16s |
 | [baseline](bench-f64vec-dot-baseline.c) `plain` -- a left-to-right C loop | 0.51s | 0.53s |
 
@@ -26,9 +26,11 @@ What it says:
   strict left-to-right float sum cannot vectorize without `-ffast-math`; the
   kernel's fixed eight-lane order is that reassociation, chosen by the
   library, so it gives the same bits on every engine.
-- **clang is slower here** (0.32s, before and after): its vectorizer gives
-  up on the main loop when the length check sits in front of it. Open, in the
-  plan's N1 notes.
+- **clang is as fast** since 2026-10-29 (it was 0.32s). With the eight
+  accumulators in an array and a `s[i & 7]` tail, clang paired lane 0 with
+  lane 4 and built every vector from two half loads; the kernel now keeps
+  them as eight scalars and writes the tail out, the same arithmetic, so the
+  total is unchanged. `f32vec-dot` gained more: 0.27s -> 0.075s under clang.
 - AVX2 widths need `-march`, which tur never sets (`TUR_CC_FLAGS` opts in).
 
 Reproduce:

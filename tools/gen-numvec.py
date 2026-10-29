@@ -451,9 +451,14 @@ def same_len(t, name, ret):
 #     the written-out body of `add!` / `scale!` / `axpy!` / integer `min` /
 #     `max` slower (with two arrays it cannot prove the written-out stores do
 #     not overlap the loads), so it keeps the loop.
-#   - float `min` / `max` keep an inner lane loop but take NaN out of the
-#     select (a separate flag), which is what lets it vectorize.  Every spelling computes the same
-#     element-by-element arithmetic, so the result is the same either way.
+#   - `unrolled_scalar_lanes` (float `dot`): accumulators as eight scalars
+#     and a written-out tail, so clang pairs adjacent lanes (see the helper).
+#   - float `min` / `max`: eight scalar lanes written out, NaN detected by a
+#     running sum beside them (see k_minmax).  gcc vectorizes no float min
+#     reduction without -ffast-math; these scalar chains still beat the
+#     spelling it did vectorize.
+#   Every spelling computes the same element-by-element arithmetic, so the
+#   result is the same either way.
 
 def idx(k):
     return "i" if k == 0 else "i + %d" % k
@@ -478,6 +483,23 @@ def unrolled_loads_first(loads, computes, stores, tail):
             body += ["  " + part(idx(k), k) for k in range(8)]
     return (["int64_t i = 0;", "for (; i + 8 <= n; i += 8) {"] + body
             + ["}", "for (; i < n; i++) " + tail])
+
+
+def unrolled_scalar_lanes(C, step):
+    """Eight accumulators as scalars `s0`..`s7`, not an array, with the tail
+    written out as seven guarded steps: element i + k still lands in lane k,
+    so the arithmetic is the array form's.  `step(index_expr, lane_var)` ->
+    one C statement.  For `dot`: with `s[8]` and a `s[i & 7]` tail clang
+    pairs lane 0 with lane 4 (1 with 5, ...) and assembles every vector from
+    two half loads -- 0.31s against 0.17s for this spelling, gcc unchanged."""
+    return (["%s %s;" % (C, ", ".join("s%d = 0" % k for k in range(8))),
+             "int64_t i = 0;", "for (; i + 8 <= n; i += 8) {"]
+            + ["  " + step(idx(k), "s%d" % k) for k in range(8)]
+            + ["}"]
+            + ["if (%s < n) %s" % (idx(k), step(idx(k), "s%d" % k)) for k in range(7)])
+
+
+SCALAR_TREE = "((s0 + s1) + (s2 + s3)) + ((s4 + s5) + (s6 + s7))"
 
 
 def by_compiler(loop_lines, hand_lines):
@@ -602,11 +624,10 @@ def k_dot(t):
            "int64_t n = y->len;",
            "const %s *yd = y->data;" % C, "const %s *xd = x->data;" % C]
     if IS_FLOAT[t["p"]]:
-        return "\n".join(pre + ["%s s[8] = {0, 0, 0, 0, 0, 0, 0, 0};" % C]
-                         + unrolled(lambda j, k: "{ %s m = yd[%s] * xd[%s]; s[%d] = s[%d] + m; }"
-                                    % (C, j, j, k, k),
-                                    "{ %s m = yd[i] * xd[i]; s[i & 7] = s[i & 7] + m; }" % C)
-                         + ["return %s;" % TREE])
+        return "\n".join(pre
+                         + unrolled_scalar_lanes(C, lambda j, s: "{ %s m = yd[%s] * xd[%s]; %s = %s + m; }"
+                                                 % (C, j, j, s, s))
+                         + ["return %s;" % SCALAR_TREE])
     if t["p"] == "i32vec":
         prod = lambda j: "(uint64_t)((int64_t)yd[%s] * (int64_t)xd[%s])" % (j, j)
     else:
@@ -628,28 +649,38 @@ def k_minmax(t, which):
     if IS_FLOAT[t["p"]]:
         # A NaN anywhere makes the result NaN: the FIRST NaN by index.  The
         # lanes are a plain `x OP m ? x : m` -- one SSE min/max instruction,
-        # with no -ffast-math -- and a separate flag notes whether any element
-        # is NaN; only then does a second pass find the first one.  A NaN-free
-        # array never pays for it.
-        it = "int64_t" if t["p"] == "f64vec" else "int32_t"
+        # with no -ffast-math -- which never lets a NaN in, so NaN is found
+        # apart from them: a running sum of the elements is NaN when any of
+        # them is, and only then does a second pass find the first one.  (It
+        # is also NaN for an array holding both infinities, or one whose sum
+        # overflows to both; the second pass then finds none and the lanes
+        # answer.)  The sum is the cheapest detector there is -- one add per
+        # element, two chains -- and it keeps the eight lanes and their temps
+        # within sixteen registers; a per-lane int flag cost gcc twice the
+        # time (0.37s against 0.24s, benchmarks/f64vec-dot-results.md).
+        ms = ["m%d" % k for k in range(8)]
+        xs = ["x%d" % k for k in range(8)]
         return "\n".join(pre + [
-            "%s m[8];" % C, "%s bad[8];" % it,
-            "for (int k = 0; k < 8; k++) { m[k] = d[0]; bad[k] = 0; }"]
-            + ["int64_t i = 0;",
-               "for (; i + 8 <= n; i += 8)",
-               "  for (int k = 0; k < 8; k++) {",
-               "    %s x = d[i + k];" % C,
-               "    m[k] = x %s m[k] ? x : m[k];" % op,
-               "    bad[k] = bad[k] | (%s)(x != x);" % it,
-               "  }",
+            "%s %s;" % (C, ", ".join("%s = d[0]" % m for m in ms)),
+            "%s z0 = 0, z1 = 0;" % C,
+            "int64_t i = 0;",
+            "for (; i + 8 <= n; i += 8) {",
+            "  %s %s;" % (C, ", ".join("x%d = d[%s]" % (k, idx(k)) for k in range(8)))]
+            + ["  %s = %s %s %s ? %s : %s;" % (ms[k], xs[k], op, ms[k], xs[k], ms[k])
+               for k in range(8)]
+            + ["  %s p0 = (x0 + x2) + (x4 + x6);" % C,
+               "  %s p1 = (x1 + x3) + (x5 + x7);" % C,
+               "  z0 = z0 + p0;",
+               "  z1 = z1 + p1;",
+               "}",
+               "%s m[8] = {%s};" % (C, ", ".join(ms)),
+               "%s z = z0 + z1;" % C,
                "for (; i < n; i++) {",
                "  %s x = d[i];" % C,
                "  m[i & 7] = x %s m[i & 7] ? x : m[i & 7];" % op,
-               "  bad[i & 7] = bad[i & 7] | (%s)(x != x);" % it,
-               "}"]
-            + ["%s any = 0;" % it,
-               "for (int k = 0; k < 8; k++) any = any | bad[k];",
-               "if (any) {",
+               "  z = z + x;",
+               "}",
+               "if (z != z) {",
                "  for (int64_t j = 0; j < n; j++) if (d[j] != d[j]) return d[j];",
                "}",
                "for (int w = 4; w >= 1; w /= 2)",

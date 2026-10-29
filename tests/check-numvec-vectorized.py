@@ -13,18 +13,22 @@ with gcc and `-fopt-info-vec-optimized`, twice:
   -O2  tur's default build.  gcc's -O2 cost model vectorizes no loop whose
        trip count it cannot see, so the kernels write their eight-wide body
        out and its basic-block vectorizer takes it ("basic block part
-       vectorized").  BOTH and O2_ONLY must be vectorized here.
+       vectorized").  BOTH must be vectorized here.
   -O3  `--release`, the loop vectorizer.  BOTH, O3_ONLY and the N2 probes.
 
 A report counts for a kernel only when its line falls inside the kernel's main
-loop -- from `for (; i + 8 <=` up to the scalar tail `for (; i < n` -- so
+loop -- from `for (; i + 8 <=` up to the scalar tail (`for (; i < n`, or
+`if (i < n)` where the tail is written out) -- so
 setup code vectorized around a scalar loop does not pass for it.
 
 Which loops vectorize depends on the instruction set, so the list is for
 x86-64's baseline (SSE2); elsewhere, or without gcc, this skips.  Not listed,
 on purpose: `-copy!` (a memmove), a u8 `-fill!` (gcc turns it into memset),
-`-sum-ordered` (the strict left fold), and the 64-bit integer multiplies and
-min/max that SSE2 has no vector instruction for.
+`-sum-ordered` (the strict left fold), the 64-bit integer multiplies and
+min/max that SSE2 has no vector instruction for, and float min/max: gcc
+vectorizes no `x < m ? x : m` reduction without -ffast-math, and the kernel's
+eight scalar chains beat the spelling it did vectorize (lanes in an array, an
+int NaN flag per lane) by a third.
 
 Usage: python3 tests/check-numvec-vectorized.py   (TUR=path to tur)
 """
@@ -48,9 +52,6 @@ BOTH = (
     + ["i32vec-" + k for k in ["fill!", "scale!", "add!", "axpy!", "sum", "min", "max"]]
     + ["u8vec-add!"]
 )
-# Float min/max: the main loop vectorizes at -O2; at -O3 gcc unrolls the lane
-# loop first and leaves it scalar -- but branch-free, and as fast as -O2's.
-O2_ONLY = ["f64vec-min", "f64vec-max", "f32vec-min", "f32vec-max"]
 # -O2's basic-block vectorizer finds these unprofitable on SSE2: eight bytes
 # half-fill a register, and there is no 64-bit integer multiply.  The u8 sum
 # is still 2.4x faster at -O2 than a plain loop (its 32-bit lanes).
@@ -108,7 +109,8 @@ def main():
         elif cur:
             if "for (; i + 8 <=" in line and cur not in loops:
                 loops[cur] = [i, None]
-            elif "for (; i < n" in line and cur in loops and loops[cur][1] is None:
+            elif ("for (; i < n" in line or "if (i < n)" in line) \
+                    and cur in loops and loops[cur][1] is None:
                 loops[cur][1] = i
     def vectorized(level, where):
         """where: "function" (anywhere in it), "loop" (inside its main
@@ -129,10 +131,8 @@ def main():
     # `for` line).  An inner `for (int k = 0; k < 8; k++)` lane loop -- the
     # old spelling -- is ALSO "loop vectorized" there, its trip count being
     # the constant 8, yet runs at a quarter of the speed; it is reported at
-    # the inner loop's line, so it does not pass.  Float min/max keep a lane
-    # loop on purpose, so for them anywhere in the main loop counts.
+    # the inner loop's line, so it does not pass.
     for level, names, where in (("-O2", BOTH, "head"),
-                                ("-O2", O2_ONLY, "loop"),
                                 ("-O3", BOTH + O3_ONLY, "loop"),
                                 ("-O3", PROBES, "function")):
         got = vectorized(level, where)

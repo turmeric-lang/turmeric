@@ -357,9 +357,12 @@ Choices made on the way:
 - **Integer arithmetic wraps**, computed in the unsigned type; `int32` and
   `uint8` sums widen to `int`, and an `int32` product is formed in 64 bits.
 - **`min` / `max` propagate NaN**: the result is the first NaN by index.
-  The lanes are a plain `x < m ? x : m` (one SSE `minpd`, no `-ffast-math`)
-  and a separate flag notes any NaN; only then does a second pass find the
-  first one, so a NaN-free array never pays for it.
+  The lanes are a plain `x < m ? x : m` (one SSE `minsd`, no `-ffast-math`),
+  which never lets a NaN in, and a running sum of the elements beside them
+  is NaN when any element is; only then does a second pass find the first
+  one, so a NaN-free array never pays for it. (The sum is also NaN for an
+  array holding both infinities; the second pass then finds no NaN and the
+  lanes answer -- `numvec-kernels` covers it.)
 - **Fast at the default `-O2`, not only at `--release`** (2026-10-29). gcc's
   `-O2` vectorizes no loop whose trip count it cannot see, and only `-O3`
   fully unrolls an inner lane loop, so the first spelling of every kernel
@@ -390,24 +393,44 @@ Choices made on the way:
 
   Note the old float `min` at `-O3`: 1.08s, slower than at `-O2`, because
   gcc unrolled the lane loop into branches -- `--release` made it worse.
-  **Open:** clang's `dot` is ~0.31s both before and after. Isolated, the
-  length check at the top is what costs it (0.34s with, 0.19s without);
-  checking after the loop (legal: `dot` has no effect) gets clang to 0.21s
-  but costs gcc `-O2` 0.17 -> 0.23s, so it is not taken; a per-compiler
-  spelling would do it if clang's `dot` matters.
+
+  **The two left open, closed the same day.** Same harness, the column's
+  number before -> after:
+
+  | kernel | gcc `-O2` | gcc `-O3` | clang `-O2` | clang `-O3` |
+  |---|---|---|---|---|
+  | `f64vec-dot` | 0.191 -> 0.186 | 0.183 -> 0.180 | 0.308 -> 0.190 | 0.325 -> 0.180 |
+  | `f32vec-dot` | 0.071 -> 0.070 | | 0.267 -> 0.075 | |
+  | `f64vec-min` | 0.352 -> 0.249 | 0.355 -> 0.238 | 0.184 -> 0.125 | 0.191 -> 0.128 |
+  | `f32vec-min` | 0.293 -> 0.239 | 0.357 -> 0.235 | 0.125 -> 0.124 | 0.123 -> 0.131 |
+
+  - clang's `dot` was not the length check (moving the loop into a function
+    of its own did not help either): with the accumulators in an array and a
+    `s[i & 7]` tail, clang paired lane 0 with lane 4, 1 with 5, ..., and
+    assembled each vector from two half loads (`movsd` + `movhpd`). Eight
+    scalar accumulators and a tail written out as seven guarded steps
+    (element `i + k` still lands in lane `k`) give it adjacent pairs.
+  - gcc's float `min` / `max`: gcc vectorizes no `x < m ? x : m` reduction
+    without `-ffast-math` ("unsupported use in stmt"), so the floor is eight
+    scalar `minsd` chains, 0.16s with no NaN tracking at all. The old
+    per-lane int NaN flag doubled that; the running sum costs one add per
+    element and, kept to two chains, leaves the lanes their registers (eight
+    chains of it spilled one `min` lane to the stack, 0.30s). It is the only
+    tracker measured that helps clang as well. gcc stays ~2x behind clang
+    here, which vectorizes the reduction.
 - **The vectorization check** is `tests/check-numvec-vectorized.py` (ctest
   `tur_numvec_vectorized`), over `tests/vectorize/numvec-probe.tur`, x86-64
   with gcc only (it skips elsewhere). It compiles the probe at `-O2` and
-  `-O3` and requires 57 reports of a vectorized main loop: at `-O2` on the
+  `-O3` and requires 53 reports of a vectorized main loop: at `-O2` on the
   main loop's own `for` line (the old spelling's inner lane loop is also
   "loop vectorized" at `-O2`, at its own line, yet runs at a quarter of the
   speed -- putting `f64vec-sum` back in that spelling fails the check). Not
   on the list, because SSE2 has no instruction for them: 64-bit integer
   multiply and min/max (`i64vec-scale!`, `-dot`, `-min`, `-max`) and
-  `i32vec-dot`'s widening multiply; nor `-copy!` (a `memmove`). At `-O2`
-  only: float `min` / `max` (at `-O3` gcc unrolls their lane loop and leaves
-  it scalar, but branch-free and as fast). At `-O3` only: `i64vec-axpy!` and
-  the u8 sum / `min` / `max`.
+  `i32vec-dot`'s widening multiply; nor `-copy!` (a `memmove`); nor float
+  `min` / `max`, which gcc does not vectorize without `-ffast-math` and whose
+  scalar chains beat the spelling it did vectorize. At `-O3` only:
+  `i64vec-axpy!` and the u8 sum / `min` / `max`.
   Two traps the probe has to avoid, both recorded in it: a constant length
   lets gcc unroll instead of vectorize, and code it estimates runs once (only
   from `main`) is optimized for size, which skips vectorization entirely.

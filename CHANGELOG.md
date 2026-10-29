@@ -19,9 +19,10 @@ All notable changes to Turmeric are documented here.
   body.
 - **Bulk kernels and loops over the typed numeric arrays** (phases N1 and N2
   of the SIMD plan). `P-fill!`, `P-copy!`, `P-scale!`, `P-add!`, `P-axpy!`,
-  `P-sum`, `P-dot`, `P-min`, `P-max` and `P-sum-ordered` are single C loops
-  that vectorize in a default build as well as at `--release`: `f64vec-dot`
-  runs 12x faster than the same dot product over `(Vec float)`. A float reduction uses a fixed eight-lane
+  `P-sum`, `P-dot`, `P-min`, `P-max` and `P-sum-ordered` are single C loops,
+  each spelled by measurement to run as fast in a default build as at
+  `--release`, under gcc and clang alike: `f64vec-dot` runs 12x faster than
+  the same dot product over `(Vec float)`. A float reduction uses a fixed eight-lane
   order, so it vectorizes without `-ffast-math` and gives the same bits on
   every engine; integer arithmetic wraps. `P-for`, `P-for-index`, `P-fold`
   and `P-build` loop over an array without exposing an index, so their reads
