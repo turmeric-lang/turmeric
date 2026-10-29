@@ -897,6 +897,9 @@ add_test(
   COMMAND python3 tools/gen-numvec.py --check
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# The generator lays the module out with `tur fmt`, so it needs this build's tur.
+set_tests_properties(tur_numvec_generated PROPERTIES
+  ENVIRONMENT "TUR=$<TARGET_FILE:tur>")
 # The numvec loops that should vectorize at -O3 do (simd-and-vectorization-
 # plan N1/N2): the N1 kernels and loops written with the N2 macros.  Neither
 # shows in any output, so a change that put control flow back in a loop would

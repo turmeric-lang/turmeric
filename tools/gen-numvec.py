@@ -12,7 +12,9 @@ has an interpreter twin of the same name in src/turi/interpreter_natives.c
 (NUMVEC_NATIVES) and rows in src/turi/native_caps.c; keep all three in step.
 """
 import os
+import subprocess
 import sys
+import tempfile
 
 # p: prefix, T: type, E: element type, C: C element, zero: a literal of E,
 # zm: the same zero as a macro-time `list` form, ex/exs: docstring examples.
@@ -1141,7 +1143,31 @@ def kernel_natives():
 
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-OUTPUTS = [("stdlib/numvec.tur", render), ("src/turi/numvec_kernels.inc", render_inc)]
+
+
+def tur_fmt(text):
+    """The text as `tur fmt` lays it out.  The whole stdlib is held to its
+    formatter (tur_fmt_tests, fmt-bootstrap-stdlib), so the generated module
+    goes through it rather than the template chasing its rules.  `$TUR` names
+    the compiler; else the in-tree build."""
+    tur = os.environ.get("TUR") or os.path.join(ROOT, "build", "tur")
+    if not os.path.exists(tur):
+        sys.stderr.write("gen-numvec: no tur at %s to format stdlib/numvec.tur "
+                         "(build it, or set TUR)\n" % tur)
+        sys.exit(2)
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "numvec.tur")
+        with open(path, "w") as f:
+            f.write(text)
+        r = subprocess.run([tur, "fmt", path], capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.stderr.write("gen-numvec: tur fmt failed:\n" + r.stderr)
+            sys.exit(2)
+        return open(path).read()
+
+
+OUTPUTS = [("stdlib/numvec.tur", lambda: tur_fmt(render())),
+           ("src/turi/numvec_kernels.inc", render_inc)]
 
 
 def main():

@@ -2068,7 +2068,7 @@ static bool call_collect_type_bindings_inner(const Type *expected, Type actual,
                  * back as the int instantiation's A (4609434218613702656 on cc,
                  * 1.5 on turi). */
                 bool caller_rigid_vs_scalar =
-                    g_collect_depth == 1 &&
+                    g_collect_depth == 1 && bindings[idx].type.kind == TY_TYVAR &&
                     g_call_cb_elab && bindings[idx].type.as.tyvar_.name &&
                     !bindings[idx].type.as.tyvar_.open_slot &&
                     ng_tyvar_in_sig(g_call_cb_elab, bindings[idx].type.as.tyvar_.name) &&

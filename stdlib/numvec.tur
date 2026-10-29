@@ -78,13 +78,18 @@
 ;;; which is fresh against the program's own names (`syntax-gensym` here is
 ;;; fresh only against the macro-time env's).
 
-(defmacro* numvec-of__ [new setter zero v & xs]
+(defmacro* numvec-of__
+  [new setter zero v & xs]
   (let [n (syntax-len xs)]
-    (letrec [sets (fn [i : int acc : Syntax] : Syntax
-                    (if (< i 0)
-                      acc
-                      (sets (- i 1)
-                            (syntax-cons `(~setter ~v ~(int->syntax i) ~(syntax-nth xs i)) acc))))]
+    (letrec [sets
+             (fn [i : int acc : Syntax] : Syntax
+               (if (< i 0)
+                 acc
+                 (sets (- i 1)
+                   (syntax-cons `(~setter ~v
+                                   ~(int->syntax i)
+                                   ~(syntax-nth xs i))
+                     acc))))]
       (let [mk   `(~new ~(int->syntax n) ~zero)
             bind (syntax-vec v mk)
             body (syntax-cons (sym->syntax "do") (sets (- n 1) (syntax-list v)))]
@@ -152,8 +157,7 @@
 ;;; Since: Phase N0
 
 (defmacro f64vec-of [& xs]
-  (let [v (gensym "nv")]
-    (list numvec-of__ f64vec-new f64vec-set! 0.0 v ~@xs)))
+  (let [v (gensym "nv")] (list numvec-of__ f64vec-new f64vec-set! 0.0 v ~@xs)))
 ;;; f64vec-free -- release a F64Vec now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound F64Vec is freed at scope exit.  Call it to
@@ -277,9 +281,7 @@
 (defn f64vec->vec-go__ [^borrow v : F64Vec out : (Vec float) i : int n : int] : (Vec float)
   (if (>= i n)
     out
-    (do
-      (vec-push! out (f64vec-ref v i))
-      (f64vec->vec-go__ v out {i + 1} n))))
+    (do (vec-push! out (f64vec-ref v i)) (f64vec->vec-go__ v out (+ i 1) n))))
 ;;; f64vec->vec -- copy a F64Vec into a fresh (Vec float).
 ;;;
 ;;; Parameters:
@@ -299,12 +301,15 @@
   (f64vec->vec-go__ v (:: (vec-new) (Vec float)) 0 (f64vec-len v)))
 ;;; vec->f64vec-go__ -- internal: store src[i..n) into out.
 
-(defn vec->f64vec-go__ [^borrow out : F64Vec ^borrow src : (Vec float) i : int n : int] : nil
+(defn vec->f64vec-go__ [^borrow out : F64Vec
+                        ^borrow src : (Vec float)
+                        i : int
+                        n : int] : nil
   (if (>= i n)
     nil
     (do
       (f64vec-set! out i (:: (vec-get src i) float))
-      (vec->f64vec-go__ out src {i + 1} n))))
+      (vec->f64vec-go__ out src (+ i 1) n))))
 ;;; vec->f64vec -- copy a (Vec float) into a fresh F64Vec.
 ;;;
 ;;; Parameters:
@@ -333,7 +338,7 @@
       (when (> i 0) (builder/push-cstr! b " "))
       (let [es (show (f64vec-ref v i))]
         (do (builder/push-string! b es) (string/release es)))
-      (f64vec-show-loop__ v {i + 1} n b))))
+      (f64vec-show-loop__ v (+ i 1) n b))))
 ;;; f64vec-show -- render a F64Vec as an owned "#f64vec[a b c]" String.
 ;;;
 ;;; Parameters:
@@ -886,14 +891,12 @@
         v    (second bv)
         more (rest (rest bv))]
     (if (list? v)
-      (let [t (gensym "nv")]
-        `(let [~t ~v] (f64vec-for [~x ~t ~@more] ~@body)))
+      (let [t (gensym "nv")] `(let [~t ~v] (f64vec-for [~x ~t ~@more] ~@body)))
       (if (empty? more)
         `(let [^mut ~i 0
                ~n      (f64vec-len ~v)]
            (while (< ~i ~n)
-             (let [~x (unsafe (f64vec-ref-unchecked ~v ~i))]
-               ~@body)
+             (let [~x (unsafe (f64vec-ref-unchecked ~v ~i))] ~@body)
              (set! ~i (+ ~i 1))))
         (let [y (first more)
               w (second more)]
@@ -969,8 +972,7 @@
              ~n        (f64vec-len ~v)
              ^mut ~acc ~init]
          (while (< ~i ~n)
-           (let [~x (unsafe (f64vec-ref-unchecked ~v ~i))]
-             (set! ~acc ~body))
+           (let [~x (unsafe (f64vec-ref-unchecked ~v ~i))] (set! ~acc ~body))
            (set! ~i (+ ~i 1)))
          ~acc))))
 ;;; f64vec-build -- a fresh F64Vec of n elements, element i the value of expr.
@@ -1209,9 +1211,7 @@
 (defn f32vec->vec-go__ [^borrow v : F32Vec out : (Vec float32) i : int n : int] : (Vec float32)
   (if (>= i n)
     out
-    (do
-      (vec-push! out (f32vec-ref v i))
-      (f32vec->vec-go__ v out {i + 1} n))))
+    (do (vec-push! out (f32vec-ref v i)) (f32vec->vec-go__ v out (+ i 1) n))))
 ;;; f32vec->vec -- copy a F32Vec into a fresh (Vec float32).
 ;;;
 ;;; Parameters:
@@ -1231,12 +1231,15 @@
   (f32vec->vec-go__ v (:: (vec-new) (Vec float32)) 0 (f32vec-len v)))
 ;;; vec->f32vec-go__ -- internal: store src[i..n) into out.
 
-(defn vec->f32vec-go__ [^borrow out : F32Vec ^borrow src : (Vec float32) i : int n : int] : nil
+(defn vec->f32vec-go__ [^borrow out : F32Vec
+                        ^borrow src : (Vec float32)
+                        i : int
+                        n : int] : nil
   (if (>= i n)
     nil
     (do
       (f32vec-set! out i (:: (vec-get src i) float32))
-      (vec->f32vec-go__ out src {i + 1} n))))
+      (vec->f32vec-go__ out src (+ i 1) n))))
 ;;; vec->f32vec -- copy a (Vec float32) into a fresh F32Vec.
 ;;;
 ;;; Parameters:
@@ -1265,7 +1268,7 @@
       (when (> i 0) (builder/push-cstr! b " "))
       (let [es (show (f32vec-ref v i))]
         (do (builder/push-string! b es) (string/release es)))
-      (f32vec-show-loop__ v {i + 1} n b))))
+      (f32vec-show-loop__ v (+ i 1) n b))))
 ;;; f32vec-show -- render a F32Vec as an owned "#f32vec[a b c]" String.
 ;;;
 ;;; Parameters:
@@ -1818,14 +1821,12 @@
         v    (second bv)
         more (rest (rest bv))]
     (if (list? v)
-      (let [t (gensym "nv")]
-        `(let [~t ~v] (f32vec-for [~x ~t ~@more] ~@body)))
+      (let [t (gensym "nv")] `(let [~t ~v] (f32vec-for [~x ~t ~@more] ~@body)))
       (if (empty? more)
         `(let [^mut ~i 0
                ~n      (f32vec-len ~v)]
            (while (< ~i ~n)
-             (let [~x (unsafe (f32vec-ref-unchecked ~v ~i))]
-               ~@body)
+             (let [~x (unsafe (f32vec-ref-unchecked ~v ~i))] ~@body)
              (set! ~i (+ ~i 1))))
         (let [y (first more)
               w (second more)]
@@ -1901,8 +1902,7 @@
              ~n        (f32vec-len ~v)
              ^mut ~acc ~init]
          (while (< ~i ~n)
-           (let [~x (unsafe (f32vec-ref-unchecked ~v ~i))]
-             (set! ~acc ~body))
+           (let [~x (unsafe (f32vec-ref-unchecked ~v ~i))] (set! ~acc ~body))
            (set! ~i (+ ~i 1)))
          ~acc))))
 ;;; f32vec-build -- a fresh F32Vec of n elements, element i the value of expr.
@@ -2016,8 +2016,7 @@
 ;;; Since: Phase N0
 
 (defmacro i64vec-of [& xs]
-  (let [v (gensym "nv")]
-    (list numvec-of__ i64vec-new i64vec-set! 0 v ~@xs)))
+  (let [v (gensym "nv")] (list numvec-of__ i64vec-new i64vec-set! 0 v ~@xs)))
 ;;; i64vec-free -- release a I64Vec now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound I64Vec is freed at scope exit.  Call it to
@@ -2141,9 +2140,7 @@
 (defn i64vec->vec-go__ [^borrow v : I64Vec out : (Vec int) i : int n : int] : (Vec int)
   (if (>= i n)
     out
-    (do
-      (vec-push! out (i64vec-ref v i))
-      (i64vec->vec-go__ v out {i + 1} n))))
+    (do (vec-push! out (i64vec-ref v i)) (i64vec->vec-go__ v out (+ i 1) n))))
 ;;; i64vec->vec -- copy a I64Vec into a fresh (Vec int).
 ;;;
 ;;; Parameters:
@@ -2163,12 +2160,15 @@
   (i64vec->vec-go__ v (:: (vec-new) (Vec int)) 0 (i64vec-len v)))
 ;;; vec->i64vec-go__ -- internal: store src[i..n) into out.
 
-(defn vec->i64vec-go__ [^borrow out : I64Vec ^borrow src : (Vec int) i : int n : int] : nil
+(defn vec->i64vec-go__ [^borrow out : I64Vec
+                        ^borrow src : (Vec int)
+                        i : int
+                        n : int] : nil
   (if (>= i n)
     nil
     (do
       (i64vec-set! out i (:: (vec-get src i) int))
-      (vec->i64vec-go__ out src {i + 1} n))))
+      (vec->i64vec-go__ out src (+ i 1) n))))
 ;;; vec->i64vec -- copy a (Vec int) into a fresh I64Vec.
 ;;;
 ;;; Parameters:
@@ -2197,7 +2197,7 @@
       (when (> i 0) (builder/push-cstr! b " "))
       (let [es (show (i64vec-ref v i))]
         (do (builder/push-string! b es) (string/release es)))
-      (i64vec-show-loop__ v {i + 1} n b))))
+      (i64vec-show-loop__ v (+ i 1) n b))))
 ;;; i64vec-show -- render a I64Vec as an owned "#i64vec[a b c]" String.
 ;;;
 ;;; Parameters:
@@ -2705,14 +2705,12 @@
         v    (second bv)
         more (rest (rest bv))]
     (if (list? v)
-      (let [t (gensym "nv")]
-        `(let [~t ~v] (i64vec-for [~x ~t ~@more] ~@body)))
+      (let [t (gensym "nv")] `(let [~t ~v] (i64vec-for [~x ~t ~@more] ~@body)))
       (if (empty? more)
         `(let [^mut ~i 0
                ~n      (i64vec-len ~v)]
            (while (< ~i ~n)
-             (let [~x (unsafe (i64vec-ref-unchecked ~v ~i))]
-               ~@body)
+             (let [~x (unsafe (i64vec-ref-unchecked ~v ~i))] ~@body)
              (set! ~i (+ ~i 1))))
         (let [y (first more)
               w (second more)]
@@ -2788,8 +2786,7 @@
              ~n        (i64vec-len ~v)
              ^mut ~acc ~init]
          (while (< ~i ~n)
-           (let [~x (unsafe (i64vec-ref-unchecked ~v ~i))]
-             (set! ~acc ~body))
+           (let [~x (unsafe (i64vec-ref-unchecked ~v ~i))] (set! ~acc ~body))
            (set! ~i (+ ~i 1)))
          ~acc))))
 ;;; i64vec-build -- a fresh I64Vec of n elements, element i the value of expr.
@@ -3028,9 +3025,7 @@
 (defn i32vec->vec-go__ [^borrow v : I32Vec out : (Vec int32) i : int n : int] : (Vec int32)
   (if (>= i n)
     out
-    (do
-      (vec-push! out (i32vec-ref v i))
-      (i32vec->vec-go__ v out {i + 1} n))))
+    (do (vec-push! out (i32vec-ref v i)) (i32vec->vec-go__ v out (+ i 1) n))))
 ;;; i32vec->vec -- copy a I32Vec into a fresh (Vec int32).
 ;;;
 ;;; Parameters:
@@ -3050,12 +3045,15 @@
   (i32vec->vec-go__ v (:: (vec-new) (Vec int32)) 0 (i32vec-len v)))
 ;;; vec->i32vec-go__ -- internal: store src[i..n) into out.
 
-(defn vec->i32vec-go__ [^borrow out : I32Vec ^borrow src : (Vec int32) i : int n : int] : nil
+(defn vec->i32vec-go__ [^borrow out : I32Vec
+                        ^borrow src : (Vec int32)
+                        i : int
+                        n : int] : nil
   (if (>= i n)
     nil
     (do
       (i32vec-set! out i (:: (vec-get src i) int32))
-      (vec->i32vec-go__ out src {i + 1} n))))
+      (vec->i32vec-go__ out src (+ i 1) n))))
 ;;; vec->i32vec -- copy a (Vec int32) into a fresh I32Vec.
 ;;;
 ;;; Parameters:
@@ -3084,7 +3082,7 @@
       (when (> i 0) (builder/push-cstr! b " "))
       (let [es (show (i32vec-ref v i))]
         (do (builder/push-string! b es) (string/release es)))
-      (i32vec-show-loop__ v {i + 1} n b))))
+      (i32vec-show-loop__ v (+ i 1) n b))))
 ;;; i32vec-show -- render a I32Vec as an owned "#i32vec[a b c]" String.
 ;;;
 ;;; Parameters:
@@ -3592,14 +3590,12 @@
         v    (second bv)
         more (rest (rest bv))]
     (if (list? v)
-      (let [t (gensym "nv")]
-        `(let [~t ~v] (i32vec-for [~x ~t ~@more] ~@body)))
+      (let [t (gensym "nv")] `(let [~t ~v] (i32vec-for [~x ~t ~@more] ~@body)))
       (if (empty? more)
         `(let [^mut ~i 0
                ~n      (i32vec-len ~v)]
            (while (< ~i ~n)
-             (let [~x (unsafe (i32vec-ref-unchecked ~v ~i))]
-               ~@body)
+             (let [~x (unsafe (i32vec-ref-unchecked ~v ~i))] ~@body)
              (set! ~i (+ ~i 1))))
         (let [y (first more)
               w (second more)]
@@ -3675,8 +3671,7 @@
              ~n        (i32vec-len ~v)
              ^mut ~acc ~init]
          (while (< ~i ~n)
-           (let [~x (unsafe (i32vec-ref-unchecked ~v ~i))]
-             (set! ~acc ~body))
+           (let [~x (unsafe (i32vec-ref-unchecked ~v ~i))] (set! ~acc ~body))
            (set! ~i (+ ~i 1)))
          ~acc))))
 ;;; i32vec-build -- a fresh I32Vec of n elements, element i the value of expr.
@@ -3915,9 +3910,7 @@
 (defn u8vec->vec-go__ [^borrow v : U8Vec out : (Vec uint8) i : int n : int] : (Vec uint8)
   (if (>= i n)
     out
-    (do
-      (vec-push! out (u8vec-ref v i))
-      (u8vec->vec-go__ v out {i + 1} n))))
+    (do (vec-push! out (u8vec-ref v i)) (u8vec->vec-go__ v out (+ i 1) n))))
 ;;; u8vec->vec -- copy a U8Vec into a fresh (Vec uint8).
 ;;;
 ;;; Parameters:
@@ -3937,12 +3930,15 @@
   (u8vec->vec-go__ v (:: (vec-new) (Vec uint8)) 0 (u8vec-len v)))
 ;;; vec->u8vec-go__ -- internal: store src[i..n) into out.
 
-(defn vec->u8vec-go__ [^borrow out : U8Vec ^borrow src : (Vec uint8) i : int n : int] : nil
+(defn vec->u8vec-go__ [^borrow out : U8Vec
+                       ^borrow src : (Vec uint8)
+                       i : int
+                       n : int] : nil
   (if (>= i n)
     nil
     (do
       (u8vec-set! out i (:: (vec-get src i) uint8))
-      (vec->u8vec-go__ out src {i + 1} n))))
+      (vec->u8vec-go__ out src (+ i 1) n))))
 ;;; vec->u8vec -- copy a (Vec uint8) into a fresh U8Vec.
 ;;;
 ;;; Parameters:
@@ -3971,7 +3967,7 @@
       (when (> i 0) (builder/push-cstr! b " "))
       (let [es (show (u8vec-ref v i))]
         (do (builder/push-string! b es) (string/release es)))
-      (u8vec-show-loop__ v {i + 1} n b))))
+      (u8vec-show-loop__ v (+ i 1) n b))))
 ;;; u8vec-show -- render a U8Vec as an owned "#u8vec[a b c]" String.
 ;;;
 ;;; Parameters:
@@ -4337,14 +4333,12 @@
         v    (second bv)
         more (rest (rest bv))]
     (if (list? v)
-      (let [t (gensym "nv")]
-        `(let [~t ~v] (u8vec-for [~x ~t ~@more] ~@body)))
+      (let [t (gensym "nv")] `(let [~t ~v] (u8vec-for [~x ~t ~@more] ~@body)))
       (if (empty? more)
         `(let [^mut ~i 0
                ~n      (u8vec-len ~v)]
            (while (< ~i ~n)
-             (let [~x (unsafe (u8vec-ref-unchecked ~v ~i))]
-               ~@body)
+             (let [~x (unsafe (u8vec-ref-unchecked ~v ~i))] ~@body)
              (set! ~i (+ ~i 1))))
         (let [y (first more)
               w (second more)]
@@ -4420,8 +4414,7 @@
              ~n        (u8vec-len ~v)
              ^mut ~acc ~init]
          (while (< ~i ~n)
-           (let [~x (unsafe (u8vec-ref-unchecked ~v ~i))]
-             (set! ~acc ~body))
+           (let [~x (unsafe (u8vec-ref-unchecked ~v ~i))] (set! ~acc ~body))
            (set! ~i (+ ~i 1)))
          ~acc))))
 ;;; u8vec-build -- a fresh U8Vec of n elements, element i the value of expr.
