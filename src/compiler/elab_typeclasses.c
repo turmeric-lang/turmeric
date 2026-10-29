@@ -7243,6 +7243,52 @@ static uint32_t method_borrow_mask_by_name(const TypeClassEnv *env, const Symbol
     return mask;
 }
 
+/* literal-at-associated-type-unchecked: in a generic body, a method called on
+ * the signature's own abstract variable `V` takes, at a parameter the class
+ * types `v` (the class variable) or an associated type (`(E V)`), whatever V's
+ * instance says -- never a value the body picks.  A ground scalar there was
+ * accepted without a check and the instance's emitted C converted it:
+ * `(c-put a 1.5)` printed 1 at an `int32` element.  Inside `unsafe` the carrier
+ * bridge stays.  Returns false after reporting. */
+static bool method_arg_scalar_at_abstract_ok(Elab *e, const Expr *obj,
+                                             const TypeClassMethod *cm,
+                                             const TypeClass *tc, uint32_t slot,
+                                             const Expr *arg, const char *method_name) {
+    if (!obj || !cm || !tc || !arg || e->unsafe_depth > 0) return true;
+    if (obj->type.kind != TY_TYVAR || !obj->type.as.tyvar_.name) return true;
+    bool sig = false;
+    for (uint8_t k = 0; k < e->n_sig_tyvars && !sig; k++)
+        sig = e->sig_tyvars[k] && strcmp(e->sig_tyvars[k], obj->type.as.tyvar_.name) == 0;
+    if (!sig || slot >= cm->n_params || !cm->param_types) return true;
+    const Type *pt = &cm->param_types[slot];
+    if (pt->kind != TY_TYVAR || !pt->as.tyvar_.name) return true;
+    const char *pn = pt->as.tyvar_.name;
+    const char *assoc = NULL;
+    bool is_class_var = tc->n_type_params > 0 && tc->type_params[0] &&
+                        strcmp(tc->type_params[0]->name, pn) == 0;
+    for (uint8_t k = 0; !is_class_var && k < tc->n_assoc_types; k++)
+        if (tc->assoc_type_names[k] && strcmp(tc->assoc_type_names[k]->name, pn) == 0)
+            assoc = pn;
+    if (!is_class_var && !assoc) return true;
+    TypeKind ak = arg->type.kind;
+    if (!(typekind_is_numeric(ak) || ak == TY_BOOL || ak == TY_CSTR)) return true;
+    Buf gb; buf_init(&gb);
+    type_print(&gb, arg->type);
+    buf_putc(&gb, '\0');
+    if (assoc)
+        diag_emit_with_code(DIAG_ERROR, arg->span, TUR_E0001_TYPE_MISMATCH,
+                            "method '%s' arg %u: expected (%s %s), got %s -- "
+                            "%s's instance decides that type, not the call",
+                            method_name, slot + 1, assoc, obj->type.as.tyvar_.name,
+                            gb.data, obj->type.as.tyvar_.name);
+    else
+        diag_emit_with_code(DIAG_ERROR, arg->span, TUR_E0001_TYPE_MISMATCH,
+                            "method '%s' arg %u: expected %s, got %s",
+                            method_name, slot + 1, obj->type.as.tyvar_.name, gb.data);
+    buf_free(&gb);
+    return false;
+}
+
 /* A class method's `^borrow` parameter reads its argument without spending
  * it.  The var-use elaboration of the argument just recorded a use (a second
  * one would have been refused there), so undo it for a borrowed slot, right
@@ -9577,6 +9623,10 @@ resolved_user_fallback:;
         if (lam_push) e->expected_type = lam_saved;
         if (!args[i]) return NULL;
         method_arg_release_if_borrowed(e, call, 1 + i, args[i]);
+        if (lam_cm && best_inst &&
+            !method_arg_scalar_at_abstract_ok(e, obj, lam_cm, best_inst->typeclass,
+                                              1 + i, args[i], method_name))
+            return NULL;
         if (lam_cm && 1 + i < lam_cm->n_params)
             m7_collect_tyvar_bindings(e, lam_cm->param_types[1 + i], args[i]->type,
                                       lam_bn, lam_bt, &lam_nb, 16);
@@ -9847,6 +9897,14 @@ resolved_user_fallback:;
                 cm->param_types[0].kind == TY_TYVAR &&
                 cm->param_types[0].as.tyvar_.name &&
                 strcmp(cm->param_types[0].as.tyvar_.name, cv) == 0;
+            /* An UNTYPED first parameter, `(unbox [b] : Inner)`, is the receiver
+             * this path dispatched on just as `[b : a]` is -- for an
+             * ASSOCIATED result only (literal-at-associated-type-unchecked: it
+             * was typed by the representative instance, `int`, instead of
+             * `(Inner B)`).  The class-variable result rules below keep the
+             * typed spelling: `(comp [f g] : arr)` relies on the carrier. */
+            bool recv_untyped = cm->n_params >= 1 && cm->param_explicit_type &&
+                                !cm->param_explicit_type[0];
             bool res_is_cv = cm->return_type.kind == TY_TYVAR &&
                 cm->return_type.as.tyvar_.name &&
                 strcmp(cm->return_type.as.tyvar_.name, cv) == 0;
@@ -9856,7 +9914,7 @@ resolved_user_fallback:;
              * : Inner)` -- is the projection at the receiver, `(Inner A)`, not
              * the representative's binding: that is what a parameter declared
              * `(Inner A)` holds, and what each instantiation reduces. */
-            else if (recv_is_cv && cm->return_type.kind == TY_TYVAR &&
+            else if ((recv_is_cv || recv_untyped) && cm->return_type.kind == TY_TYVAR &&
                      cm->return_type.as.tyvar_.name &&
                      obj->type.as.tyvar_.name && rtc->n_assoc_types > 0) {
                 for (uint8_t ak = 0; ak < rtc->n_assoc_types; ak++) {

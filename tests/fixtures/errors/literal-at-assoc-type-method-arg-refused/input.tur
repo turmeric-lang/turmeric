@@ -1,0 +1,13 @@
+;; literal-at-associated-type-unchecked: in a generic, a class method called
+;; on the signature's abstract variable takes (E V) at an associated-type
+;; parameter -- not a literal.  Accepted before, the int32 instance's emitted
+;; C truncated 1.5 to 1.
+(defopaque W32 :int)
+(defclass C [v]
+  (type E : Type)
+  (c-put [a : v x : E] : nil))
+(definstance C [W32] (type E = int32) (c-put [a x] (println (as int x))))
+(defn viaclass [V] [(C V)] [a : V] : nil (c-put a 1.5))
+(defn main [] : int
+  (viaclass (:: 0 W32))
+  0)

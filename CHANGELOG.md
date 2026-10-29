@@ -48,6 +48,12 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A literal can no longer stand for a generic's type variable or associated
+  type.** `(defn f [V] [(C V)] [a : V] : (E V) 1.5)` compiled, and an
+  `int32` instance truncated it to 1; so did `(c-put a 1.5)` at an
+  associated-type parameter. `(second x 1.5)` inside an `[A]` generic, with
+  `second [A]` spelled alike, read 1.5's bits back as an int on cc and printed
+  1.5 under turi. All three are type errors now (TUR-E0709 / TUR-E0001).
 - **`(unsafe ...)` no longer sends its function, and every caller, onto the
   CPS backend.** The may-capture coloring took the `unsafe` marker (a handle
   discharging the `Unsafe` capability, never performed at run time) for a

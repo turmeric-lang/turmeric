@@ -1,0 +1,12 @@
+;; literal-at-associated-type-unchecked: a generic declared to return an
+;; associated type, (E V), may not return a literal -- V's instance decides
+;; that type.  Accepted before, the int32 instance truncated 1.5 to 1.
+(defopaque W32 :int)
+(defclass C [v]
+  (type E : Type)
+  (c-get [a : v] : E))
+(definstance C [W32] (type E = int32) (c-get [a] (:: 3 int32)))
+(defn f [V] [(C V)] [a : V] : (E V) 1.5)
+(defn main [] : int
+  (println (as int (f (:: 0 W32))))
+  0)

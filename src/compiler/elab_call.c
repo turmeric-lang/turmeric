@@ -1919,8 +1919,27 @@ static bool ng_ground_nullary_arg(Elab *e, Expr *arg, const Type *expected_full,
     return true;
 }
 
+/* A ground scalar: a number, a bool or a string -- a value no type variable
+ * of the enclosing signature may silently stand for. */
+static bool call_type_is_ground_scalar(Type t) {
+    return typekind_is_numeric(t.kind) || t.kind == TY_BOOL || t.kind == TY_CSTR;
+}
+
+/* Nesting depth of call_collect_type_bindings: 1 while matching an argument's
+ * own type against its parameter's, more inside an application or a function
+ * type.  The caller-rigid scalar check below is an argument-level one. */
+static int g_collect_depth;
+static bool call_collect_type_bindings_inner(const Type *expected, Type actual,
+                                             CallTypeBinding *bindings, uint8_t *n_bindings);
 static bool call_collect_type_bindings(const Type *expected, Type actual,
                                        CallTypeBinding *bindings, uint8_t *n_bindings) {
+    g_collect_depth++;
+    bool ok = call_collect_type_bindings_inner(expected, actual, bindings, n_bindings);
+    g_collect_depth--;
+    return ok;
+}
+static bool call_collect_type_bindings_inner(const Type *expected, Type actual,
+                                             CallTypeBinding *bindings, uint8_t *n_bindings) {
     if (!expected) return true;
     switch (expected->kind) {
         case TY_REF_IMMUT: case TY_REF_MUT: {
@@ -2040,9 +2059,23 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                  * the gap-1 lambda-after-typed-args shape without the
                  * hamt-delete-regressing binding loss that the reverted
                  * skip-and-upgrade attempt caused. */
+                /* literal-at-associated-type-unchecked: not when the binding is
+                 * the ENCLOSING signature's own variable and the actual is a
+                 * ground scalar.  The names coincide only by accident --
+                 * `(second x 1.5)` with `second [A]` called from inside another
+                 * `[A]` -- and with any other spelling of the callee's variable
+                 * it is "expected A, got float".  Accepting it handed 1.5's bits
+                 * back as the int instantiation's A (4609434218613702656 on cc,
+                 * 1.5 on turi). */
+                bool caller_rigid_vs_scalar =
+                    g_collect_depth == 1 &&
+                    g_call_cb_elab && bindings[idx].type.as.tyvar_.name &&
+                    !bindings[idx].type.as.tyvar_.open_slot &&
+                    ng_tyvar_in_sig(g_call_cb_elab, bindings[idx].type.as.tyvar_.name) &&
+                    call_type_is_ground_scalar(actual);
                 if (bindings[idx].type.kind == TY_TYVAR &&
                     bindings[idx].type.as.tyvar_.name == expected->as.tyvar_.name &&
-                    actual.kind != TY_TYVAR) {
+                    actual.kind != TY_TYVAR && !caller_rigid_vs_scalar) {
                     return true;
                 }
                 /* generic-map-assoc-rejects-sig-tyvar-value: the same
@@ -7919,7 +7952,15 @@ static bool call_bind_assoc_projections(Elab *e, const Form *call,
             }
             want = *r;
         } else if (type_eq(a, *P->as.tyvar_.assoc_arg)) {
-            continue;   /* the variable stands for itself (a recursive call) */
+            /* The variable stands for itself -- a recursive call, or a generic
+             * relaying to one whose variable is spelled the same.  Bind the
+             * projection to itself: left unbound, the result's `(Inner A)`
+             * read as a callee variable clashing with the caller's (the
+             * caller's signature names `(Inner A)` too) and was renamed apart
+             * to an open slot, losing the projection -- so the relay's body
+             * typed `int`, not `(Inner A)` (literal-at-associated-type-
+             * unchecked, where the return check now sees that). */
+            want = *P;
         } else if (!elab_assoc_projection(e, P->as.tyvar_.assoc_of, &a, 1, &want)) {
             continue;
         }
