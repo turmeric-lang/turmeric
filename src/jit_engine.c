@@ -150,6 +150,35 @@ static int jit_getc (void *data) {
  * out of inline-C the emitter does not own, and shipping them would trade a
  * clean compile error for silent corruption under spawn.  Inline C that uses
  * them fails c2mir loudly and takes the step-6 fallback to cc instead. */
+#if !defined(_WIN32)
+/* jit-inline-c-thread-local-collapses-to-global: write c2mir's collected
+ * messages to stderr, one line each, leaving out the warnings when `quiet`
+ * (what ignore_warnings_p did before they were collected).  Returns true when
+ * c2mir compiled a thread-local as a plain global. */
+static bool jit_span_has (const char *p, size_t n, const char *needle) {
+  size_t k = strlen (needle);
+  for (size_t i = 0; i + k <= n; i++)
+    if (memcmp (p + i, needle, k) == 0) return true;
+  return false;
+}
+
+static bool jit_relay_c2mir_messages (const char *buf, size_t len, bool quiet) {
+  bool tls = false;
+  size_t i = 0;
+  while (i < len) {
+    const char *line = buf + i;
+    const char *nl = memchr (line, '\n', len - i);
+    size_t n = nl ? (size_t) (nl - line) + 1 : len - i;
+    bool warn = jit_span_has (line, n, "warning -- ");
+    if (warn && jit_span_has (line, n, "Thread local is not implemented"))
+      tls = true;
+    if (!(warn && quiet)) fwrite (line, 1, n, stderr);
+    i += n;
+  }
+  return tls;
+}
+#endif
+
 static const char JIT_PRELUDE[] =
   /* Tells runtime C it is being compiled by this engine: r7gc.c (the
    * r7rs-gc experiment) switches its collector off, since a JIT'd
@@ -1229,11 +1258,41 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
   memset (&ops, 0, sizeof ops);
   ops.message_file = stderr;
   ops.ignore_warnings_p = g_jit_quiet_warnings;
+#if !defined(_WIN32)
+  /* jit-inline-c-thread-local-collapses-to-global: c2mir only WARNS on
+   * `_Thread_local` and compiles one global every thread shares, so inline C
+   * that declared one ran with silent cross-thread corruption.  Collect the
+   * messages, relay them as before, and refuse the compile when that warning
+   * is among them -- cmd_jit's TUR-W0070 fallback to cc then runs the
+   * program with real thread-local storage, as `__thread` already did.  The
+   * warnings are collected even when quiet (and dropped on relay), or the
+   * refusal would depend on the quiet flag. */
+  char *msg_buf = NULL;
+  size_t msg_len = 0;
+  FILE *msg_f = open_memstream (&msg_buf, &msg_len);
+  if (msg_f != NULL) {
+    ops.message_file = msg_f;
+    ops.ignore_warnings_p = 0;
+  }
+#endif
 
   ops.include_dirs_num = (size_t) (n_include_dirs > 0 ? n_include_dirs : 0);
   ops.include_dirs = include_dirs;
 
   int ok = c2mir_compile (ctx, &ops, jit_getc, NULL, "<tur-jit>", NULL);
+#if !defined(_WIN32)
+  if (msg_f != NULL) {
+    fclose (msg_f);
+    if (jit_relay_c2mir_messages (msg_buf, msg_len, g_jit_quiet_warnings) && ok) {
+      fprintf (stderr,
+               "<tur-jit>: inline C declares a `_Thread_local` variable, which "
+               "this engine would compile as one global shared by every "
+               "thread; compiling with cc instead\n");
+      ok = 0;
+    }
+    free (msg_buf);
+  }
+#endif
   if (!ok) {
     g_jit_err_active = 0;
     c2mir_finish (ctx);

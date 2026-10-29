@@ -13851,6 +13851,21 @@ void elab_ground_free_poly_call(Elab *e, Expr *call, const Type *target) {
 
 /* Phase HRT1: Elaborate a call through a rank-2 polymorphic function parameter.
  * fn_binding->is_poly_fn is true; the call emits fn_name.fn(fn_name.env, args...) */
+/* call-through-fn-param-skips-argument-checks: the scalar class of a kind,
+ * or 0 when it is not one of the plain scalars a carrier call can check
+ * without the nominal path's tolerances.  `int` and `int64` are one class,
+ * as are `float` and `float64`. */
+static int fn_param_scalar_class(TypeKind k) {
+    switch (k) {
+    case TY_INT: case TY_INT64: return 1;
+    case TY_FLOAT: case TY_FLOAT64: return 2;
+    case TY_FLOAT32: return 3;
+    case TY_BOOL: return 4;
+    case TY_CSTR: return 5;
+    default: return 0;
+    }
+}
+
 static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
@@ -13914,6 +13929,46 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                               : (TypeKind)poly->as.fn.arg_kinds[i];
             if (pk == TY_ANY && args[i] && args[i]->type.kind != TY_ANY)
                 args[i] = elab_coerce_to_any(e, args[i]);
+        }
+    }
+
+    /* call-through-fn-param-skips-argument-checks: a call through an F5
+     * typed carrier compared nothing with its signature, so `(f 7.1)` at
+     * `(fn [int] int)` passed the double's bits and `(f 1 2)` dropped an
+     * argument.  Check what the nominal path checks for the shapes that are
+     * plainly wrong: the arity, and a scalar argument of another scalar
+     * class.  Everything else (type variables, carriers, aggregates) keeps
+     * its existing tolerance. */
+    if (poly && poly->kind == TY_FN &&
+        !(e->toplevel_dynamic || lang_span_is_dynamic(call->span))) {
+        const char *fname = fn_binding->name ? fn_binding->name->name : "?";
+        /* Over-application of a function-returning signature is left to the
+         * existing path. */
+        TypeKind rk = poly->as.fn.result_full_type
+                          ? poly->as.fn.result_full_type->kind
+                          : (TypeKind)poly->as.fn.result_kind;
+        if (n_args < (uint32_t)poly->as.fn.arity ||
+            (n_args > (uint32_t)poly->as.fn.arity && rk != TY_FN &&
+             rk != TY_PTR_VOID && rk != TY_FORALL && rk != TY_TYVAR)) {
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0002_ARITY_MISMATCH,
+                                "function '%s' expects %u argument(s), got %u",
+                                fname, (unsigned)poly->as.fn.arity, n_args);
+            return NULL;
+        }
+        for (uint32_t i = 0; i < n_args && i < (uint32_t)poly->as.fn.arity; i++) {
+            const Type *pt = poly->as.fn.arg_full_types ? poly->as.fn.arg_full_types[i] : NULL;
+            Type want = pt ? *pt : type_from_kind((TypeKind)poly->as.fn.arg_kinds[i]);
+            int wc = fn_param_scalar_class(want.kind);
+            int gc = args[i] ? fn_param_scalar_class(args[i]->type.kind) : 0;
+            if (!wc || !gc || wc == gc) continue;
+            Buf wb; buf_init(&wb); type_print(&wb, want); buf_putc(&wb, '\0');
+            Buf gb; buf_init(&gb); type_print(&gb, args[i]->type); buf_putc(&gb, '\0');
+            diag_emit_with_code(DIAG_ERROR, args[i]->span, TUR_E0001_TYPE_MISMATCH,
+                                "function '%s' arg %u: expected %s, got %s",
+                                fname, i + 1, wb.data, gb.data);
+            buf_free(&wb);
+            buf_free(&gb);
+            return NULL;
         }
     }
 

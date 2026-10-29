@@ -1,0 +1,4 @@
+;; call-through-fn-param-skips-argument-checks: the extra argument was dropped.
+(defn inc1 [x : int] : int (+ x 1))
+(defn via [f : (fn [int] int)] : int (f 1 2))
+(defn main [] : int (println (via inc1)) 0)

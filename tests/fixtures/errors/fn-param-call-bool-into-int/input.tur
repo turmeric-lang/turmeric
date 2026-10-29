@@ -1,0 +1,4 @@
+;; call-through-fn-param-skips-argument-checks: a bool is not an int.
+(defn inc1 [x : int] : int (+ x 1))
+(defn via [f : (fn [int] int)] : int (f true))
+(defn main [] : int (println (via inc1)) 0)

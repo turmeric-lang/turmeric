@@ -1,0 +1,9 @@
+;; effect-row-check-skips-let-bound-fn-values: an IO function passed by
+;; name into a #fx{} parameter is TUR-E0009; bound to a let first, it was
+;; admitted.  Checked through a plain let, an annotated one and a lambda.
+(defn noisy [x : int] : int (println "side effect") x)
+(defn pure-hof [g : (fn [int] #fx{} int) x : int] : int (g x))
+(defn main [] : int
+  (let [h noisy]
+    (println (pure-hof h 1)))
+  0)

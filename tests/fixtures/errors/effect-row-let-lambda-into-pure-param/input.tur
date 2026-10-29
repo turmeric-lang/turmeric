@@ -1,0 +1,8 @@
+;; effect-row-check-skips-let-bound-fn-values: a let-bound lambda that
+;; performs IO, passed into a #fx{} parameter.
+(defn noisy [x : int] : int (println "side effect") x)
+(defn pure-hof [g : (fn [int] #fx{} int) x : int] : int (g x))
+(defn main [] : int
+  (let [h (fn [x : int] : int (noisy x))]
+    (println (pure-hof h 1)))
+  0)

@@ -46,3 +46,15 @@ opposite bridge exists (`EX_POLY_WRAP`).
   that the declared rows differ.
 - Workaround today: give the forwarding parameter a row too
   (`[g : (fn [int] #fx{e} int)] #fx{e}`).
+
+## Note for whoever fixes this (2026-10-29)
+
+Bridging the parameter must not admit an effectful function into a `#fx{}`
+slot. The parameter's type `(fn [int] int)` carries no row, and the ER4
+call-site check reads "no row" as "no effects". So once `(pure-hof h 1)`
+compiles with `h` a parameter, the caller can pass `noisy` through it.
+[effect-row-check-skips-let-bound-fn-values](../archive/effect-row-check-skips-let-bound-fn-values.md)
+closed the same hole for `let` aliases by following them to their
+initializer. A parameter has no initializer to follow, so a row-less
+function type flowing into a rowed slot has to be refused or need an
+annotation.

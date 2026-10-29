@@ -6690,11 +6690,123 @@ static bool reach_refs_visit(const Expr *e, void *ud) {
     cps_visit_children(e, reach_refs_visit, ud);
     return false;
 }
+/* cps-fn-unreached-rescans-all-inline-c: fn_unreached asked, once per
+ * unreferenced coloured function, whether its name occurs in any inline C --
+ * a memcmp at every byte of the program's inline C, stdlib included.  These
+ * two sets answer the same questions in a probe each, built on first use.
+ *
+ * `ic_suffixes` holds every string the old scan could have matched with an
+ * identifier-only spelling: a spelling matches at a position where the next
+ * byte is not alphanumeric and is not a single `_` (a `__` may follow), and
+ * nothing is required before it.  So a match is a SUFFIX of the identifier
+ * run that ends at such a position -- every suffix of every run, and of each
+ * run prefix that a `__` follows.  A spelling with any other byte, or longer
+ * than REACH_SUFFIX_MAX, still takes the scan; the answer is identical. */
+#define REACH_SUFFIX_MAX 512
+typedef struct { uint64_t h; const char *p; uint32_t len; } ReachSuffix;
+typedef struct {
+    ReachSuffix *slots; size_t cap, n;          /* open addressing, p == NULL empty */
+    const Binding **called; size_t called_cap;  /* pointer set */
+    bool ready;
+} ReachIndex;
+static ReachIndex g_reach_ix;
+
+static inline bool reach_ident_byte(unsigned char ch) {
+    return isalnum(ch) || ch == '_';
+}
+static inline uint64_t reach_hash_step(uint64_t h, unsigned char ch) {
+    return (h ^ ch) * 1099511628211ULL;
+}
+static void reach_suffix_put(ReachIndex *ix, uint64_t h, const char *p, uint32_t len);
+static void reach_suffix_grow(ReachIndex *ix) {
+    ReachSuffix *old = ix->slots;
+    size_t old_cap = ix->cap;
+    ix->cap = old_cap ? old_cap * 2 : 4096;
+    ix->slots = (ReachSuffix *)calloc(ix->cap, sizeof *ix->slots);
+    ix->n = 0;
+    for (size_t i = 0; i < old_cap; i++)
+        if (old[i].p) reach_suffix_put(ix, old[i].h, old[i].p, old[i].len);
+    free(old);
+}
+static void reach_suffix_put(ReachIndex *ix, uint64_t h, const char *p, uint32_t len) {
+    if ((ix->n + 1) * 2 > ix->cap) reach_suffix_grow(ix);
+    size_t m = ix->cap - 1;
+    for (size_t i = (size_t)h & m;; i = (i + 1) & m) {
+        ReachSuffix *sl = &ix->slots[i];
+        if (!sl->p) { sl->h = h; sl->p = p; sl->len = len; ix->n++; return; }
+        if (sl->h == h && sl->len == len && memcmp(sl->p, p, len) == 0) return;
+    }
+}
+/* The hash runs over the string BACKWARDS, so each suffix's hash extends the
+ * shorter one's by a byte. */
+static bool reach_suffix_has(const ReachIndex *ix, const char *s, size_t len) {
+    if (!ix->cap) return false;
+    uint64_t h = 1469598103934665603ULL;
+    for (size_t j = len; j > 0; j--) h = reach_hash_step(h, (unsigned char)s[j - 1]);
+    size_t m = ix->cap - 1;
+    for (size_t i = (size_t)h & m;; i = (i + 1) & m) {
+        const ReachSuffix *sl = &ix->slots[i];
+        if (!sl->p) return false;
+        if (sl->h == h && sl->len == len && memcmp(sl->p, s, len) == 0) return true;
+    }
+}
+static void reach_called_put(ReachIndex *ix, const Binding *b) {
+    size_t m = ix->called_cap - 1;
+    for (size_t i = ((uintptr_t)b >> 4) & m;; i = (i + 1) & m) {
+        if (ix->called[i] == b) return;
+        if (!ix->called[i]) { ix->called[i] = b; return; }
+    }
+}
+static bool reach_called_has(const ReachIndex *ix, const Binding *b) {
+    if (!ix->called_cap) return false;
+    size_t m = ix->called_cap - 1;
+    for (size_t i = ((uintptr_t)b >> 4) & m;; i = (i + 1) & m) {
+        if (ix->called[i] == b) return true;
+        if (!ix->called[i]) return false;
+    }
+}
+static void reach_index_build(ReachIndex *ix, const ReachRefs *r) {
+    size_t cc = 16;
+    while (cc < (size_t)r->n_called * 2) cc *= 2;
+    ix->called = (const Binding **)calloc(cc, sizeof *ix->called);
+    ix->called_cap = cc;
+    for (uint32_t i = 0; i < r->n_called; i++)
+        if (r->called[i]) reach_called_put(ix, r->called[i]);
+    for (uint32_t i = 0; i < r->n_ic; i++) {
+        StrSlice c = r->ic[i]->code;
+        if (!c.p) continue;
+        for (size_t q = 1; q <= c.len; q++) {
+            if (!reach_ident_byte((unsigned char)c.p[q - 1])) continue;
+            /* q is a valid end: the byte there (if any) is the `after` the
+             * scan tested. */
+            if (q < c.len) {
+                unsigned char after = (unsigned char)c.p[q];
+                if (isalnum(after)) continue;
+                if (after == '_' && !(q + 1 < c.len && c.p[q + 1] == '_')) continue;
+            }
+            uint64_t h = 1469598103934665603ULL;
+            for (size_t j = q; j > 0 && q - j < REACH_SUFFIX_MAX; j--) {
+                unsigned char ch = (unsigned char)c.p[j - 1];
+                if (!reach_ident_byte(ch)) break;
+                h = reach_hash_step(h, ch);
+                reach_suffix_put(ix, h, c.p + j - 1, (uint32_t)(q - j + 1));
+            }
+        }
+    }
+    ix->ready = true;
+}
+static void reach_index_reset(ReachIndex *ix) {
+    free(ix->slots);
+    free((void *)ix->called);
+    memset(ix, 0, sizeof *ix);
+}
+
 static void reach_refs_reset(void) {
     free((void *)g_reach_refs.called);
     free((void *)g_reach_refs.ic);
     memset(&g_reach_refs, 0, sizeof g_reach_refs);
     g_reach_refs_ready = false;
+    reach_index_reset(&g_reach_ix);
 }
 static bool fn_unreached(const Expr *program, const FnDef *fd) {
     const Binding *b = fd ? fd->binding : NULL;
@@ -6714,8 +6826,8 @@ static bool fn_unreached(const Expr *program, const FnDef *fd) {
         }
         g_reach_refs_ready = true;
     }
-    for (uint32_t i = 0; i < g_reach_refs.n_called; i++)
-        if (g_reach_refs.called[i] == b) return false;
+    if (!g_reach_ix.ready) reach_index_build(&g_reach_ix, &g_reach_refs);
+    if (reach_called_has(&g_reach_ix, b)) return false;
     /* The C spellings that could call it: the mangled identifier (as a whole
      * identifier -- any module prefix ends in `_`, which is part of one, so a
      * prefixed spelling is caught by its unprefixed tail below) and the
@@ -6723,12 +6835,23 @@ static bool fn_unreached(const Expr *program, const FnDef *fd) {
     char mangled[512];
     tur_mangle_ident(b->name->name, mangled, sizeof mangled);
     const char *spell[2] = { mangled, b->name->name };
+    bool scan[2] = { false, false };
+    for (int w = 0; w < 2; w++) {
+        size_t nl = strlen(spell[w]);
+        if (!nl) continue;
+        bool ident = nl <= REACH_SUFFIX_MAX;
+        for (size_t k = 0; ident && k < nl; k++)
+            ident = reach_ident_byte((unsigned char)spell[w][k]);
+        if (!ident) { scan[w] = true; continue; }
+        if (reach_suffix_has(&g_reach_ix, spell[w], nl)) return false;
+    }
+    if (!scan[0] && !scan[1]) return true;
     for (uint32_t i = 0; i < g_reach_refs.n_ic; i++) {
         StrSlice c = g_reach_refs.ic[i]->code;
         if (!c.p) continue;
         for (int w = 0; w < 2; w++) {
+            if (!scan[w]) continue;
             size_t nl = strlen(spell[w]);
-            if (!nl) continue;
             for (size_t k = 0; k + nl <= c.len; k++) {
                 if (memcmp(c.p + k, spell[w], nl) != 0) continue;
                 char after = k + nl < c.len ? c.p[k + nl] : '\0';

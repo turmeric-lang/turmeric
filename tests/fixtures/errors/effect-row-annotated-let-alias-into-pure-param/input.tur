@@ -1,0 +1,9 @@
+;; effect-row-check-skips-let-bound-fn-values: the annotated binding
+;; `h : (fn [int] int)` carries no row, which used to read as "pure".
+(defn noisy [x : int] : int (println "side effect") x)
+(defn pure-hof [g : (fn [int] #fx{} int) x : int] : int (g x))
+(defn main [] : int
+  (let [h : (fn [int] int) noisy
+        h2 h]
+    (println (pure-hof h2 1)))
+  0)

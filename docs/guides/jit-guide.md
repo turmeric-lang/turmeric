@@ -405,7 +405,10 @@ A few families always take the fallback, deliberately:
   any shim would write the wrong width for some caller.
 - `_Thread_local` / `__thread`. Collapsing a thread-local to a global would
   trade a clean compile error for silent cross-thread corruption under
-  `spawn`.
+  `spawn`. c2mir rejects `__thread` outright. It accepts `_Thread_local` with
+  a warning and compiles a plain global, so the engine treats that warning as
+  a failed compile and falls back
+  ([jit-inline-c-thread-local-collapses-to-global](../archive/jit-inline-c-thread-local-collapses-to-global.md)).
 
 ### The two ladders
 
