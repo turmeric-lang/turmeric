@@ -825,8 +825,8 @@ a second on some engine, so the runner's jitter is a small part of the number
   time** (`tur build`, the front end plus cc), the **front-end time**
   (`tur emit-c`) and the **binary size**.
 
-`benchmarks/audit/bench-rows.py` writes one row per program, engine and metric
-to the `ci-metrics` branch's `bench-<year>.jsonl`, and **/ci's Benchmarks tab**
+`benchmarks/audit/bench-rows.py` writes one row per program, engine and metric,
+the nightly reports them to the `bench` table behind `/ci`, and **/ci's Benchmarks tab**
 plots them, one engine and metric per view.
 
 How to read it:

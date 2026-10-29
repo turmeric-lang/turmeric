@@ -1,6 +1,6 @@
 // ci-api.js -- /api/ci/*, the D1-backed store behind /ci.
 //
-// docs/upcoming/ci-metrics-d1-plan.md. CI POSTs each push's rows to
+// docs/archive/ci-metrics-d1-plan.md. CI POSTs each push's rows to
 // /api/ci/report (tools/ci/report-metrics.py); the page reads chart-ready
 // responses from the GET endpoints below. Every GET but /api/ci/meta carries
 // the current ingest version (?v=), so its response never changes and is sent

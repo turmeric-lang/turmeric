@@ -17,7 +17,7 @@
 // result, markers that appear and clear). Timing bounds belong to a trend
 // (WP6), not to a single run on a shared runner. Results go to
 // test-results/web-perf.json (WEB_PERF_OUT overrides), which
-// tools/ci/collect-playwright-timings.py --web-perf turns into ci-metrics rows.
+// tools/ci/collect-playwright-timings.py --web-perf turns into /ci rows.
 //
 // Skipped unless WEB_PERF=1 (CI's web-smoke job sets it) so a local suite run
 // does not pay for it, and skipped when there is no production build.

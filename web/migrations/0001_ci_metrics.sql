@@ -1,4 +1,4 @@
--- The store behind /ci (docs/upcoming/ci-metrics-d1-plan.md).
+-- The store behind /ci (docs/archive/ci-metrics-d1-plan.md).
 --
 -- CI POSTs each push's rows to /api/ci/report (web/ci-api.js), which writes
 -- them here in one transaction. Column names are the row keys the collectors
