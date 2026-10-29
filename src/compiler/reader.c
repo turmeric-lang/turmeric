@@ -1974,7 +1974,21 @@ static Form *read_cx_literal(Reader *r) {
  *
  * Recognizes #map{ and #set{ from a small dispatch table.  A #<ident>{ whose
  * tag is not in the table is reported as TUR-E0283 (unknown dispatch tag). */
+static Form *try_read_data_literal_at(Reader *r);
+/* The literal's form spans its whole lexeme, `#map` and all: read_seq starts
+ * the span at the '{', so a tool that slices a form's source out by its span
+ * (the compiled REPL's definition table, aot-compiled-repl-plan C2) got
+ * `{:a 1}` -- a curly-infix call -- for `#map{:a 1}`. */
 static Form *try_read_data_literal(Reader *r) {
+    uint32_t start_line = r->line, start_col = r->col;
+    size_t start_off = r->pos;
+    Form *f = try_read_data_literal_at(r);
+    if (f && f->span.off_start > start_off && f->span.off_end >= f->span.off_start)
+        f->span = span_from_to(r, start_line, start_col, start_off, f->span.off_end);
+    return f;
+}
+
+static Form *try_read_data_literal_at(Reader *r) {
     /* peek(r) == '#' guaranteed by caller. */
     if (peek_at(r, 1) == 'm' && peek_at(r, 2) == 'a' &&
         peek_at(r, 3) == 'p' && peek_at(r, 4) == '{') {

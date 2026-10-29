@@ -6,8 +6,8 @@
 # result as the REPL would.  A `def` lives in a host slot (step 2), so its
 # value and its mutations carry from turn to turn, and a redefinition
 # initializes it again.  This checks the transcripts a session prints against
-# the interpreter's, and the difference left: a value with no scalar printer
-# shows as #<Type>.  Without the flag nothing changes.
+# the interpreter's: scalars, definitions, slots, and results printed through
+# Show or their constructors.  Without the flag nothing changes.
 #
 # Asserts on the evaluated output, never on exit status alone: a feature that
 # silently did nothing would still exit 0.
@@ -148,7 +148,7 @@ cat > "$WORK/t3" <<'EOF'
 EOF
 out="$(repl_out --enable=compiled-repl < "$WORK/t3")"
 same "a node made in a bracket and kept in a def is read after it" \
-     "$(printf '=> #<fn link-v>\n=> #<Link>\n=> 41\n=> #<Link>\n=> #<fn grab>\n=> 1\n=> 7')" \
+     "$(printf '=> #<fn link-v>\n=> Link { v = 41, nxt = 0 }\n=> 41\n=> Link { v = 0, nxt = 0 }\n=> #<fn grab>\n=> 1\n=> 7')" \
      "$(results "$out" | grep -v 'adt-type')"
 
 # --- An early turn's code and data outlive its MIR context --------------------
@@ -169,12 +169,69 @@ out="$(repl_out --enable=compiled-repl < "$WORK/t4")"
 same "a string, a lambda and a static table from turn 1, read 100 turns later" \
      "$(printf '=> "kept-from-turn-1"\n=> 15\n=> 13')" "$(results "$out" | tail -3)"
 
-# --- The difference left: no Show printer yet -------------------------------------
-out="$(repl_out --enable=compiled-repl <<'EOF'
+# --- Results print as the interpreter prints them ------------------------------
+# Show where the type has an instance (Vec, Map, a user's own), the
+# constructor layout for a struct or ADT without one, nested.  A positional
+# field shows its value alone, both ways (it printed "(null) = 3").
+cat > "$WORK/t5" <<'EOF'
 [1 2 3]
+(defstruct Pt [x : int y : int])
+(Pt 1 2)
+(defdata Sh (Circle [r : float]) (Sq [s : int]) (Dot))
+(Circle 2.5)
+(Dot)
+(some 3)
+(none)
+(ok 1)
+#map{:a 1}
+#set{1 2}
+(vec-of "a" "b")
+(defstruct Line [a : Pt b : Pt name : cstr])
+(Line (Pt 1 2) (Pt 3 4) "l")
+(defdata Box [A] (Box A))
+(Box "s")
+(defstruct P [x : int])
+(definstance Show [P] (show [p] : String (string/from-cstr "P!")))
+(P 1)
+EOF
+interp="$(repl_out < "$WORK/t5")"
+comp="$(repl_out --enable=compiled-repl < "$WORK/t5")"
+same "Show, structs, ADTs, nesting, generics: compiled matches interpreted" \
+     "$(results "$interp")" "$(results "$comp")"
+has "a positional field prints its value alone" "=> Some { 3 }" "$interp"
+
+# A Vec whose elements have no Show prints each element as the REPL would.
+# (The interpreter shows these with another type's instance: reported in
+# docs/reported/repl-show-uses-wrong-instance-for-vec-elements.md.)
+out="$(repl_out --enable=compiled-repl <<'EOF'
+(defstruct Q [y : int])
+[[(Q 1)] [(Q 2) (Q 3)]]
 EOF
 )"
-same "a Vec prints as #<Type>" "=> #<(Vec int)>" "$(results "$out")"
+same "a Vec of a type without Show, nested" \
+     "$(printf '=> #<struct-type Q>\n=> [[Q { y = 1 }] [Q { y = 2 } Q { y = 3 }]]')" "$(results "$out")"
+
+# --- Redefining a type drops the defs that hold its values -------------------------
+# A slot keeps the old layout, and the def's source may now mean something
+# else ((S 1) is a partial application once S has two fields), so the def is
+# dropped, with a note, rather than read as the new type.
+out="$(repl_out --enable=compiled-repl <<'EOF'
+(defstruct S [a : int])
+(def s (S 1))
+(def keep 7)
+(defstruct S [a : int b : int])
+s
+keep
+(def s (S 2 3))
+s
+EOF
+)"
+has "the redefinition names the dropped def" \
+    "note: S changed, so the defs holding its old values are dropped; define them again to use them: s" "$out"
+has "reading it is a compile error, not a misread value" "unbound symbol 's'" "$out"
+same "an unrelated def stays, and the dropped one can be defined again" \
+     "$(printf '=> #<struct-type S>\n=> S { a = 1 }\n=> 7\n=> #<struct-type S>\n=> 7\n=> S { a = 2, b = 3 }\n=> S { a = 2, b = 3 }')" \
+     "$(results "$out")"
 
 # --- Off by default ----------------------------------------------------------------
 out="$(repl_out <<'EOF'

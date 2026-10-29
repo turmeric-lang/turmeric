@@ -2,8 +2,10 @@
  * See compiled_turn.h for the model. */
 #include "turi/compiled_turn.h"
 
+#include "compiler/expr.h"
 #include "compiler/forms.h"
 #include "compiler/types.h"
+#include "compiler/typeclass.h"
 #include "runtime/buf.h"
 #include "runtime/experiments.h"
 
@@ -97,6 +99,7 @@ void turi_compiled_defs_clear(TuriEnv *env) {
     for (uint32_t i = 0; i < env->n_compiled_defs; i++) {
         free(env->compiled_defs[i].key);
         free(env->compiled_defs[i].text);
+        free(env->compiled_defs[i].type);
     }
     free(env->compiled_defs);
     env->compiled_defs = NULL;
@@ -209,7 +212,42 @@ static const char k_printers[] =
     "  ```c\n"
     "  printf(\"=> %s\\n\", s);\n"
     "  return 0;\n"
+    "  ```)\n"
+    /* The pieces of a structured result (emit_repr): no prefix, no newline. */
+    "(defn __tur_repl_raw [s : cstr] : int\n"
+    "  ```c\n"
+    "  fputs(s, stdout);\n"
+    "  return 0;\n"
+    "  ```)\n"
+    "(defn __tur_repl_raw_int [x : int] : int\n"
+    "  ```c\n"
+    "  printf(\"%lld\", (long long)x);\n"
+    "  return 0;\n"
+    "  ```)\n"
+    "(defn __tur_repl_raw_float [x : float] : int\n"
+    "  ```c\n"
+    "  printf(\"%g\", x);\n"
+    "  return 0;\n"
+    "  ```)\n"
+    "(defn __tur_repl_raw_bool [b : bool] : int\n"
+    "  ```c\n"
+    "  fputs(b ? \"true\" : \"false\", stdout);\n"
+    "  return 0;\n"
+    "  ```)\n"
+    "(defn __tur_repl_raw_qcstr [s : cstr] : int\n"
+    "  ```c\n"
+    "  printf(\"\\\"%s\\\"\", s ? s : \"\");\n"
+    "  return 0;\n"
     "  ```)\n";
+
+/* Show's module, and the printer of a `show` result (an owned String, printed
+ * and released), for a program that prints through Show or uses it itself.
+ * The interpreter preloads Show; a compiled program loads it like any other
+ * stdlib module. */
+static const char k_show_load[] = "(load \"stdlib/typeclass-show.tur\")\n";
+static const char k_show_printer[] =
+    "(defn __tur_repl_raw_string [s : String] : int\n"
+    "  (do (__tur_repl_raw (string/to-cstr s)) (string/release s) 0))\n";
 
 static bool type_is_int(TypeKind k) {
     switch (k) {
@@ -221,8 +259,229 @@ static bool type_is_int(TypeKind k) {
     }
 }
 
-/* The statement that prints `expr` (its source) of type `t`. */
-static void emit_print(Buf *b, const char *expr, const Type *t) {
+/* ---- printing a result ---------------------------------------------------
+
+The interpreter's REPL shows a value through its Show instance when it has
+one (turi_try_show, turi_try_show_by_tag), and otherwise through its default
+repr: `Name { field = value, ... }` for a constructor with fields, `#<struct
+Name>` for one without, nested four deep (turi_value_repr_d).  The compiled
+turn does the same in the program it builds, from the result's static type:
+Show where the session has an instance for the type and for each of its
+arguments, the constructor layout for a struct or ADT, the scalar printers
+for scalars, and `#<Type>` for anything else. */
+
+typedef struct {
+    const TuriEnv *env;
+    bool uses_show;
+    int tmp;                 /* fresh names: __tur_rN, __tur_repl_vec_N */
+    Buf helpers;             /* defns the printer needs, ahead of main */
+} ReprCtx;
+
+typedef struct {             /* a generic ADT's parameter -> its argument */
+    const char *name;
+    const Type *type;
+} ReprSub;
+
+static const TypeClass *show_class(const TuriEnv *env) {
+    const TypeClassEnv *tc = (const TypeClassEnv *)env->last_tc_env;
+    for (const TypeClass *c = tc ? tc->typeclasses : NULL; c; c = c->next)
+        if (c->name && strcmp(c->name->name, "Show") == 0) return c;
+    return NULL;
+}
+
+/* The head constructor's name, for an ADT (possibly applied). */
+static const char *head_name(const Type *t) {
+    while (t && t->kind == TY_APP && t->as.app.fn) t = t->as.app.fn;
+    return t && t->kind == TY_ADT && t->as.adt_.def ? t->as.adt_.def->name : NULL;
+}
+
+static bool is_scalar(TypeKind k) {
+    return type_is_int(k) || k == TY_FLOAT || k == TY_FLOAT32 || k == TY_FLOAT64 ||
+           k == TY_BOOL || k == TY_CSTR;
+}
+
+/* True when Show has an instance for t's head (Vec for (Vec Q)). */
+static bool has_show_head(const TuriEnv *env, const Type *t);
+
+/* True when `show` on a value of type t resolves: Show has an instance for
+ * its head, and for each argument it is applied to. */
+static bool has_show(const TuriEnv *env, const Type *t) {
+    if (!t) return false;
+    if (is_scalar(t->kind)) return true;
+    const char *hn = head_name(t);
+    const TypeClass *show = show_class(env);
+    if (!show || t->kind == TY_TYVAR || t->kind == TY_UNKNOWN) return false;
+    const TypeClassEnv *tc = (const TypeClassEnv *)env->last_tc_env;
+    bool found = false;
+    for (const TypeClassInstance *i = tc->instances; i && !found; i = i->next) {
+        if (i->typeclass != show || i->n_type_args < 1) continue;
+        const char *in = head_name(&i->type_args[0]);
+        /* An ADT matches by its head's name, Vec as (Vec int); a built-in
+         * type with an instance of its own (Sym, Char) by its kind. */
+        if (hn) found = in && strcmp(in, hn) == 0;
+        else found = !in && i->type_args[0].kind == t->kind && t->kind != TY_APP;
+    }
+    if (!found) return false;
+    for (const Type *a = t; a->kind == TY_APP && a->as.app.fn; a = a->as.app.fn)
+        if (!has_show(env, a->as.app.arg)) return false;
+    return true;
+}
+
+static bool has_show_head(const TuriEnv *env, const Type *t) {
+    const Type *h = t;
+    while (h && h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+    return h && has_show(env, h);
+}
+
+/* A generic ADT's parameters bound to the arguments t applies it to:
+ * (Result int cstr) is APP(APP(Result, int), cstr). */
+static uint32_t adt_subst(const Type *t, const AdtDef *def, ReprSub *out, uint32_t cap) {
+    const Type *args[16];
+    uint32_t n = 0;
+    for (const Type *a = t; a->kind == TY_APP && a->as.app.fn && n < 16; a = a->as.app.fn)
+        args[n++] = a->as.app.arg;
+    uint32_t m = 0;
+    for (uint32_t i = 0; i < n && i < def->n_type_params && m < cap; i++)
+        out[m++] = (ReprSub){ def->type_params[i], args[n - 1 - i] };
+    return m;
+}
+
+static void emit_quoted(Buf *b, const char *s) {
+    buf_putc(b, '"');
+    for (const char *p = s; *p; p++)
+        buf_printf(b, (*p == '"' || *p == '\\') ? "\\%c" : "%c", *p);
+    buf_putc(b, '"');
+}
+
+static void emit_type_sentinel(Buf *b, const Type *t) {
+    Buf tn;
+    buf_init(&tn);
+    if (t) type_print(&tn, *t);
+    else buf_puts(&tn, "?");
+    buf_putc(&tn, '\0');
+    buf_puts(b, "(__tur_repl_raw \"#<");
+    for (const char *p = tn.data; *p; p++)
+        buf_printf(b, (*p == '"' || *p == '\\') ? "\\%c" : "%c", *p);
+    buf_puts(b, ">\")");
+    buf_free(&tn);
+}
+
+/* An expression printing the value `v` (a variable) of type t, with no
+ * prefix and no newline, `depth` levels of constructors deep.  `sub` binds a
+ * generic ADT's parameters for its fields' types. */
+static void emit_repr(Buf *b, ReprCtx *rc, const char *v, const Type *t, int depth,
+                      const ReprSub *sub, uint32_t n_sub) {
+    if (t && t->kind == TY_TYVAR) {
+        const Type *bound = NULL;
+        for (uint32_t i = 0; i < n_sub && !bound; i++)
+            if (t->as.tyvar_.name && sub[i].name && strcmp(t->as.tyvar_.name, sub[i].name) == 0)
+                bound = sub[i].type;
+        t = bound;
+    }
+    TypeKind k = t ? t->kind : TY_UNKNOWN;
+    if (type_is_int(k)) { buf_printf(b, "(__tur_repl_raw_int %s)", v); return; }
+    if (k == TY_FLOAT || k == TY_FLOAT32 || k == TY_FLOAT64) {
+        buf_printf(b, "(__tur_repl_raw_float %s)", v);
+        return;
+    }
+    if (k == TY_BOOL) { buf_printf(b, "(__tur_repl_raw_bool %s)", v); return; }
+    if (k == TY_CSTR) { buf_printf(b, "(__tur_repl_raw_qcstr %s)", v); return; }
+    if (k == TY_FN) { buf_puts(b, "(__tur_repl_raw \"#<fn>\")"); return; }
+    if (k == TY_NIL) { buf_puts(b, "(__tur_repl_raw \"nil\")"); return; }
+    if (has_show(rc->env, t)) {
+        rc->uses_show = true;
+        buf_printf(b, "(__tur_repl_raw_string (show %s))", v);
+        return;
+    }
+    const Type *head = t;
+    while (head && head->kind == TY_APP && head->as.app.fn) head = head->as.app.fn;
+    const AdtDef *def = head && head->kind == TY_ADT ? head->as.adt_.def : NULL;
+    const char *hn = def ? def->name : NULL;
+    if (hn && strcmp(hn, "Vec") == 0 && t->kind == TY_APP && depth > 0) {
+        /* A Vec whose elements have no Show: Show [Vec]'s "[a b]" shape, each
+         * element printed the way the REPL would print it alone. */
+        int id = rc->tmp++;
+        Buf vt;
+        buf_init(&vt);
+        type_print(&vt, *t);
+        buf_putc(&vt, '\0');
+        Buf elem;   /* a nested Vec adds its own helper while this one is built */
+        buf_init(&elem);
+        emit_repr(&elem, rc, "__tur_e", t->as.app.arg, depth - 1, sub, n_sub);
+        buf_putc(&elem, '\0');
+        Buf *h = &rc->helpers;
+        buf_printf(h, "(defn __tur_repl_vec_%d [v : %s i : int] : int\n", id, vt.data);
+        buf_printf(h, "  (if (< i (vec-len v))\n    (do (when (> i 0) (__tur_repl_raw \" \"))\n"
+                      "      (let [__tur_e (vec-get v i)]\n        %s)\n", elem.data);
+        buf_printf(h, "      (__tur_repl_vec_%d v (+ i 1)))\n    0))\n", id);
+        buf_free(&elem);
+        buf_free(&vt);
+        buf_printf(b, "(do (__tur_repl_raw \"[\") (__tur_repl_vec_%d %s 0) (__tur_repl_raw \"]\"))",
+                   id, v);
+        return;
+    }
+    /* Another container with Show for itself but not for its elements: its
+     * fields are its representation, not its contents. */
+    if (!def || def->n_ctors == 0 || has_show_head(rc->env, t)) {
+        emit_type_sentinel(b, t);
+        return;
+    }
+
+    ReprSub inner[16];
+    uint32_t n_inner = adt_subst(t, def, inner, 16);
+    buf_printf(b, "(match %s", v);
+    for (uint32_t c = 0; c < def->n_ctors; c++) {
+        const CtorDef *cd = def->ctors[c];
+        int base = rc->tmp;
+        rc->tmp += (int)cd->n_fields;
+        buf_printf(b, "\n    (%s", cd->name);
+        for (uint32_t f = 0; f < cd->n_fields; f++) buf_printf(b, " __tur_r%d", base + (int)f);
+        buf_puts(b, ") ");
+        if (cd->n_fields == 0 || depth <= 0) {
+            Buf lit;
+            buf_init(&lit);
+            buf_printf(&lit, "#<struct %s>", cd->name);
+            buf_putc(&lit, '\0');
+            buf_puts(b, "(__tur_repl_raw ");
+            emit_quoted(b, lit.data);
+            buf_puts(b, ")");
+            buf_free(&lit);
+            continue;
+        }
+        buf_puts(b, "(do ");
+        for (uint32_t f = 0; f < cd->n_fields; f++) {
+            const CtorField *fd = &cd->fields[f];
+            Buf lit;
+            buf_init(&lit);
+            if (f == 0) buf_printf(&lit, "%s { ", cd->name);
+            else buf_puts(&lit, ", ");
+            /* A positional field has no name; the value stands alone. */
+            if (fd->name) buf_printf(&lit, "%s = ", fd->name);
+            buf_putc(&lit, '\0');
+            buf_puts(b, "(__tur_repl_raw ");
+            emit_quoted(b, lit.data);
+            buf_puts(b, ") ");
+            buf_free(&lit);
+            char var[32];
+            snprintf(var, sizeof var, "__tur_r%d", base + (int)f);
+            Type scalar;
+            const Type *ft = fd->full_type;
+            if (!ft) {
+                memset(&scalar, 0, sizeof scalar);
+                scalar.kind = fd->kind;
+                ft = &scalar;
+            }
+            emit_repr(b, rc, var, ft, depth - 1, inner, n_inner);
+            buf_puts(b, " ");
+        }
+        buf_puts(b, "(__tur_repl_raw \" }\"))");
+    }
+    buf_puts(b, ")");
+}
+
+/* The statement that prints `expr` (its source) of type `t` as the REPL's
+ * `=> ...` line. */
+static void emit_print(Buf *b, ReprCtx *rc, const char *expr, const Type *t) {
     TypeKind k = t ? t->kind : TY_NIL;
     if (type_is_int(k)) {
         buf_printf(b, "  (__tur_repl_put_int %s)\n", expr);
@@ -239,32 +498,36 @@ static void emit_print(Buf *b, const char *expr, const Type *t) {
     } else if (k == TY_NIL || k == TY_NEVER) {
         buf_printf(b, "  %s\n  (__tur_repl_put_line \"nil\")\n", expr);
     } else {
-        Buf tn;
-        buf_init(&tn);
-        type_print(&tn, *t);
-        buf_putc(&tn, '\0');
-        buf_printf(b, "  %s\n  (__tur_repl_put_line \"#<", expr);
-        for (const char *p = tn.data; *p; p++)
-            buf_printf(b, (*p == '"' || *p == '\\') ? "\\%c" : "%c", *p);
-        buf_puts(b, ">\")\n");
-        buf_free(&tn);
+        buf_printf(b, "  (let [__tur_v %s]\n    (do (__tur_repl_raw \"=> \")\n      ", expr);
+        emit_repr(b, rc, "__tur_v", t, 4, NULL, 0);
+        buf_puts(b, "\n      (__tur_repl_raw \"\\n\")))\n");
     }
+}
+
+/* True when the program's own text names Show or show, so it needs Show's
+ * module the interpreter would have preloaded. */
+static bool mentions_show(const char *s) {
+    for (const char *p = s; (p = strstr(p, "how")) != NULL; p++)
+        if (p > s && (p[-1] == 's' || p[-1] == 'S')) return true;
+    return false;
 }
 
 /* ---- the turn -------------------------------------------------------------- */
 
 typedef struct {
-    char *key, *text;
+    char *key, *text, *type;
     bool is_import;
 } NewDef;
 
-static void table_put(TuriEnv *env, char *key, char *text, bool is_import) {
+static void table_put(TuriEnv *env, char *key, char *text, char *type, bool is_import) {
     for (uint32_t i = 0; i < env->n_compiled_defs; i++) {
         if (strcmp(env->compiled_defs[i].key, key) == 0) {
             free(key);
-            if (is_import) { free(text); return; }   /* kept once, in order */
+            if (is_import) { free(text); free(type); return; }   /* kept once, in order */
             free(env->compiled_defs[i].text);
+            free(env->compiled_defs[i].type);
             env->compiled_defs[i].text = text;       /* replaced in place */
+            env->compiled_defs[i].type = type;
             return;
         }
     }
@@ -276,16 +539,50 @@ static void table_put(TuriEnv *env, char *key, char *text, bool is_import) {
         env->compiled_defs = grown;
         env->cap_compiled_defs = cap;
     }
-    env->compiled_defs[env->n_compiled_defs++] = (TuriCompiledDef){ key, text, is_import };
+    env->compiled_defs[env->n_compiled_defs++] = (TuriCompiledDef){ key, text, type, is_import };
+}
+
+/* Drop table entry i, keeping the order of the rest. */
+static void table_drop(TuriEnv *env, uint32_t i) {
+    free(env->compiled_defs[i].key);
+    free(env->compiled_defs[i].text);
+    free(env->compiled_defs[i].type);
+    memmove(&env->compiled_defs[i], &env->compiled_defs[i + 1],
+            (env->n_compiled_defs - i - 1) * sizeof env->compiled_defs[0]);
+    env->n_compiled_defs--;
+}
+
+/* A definer of a type: redefining one can change what a value of it is. */
+static bool is_type_definer_key(const char *key) {
+    static const char *const heads[] = {
+        "defstruct ", "defdata ", "deftype ", "defopaque ", "defgadt ",
+        "defrecord ", "defenum ", "defalias ", "defrec ", NULL
+    };
+    for (int i = 0; heads[i]; i++)
+        if (strncmp(key, heads[i], strlen(heads[i])) == 0) return true;
+    return false;
+}
+
+/* True when the printed type `type` names `name` as a whole token. */
+static bool type_mentions(const char *type, const char *name) {
+    size_t n = strlen(name);
+    if (!type || n == 0) return false;
+    static const char delim[] = " ()[]{}<>,:";
+    for (const char *p = type; (p = strstr(p, name)) != NULL; p++) {
+        bool left = p == type || strchr(delim, p[-1]);
+        bool right = p[n] == '\0' || strchr(delim, p[n]);
+        if (left && right) return true;
+    }
+    return false;
 }
 
 /* The text of the table with this turn's definitions applied, without
  * changing the table: a turn that fails leaves it as it was. */
 static void emit_table(Buf *b, const TuriEnv *env, const NewDef *nd, uint32_t n_nd,
-                       bool imports) {
+                       const bool *stale, bool imports) {
     for (uint32_t i = 0; i < env->n_compiled_defs; i++) {
         const TuriCompiledDef *d = &env->compiled_defs[i];
-        if (d->is_import != imports) continue;
+        if (d->is_import != imports || (stale && stale[i])) continue;
         const char *text = d->text;
         for (uint32_t j = 0; j < n_nd; j++)
             if (!nd[j].is_import && strcmp(nd[j].key, d->key) == 0) text = nd[j].text;
@@ -303,7 +600,8 @@ static void emit_table(Buf *b, const TuriEnv *env, const NewDef *nd, uint32_t n_
 }
 
 TuriValue turi_compiled_turn_run(TuriEnv *env, Form **forms, uint32_t first, uint32_t n,
-                                 const char *src, const Type *last_type, bool last_is_def) {
+                                 const char *src, Expr *const *items, uint32_t n_items,
+                                 const Type *last_type, bool last_is_def) {
     static bool warned;   /* once per session, not per turn */
     if (!warned) {
         experiment_warn_if_used("compiled-repl");
@@ -325,27 +623,75 @@ TuriValue turi_compiled_turn_run(TuriEnv *env, Form **forms, uint32_t first, uin
         bool is_import = false;
         char *key = form_key(forms[i], src, &is_import);
         if (key) {
-            nd[n_nd++] = (NewDef){ key, slice(src, forms[i]), is_import };
+            nd[n_nd++] = (NewDef){ key, slice(src, forms[i]), NULL, is_import };
             if (!is_import) last_def = forms[i];
         } else {
             exprs[n_exprs++] = slice(src, forms[i]);
         }
     }
 
-    /* The program: imports, the printers, the table, then main. */
-    Buf prog;
-    buf_init(&prog);
-    emit_table(&prog, env, nd, n_nd, /*imports=*/true);
-    buf_puts(&prog, k_printers);
-    emit_table(&prog, env, nd, n_nd, /*imports=*/false);
-    buf_puts(&prog, "(defn main [] : int\n");
+    /* A def's value type, as this turn elaborated it. */
+    for (uint32_t j = 0; j < n_nd; j++) {
+        if (strncmp(nd[j].key, "def ", 4) != 0) continue;
+        for (uint32_t k = 0; k < n_items; k++) {
+            const Expr *it = items[k];
+            if (!it || it->kind != EX_DEF || !it->as.def_.binding || !it->as.def_.init) continue;
+            const Binding *bd = it->as.def_.binding;
+            if (!bd->name || strcmp(bd->name->name, nd[j].key + 4) != 0) continue;
+            Buf tn;
+            buf_init(&tn);
+            type_print(&tn, it->as.def_.init->type);
+            buf_putc(&tn, '\0');
+            nd[j].type = tn.data;
+        }
+    }
+
+    /* A type this turn redefines makes the defs holding its values stale. */
+    bool *stale = env->n_compiled_defs ? (bool *)calloc(env->n_compiled_defs, sizeof *stale) : NULL;
+    Buf dropped;
+    buf_init(&dropped);
+    for (uint32_t j = 0; stale && j < n_nd; j++) {
+        if (!is_type_definer_key(nd[j].key)) continue;
+        bool redefined_type = false;
+        for (uint32_t i = 0; i < env->n_compiled_defs; i++)
+            if (strcmp(env->compiled_defs[i].key, nd[j].key) == 0 &&
+                strcmp(env->compiled_defs[i].text, nd[j].text) != 0)
+                redefined_type = true;
+        if (!redefined_type) continue;
+        const char *tname = strchr(nd[j].key, ' ') + 1;
+        size_t mark = dropped.len;
+        uint32_t n_dropped = 0;
+        for (uint32_t i = 0; i < env->n_compiled_defs; i++) {
+            const TuriCompiledDef *d = &env->compiled_defs[i];
+            if (stale[i] || strncmp(d->key, "def ", 4) != 0 || !type_mentions(d->type, tname))
+                continue;
+            bool rewritten = false;   /* this turn defines it again */
+            for (uint32_t k = 0; k < n_nd && !rewritten; k++)
+                rewritten = strcmp(nd[k].key, d->key) == 0;
+            if (rewritten) continue;
+            if (n_dropped++ == 0)
+                buf_printf(&dropped, "note: %s changed, so the defs holding its old values "
+                                     "are dropped; define them again to use them: ", tname);
+            stale[i] = true;
+            buf_printf(&dropped, "%s%s", n_dropped > 1 ? ", " : "", d->key + 4);
+        }
+        if (dropped.len > mark) buf_putc(&dropped, '\n');
+    }
+
+    /* The program: imports, the printers, the table, then main.  main is built
+     * first, since how it prints decides whether Show's module comes in. */
+    ReprCtx rc_print = { env, false, 0, { 0 } };
+    buf_init(&rc_print.helpers);
+    Buf mainb;
+    buf_init(&mainb);
+    Buf *mb = &mainb;
     bool printed = false;
     for (uint32_t i = 0; i < n_exprs; i++) {
         if (i + 1 == n_exprs && !last_is_def) {
-            emit_print(&prog, exprs[i], last_type);
+            emit_print(mb, &rc_print, exprs[i], last_type);
             printed = true;
         } else {
-            buf_printf(&prog, "  %s\n", exprs[i]);
+            buf_printf(mb, "  %s\n", exprs[i]);
         }
     }
     /* A turn that ends in a definition prints it as the REPL does: a defn as
@@ -355,14 +701,32 @@ TuriValue turi_compiled_turn_run(TuriEnv *env, Form **forms, uint32_t first, uin
         const char *h = form_head(last_def);
         const char *name = form_def_name(last_def);
         if (name && strcmp(h, "defn") == 0) {
-            buf_printf(&prog, "  (__tur_repl_put_line \"#<fn %s>\")\n", name);
+            buf_printf(mb, "  (__tur_repl_put_line \"#<fn %s>\")\n", name);
             printed = true;
         } else if (name && (strcmp(h, "def") == 0 || strcmp(h, "define") == 0)) {
-            emit_print(&prog, name, last_type);
+            emit_print(mb, &rc_print, name, last_type);
             printed = true;
         }
     }
-    buf_puts(&prog, "  0)\n");
+    buf_puts(mb, "  0)\n");
+
+    Buf prog;
+    buf_init(&prog);
+    emit_table(&prog, env, nd, n_nd, stale, /*imports=*/true);
+    bool want_show = rc_print.uses_show;
+    for (uint32_t i = 0; i < env->n_compiled_defs && !want_show; i++)
+        want_show = mentions_show(env->compiled_defs[i].text);
+    for (uint32_t j = 0; j < n_nd && !want_show; j++) want_show = mentions_show(nd[j].text);
+    for (uint32_t i = 0; i < n_exprs && !want_show; i++) want_show = mentions_show(exprs[i]);
+    if (want_show) buf_puts(&prog, k_show_load);
+    buf_puts(&prog, k_printers);
+    if (rc_print.uses_show) buf_puts(&prog, k_show_printer);
+    emit_table(&prog, env, nd, n_nd, stale, /*imports=*/false);
+    buf_write(&prog, rc_print.helpers.data, rc_print.helpers.len);
+    buf_free(&rc_print.helpers);
+    buf_puts(&prog, "(defn main [] : int\n");
+    buf_write(&prog, mainb.data, mainb.len);
+    buf_free(&mainb);
 
     /* The defs this turn writes initialize again, in the slot they have. */
     char **redefined = (char **)calloc(n_nd ? n_nd : 1, sizeof *redefined);
@@ -388,15 +752,24 @@ TuriValue turi_compiled_turn_run(TuriEnv *env, Form **forms, uint32_t first, uin
     } else if (rc != 0) {
         result = turi_error("the turn's program exited non-zero");
     } else {
+        for (uint32_t i = env->n_compiled_defs; stale && i-- > 0;)
+            if (stale[i]) table_drop(env, i);
         for (uint32_t j = 0; j < n_nd; j++) {
-            table_put(env, nd[j].key, nd[j].text, nd[j].is_import);
-            nd[j].key = nd[j].text = NULL;
+            table_put(env, nd[j].key, nd[j].text, nd[j].type, nd[j].is_import);
+            nd[j].key = nd[j].text = nd[j].type = NULL;
         }
         env->last_turn_printed = printed;
+        if (dropped.len) {
+            fwrite(dropped.data, 1, dropped.len, stderr);
+            fflush(stderr);
+        }
     }
+    free(stale);
+    buf_free(&dropped);
     for (uint32_t j = 0; j < n_nd; j++) {
         free(nd[j].key);
         free(nd[j].text);
+        free(nd[j].type);
     }
     for (uint32_t i = 0; i < n_exprs; i++) free(exprs[i]);
     free(nd);

@@ -18697,7 +18697,10 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
         const Type *last_type = last_item ? &last_item->type : NULL;
         if (last_item && last_item->kind == EX_DEF && last_item->as.def_.init)
             last_type = &last_item->as.def_.init->type;
+        uint32_t first_new = n_fsd + prior_prog;
         last = turi_compiled_turn_run(env, forms, prior, nforms, sfile->src,
+                                      prog->as.program.items + first_new,
+                                      total > first_new ? total - first_new : 0,
                                       last_type, last_is_def);
     } else {
         /* Imported module bodies [0, n_fsd), then the new user forms. */
@@ -18929,7 +18932,12 @@ static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth) {
             turi_value_repr_d(fval, sizeof(fval), s->fields[i], depth - 1);
             const char *fname = (i < cd->n_fields) ? cd->fields[i].name : "?";
             const char *sep = (i == 0) ? " " : ", ";
-            pos += (size_t)snprintf(buf + pos, cap - pos, "%s%s = %s", sep, fname, fval);
+            /* A positional field -- `(Some A)` -- has no name to show; its
+             * value stands alone (it printed as "(null) = 3"). */
+            if (fname)
+                pos += (size_t)snprintf(buf + pos, cap - pos, "%s%s = %s", sep, fname, fval);
+            else
+                pos += (size_t)snprintf(buf + pos, cap - pos, "%s%s", sep, fval);
         }
         if (pos < cap - 1) snprintf(buf + pos, cap - pos, " }");
         break;

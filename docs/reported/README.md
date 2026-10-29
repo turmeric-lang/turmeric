@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found matching the compiled REPL's printer (filed 2026-10-29)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [repl-show-uses-wrong-instance-for-vec-elements](repl-show-uses-wrong-instance-for-vec-elements.md) | medium-low (REPL display) | At the interpreter prompt a `Vec` of structs with no `Show` shows through another struct's instance (`[P! P!]` for `[(Q 1) (Q 2)]`) or as an address, and a `(def w [1 2 3])` turn prints an address: `Show [Vec]`'s `[(Show A)]` is never checked, and a def turn's display gets the unit-typed def node. `--enable=compiled-repl` prints them right |
+
 ## Found by the refined-fn-types optimization scan (filed 2026-10-28)
 
 | Report | Severity | One line |

@@ -12,14 +12,15 @@
 > slots (C2, "Step 1, as built" and "Step 2, as built"). Point 5's
 > image-memory decision went to option (a) on 2026-10-29: a turn keeps only its
 > program's code and data, not its MIR context (C2, "Point 5, option (a), as
-> built"). **Rewritten 2026-09-29.** The 2026-06-28 draft (in
+> built"); results print through Show or their constructors, and redefining a
+> type drops the defs holding its values (C2, "Point 8 and type redefinition"). **Rewritten 2026-09-29.** The 2026-06-28 draft (in
 > git history) proposed compiling each prompt form with a `cc` subprocess into
 > a `.so` and `dlopen`ing it. It predates the in-process MIR JIT (graduated
 > 0.34.0). The JIT and the spice REPL now provide most of the machinery the
 > draft planned to build, and the draft had design flaws this version fixes
 > (see "Why not the 2026-06-28 draft"). The file name is historical: nothing
 > here is ahead-of-time compiled any more.
-> **Last Updated:** 2026-10-29 (C2: a kept turn keeps its code and data only)
+> **Last Updated:** 2026-10-29 (C2: the result printer; type redefinition)
 > **Track:** post-v1. C0 (a bug fix) and C1 (graduated) have landed.
 > **Type:** REPL / interpreter (`src/turi/`) / JIT (`src/jit_engine.c`) /
 > emitter (REPL-mode globals).
@@ -693,13 +694,54 @@ grows with the session: turns 1-50 ~131 ms, 251-300 ~136 ms (step 2: ~188 ms
 rising to ~302 ms). The slowdown was the allocator working through the kept
 contexts' heap; finishing them is also why every turn got faster.
 
-**Left before C2 can leave prototype:** the turn-entry printer for
-non-scalars (point 8); continuations crossing turns; the transcript corpus's
-remaining case (a `defstruct` redefined with values in slots); the page (the
-browser JIT module installs the same hook, as for C1, and there point 5 is
-still open: the interpreter needs the IR). Option (b) stays available if a
-session's own definitions, rather than its turn count, ever make the kept
-code too much.
+#### Point 8 and type redefinition, as built (2026-10-29)
+
+**The printer.** A result prints as the interpreter's display prints it,
+chosen from its static type when the turn's program is built (`emit_repr`,
+`src/turi/compiled_turn.c`):
+
+- scalars as before;
+- **Show** when the session has an instance for the type's head and for each
+  argument it is applied to (`Vec`, `Map`, `Set`, `Sym`, a user's own), through
+  `(show v)`. The program then loads `stdlib/typeclass-show.tur`, which the
+  interpreter preloads and a compiled program does not; so does a program
+  whose own text uses `show`;
+- a **struct or ADT** without an instance as `Name { field = value, ... }`, a
+  constructor with no fields as `#<struct Name>`, four levels deep, by a
+  generated `match`. A generic ADT's fields are typed by the arguments it is
+  applied to;
+- a **Vec** whose elements have no Show as `[a b]`, each element as the REPL
+  would print it alone, by a generated loop; another container in that case,
+  and anything else, as `#<Type>`.
+
+Two fixes fell out of matching the transcripts. A positional field, `(Some
+A)`'s, printed as `(null) = 3` in the interpreter; both now print `Some { 3 }`.
+And a `#map{...}` / `#set{...}` literal's form span started at its `{`, so
+the definition table copied `{:a 1}`, a curly-infix call; the reader now
+spans the whole lexeme. The interpreter's display has two bugs of its own
+the compiled printer does not share:
+[repl-show-uses-wrong-instance-for-vec-elements](../reported/repl-show-uses-wrong-instance-for-vec-elements.md).
+
+**Redefining a type.** The table re-elaborates every definition's source
+against the latest types, and that can change what a `def` means: once `S`
+grows a field, `(def s (S 1))` is a partial application, and the session --
+which still says `s : S` -- printed the closure as a struct
+(`S { a = 139737849398160, b = 1 }`). Changing a field's type was worse:
+the stale def stopped compiling, so every later turn failed until `:reset`.
+So each table entry for a `def` records its value's type as elaborated when
+it was made, and a turn that redefines a type drops every `def` whose type
+names it, saying so: `note: S changed, so the defs holding its old values are
+dropped; define them again to use them: s`. Reading a dropped def is then a
+compile error, not a misread value. (The interpreter keeps the old value in
+its old shape; compiled code has one layout per name, the new one.) A `defn`
+that no longer compiles against the new type still fails the turn that
+redefines it; redefine both in one turn.
+
+**Left before C2 can leave prototype:** continuations crossing turns; the
+page (the browser JIT module installs the same hook, as for C1, and there
+point 5 is still open: the interpreter needs the IR). Option (b) stays
+available if a session's own definitions, rather than its turn count, ever
+make the kept code too much.
 
 #### Investigation (2026-10-02)
 

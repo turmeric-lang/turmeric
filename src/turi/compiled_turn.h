@@ -31,11 +31,13 @@ extern "C" {
 
 struct Form;
 struct Type;
+struct Expr;
 
 /* One entry of the definition table. */
 typedef struct TuriCompiledDef {
     char *key;    /* "defn f", "definstance Show Pt", "import m", ... */
     char *text;   /* the form's source */
+    char *type;   /* a def's value type, printed; NULL for anything else */
     bool  is_import;
 } TuriCompiledDef;
 
@@ -58,14 +60,21 @@ bool turi_compiled_turn_available(void);
  * stays interpreted). */
 bool turi_compiled_turn_applies(const TuriEnv *env);
 
-/* Run one turn: forms[first, n) are the turn's new forms, spans into `src`.
- * `last_type` is the elaborated type of the turn's last item, NULL when it
- * has none; `last_is_def` says the last item is a definition.  Returns nil
- * (with env->last_turn_printed set when the program printed the result), or
- * an error value when the program did not compile or exited non-zero; the
- * definition table changes only on success. */
+/* Run one turn: forms[first, n) are the turn's new forms, spans into `src`,
+ * and items[0, n_items) the program items they elaborated to.  `last_type`
+ * is the elaborated type of the turn's last item, NULL when it has none;
+ * `last_is_def` says the last item is a definition.  Returns nil (with
+ * env->last_turn_printed set when the program printed the result), or an
+ * error value when the program did not compile or exited non-zero; the
+ * definition table changes only on success.
+ *
+ * A turn that redefines a type drops every def whose value has that type
+ * (the type printed, as elaborated when the def was made): its slot holds
+ * the old layout, and its source may now mean something else -- `(S 1)` is a
+ * partial application once S grows a field.  The REPL says which. */
 TuriValue turi_compiled_turn_run(TuriEnv *env, struct Form **forms,
                                  uint32_t first, uint32_t n, const char *src,
+                                 struct Expr *const *items, uint32_t n_items,
                                  const struct Type *last_type, bool last_is_def);
 
 /* Drop the definition table and the global slots (turi_env_free, :reset). */
