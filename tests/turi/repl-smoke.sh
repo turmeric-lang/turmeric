@@ -229,6 +229,45 @@ IMP_AS_OUT="$(cd "$IMP_DIR" && printf '%s\n' '(import mods/sq :as m)' '(m/sq 6)'
 check_last "top-level import :as, called on a later turn" '=> 36' "$IMP_AS_OUT"
 rm -rf "$IMP_DIR"
 
+# --- A Vec shows each element as that element's type shows it ----------------
+# repl-show-uses-wrong-instance-for-vec-elements: Show [Vec] was picked by its
+# head name, so a Vec of a type with no Show showed through another struct's
+# instance (or as an address); a `def` turn showed its Vec as an address; and a
+# Vec of Vecs crashed the display (Release printed nothing at all).
+SHOW_OUT="$(repl_out '(defstruct P [x : int])' \
+                     '(definstance Show [P] (show [p] : String (string/from-cstr "P!")))' \
+                     '(defstruct Q [y : int])' \
+                     '[(Q 1) (Q 2)]' \
+                     '(def w [1 2 3])' \
+                     '(def v [(P 1)])' \
+                     '[[1 2] [3]]' \
+                     '[[(Q 1)] [(Q 2)]]')"
+check "a Vec of a type with no Show shows each element's default" \
+      '=> [Q { y = 1 } Q { y = 2 }]' "$SHOW_OUT"
+check "a def turn shows its Vec, not its carrier" '=> [1 2 3]' "$SHOW_OUT"
+check "an element type's own Show is used" '=> [P!]' "$SHOW_OUT"
+check "a Vec of Vecs shows" '=> [[1 2] [3]]' "$SHOW_OUT"
+check_last "a Vec of Vecs of structs shows" '=> [[Q { y = 1 }] [Q { y = 2 }]]' "$SHOW_OUT"
+
+# --- A continuation stored in one turn, resumed in a later one ---------------
+# turi-repl-continuation-resumed-in-later-turn-reads-freed-frames: the turn
+# boundary rewound the scratch arena under a suspended fiber continuation, so
+# the resume walked poisoned frames (an ASan abort on the Debug build, before
+# any `=>`; Release happened to print 6).
+K_DEF_OUT="$(repl_out '(defeffect Ask [] : int)' \
+                      '(defn w4 [] : int (+ 1 (perform (Ask))))' \
+                      '(def saved (handle (w4) (Ask [] k) k))' \
+                      '(resume saved 5)')"
+check_last "a continuation def'd in one turn resumes in the next" '=> 6' "$K_DEF_OUT"
+K_SET_OUT="$(repl_out '(defeffect Ask [] : int)' \
+                      '(defn w4 [] : int (+ 1 (perform (Ask))))' \
+                      '(def ^mut saved 0)' \
+                      '(handle (w4) (Ask [] k) (do (set! saved k) 0))' \
+                      '(resume saved 5)' \
+                      '(+ 1 2)')"
+check "a continuation set! in one turn resumes in the next" '=> 6' "$K_SET_OUT"
+check_last "and the session goes on" '=> 3' "$K_SET_OUT"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -14,8 +14,9 @@ Usage:
                       [--bench bench.jsonl]
     report-metrics.py --backfill <checkout of the ci-metrics branch>
 
-The branch was the store before D1 and is no longer written. --backfill is
-kept for one last top-up from it before it is deleted; it is idempotent.
+The branch was the store before D1, and it has since been deleted. D1 already
+holds everything it had, so --backfill has nothing left to read; it is kept
+for a checkout restored from a local copy. It is idempotent.
 
 A missing or empty input file is a warning, not a failure: each array
 is optional, and a docs-only push has counts but no timings. Nothing to report

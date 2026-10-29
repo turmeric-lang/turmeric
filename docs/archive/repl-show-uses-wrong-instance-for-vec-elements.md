@@ -56,3 +56,35 @@ printer from the result's static type when it builds the turn's program
   repr, as the compiled REPL does.
 - For a `def` turn, use the initializer's type, as `turi_eval_impl` step 7
   already does for the compiled turn (`last_type`).
+
+## Resolution (2026-10-29)
+
+Both shapes, plus a third the fix found (`src/turi/eval.c`):
+
+1. **Element instance.** `turi_call_show_named` now checks the instance's
+   type-parameter constraints against the receiver's element types
+   (`typeclass_instance_constraints_satisfied`) before calling it. A `(Vec Q)`
+   whose `Q` has no `Show` is walked in C instead (`show_vec_render`). Each
+   element is shown through its own `Show` if it has one, and otherwise in
+   its default repr: `[Q { y = 1 } Q { y = 2 }]`, as the compiled REPL
+   prints it. The elements come back typed through `turi_vec_elem`
+   (`collections_native.c`, the `vec-get` read).
+2. **A `def`'s value.** A `def` turn takes the type tag and full type from
+   its initializer, not the unit-typed def node: `(def w [1 2 3])` shows
+   `[1 2 3]`.
+3. **A Vec of Vecs.** `Show [Vec]`'s loop shows an element through
+   `(show (:: (vec-get v i) A))`, with `A` seeded from the receiver. The inner
+   Vec's loop then read the outer `A` (`(Vec int)`) for its own `int`s and
+   called `vec-len` on 1. That was a SEGV on the Debug build, and a silent
+   process exit on Release, where the prompt printed nothing. A Vec whose
+   elements are Vecs takes the same C walk, recursively: `[[1 2] [3]]`. A
+   nested Vec of structs printed garbage before; it now prints
+   `[[Q { y = 1 }] [Q { y = 2 }]]`.
+
+Elements that `Show [Vec]` shows right (ints, strings, structs with an
+instance) still go through it, so `["a" "b"]` keeps showing `[a b]`. The
+same check covers `Set` and `Map`, but only `Vec` has the C walk: a Map with
+a value type that has no `Show` falls back to the default repr of the whole
+value.
+
+Pinned by `tests/turi/repl-smoke.sh` (ctest `tur_repl_smoke`).

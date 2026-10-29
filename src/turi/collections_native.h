@@ -26,6 +26,12 @@ void turi_register_collection_natives(TuriEnv *env);
 TuriValue turi_native_vec_new(TuriEnv *env);
 TuriValue turi_native_vec_push(TuriEnv *env, TuriValue vec, TuriValue elem);
 TuriValue turi_native_vec_free(TuriEnv *env, TuriValue vec);
+/* A Vec's length, and its element `i` as native_vec_get reads it (re-tagged
+ * from the recorded element tag, so a struct element is a TURI_STRUCT).  For
+ * the REPL's display of a Vec whose elements have no Show
+ * (repl-show-uses-wrong-instance-for-vec-elements).  0 / nil for a non-Vec. */
+size_t    turi_vec_len(TuriValue vec);
+TuriValue turi_vec_elem(TuriValue vec, size_t i);
 
 /* Exposed for wk_register_sym_natives (interpreter_natives.c): MapKey[Sym] reuses the
  * int-carrier comparator and the cstr box (a Sym is a one-word interned

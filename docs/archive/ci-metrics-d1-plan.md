@@ -5,9 +5,9 @@
 > production since its deploy (0.70.4, 2026-10-24), with every main push and
 > nightly reporting to it (ingest 70 by then). D1 is now the only store behind /ci: nothing writes the
 > `ci-metrics` orphan branch any more, and the Worker no longer proxies it.
-> One step is left to the owner, since sessions cannot delete remote
-> branches: delete the `ci-metrics` branch (after the optional last backfill
-> top-up under "Retirement as built"). Database `ci-metrics`
+> The owner has deleted the `ci-metrics` branch. The backfill top-up was
+> never run, and on 2026-10-29 D1 was checked and found to be missing nothing
+> without it (see "Retirement as built"). Database `ci-metrics`
 > (`b25ff4cf-0e0c-4233-b79a-b15147fa4a6e`); `CI_METRICS_TOKEN` is a Worker
 > secret and a repository secret. The owner signed off on everything this
 > gives up (git history of the data, the year files, raw-row access via
@@ -472,12 +472,21 @@ What implementation measured or changed relative to the draft above.
   test-suite-portability guide and the performance guide. Historical mentions
   (CHANGELOG entries, archived and open reports quoting measurements taken off
   the branch) are left as written.
-- **Kept:** `report-metrics.py --backfill`. Pushes that landed between the
-  first backfill (2026-10-23 22:25 UTC) and the deploy reached only the
-  branch, and "As built" asks for one idempotent top-up from a fresh checkout
-  of it after deploying. If that was not run, run it once before deleting the
-  branch:
-  `git clone --branch ci-metrics --single-branch --depth 1
-  https://github.com/turmeric-lang/turmeric /tmp/cim`, then
-  `CI_METRICS_TOKEN=... python3 tools/ci/report-metrics.py --backfill /tmp/cim`.
-- **Left to the owner:** delete the `ci-metrics` branch.
+- **Kept:** `report-metrics.py --backfill`, for the top-up "As built" asks
+  for. With the branch deleted it can only read a checkout restored from a
+  local copy.
+- **The top-up was not needed (checked 2026-10-29).** It was never run: the
+  `ingest` table holds one backfill entry (ingest 1,
+  `backfill:ci-metrics-branch`, 2026-10-23 23:58 UTC, 174,511 suite rows),
+  and every entry after it is a single run's report, the first being ingest 2
+  at 2026-10-24 00:47 UTC. A top-up would have left a run of ~2,000-row
+  entries. Nothing was lost without it. The branch at 2026-10-25 17:25 UTC
+  (`120587556`, after the deploy, so covering the whole gap) was compared
+  with D1 run by run. Every one of its 613 timing runs, 323 loc rows and 251
+  docs rows is in D1. The only shortfall is 70 rows across 36 runs of
+  2026-10-03..04, which is the `tur_flags_tests` duplicate-key collapse
+  described in "As built". Every main-branch `ci.yml` and `nightly-arm64.yml`
+  run from 2026-10-23 on is in D1 too (apart from two still running when
+  checked), which covers the dual-write days after that snapshot.
+- **Branch deleted.** The owner deleted the `ci-metrics` branch on
+  2026-10-29. Its data now lives only in D1, as signed off above.

@@ -54,3 +54,24 @@ pinned down.
 stored in the top-level saved would outlive this REPL turn`), since the
 compiled backend's reaper frees a stored chain when the turn's entry returns.
 Resuming within the same turn works on both engines.
+
+## Resolution (2026-10-29)
+
+The partly-confirmed cause was close. The continuation in both repros is a
+fiber continuation (`ws == NULL`: `w4`'s `perform` has no work-stack prompt
+to capture). Its `TuriEffectCont` is `calloc`'d off the value pool, so
+`promo_check` (`src/turi/eval.c`) let it through the turn boundary's
+promotion ("already off scratch"). But a suspended fiber's body is C frames
+on its own stack, holding the `EvalFrame`s of the activation it suspended,
+and those were scratch. The rewind poisoned them (the `f7` ASan bytes were
+the arena's, not the frame free list's), and the resume's `frame_release`
+read one. `TUR_TURI_FRAME_RECLAIM=0` did not help, which ruled the free
+list out.
+
+A fiber continuation that is not `done` now refuses the rewind, as a started
+generator does: the turn keeps its scratch while such a continuation lives,
+the second fix direction above. A finished one passes as before.
+
+Pinned by `tests/turi/repl-smoke.sh` (ctest `tur_repl_smoke`): the report's
+`set!` form, the same continuation `def`'d directly, and a later turn after
+the resume. On the Debug build the old code aborted before the `=> 6`.

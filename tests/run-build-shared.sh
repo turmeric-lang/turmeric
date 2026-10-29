@@ -226,6 +226,32 @@ else
     pass "build-dir-env-override"
 fi
 
+# sepcomp-module-def-initializers-never-run: a library module's defs are
+# initialized at load -- they used to read zero -- and an initializer with an
+# effect runs once.  sepcomp-exported-global-header-name-mismatch: a second
+# module reads and writes the first's exported global, which is
+# `glob__counter` in both and in glob.h (an importer failed to compile).
+DEFI="tests/fixtures/build-shared-def-init"
+DEFI_LIB="$WORK/libglob.$LIB_EXT"
+defi_out=$("$TUR" build --shared "$DEFI" -o "$DEFI_LIB" 2>&1)
+defi_rc=$?
+if [ $defi_rc -ne 0 ]; then
+    fail "build-shared-def-init" "tur build --shared exit=$defi_rc: $defi_out"
+elif ! $CC_BIN -O0 -std=c99 -Wall -Isrc -o "$WORK/defi-harness" "$DEFI/harness.c" $DL_LIBS 2>"$WORK/defi-cc.err"; then
+    fail "build-shared-def-init" "cc failed: $(cat "$WORK/defi-cc.err")"
+else
+    defi_run=$("$WORK/defi-harness" "$DEFI_LIB" 2>&1)
+    defi_expect=$(printf 'glob: initialized\ncounter = 5, after bump = 6\nuser reads 6, pokes 40; glob reads 40; glob__counter = 40')
+    if [ "$defi_run" != "$defi_expect" ]; then
+        fail "build-shared-def-init" "expected '$defi_expect', got '$defi_run'"
+    elif ! grep -q 'extern int64_t glob__counter;' "$DEFI/build/obj/glob.h"; then
+        fail "build-shared-def-init" "glob.h does not declare glob__counter"
+    else
+        pass "build-shared-def-init"
+    fi
+fi
+rm -rf "$DEFI/build"
+
 echo
 echo "build-shared: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
