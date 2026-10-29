@@ -1,13 +1,29 @@
 # Plan: a raylib playground in the browser ("Try Turmeric with a screen")
 
-> **Status:** Draft, 2026-10-23. Nothing built. The one decision this plan
-> needs from its owner before P0 starts is in
-> [section 3](#3-the-central-decision-how-does-typed-code-reach-raylib)
-> (interpreter-with-baked-spices first, build service second -- recommended)
-> and [section 4](#4-where-it-lives) (its own repo -- recommended).
-> **Type:** Web platform / interpreter (`src/turi/`, `src/web/`) / build
-> driver (`src/driver/cmd_build.c`) / a new site.
-> **Builds on:** [wasm-spices-plan](wasm-spices-plan.md) (the raylib web arm,
+> **Status:** Draft, 2026-10-23; revised 2026-10-29 after the browser JIT
+> landed ([wasm-jit-plan](wasm-jit-plan.md) P0-P5 and P6's C1, 2026-10-28).
+> Nothing of this plan is built. **What changed:** the premise that "a program
+> typed into the page cannot be compiled there" is false. Try Turmeric has a
+> Compile engine (c2mir + MIR's interpreter in the page, inline C works), and
+> the raylib spice is *pure inline C* that `#include <raylib.h>`, so the
+> browser can compile it from source: the static spice image of the old A1 and
+> the build service of the old B are both unnecessary for raylib. The
+> recommendation therefore flips to **the JIT engine first (section 3, "J"),
+> gated by a one-to-two day spike (P0); the interpreter-with-baked-images
+> architecture (A) is kept as the fallback if the spike fails.** What the spike
+> must answer, and the prerequisite work that should land before it, is
+> [section 7](#prerequisites-before-p0). The decision this plan needs from its
+> owner before P0 starts is in
+> [section 3](#3-the-central-decision-how-does-typed-code-reach-raylib) (J first,
+> A as the fallback -- recommended) and [section 4](#4-where-it-lives) (its own
+> repo -- recommended).
+> **Type:** Web platform / browser JIT module (`tools/wasm-jit/`,
+> `src/web/wasm_jit_glue.c`, `src/jit_engine.c`) / a new site. The interpreter
+> side (`src/turi/`) and the build driver (`src/driver/cmd_build.c`) only if the
+> contingent track A is taken.
+> **Builds on:** [wasm-jit-plan](wasm-jit-plan.md) (the browser JIT engine,
+> `turmeric-jit.{js,wasm}`, the shared `stdlib.data` package, the import
+> table), [wasm-spices-plan](wasm-spices-plan.md) (the raylib web arm,
 > `tur build --target wasm`, the `:web` manifest block, the measured
 > Asyncify cost), [script-spice-deps-plan](script-spice-deps-plan.md)
 > (`defscript :spices`, landed 2026-10-22 behind `--enable=script-deps`),
@@ -24,8 +40,10 @@ A single-page app, in the spirit of `try.turmeric-lang.com`, where a visitor
 edits a raylib program on the left and sees it **run** in a small screen on
 the right, with the program's `println` output in a console under the
 screen. Examples are one click away. A program may use raylib, raygui, and
-other spices that work in a browser. Run is near-instant; nothing is
-installed.
+other spices that work in a browser. Run starts in well under a second (the
+browser JIT measured 125-180 ms in the front half and 110-170 ms in c2mir for a
+small program; a program that pulls in the raylib spice compiles its inline C
+too, which P0 measures); nothing is installed.
 
 Concretely, this program -- the raylib README's quick start, unchanged --
 pasted into the editor and run, draws its text in the screen pane:
@@ -49,111 +67,163 @@ controls beyond what raylib's web backend already maps, WebGPU, a debugger.
 
 ## 2. What exists today, and what it means for this
 
-Checked against `main` (v0.70.0) and turmeric-spices on 2026-10-23.
+Checked against `main` (v0.72.0) and turmeric-spices on 2026-10-23; the browser
+JIT rows and the spice findings were re-checked on 2026-10-29.
 
 | Piece | Where | What it gives this plan |
 |---|---|---|
-| Try Turmeric | `web/try/`, `web/main.js` (6.8k lines), `web/public/eval-worker.js` | An editor-plus-console SPA with Monaco, LSP in a worker, share URLs (`share-codec.js`), an examples menu, a CSP (`csp.js`), a service worker, Playwright tests, a Cloudflare Worker deploy. **It runs the tree-walking interpreter** (`libturi_wasm`, `src/web/wasm_glue.c`), not compiled code: `turi_wasm_eval` in a Web Worker. |
-| raylib's web arm | turmeric-spices `spices/raylib/build.tur` (`:wasm-options` `PLATFORM=Web`, `GRAPHICS=ES3`), `raylib/web.tur` (`run-main-loop`, `cancel-main-loop`, `with-web-game-loop`), `c/raylib/rl_web_loop.c` | raylib 5.5 builds under `emcmake` and renders at 60 fps in Chromium (wasm-spices-plan section 12). The frame-callback shim exists. |
+| Try Turmeric | `web/try/`, `web/main.js` (6.8k lines), `web/public/eval-worker.js`, `web/public/jit-worker.js`, `web/engine.js` | An editor-plus-console SPA with Monaco, LSP in a worker, share URLs (`share-codec.js`), an examples menu, a CSP (`csp.js`), a service worker, Playwright tests, a Cloudflare Worker deploy, COOP/COEP headers (`web/public/_headers`). It has **two engines** behind the language menu's Engine section: Interpret (`libturi_wasm`, `turi_wasm_eval` in a Web Worker -- the tree-walker) and, since 2026-10-28, **Compile** (`turmeric-jit.{js,wasm}`, `turi_wasm_jit_run` in `jit-worker.js`). |
+| The browser JIT | [wasm-jit-plan](wasm-jit-plan.md); `src/web/wasm_jit_glue.c`, `tools/wasm-jit/` (`build-module.sh`, `gen-symtab.py`, `headers.txt`), `src/jit_engine.c` (`__EMSCRIPTEN__` arm), `tur_front` (`src/driver/pipeline.c` and four siblings) | The driver's front half emits C in the page, c2mir compiles it to MIR, MIR's interpreter runs it. **Inline C and `extern-c` work.** Runtime calls go through generated exact-signature stubs, not a JS round trip; `setjmp` works; `exit`/`abort` are caught. 5.27 MB wasm (1.84 MB gzipped), a second module loaded on first use. Corpus: 2,488 compiled, 191 fell back right, 254 failed, 241 skipped (`tests/jit-wasm-baseline.txt`); every Try example compiles or falls back with a reason. **Not yet:** it runs on a Web Worker and `main` runs on the calling thread to completion (no frame loop), it has no Asyncify, no module in it knows about raylib, and its compile has no spice search path (`compile_to_c` is called with none). |
+| The shared package | `stdlib.data` (CMake `tur_stdlib_pkg`, wasm-jit-plan 5.11) | Files the page needs at runtime ship as an Emscripten `file_packager` package mounted at `/stdlib` by a loader linked into both modules, not embedded in the wasm. The same mechanism can carry spice sources (section 5.3). |
+| raylib's web arm | turmeric-spices `spices/raylib/build.tur` (`:cmake-deps` raylib 5.5, `:wasm-options` `PLATFORM=Web`, `GRAPHICS=ES3`; `:build-opts :c-sources ["c/raylib/rl_web_loop.c"]`), `raylib/web.tur` (`run-main-loop`, `cancel-main-loop`, `with-web-game-loop`) | raylib 5.5 builds under `emcmake` and renders at 60 fps in Chromium (wasm-spices-plan section 12). The frame-callback shim exists. **Checked 2026-10-29: every module under `src/raylib/` is Turmeric with inline-C bodies that `#include <raylib.h>` and call raylib directly** (Color, Vector2, Rectangle, textures and the rest are `malloc`'d boxes passed to raylib by value, `DrawCircleV(*v, ...)`); the only native C of the spice's own is the 79-line `rl_web_loop.c`. |
 | `tur build --target wasm` | `src/driver/cmd_build.c`, `pkg_web_compose_link_flags` in `src/compiler/pkg.c` | Compiles a project with `emcc`, composes the GL/audio/asyncify/heap link line from the `:web` block. Produces `.js` + `.wasm`; **no HTML shell**, no `--preload-file`, no `*args*` (wasm-spices-plan W1 is not built). |
 | Spice exports as interpreter natives | `src/turi/spice_loader.c` (build + dlopen + manifest), `src/turi/ffi_thunk.c` (`tur_ffi_install_spice_bindings`, by-value records, F5 callbacks from C back into Turmeric), `turi_env_attach_spice` (`src/turi/eval.h:700`) | The REPL already binds a compiled spice's exported defns as natives, marshals int/float/cstr/bool/nil and records, and lets C call a Turmeric closure. Every raylib handle type is `defopaque ... :int`, so raylib's whole surface is int-class. **Natively this goes through `dlopen`**; there is no static-image constructor yet. |
 | Interpreter under Asyncify | `src/turi/env.h:33` (Emscripten fibers for continuations, "requires `-sASYNCIFY=1`") | The interpreter already has an Asyncify-aware build shape, so linking the playground module with `-sASYNCIFY` is not new ground. Whether `tur_wasm` is linked with it today: **verify in P0** (`src/CMakeLists.txt` names no `ASYNCIFY`). |
 | `defscript :spices` | `script-spice-deps-plan`, `--enable=script-deps` | A single file can declare the spices it needs. This is the syntax a playground program should use to say what it pulls in, whichever architecture serves it. |
 | Spice compatibility matrix | wasm-spices-plan section 9 | Which spices can be in the browser at all. Pure and inline-C spices work; cmake deps that are portable C work; anything socket-shaped does not. |
 
-Two facts from that table shape everything below:
+Three facts from that table shape everything below:
 
-1. **Try Turmeric interprets.** There is no C compiler in the browser and
-   MIR does not target wasm, so a program typed into the page cannot be
-   compiled there. Either the interpreter calls into a raylib that was linked
-   into the page's module ahead of time, or a server compiles the program.
+1. **There is a C compiler in the browser now, and it is slow-start but
+   compiled.** The original draft said the opposite (no C compiler, MIR does
+   not target wasm) and built its recommendation on that. c2mir and MIR's
+   interpreter do run on wasm32, so a program typed into the page can be
+   compiled *and* its inline C (including the raylib spice's) can be compiled
+   with it. What the browser cannot do is link: `libraylib.a` has to be inside
+   the module ahead of time, and its entry points have to be in the module's
+   import table (wasm-jit-plan 5.3).
 2. **The browser calls the program, not the reverse.** A raylib frame loop
    on the page's main thread must yield every frame. Compiled programs do
    that with `run-main-loop` or Asyncify. An interpreted blocking `while`
-   loop needs Asyncify too, which the interpreter build already assumes.
+   loop needs Asyncify too. **Neither wasm module is linked with
+   `-sASYNCIFY` today** (`src/CMakeLists.txt` and `tools/wasm-jit/build-module.sh`
+   name none), and 49 corpus fixtures fail on the JIT module for exactly that
+   (`emscripten_fiber_swap`, an unowned family in wasm-jit-plan P5). So the
+   blocking style is an open question for the JIT arm, not a given; the
+   callback style (`with-web-game-loop`, `run-main-loop`) needs no Asyncify.
+3. **raylib needs the main thread.** Its GLFW port wants the canvas and DOM
+   input events, which a worker lacks. The browser JIT runs in a worker today.
 
 ## 3. The central decision: how does typed code reach raylib?
 
-Three architectures. The recommendation is **A now, B as the second
-phase, designed so the screen pane cannot tell them apart.**
+Three architectures. The recommendation is **J now, A only if J's spike
+fails, and no build service** -- designed so the screen pane cannot tell
+them apart.
 
-### A. Interpreter + a baked spice image (no server)
+### J. The JIT engine on the page, raylib linked in (recommended)
 
-One Emscripten module -- call it the **arcade module** -- links
-`libturi_wasm` with the web build of `libraylib.a`, raygui's one TU, and the
-AOT-compiled exports of a curated spice set (raylib, raygui, ecs,
-ecs-raylib, math, linalg, json, regex, plutovg, png, ...: the "Works" rows of
-the matrix). At startup the module installs those exports as interpreter
-natives through the existing `ffi_thunk` shim, and embeds the spices'
-`.tur` sources next to the stdlib so `(import raylib/core ...)` elaborates
-with real types. The page then evaluates the user's program with
-`turi_wasm_eval`, exactly as Try Turmeric does.
+One Emscripten module -- the **arcade module** -- is `turmeric-jit` (wasm-jit-plan:
+the front half, c2mir, MIR's interpreter, the resident runtime) with
+`libraylib.a` (the web build, ES3) and raygui's one TU linked in, and the
+raylib entry points added to the import table (`gen-symtab.py`, wasm-jit-plan
+5.3) so `MIR_link` finds `InitWindow` and `DrawCircleV`. The page compiles the
+user's program with `turi_wasm_jit_run` exactly as the Compile engine does. The
+spices are **source**, not images: `raylib/core`, `raylib/shapes`, ... are
+Turmeric files whose inline-C bodies `#include <raylib.h>`; c2mir compiles
+them with the program, and `raylib.h` is served from MEMFS beside the musl
+subset (wasm-jit-plan 5.4). `rl_web_loop.c`, the one native TU the spice owns,
+is compiled into the module with emcc like raylib itself.
 
-- The module runs on the **main thread of a sandboxed iframe** (the screen
-  pane), not in a Web Worker: raylib's GLFW port needs the canvas and DOM
-  input events, which a worker does not have. The iframe gives the Stop
-  button for free (tear the iframe down), isolates a runaway program from the
-  editor page, and keeps arrow keys from scrolling the editor.
-- Linked with `-sASYNCIFY`. raylib's web `WindowShouldClose` yields to the
-  browser through `emscripten_sleep`, so **the blocking `while` style runs
-  unchanged**, at the measured cost of a fixed ~16 ms added per frame
-  (wasm-spices-plan section 12, finding 3). For a playground that is fine:
-  a 30-60 fps demo, not a shipping game. `run-main-loop` with an
-  interpreter closure also works, through F5 callbacks.
-- "Pulling in other spices" means: **the spices baked into the module**,
-  chosen from a chip row in the UI or named in a `defscript :spices` header
-  (which the page reads and the module satisfies from its baked set, or
-  refuses by name). Adding a spice is a rebuild and redeploy of the module,
-  not a runtime fetch.
-- Cost: inline-C in user code is still refused (as on Try Turmeric today);
-  interpreted semantics, not compiled; one large module (libturi is already
-  what Try loads, plus ~4.5 MB of raylib, plus the spices).
+- **Why this beats A for raylib.** It deletes A0/A1/A2 (the per-export `__ffi`
+  shims, the static `TurSpiceImage` constructor, `turi_wasm_attach_images`,
+  the sandbox cap that lets natives in without granting `extern-c`): the
+  spice needs no marshalling layer because it is not called across an
+  interpreter boundary, it is compiled in the same unit as its caller. By-value
+  records (raygui's `Rect`) are C structs, not a `note_records` problem. User
+  code may contain inline C and `extern-c`, which A refuses, so
+  `inline-c-plasma.tur` (section 8, "Later") is in scope on day one.
+  Compiled semantics: what the page runs is what `tur jit` runs, and the
+  example's native twin (section 5.4) exercises the same emitter output.
+- **Speed.** The MIR interpreter on wasm32 measured about 7x slower than
+  `clang -O0` on a tight loop; the tree-walker is about 20x slower than MIR's
+  interpreter natively (wasm-jit-plan section 4). That is the difference
+  between "life.tur at 5,184 cells a frame misses 30 fps" and "probably
+  meets it", which P0 measures rather than assumes.
+- **Adding a spice is data, not a rebuild**, for every spice that is pure or
+  inline-C: its `src/` tree is a file package fetched on demand (section 5.3),
+  the way `stdlib.data` is. Only a spice with a native dep (raylib's
+  `libraylib.a`, raygui's TU) needs a module relink.
+- **Honest limits.** (1) Recursion depth is the MIR interpreter's ~1,700
+  frames, not the tree-walker's heap-bounded depth (wasm-jit-plan 5.8); the
+  engine toggle already says so. (2) A program the engine refuses (threads,
+  an autolink) falls back to the tree-walker, which in *this* module has no
+  raylib, so for the arcade the fallback is an error that names the reason, not
+  a silent second engine. (3) The ~125-180 ms front half and ~110-170 ms c2mir
+  are a fixed cost on every Run; a spice's inline C adds to c2mir's share. (4)
+  The corpus still has 254 failures; the ones that matter here are
+  [ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md)
+  shapes 2-3 (`vec`/HAMT values, `life.tur`'s grid) and the open Asyncify family.
+- **What nobody has measured**, so it is P0's job and not an assumption: calling
+  a C function that takes a struct by value (`DrawCircleV`, `DrawRectangleRec`,
+  `DrawText` with a `Color`) from MIR-interpreted wasm32 code; an interpreted
+  function as the frame callback `emscripten_set_main_loop` calls (a thunk is a
+  table entry since mir#16, so it should work); `simulate_infinite_loop=1`
+  unwinding out of a `main` that is running *inside* the MIR interpreter's
+  `eval` frames (the P5 corpus has two `unwind` traps); and the module on the
+  main thread of an iframe. Section 7 lists them with the prerequisites.
+- **The blocking `while` style is the real fork inside J.** raylib's web
+  `WindowShouldClose` and `EndDrawing` yield through `emscripten_sleep`, which
+  needs Asyncify, which cannot unwind through a JS frame. The JIT module's
+  runtime calls no longer cross JS (5.5's stubs), but the interpreter's
+  interpreted-to-interpreted and native-to-interpreted re-entry paths still do,
+  which is the 49-fixture family. Two outcomes: Asyncify works under the MIR
+  interpreter (then the blocking examples run unchanged, at the measured ~16 ms
+  a frame), or it does not (then the playground teaches the callback form,
+  `with-web-game-loop`, the form a shipping game uses anyway, and section 8's
+  blocking examples are rewritten). Either is shippable; P0 says which.
 
-### B. Build service (compile on a server)
+### A. Interpreter + a baked spice image (fallback)
 
-The page POSTs the program; a service runs `tur build --target wasm` with
-`--enable=script-deps` and warm caches (emsdk, the raylib web archive, each
-spice's objects), and returns `.js` + `.wasm` (+ `.data`). The iframe loads
-that bundle.
+Everything the previous draft of this section said, kept because it is the
+plan if J's spike fails (most likely cause: struct-by-value calls from MIR on
+wasm32, or the main-thread/iframe boot). One module links `libturi_wasm` with
+the web `libraylib.a`, raygui's TU and the AOT-compiled exports of a curated
+spice set. At startup it installs those exports as interpreter natives through
+the existing `ffi_thunk` shim and embeds the spices' `.tur` sources next to the
+stdlib, so `(import raylib/core ...)` elaborates with real types. The page then
+evaluates the program with `turi_wasm_eval`, as Try Turmeric's Interpret
+engine does.
 
-- Any wasm-clean spice, pulled on demand by `defscript :spices`; inline-C in
-  user code; real compiled semantics and full-speed `:callback` mode.
-- Cost: a server that can run `emcc`. The site is on Cloudflare Workers,
-  which cannot; the service needs a container (Cloudflare Containers,
-  Fly.io, or a small VM). A cold compile is seconds, not milliseconds;
-  compiling arbitrary C is an abuse surface (sandbox, no network, CPU and
-  wall-clock limits, rate limits, content hash cache). The turmeric repo's
-  deploy must not depend on it being up.
+- It runs on the **main thread of a sandboxed iframe**, linked with `-sASYNCIFY`
+  (the tree-walker already has an Asyncify-aware shape, `src/turi/env.h:33`), so
+  the blocking `while` style runs unchanged at the ~16 ms-a-frame cost
+  (wasm-spices-plan section 12, finding 3). `run-main-loop` with an interpreter
+  closure also works, through F5 callbacks.
+- "Other spices" means the spices **baked into the module**: adding one is a
+  rebuild and redeploy.
+- Cost: inline C in user code is refused; interpreted semantics; one large
+  module; and A0-A4 (section 6), which is real interpreter work.
 
-### B'. The JIT engine on the page (amendment, 2026-10-23)
+### B. Build service (not planned)
 
-[wasm-jit-plan](wasm-jit-plan.md) would give B's two wins -- inline C and
-any inline-C spice compiled from source -- **without the server**: c2mir and
-the MIR interpreter run in the browser (`turmeric-lang/c2mp` already does
-this on the same MIR fork this repo vendors). If that plan lands, the Build
-button runs client-side and B's service is not built. raylib itself is a
-cmake dep either way, so A's baked module stays the first step; the two
-compose rather than compete.
+A server that runs `tur build --target wasm` and returns a bundle was the
+original second phase, for "any wasm-clean spice" and inline C. J provides both
+in the page, with no container, no sandbox for arbitrary C, no rate limits and
+no deploy that depends on a service being up, so **B is dropped from the
+schedule** and kept only as an escape hatch for a program that outgrows the
+MIR interpreter. If it is ever needed, the screen pane's contract (C below)
+already admits it, and wasm-jit-plan section 8's T2 (a MIR-to-wasm generator)
+is the cheaper route to speed than a server.
 
-### C. Both, behind one screen pane
+### C. One screen pane for all of them
 
 The screen pane's contract is "load an Emscripten `MODULARIZE`d bundle into
 the iframe, hand it a canvas, forward stdout/stderr to the console, report
-exit." A loads the baked arcade module and evals; B loads a per-program
-bundle. The editor, examples, share URLs, LSP and console are identical.
+exit." J loads the arcade module and compiles; A loads its module and evals;
+B would load a per-program bundle. The editor, examples, share URLs, LSP and
+console are identical, so the architecture can change under the page.
 
 ### Decision
 
-**A first.** It reuses the most (Try Turmeric's whole page, the interpreter,
-`ffi_thunk`, the raylib web arm), needs no server, and gets a visitor from
-"paste" to "pixels" in under a second. **B second**, as the "Build" button
-beside "Run": it is what makes "any spice" and inline-C true, and it is
-where the examples that outgrow the interpreter go. C's iframe contract is
-written in P2 so B drops in without touching the page.
+**J first, behind a P0 spike; A if J fails the spike; B not scheduled.** J reuses
+Try Turmeric's Compile engine as built (the front half, c2mir, the shared
+package, the engine line), needs no server, and removes the interpreter-side
+work A needed. It trades a ~0.3 s Run for compiled semantics and inline C.
 
-The honest limits of A go on the page: a small "Interpreted; inline C is not
-available; blocking loops cost ~16 ms a frame" note next to the Run button,
-the way Try Turmeric notes the eval watchdog.
+The honest limits of the chosen engine go on the page: a small "Compiled in
+your browser (MIR interpreter); recursion limit ~1,700 frames; threads are not
+available" note next to the Run button, the way Try Turmeric notes the
+eval watchdog.
 
 ## 4. Where it lives
 
@@ -165,13 +235,14 @@ Three candidates were asked about. Recommendation: **its own repository**.
 | A fifth page in `web/` (`web/arcade/index.html`, next to `try/`, `tour/`, `trowel/`, `ci/` in `vite.config.js`) | Maximum reuse of `main.js`; one deploy; the LSP worker could be one module for both pages. | `tur run wasm` and `deploy-web` would need emsdk's raylib build and a spices checkout; the compiler's release-cut workflow would depend on turmeric-spices being green. That coupling is the thing extras-repo-split was undoing. |
 | A spice | -- | A spice is a library `tur` builds; this is a site. The closest fit, a `:bin` that serves the page, still needs the web build pipeline, which spices do not have. The *examples* can be a spice-shaped directory (plain `.tur` files with `defscript` headers), but the app is not one. |
 
-What lands **in this repo** regardless: the compiler- and interpreter-side
-plumbing in section 6, because the arcade module is built by `tur` and the
-page talks to `libturi_wasm`.
+What lands **in this repo** regardless: the compiler- and engine-side plumbing
+in section 6, because the arcade module is the JIT module (`tools/wasm-jit/`,
+`src/web/wasm_jit_glue.c`) plus a raylib link, and the page talks to it.
 
-What lands **in turmeric-spices**: nothing new is required for A beyond the
-`:web #map{:supported ...}` stubs wasm-spices-plan W0 already calls for,
-which the arcade's spice picker reads to decide what is offered.
+What lands **in turmeric-spices**: the `:web #map{:supported ...}` stubs
+wasm-spices-plan W0 already calls for, which the arcade's spice picker reads to
+decide what is offered. Under J nothing in the raylib spice itself changes (it
+is inline C already); `rl_web_loop.c` is compiled into the module as it is.
 
 ## 5. The page
 
@@ -198,8 +269,10 @@ drag handle between them. On a narrow viewport the three stack
 
 - **An iframe per run.** Run creates a sandboxed `<iframe>` (same origin,
   `sandbox="allow-scripts allow-same-origin"`), loads `screen.html`, which
-  boots the arcade module and evaluates the program it receives by
-  `postMessage`. Stop removes the iframe. A second Run replaces it. No module
+  boots the arcade module on the **iframe's main thread** (raylib needs the
+  canvas; the Compile engine's worker has none), compiles and runs the program
+  it receives by `postMessage`, and prints the engine line (front, c2mir, run
+  ms) to the console as Try's Compile engine does. Stop removes the iframe. A second Run replaces it. No module
   teardown is ever attempted (wasm-spices-plan 6.9); the iframe is the
   teardown.
 - **Canvas size.** Default 480x270 (16:9, four times smaller than a 1080p
@@ -224,8 +297,8 @@ drag handle between them. On a narrow viewport the three stack
   interpreter error ends the run and is printed red, with the line number
   linked back into the editor.
 - **FPS and frame time** in the pane's corner, from `requestAnimationFrame`
-  deltas in the shell, so a visitor sees the Asyncify cost rather than
-  wondering.
+  deltas in the shell, so a visitor sees the engine's cost (and Asyncify's, if
+  J4 went that way) rather than wondering.
 - **Pop out** opens the same `screen.html?share=...` in a new tab at native
   size; **fullscreen** uses the Fullscreen API on the iframe (gesture
   required, so it is a button). Neither resizes the canvas (6.4 deferred
@@ -237,18 +310,31 @@ drag handle between them. On a narrow viewport the three stack
 
 ### 5.3 Spices
 
-- A **Spices** menu lists what the arcade module carries, grouped by the
-  matrix tiers, each with its one-line description from `build.tur`. Ticking
-  one inserts or updates a `defscript :spices` header at the top of the
-  buffer (the same way the `#lang` picker edits the `#lang` line in place:
-  the buffer is the source of truth).
+- A **Spices** menu lists what the arcade offers, grouped by the matrix tiers,
+  each with its one-line description from `build.tur`. Ticking one inserts or
+  updates a `defscript :spices` header at the top of the buffer (the same way
+  the `#lang` picker edits the `#lang` line in place: the buffer is the source
+  of truth).
 - The header is the **real** `defscript` form, so a program copied out of the
   page runs natively with `tur --enable=script-deps file.tur` and fetches
-  the same spices. Under A the page satisfies the header from the baked set
-  and refuses an unknown name with "not in this build; try Build" (which is B).
-- Imports work without the header too, for the baked set: a visitor who
+  the same spices. On the page the header is satisfied **from what is mounted**,
+  never from the network: a name the arcade carries resolves, an unknown name
+  is refused with the name and "not in this build".
+- **Under J a spice is a file package.** Each spice's `src/` tree ships like
+  `stdlib.data` does (wasm-jit-plan 5.11): one Emscripten `file_packager`
+  package per spice, fetched when the program names it, mounted at
+  `/spices/<name>/src`, and put on the front half's module search path. The
+  inline-C bodies in those files are compiled by c2mir with the program, so a
+  pure or inline-C spice (`math`, `ecs`, `ecs-raylib`, `linalg`, `json`'s
+  Turmeric half, `raylib` itself, `raygui`) needs **no module relink**; only
+  the native deps they call do (`libraylib.a`, raygui's TU, any cmake dep), and
+  those are in the module and its import table. Whether a package can be
+  mounted after the module has started is a P0 check; if not, the arcade
+  builds one package of every offered spice, which is still a data rebuild and
+  not a relink.
+- Imports work without the header too, for the mounted set: a visitor who
   pastes the raylib README's quick start should not have to know about
-  `defscript`. The header exists for portability and for B.
+  `defscript`. The header exists for portability.
 
 ### 5.4 Examples and sharing
 
@@ -267,13 +353,89 @@ drag handle between them. On a narrow viewport the three stack
 ### 5.5 Editor intelligence
 
 The LSP worker (`web/public/lsp-worker.js` pattern) is rebuilt as an arcade
-variant whose module embeds the baked spices' `src/` trees, so completion
-and hover know `draw-circle`. Diagnostics come from the same elaboration the
-eval uses, so a program the LSP accepts is one the module runs.
+variant that mounts the offered spices' `src/` trees (the same packages the
+runtime fetches), so completion and hover know `draw-circle`. It runs the
+interpreter module's elaboration only (`web/wasm_lsp.c`), so it needs no
+raylib and no JIT. Diagnostics come from the same elaboration the front half
+runs, so a program the LSP accepts is one the compiler accepts.
 
-## 6. Compiler- and interpreter-side work (this repo)
+## 6. Compiler- and engine-side work (this repo)
 
-Ordered by dependency. Items A0-A3 are what A needs; B0-B2 are what B needs.
+Ordered by dependency. **J items are the plan**; the A items below are the
+contingent track, kept in full because P0 may send the work there; the B items
+are cut down to what survives.
+
+### J -- the arcade module is the JIT module plus raylib
+
+- **J0. Link raylib into the JIT module.** `tools/wasm-jit/build-module.sh`
+  today links `tur_core` + `tur_front` + the web glue, the engine, and MIR /
+  c2mir. Give it a list of extra objects and archives (the web `libraylib.a`,
+  raygui's TU, `rl_web_loop.c`) and compose their link flags (`-sUSE_GLFW=3`,
+  `-sMIN_WEBGL_VERSION=2`, the GL/audio/heap flags `pkg_web_compose_link_flags`
+  in `src/compiler/pkg.c` already derives from a `:web` block) with the
+  module's own (`-pthread`, `-sALLOW_MEMORY_GROWTH`, `-sSTACK_SIZE=16777216`).
+  Open: how the archive is built for the arcade -- `tur build --target wasm` on a
+  stub project already runs `emcmake` over raylib's `:cmake-deps`
+  (`:wasm-options`), the arcade repo's CI can call it once and cache the
+  archive by raylib ref. The arcade module is `tur_wasm_arcade` (or the JIT
+  target with `TUR_WASM_JIT_EXTRAS=<list>`), not a fork of the script.
+- **J1. The raylib entry points in the import table, at their real types.**
+  `gen-symtab.py` builds the table from the runtime's declarations region and a
+  libc list. Add a mode that reads prototypes from a header (`raylib.h`, then
+  `raygui.h`'s function declarations) and registers each function at its real
+  wasm signature. raylib is the first import set that passes **structs by
+  value** (`Color` is four bytes, `Vector2` two floats, `Rectangle` four;
+  `Texture2D`, `Camera3D` are bigger), which the wasm C ABI passes
+  indirectly. The exact-signature stubs (5.5, `--stubs`) are generated per wasm
+  signature, so they have to be generated from the same prototypes, and c2mir's
+  wasm32 target (`c2mir/wasm32/`) has to pass and return aggregates the way
+  clang does. **This is the first thing P0 tests**, because it is the one place
+  the browser JIT has not been exercised. `raylib.h` (and `raygui.h`) join
+  `/sysinclude` through `headers.txt`'s mechanism.
+  Also check how the autolink works for a spice's `:cmake-deps`: the JIT arm
+  has no `dlopen` and turns a `-l<name>` marker into a refusal that names the
+  library (wasm-jit-plan 5.7), but on the page there is no `build.tur` to
+  produce the marker; confirm the program compiles without one and that a
+  library the module already carries is simply satisfied.
+- **J2. Spice roots on the page.** `turi_wasm_jit_run` calls
+  `compile_to_c(path, &csrc, NULL, 0, NULL, 0)` with no include or spice
+  directories, so `(import raylib/core)` cannot resolve. Add the mounted
+  spice roots (`/spices/<name>/src`) to the front half's search path (the
+  same `spice.c` discovery `tur` uses, in `tur_front`), and decide what a
+  `defscript :spices` header does in the page: the front half reads the form
+  under `--enable=script-deps`, which would try to fetch, so the glue satisfies
+  it from the mounted roots instead and refuses an unknown name. The
+  per-spice packages generalize `tur_stdlib_pkg` (wasm-jit-plan 5.11).
+- **J3. The frame loop on the main thread.** `turi_wasm_jit_run` runs `main`
+  to completion and tears the context down; a callback-style program's
+  `main` calls `run-main-loop`, whose `emscripten_set_main_loop(..., 1)`
+  *unwinds out of `main`* and lets the browser call an interpreted function
+  later. So: (a) the MIR context and every image must outlive `main` (the REPL
+  already keeps contexts, `g_jit_keep_contexts`), (b) the unwind exception
+  passing through MIR's `eval` frames must not be mistaken for a trap by the
+  page's trap handler (`trapped` retires the instance, wasm-jit-plan P4) and
+  must leave the interpreter's frame state sound, (c) the frame function's
+  thunk must be callable by host code (a table entry since mir#16), and (d) the
+  whole thing runs on the iframe's main thread, so `tur_run_on_big_stack`-style
+  create-then-join code must run on the caller's stack as it already does on
+  Emscripten (wasm-jit-plan P4, "the emitter deadlocked in the browser"); any
+  other create-then-join in code the page reaches would hang the same way.
+- **J4. Asyncify, if P0 says it works.** Link the arcade module with
+  `-sASYNCIFY` so `WindowShouldClose`'s sleep yields and the blocking `while`
+  runs unchanged. It needs the interpreter's re-entry paths to stop putting
+  JS frames on the stack (the 49-fixture family in wasm-jit-plan P5 is the
+  same defect), and its cost is code size and a slower interpreter. If P0
+  says no, J4 is "document the callback form and rewrite the examples", and
+  `with-web-game-loop` becomes the front door.
+- **J5. `*args*`.** `turi_wasm_jit_run(src, args)` already takes a
+  newline-separated argument string (`split_args` in `wasm_jit_glue.c`);
+  confirm it reaches `*args*` as `tur run` would, which retires the
+  `--frames N` convention's wasm-spices-plan W1 dependency for J. (A needs W1's
+  `turi_wasm_set_args` instead.)
+
+### A -- contingent: interpreter + baked spice images
+
+Only if P0 sends the work here. A0's measurements stand either way.
 
 - **A0. How spice exports are called under emcc -- the call mechanism
   answered 2026-10-24; use the per-export `__ffi` shims, not the shape
@@ -337,82 +499,128 @@ Ordered by dependency. Items A0-A3 are what A needs; B0-B2 are what B needs.
 - **A4. `*args*` from the page.** wasm-spices-plan W1's `turi_wasm_set_args`
   escape hatch, so `--frames N` style arguments reach the program through
   `*args*` (CLAUDE.md's rule on how programs *read* args is unchanged).
-- **B0. The HTML shell is not needed by B** -- the iframe is the shell -- but
-  W1's `--preload-file` asset packaging and the `*args*` hook are, and W0's
-  `:web :supported false` hard error is what turns "this spice cannot be in a
-  browser" into a message with the spice's name.
-- **B1. `tur build --target wasm` on a `defscript` file.** Today
-  `--enable=script-deps` is wired through `tur run` / `tur <file>`; the
-  build service calls `tur build --target wasm --enable=script-deps
-  program.tur -o out/program.js` and needs the script-dep cache honoured on
-  that path. SD6 (cache the compiled script) becomes the service's
-  content-hash cache.
-- **B2. A build-service reference implementation**, in the arcade repo: one
-  container image (emsdk, a pinned `tur`, the raylib web archive and each
-  baked spice's objects prebuilt into the image), a 2-endpoint HTTP service
-  (`POST /build` -> bundle URL; `GET /bundle/<hash>/*`), per-request
-  `timeout`, no outbound network, a seccomp or gVisor sandbox, and a
-  size/rate limit. Deployed as a Cloudflare Container bound to the arcade
-  Worker, or on Fly.io if Containers' limits bite. The page shows "Build"
-  only when `/build` answers a health probe, so the site degrades to A
-  alone with the service down.
+### B -- what survives of the build service
+
+- **B0. `:web :supported` stubs (wasm-spices-plan W0).** Still needed: it is
+  what turns "this spice cannot be in a browser" into a message with the
+  spice's name, and what the Spices menu reads. Asset packaging
+  (`--preload-file`, W1) is needed for examples with textures or sounds under
+  any architecture: in J an asset is a file in the program's MEMFS, so
+  decide in P3 whether examples draw only shapes and text (no assets) or ship a
+  small asset package beside the spice packages.
+- **B1/B2. Cut.** A `defscript` file through `tur build --target wasm` and a
+  container-hosted build service are not scheduled (section 3, B).
 
 ## 7. Phases
 
+### Prerequisites before P0
+
+Checked 2026-10-29 against the browser JIT as landed. Each row says what is
+wrong or missing, whether it gates P0 (the spike), P1 (the module) or only
+later, and where it is tracked. Nothing here needs the arcade repo to exist.
+
+| # | Prerequisite | Gates | Why this plan cares | Tracked in |
+|---|---|---|---|---|
+| 1 | **Decide J over A, and the repo.** The owner confirms section 3's flip and section 4's own-repo choice. | P0 | P0's scope is different under each: J tests struct-by-value calls and the main-thread boot, A tests `ffi_thunk` shims under Asyncify. | this plan |
+| 2 | **`-sSTACK_OVERFLOW_CHECK=2` on the JIT link.** One flag, one test. | P0 | An iframe runs arbitrary user programs. Without the check a linear-stack overflow writes past the 16 MiB stack instead of stopping, and the spike's numbers (and the first user bug report) are of a corrupted module. | [wasm-linear-stack-overflow-unchecked](../reported/wasm-linear-stack-overflow-unchecked.md) |
+| 3 | **Decide how Asyncify gets measured on the MIR interpreter.** Neither wasm module is linked with it, and 49 corpus fixtures fail on `emscripten_fiber_swap`. Link a throwaway JIT module with `-sASYNCIFY` and run a compiled program that calls `emscripten_sleep`; that is P0 step 3 and the answer to whether the blocking style survives. | P0 | The whole examples section (8) is written in the blocking style. | wasm-jit-plan P5 (the family is "unowned"); J4 |
+| 4 | **Diagnose [wasm-jit-comparator-result-varies-between-runs](../reported/wasm-jit-comparator-result-varies-between-runs.md).** A list comparison gives a different answer on alternate runs of one module instance; present before P5, not the DK word, stubs, `setjmp` or register fix. Root cause unknown. | P1 | A frame loop is the longest-lived use the engine has had. A nondeterminism in the MIR interpreter's state on wasm is the kind of defect that shows up on frame 4,000, not in a 10-ms corpus run. Find out whether it is a MIR bug or a Turmeric one before building a site on it. | `docs/reported/` |
+| 5 | **Close ILP32 shapes 2 and 3** ([ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md)): `tur_hamt_get`'s `void *` values (a double stored in a map comes back denormal) and `stdlib/hamt.tur`'s `tur_hamt_count` declared at the wrong width, plus the `typed/vec-*` fixtures. Shape 1 (the DK word) is done. | P1 for correctness, P3 for the examples | `life.tur` is a `vec` of 0/1 ints, which survive; but any program that keeps a float (a position, a velocity) in a `vec` or a map is silently wrong on the page, and P3 has to audit each example for that shape. The same defect is in `tur build --target wasm`. | the report |
+| 6 | **Variadic calls inside a loop** ([c2mir-wasm-vararg-buffer-allocas-per-call](../reported/c2mir-wasm-vararg-buffer-allocas-per-call.md)): c2mir allocas a variadic call's buffer at the call site and keeps it until the function returns, 16 B an iteration. | P2 (the page), not P0 | A `println` of an int inside a per-entity loop of a 200-entity scene is 12,000 prints a second; a million overflows 16 MiB in about 80 seconds, with signs of memory corruption. Fix in the fork, or have the emitter hoist the buffer. | the report |
+| 7 | **Tail calls through a frame that allocated** ([wasm-mir-interp-tail-call-keeps-allocas](../reported/wasm-mir-interp-tail-call-keeps-allocas.md)): ~350 B per call, a trap after about 24,000 calls. Self tail calls are loops and unaffected; a frame function that tail-calls a *different* function each frame is the shape. | P2 | A game written as mutually tail-recursive states (menu -> play -> menu) traps after about 7 minutes at 60 fps. Know it, and keep the examples off the shape until it is fixed. | the report |
+| 8 | **A main-thread entry for the JIT module.** `jit-worker.js` and `web/jit-client.js` assume a worker; the glue's `main` runs to completion on the calling thread; the module instance is retired on a trap. The iframe needs: instantiate on the main thread, keep the context after `main` returns (J3), and a trap handler that tells a `set_main_loop` unwind from a real trap. Spike it in P0; build it in P1. | P0 (spike), P1 | raylib's GLFW port needs the canvas. | J3 |
+| 9 | **Spice roots on the compile path.** `turi_wasm_jit_run` compiles with no include or spice directories. | P1 | `(import raylib/core)` cannot resolve without it; this is also what `defscript` needs. | J2 |
+| 10 | **The import table for a non-runtime library**, including struct-by-value prototypes and `raylib.h` in `/sysinclude`. | P0 (spike by hand), P1 | The first import set that is not the runtime or libc. | J1 |
+| 11 | **`:web :supported` stubs** in turmeric-spices (wasm-spices-plan W0) for the Spices menu, and a decision about assets (shapes and text only, or a small package). | P2 / P3 | The picker reads them. | B0 |
+| 12 | **Emscripten pin.** CI's "Set up Emscripten" step pins 6.0.10; the browser JIT corpus and the P0 numbers here were measured with 6.0.13. Bring them to one version before P0 so a number is comparable to CI. | P0 | wasm-jit-plan risk 6. | `.github/workflows/ci.yml` |
+| 13 | **Headless WebGL2 in CI.** Confirm the Playwright Chromium CI uses gives the arcade module a WebGL2 context (software GL is fine); the smoke test and every example's "first frame drawn" check depend on it. | P1 | wasm-spices-plan section 12 measured 60 fps in Chromium, not necessarily headless-on-CI. | P1's smoke test |
+
+What is **not** a prerequisite, so nobody waits on it: the interpreter-side
+`ffi_thunk` work (A0-A4, contingent), `tur new-web` (W4), `*args*` for the
+JIT module (it already takes them, J5), the build service (cut), and C2 of
+[aot-compiled-repl-plan](aot-compiled-repl-plan.md) (the page's REPL session;
+the arcade is a program runner, and C1's per-defn images are already there).
+
+Rows 1-3 and 8-10 are P0's own inputs and fit in the spike's two days; rows
+2 and 12 are an hour each; rows 4-5 are the real work and are worth doing
+whichever architecture wins, because they fix the browser JIT and
+`tur build --target wasm` for everyone.
+
 ### P0 -- Spike (this repo, 1-2 days)
 
-Answer A0 by measurement, the way wasm-spices-plan section 12 did: a
-hand-linked module (`libturi_wasm` + web `libraylib.a` + the raylib spice's
-AOT objects + a hand-written image table) that evaluates the section 1
-program on a page and draws its text. Record binary size with and without
-`-sASYNCIFY`, time-to-first-frame, and fps for the blocking loop. Exports
-are called through their `__ffi` shims (A0 settled that the shape table
-cannot be used). If the fibers do not survive emcc, that is the finding, and B
-moves first.
+Hand-link one module -- `turmeric-jit` + the web `libraylib.a` + `rl_web_loop.c`
++ a hand-written import table for the raylib calls the section 1 program makes --
+and drive it from a plain main-thread page, then from a sandboxed iframe.
+Record, in this order (each step gates the next):
+
+1. **Struct by value.** A compiled `draw-circle-v` / `draw-rectangle-rec` / a
+   `draw-text` with a `Color` draws what it should. If MIR on wasm32 cannot pass
+   an aggregate the way clang does, that is the finding, A moves first, and the
+   fix to c2mir's wasm32 target is a separate item.
+2. **Callback mode.** The section 1 program written with `with-web-game-loop`
+   keeps drawing after `main` has unwound: `requestAnimationFrame` fires, the
+   interpreted frame function runs, the context survives, and a `println` per
+   frame reaches the console. Also: Stop (iframe teardown) leaves the editor
+   page alone.
+3. **Blocking mode under `-sASYNCIFY`.** The `while (not (window-should-close))`
+   form from section 1: does it yield, how much bigger is the module, how
+   much slower is the interpreter, and what fps. Run it with and without a
+   `call/cc` that also draws. If it does not work, record why (the JS frame
+   that blocks the unwind) and J4 becomes "teach the callback form".
+4. **Cost.** Time-to-first-frame cold and warm; front and c2mir milliseconds
+   for the program with the raylib spice's inline C compiled in; the module's
+   gzipped size with and without Asyncify and with raylib; `life.tur`'s
+   96x54 grid step per frame (section 8.5's budget), as an interpreted loop.
+5. **Boot.** The iframe under COOP/COEP; `SharedArrayBuffer`; a per-spice
+   package mounted after startup (5.3); a trap and a `set_main_loop` unwind
+   told apart by the page.
+
+The spike's output is a short results section in this plan, as wasm-jit-plan
+did for P1, and a go / no-go on J.
 
 ### P1 -- The arcade module (this repo)
 
-A1-A4, the `tur_wasm_arcade` target, a CI job that builds it (the existing
+J0-J5, a `tur_wasm_arcade` target, a CI job that builds it (the existing
 `Set up Emscripten` step in `ci.yml` plus the raylib web archive, cached by
 raylib ref), and a smoke test through Playwright's Chromium: first frame,
-console line, Stop.
+console line, Stop. If P0 said no-go, this phase is A1-A4 instead.
 
 ### P2 -- The page (arcade repo)
 
-Scaffold from Try's `web/`: Vite, Monaco, the eval and LSP workers (the eval
-side moved into the iframe shell), `share-codec.js`, `csp.js`, the theme.
-Build the screen pane to the section 5.2 contract. Spices menu, examples
-menu, share. Deploy to its own Worker with COOP/COEP headers (the interpreter
+Scaffold from Try's `web/`: Vite, Monaco, the LSP worker, `share-codec.js`,
+`csp.js`, the theme, the jit-client's protocol moved into the iframe shell.
+Build the screen pane to the section 5.2 contract. Spices menu (packages from
+5.3), examples menu, share. Deploy to its own Worker with COOP/COEP headers (the
 module is `-pthread`; keep that, the host serves the headers already).
 Playwright: the Try suite's shape (`web/tests/`) trimmed to the arcade's
-features.
+features. Prerequisites 6-7 should be closed or noted on the page first.
 
 ### P3 -- Examples and docs
 
 The section 8 set, each verified natively and in the page. A short guide in
 the arcade repo's README; one paragraph and a link from this repo's
 `web-emscripten-tutorial.md` and the raylib spice README ("try it in the
-browser").
+browser"). Prerequisite 5 must be closed, or each example audited for floats kept in a `vec` or map.
 
-### P4 -- Build (B0-B2)
+### P4 -- Hardening
 
-The service, the Build button, and the first example that needs it
-(`inline-c-shader.tur`, or a spice outside the baked set). Gate by a health
-probe so P2's site never depends on it.
-
-### P5 -- Hardening
-
-Mobile layout; a `?example=` deep link; the FPS counter's Asyncify note;
-telemetry-free usage counts if the owner wants them (the CSP forbids third
-party scripts, keep it that way).
+Mobile layout; a `?example=` deep link; the FPS counter (and, if J4 went the
+Asyncify way, its note); telemetry-free usage counts if the owner wants them
+(the CSP forbids third party scripts, keep it that way). If the MIR
+interpreter's speed is what limits the examples, the lever is wasm-jit-plan
+section 8's T2 (a MIR-to-wasm generator), not a server.
 
 ## 8. Examples
 
 Six, chosen so each shows one more thing. All are written in the **blocking
-style** the native raylib README uses, because under A the interpreter runs
-that unchanged, and B runs it under `:asyncify`. A `with-web-game-loop`
-variant of the first one is included to show the callback style that a
-shipping game would use under B.
+style** the native raylib README uses, because it is the form a visitor pastes
+from the README and the form a native twin runs. **Whether the blocking style
+runs on the page depends on P0 step 3** (Asyncify under the MIR interpreter,
+section 3): if it does, these are shown as written; if it does not, each
+example is shipped in the callback form of 8.2 and the blocking text appears
+only in the example's header comment as "the native version". A
+`with-web-game-loop` variant of the first one is included either way, to show
+the callback style a shipping game uses.
 
 Key codes are raylib's: Left 263, Right 262, Up 265, Down 264, Space 32,
 W 87, S 83, R 82. The examples define them as `def`s rather than magic
@@ -507,69 +715,103 @@ on the right" layout at 480x270.
 Conway's Life on a 96x54 grid (one cell per 5x5 pixels at 480x270), a
 `vec` of ints double-buffered, click to toggle a cell, Space to pause, R to
 randomise. Shows stdlib `vec` and `get-mouse-position` (a `Vector2` handle),
-and is the example that shows the interpreter's speed honestly: a 5 184
-cell step per frame is the budget A has to meet at 30 fps. If it cannot,
-the example drops to 64x36 and says why in its header comment, and it is
-the first candidate for the Build button.
+and is the example that shows the engine's speed honestly: a 5 184
+cell step per frame is the budget J has to meet at 30 fps (the MIR
+interpreter on wasm32, measured about 7x slower than `clang -O0` on a tight
+loop; under A it would be the tree-walker, ~20x slower again). If it cannot,
+the example drops to 64x36 and says why in its header comment. A cell grid of
+0/1 ints is unaffected by the ILP32 carrier defect (prerequisite 5); a grid
+of floats would not be.
 
 ### 8.6 `ecs-circles.tur` -- a third spice, with macros
 
 `ecs` + `ecs-raylib`: `Pos2`/`Vel2`/`Radius`/`Tint` components, the
 `integrate-2d` and `render-circles` system macros, 200 entities bouncing in
 the pane, a key to spawn more. Shows macro-defined systems elaborating
-against baked spice exports, and `with-game-loop` -- which under A runs as
-is, since it is the blocking form.
+against the spices' sources (under J they are compiled with the program), and
+`with-game-loop` -- the blocking form, so it follows P0 step 3.
 
-### Later (needs B)
+### Later
 
 - `inline-c-plasma.tur`: a plasma effect whose inner loop is an inline-C
   body writing an `Image` through `image-set!`, uploaded as a texture each
-  frame. Interpreted it is refused; compiled it is the showcase.
+  frame. **In scope under J** (inline C compiles on the page); refused under A.
+  It is the showcase for "this is compiled in your browser", and the first
+  example to run into the MIR interpreter's speed, since its loop is
+  per-pixel.
 - `sdf-sphere.tur`: `sdf-raylib`'s `gpu-preview` example, if its shader
   path survives WebGL2 (wasm-spices-plan 9.2 lists it as unaudited).
 
 ## 9. Risks and open questions
 
-1. **The interpreter's frame budget.** A tree-walker drawing a few hundred
-   shapes per frame is fine; a per-pixel loop is not. P0 measures 8.5's grid
-   step. The Build button is the answer for anything past it, which is why B
-   is a phase and not a maybe.
-2. **Asyncify and the interpreter together.** The interpreter's fibers and
-   raylib's `emscripten_sleep` both ride Asyncify; nesting a yield inside an
-   interpreter continuation is untested. P0's spike includes a `call/cc`
-   program that also draws.
-3. **Module size.** libturi + raylib + spices + Asyncify instrumentation.
-   Try already ships libturi; the delta is what P0 reports. If it is bad,
-   split: the LSP worker keeps the plain module, only the iframe loads the
-   arcade one, and the arcade one drops the trace/SMT/tutorial exports
-   (`-sEXPORTED_FUNCTIONS` in `src/CMakeLists.txt` lists them).
-4. **`dlopen`-shaped assumptions in `spice_loader.c`.** A1 may find the
-   image struct wants a library path, a rebuild subprocess, or a `tur_bin`;
-   the static constructor must not fake those. Keep `TurSpiceImage`'s
-   accessors as the contract and give it a second constructor, not a mode.
-5. **Keyboard focus between two documents.** The parent's shortcuts (Run,
+1. **The engine's frame budget.** The MIR interpreter on wasm32 is fast enough
+   for a few hundred shapes a frame and for a 5,184-cell grid, probably; a
+   per-pixel loop is the edge (the plasma example). P0 measures 8.5's grid step
+   and the plasma inner loop. The lever past it is wasm-jit-plan section 8's
+   T2, a MIR-to-wasm generator; the build service is not the lever any more.
+2. **Asyncify and the MIR interpreter together.** Asyncify cannot unwind
+   through a JS frame; the interpreter's re-entry paths still have them (the
+   49-fixture family). If P0 step 3 fails, the playground is callback-first,
+   which changes the examples and the pitch ("paste the README quick start")
+   but not the architecture. This is the largest single unknown.
+3. **Struct-by-value calls from MIR on wasm32.** raylib passes `Color`,
+   `Vector2`, `Rectangle`, `Texture2D` and `Camera3D` by value. The runtime half
+   the JIT has been exercised against has no such calls. P0 step 1. A failure
+   sends the work to A, or to a c2mir wasm32 fix in the fork (one PR at a time,
+   per CLAUDE.md).
+4. **A callback that outlives `main`.** `emscripten_set_main_loop(..., 1)`
+   unwinds out of `main`, which is running inside MIR's `eval` frames, and the
+   browser then calls an interpreted function whose context must still be
+   alive. The corpus has two `unwind` traps; nobody has run this on purpose.
+   P0 step 2.
+5. **Module size.** `turmeric-jit.wasm` is 5.27 MB (1.84 MB gzipped); raylib
+   adds about 4.5 MB raw; Asyncify instrumentation adds code size and slows the
+   interpreter. Spice sources are data and do not add to the module. If the
+   total is bad, the arcade module can drop the exports the arcade does not use
+   (`-sEXPORTED_FUNCTIONS` in `src/CMakeLists.txt` lists the trace, SMT and
+   tutorial ones), and the stdlib package is already shared (wasm-jit-plan
+   5.11).
+6. **Recursion depth.** J trades the tree-walker's heap-bounded depth for the
+   MIR interpreter's ~1,700 frames (wasm-jit-plan 5.8). A game's frame loop is
+   not deep; a user's recursive helper over a list of 10,000 is. The page
+   reports `stack overflow: recursion too deep` and retires the instance, as
+   Try's Compile engine does.
+7. **Keyboard focus between two documents.** The parent's shortcuts (Run,
    the command palette) must still fire when the iframe has focus; the iframe
    forwards `Ctrl/Cmd+Enter` and `Escape` to the parent by `postMessage`.
-6. **The examples' native twin.** CI running raylib natively needs a display
+8. **The examples' native twin.** CI running raylib natively needs a display
    (`xvfb-run` on Linux) and an exit after N frames; the `--frames` argument
    through `*args*` is a small convention the examples share, not a raylib
-   feature.
-7. **Name and domain** are the owner's call; nothing in the plan depends on
-   them.
+   feature. The JIT glue already carries arguments (J5).
+9. **The fork.** Any c2mir or MIR change this needs (an aggregate-passing fix,
+   an interpreter re-entry without a JS frame) is a PR to turmeric-lang/mir,
+   of which CLAUDE.md allows one open at a time. Batch them behind P0's
+   findings.
+10. **Name and domain** are the owner's call; nothing in the plan depends on
+    them.
 
 ## 10. Relationship to existing plans
 
+- **wasm-jit-plan.** This plan is its first consumer that is not Try
+  Turmeric: it takes the engine, the import table, the shared package and the
+  engine line as built, and adds raylib to the link. Its section 5.10 already
+  says the playground's Build button becomes this engine; section 3 above
+  records that and reorders the architectures accordingly. The reported defects
+  it leaves open (ILP32 shapes 2-3, the comparator, the vararg alloca, the
+  tail-call alloca, the unchecked linear stack) are this plan's prerequisites,
+  section 7.
 - **wasm-spices-plan.** This plan consumes its raylib arm (done) and W0's
   `:web :supported` stubs (not done); it does not need W1's HTML shell (the
-  iframe is the shell) but does need W1's `*args*` hook and, for B, the asset
-  preload. W4's `tur new-web` is unaffected. If the arcade lands first, W6's
+  iframe is the shell). W1's `*args*` hook is needed only by A; J has its own.
+  W4's `tur new-web` is unaffected. If the arcade lands first, W6's
   web-games guide gains a "try it in the browser" link.
 - **script-spice-deps-plan.** `defscript :spices` is the portability story
-  for every example here; B1 is its `--target wasm` arm. SD6's compiled-script
-  cache is the build service's cache.
-- **aot-compiled-repl-plan.** Unrelated in mechanism (MIR does not target
-  wasm) but the same user wish: compiled semantics at an interactive prompt.
-  B is that wish for the browser.
+  for every example here. On the page the header is satisfied from mounted
+  spice packages and never fetched (5.3); SD6's compiled-script cache has no
+  role now that the build service is cut.
+- **aot-compiled-repl-plan.** The same user wish -- compiled semantics at an
+  interactive prompt -- and the same engine: C1's per-defn images run on the
+  page already (wasm-jit-plan P6). C2 is not a prerequisite here.
 - **godot-binding-web-plan.** Shares the Emscripten profile concerns
   (`MODULARIZE`, `EXPORT_NAME`); the iframe-per-run contract in 5.2 is one
   that plan could reuse for a Godot web export preview.
