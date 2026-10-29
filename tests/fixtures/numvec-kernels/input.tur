@@ -30,12 +30,20 @@
     (f64vec-fill! b 7.1)
     (pf (f64vec-sum b))))
 
-;; NaN propagates through min/max; an empty sum is zero
+;; NaN propagates through min/max, and the result is the FIRST NaN by index:
+;; two NaNs with different bit patterns, the second in an earlier lane and in
+;; the eight-wide main loop, the first in the tail.  An empty sum is zero.
 (defn f64-edges [] : nil
-  (let [a (f64vec-of 3.25 (/ 0.0 0.0) 7.1)
-        e (f64vec-new 0 0.0)]
-    (println (if (= (f64vec-min a) (f64vec-min a)) "min not NaN" "min NaN"))
-    (println (if (= (f64vec-max a) (f64vec-max a)) "max not NaN" "max NaN"))
+  (let [nan-a (bits->float 9221120237041090561)
+        nan-b (bits->float 9221120237041090562)
+        a     (f64vec-build 13 [i] {7.1 + (int->float i)})
+        e     (f64vec-new 0 0.0)]
+    (f64vec-set! a 3 nan-a)
+    (f64vec-set! a 10 nan-b)
+    (println (float->bits (f64vec-min a)))
+    (println (float->bits (f64vec-max a)))
+    (f64vec-set! a 3 3.25)
+    (println (float->bits (f64vec-min a)))
     (pf (f64vec-sum e))))
 
 (defn f32-part [] : nil
@@ -82,7 +90,11 @@
     (u8vec-add! a a)
     (println (u8vec-sum a))
     (u8vec-fill! a (as uint8 255))
-    (println (u8vec-sum a))))
+    (println (u8vec-sum a)))
+  ;; past 2^24 elements the sum's 32-bit lanes are flushed into the 64-bit
+  ;; total: 255 * 16777300 = 4278211500, more than a uint32 holds
+  (let [big (u8vec-new 16777300 (as uint8 255))]
+    (println (u8vec-sum big))))
 
 (defn main [] : int
   (f64-part)

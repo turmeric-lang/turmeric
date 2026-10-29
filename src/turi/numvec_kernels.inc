@@ -18,7 +18,18 @@ static void nvk_f64vec_fill_x(TuriEnv *nvk_env, int64_t v, double x) {
     struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
     int64_t n = a->len;
     double *d = a->data;
-    for (int64_t i = 0; i < n; i++) d[i] = x;
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      d[i] = x;
+      d[i + 1] = x;
+      d[i + 2] = x;
+      d[i + 3] = x;
+      d[i + 4] = x;
+      d[i + 5] = x;
+      d[i + 6] = x;
+      d[i + 7] = x;
+    }
+    for (; i < n; i++) d[i] = x;
 }
 static TuriValue native_nvk_f64vec_fill_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -49,7 +60,23 @@ static void nvk_f64vec_scale_x(TuriEnv *nvk_env, int64_t v, double s) {
     struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
     int64_t n = a->len;
     double *d = a->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     for (int64_t i = 0; i < n; i++) d[i] = d[i] * s;
+    #else
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      d[i] = d[i] * s;
+      d[i + 1] = d[i + 1] * s;
+      d[i + 2] = d[i + 2] * s;
+      d[i + 3] = d[i + 3] * s;
+      d[i + 4] = d[i + 4] * s;
+      d[i + 5] = d[i + 5] * s;
+      d[i + 6] = d[i + 6] * s;
+      d[i + 7] = d[i + 7] * s;
+    }
+    for (; i < n; i++) d[i] = d[i] * s;
+    #endif
 }
 static TuriValue native_nvk_f64vec_scale_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -69,7 +96,31 @@ static void nvk_f64vec_add_x(TuriEnv *nvk_env, int64_t dst, int64_t src) {
     int64_t n = y->len;
     double *yd = y->data;
     const double *xd = x->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     for (int64_t i = 0; i < n; i++) yd[i] = yd[i] + xd[i];
+    #else
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      double y0 = yd[i], x0 = xd[i];
+      double y1 = yd[i + 1], x1 = xd[i + 1];
+      double y2 = yd[i + 2], x2 = xd[i + 2];
+      double y3 = yd[i + 3], x3 = xd[i + 3];
+      double y4 = yd[i + 4], x4 = xd[i + 4];
+      double y5 = yd[i + 5], x5 = xd[i + 5];
+      double y6 = yd[i + 6], x6 = xd[i + 6];
+      double y7 = yd[i + 7], x7 = xd[i + 7];
+      yd[i] = y0 + x0;
+      yd[i + 1] = y1 + x1;
+      yd[i + 2] = y2 + x2;
+      yd[i + 3] = y3 + x3;
+      yd[i + 4] = y4 + x4;
+      yd[i + 5] = y5 + x5;
+      yd[i + 6] = y6 + x6;
+      yd[i + 7] = y7 + x7;
+    }
+    for (; i < n; i++) yd[i] = yd[i] + xd[i];
+    #endif
 }
 static TuriValue native_nvk_f64vec_add_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -89,7 +140,39 @@ static void nvk_f64vec_axpy_x(TuriEnv *nvk_env, int64_t dst, double s, int64_t s
     int64_t n = y->len;
     double *yd = y->data;
     const double *xd = x->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     for (int64_t i = 0; i < n; i++) { double m = s * xd[i]; yd[i] = yd[i] + m; }
+    #else
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      double y0 = yd[i], x0 = xd[i];
+      double y1 = yd[i + 1], x1 = xd[i + 1];
+      double y2 = yd[i + 2], x2 = xd[i + 2];
+      double y3 = yd[i + 3], x3 = xd[i + 3];
+      double y4 = yd[i + 4], x4 = xd[i + 4];
+      double y5 = yd[i + 5], x5 = xd[i + 5];
+      double y6 = yd[i + 6], x6 = xd[i + 6];
+      double y7 = yd[i + 7], x7 = xd[i + 7];
+      double m0 = s * x0;
+      double m1 = s * x1;
+      double m2 = s * x2;
+      double m3 = s * x3;
+      double m4 = s * x4;
+      double m5 = s * x5;
+      double m6 = s * x6;
+      double m7 = s * x7;
+      yd[i] = y0 + m0;
+      yd[i + 1] = y1 + m1;
+      yd[i + 2] = y2 + m2;
+      yd[i + 3] = y3 + m3;
+      yd[i + 4] = y4 + m4;
+      yd[i + 5] = y5 + m5;
+      yd[i + 6] = y6 + m6;
+      yd[i + 7] = y7 + m7;
+    }
+    for (; i < n; i++) { double m = s * xd[i]; yd[i] = yd[i] + m; }
+    #endif
 }
 static TuriValue native_nvk_f64vec_axpy_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -105,8 +188,16 @@ static double nvk_f64vec_sum(TuriEnv *nvk_env, int64_t v) {
     const double *d = a->data;
     double s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     int64_t i = 0;
-    for (; i + 8 <= n; i += 8)
-      for (int k = 0; k < 8; k++) s[k] = s[k] + d[i + k];
+    for (; i + 8 <= n; i += 8) {
+      s[0] = s[0] + d[i];
+      s[1] = s[1] + d[i + 1];
+      s[2] = s[2] + d[i + 2];
+      s[3] = s[3] + d[i + 3];
+      s[4] = s[4] + d[i + 4];
+      s[5] = s[5] + d[i + 5];
+      s[6] = s[6] + d[i + 6];
+      s[7] = s[7] + d[i + 7];
+    }
     for (; i < n; i++) s[i & 7] = s[i & 7] + d[i];
     return ((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7]));
 }
@@ -146,8 +237,16 @@ static double nvk_f64vec_dot(TuriEnv *nvk_env, int64_t a, int64_t b) {
     const double *xd = x->data;
     double s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     int64_t i = 0;
-    for (; i + 8 <= n; i += 8)
-      for (int k = 0; k < 8; k++) { double m = yd[i + k] * xd[i + k]; s[k] = s[k] + m; }
+    for (; i + 8 <= n; i += 8) {
+      { double m = yd[i] * xd[i]; s[0] = s[0] + m; }
+      { double m = yd[i + 1] * xd[i + 1]; s[1] = s[1] + m; }
+      { double m = yd[i + 2] * xd[i + 2]; s[2] = s[2] + m; }
+      { double m = yd[i + 3] * xd[i + 3]; s[3] = s[3] + m; }
+      { double m = yd[i + 4] * xd[i + 4]; s[4] = s[4] + m; }
+      { double m = yd[i + 5] * xd[i + 5]; s[5] = s[5] + m; }
+      { double m = yd[i + 6] * xd[i + 6]; s[6] = s[6] + m; }
+      { double m = yd[i + 7] * xd[i + 7]; s[7] = s[7] + m; }
+    }
     for (; i < n; i++) { double m = yd[i] * xd[i]; s[i & 7] = s[i & 7] + m; }
     return ((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7]));
 }
@@ -168,20 +267,27 @@ static double nvk_f64vec_min(TuriEnv *nvk_env, int64_t v) {
       }
     const double *d = a->data;
     double m[8];
-    for (int k = 0; k < 8; k++) m[k] = d[0];
+    int64_t bad[8];
+    for (int k = 0; k < 8; k++) { m[k] = d[0]; bad[k] = 0; }
     int64_t i = 0;
     for (; i + 8 <= n; i += 8)
       for (int k = 0; k < 8; k++) {
         double x = d[i + k];
-        m[k] = (x < m[k] || x != x) ? x : m[k];
+        m[k] = x < m[k] ? x : m[k];
+        bad[k] = bad[k] | (int64_t)(x != x);
       }
     for (; i < n; i++) {
       double x = d[i];
-      m[i & 7] = (x < m[i & 7] || x != x) ? x : m[i & 7];
+      m[i & 7] = x < m[i & 7] ? x : m[i & 7];
+      bad[i & 7] = bad[i & 7] | (int64_t)(x != x);
+    }
+    int64_t any = 0;
+    for (int k = 0; k < 8; k++) any = any | bad[k];
+    if (any) {
+      for (int64_t j = 0; j < n; j++) if (d[j] != d[j]) return d[j];
     }
     for (int w = 4; w >= 1; w /= 2)
-      for (int k = 0; k < w; k++)
-        m[k] = (m[k + w] < m[k] || m[k + w] != m[k + w]) ? m[k + w] : m[k];
+      for (int k = 0; k < w; k++) m[k] = m[k + w] < m[k] ? m[k + w] : m[k];
     return m[0];
 }
 static TuriValue native_nvk_f64vec_min(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -201,20 +307,27 @@ static double nvk_f64vec_max(TuriEnv *nvk_env, int64_t v) {
       }
     const double *d = a->data;
     double m[8];
-    for (int k = 0; k < 8; k++) m[k] = d[0];
+    int64_t bad[8];
+    for (int k = 0; k < 8; k++) { m[k] = d[0]; bad[k] = 0; }
     int64_t i = 0;
     for (; i + 8 <= n; i += 8)
       for (int k = 0; k < 8; k++) {
         double x = d[i + k];
-        m[k] = (x > m[k] || x != x) ? x : m[k];
+        m[k] = x > m[k] ? x : m[k];
+        bad[k] = bad[k] | (int64_t)(x != x);
       }
     for (; i < n; i++) {
       double x = d[i];
-      m[i & 7] = (x > m[i & 7] || x != x) ? x : m[i & 7];
+      m[i & 7] = x > m[i & 7] ? x : m[i & 7];
+      bad[i & 7] = bad[i & 7] | (int64_t)(x != x);
+    }
+    int64_t any = 0;
+    for (int k = 0; k < 8; k++) any = any | bad[k];
+    if (any) {
+      for (int64_t j = 0; j < n; j++) if (d[j] != d[j]) return d[j];
     }
     for (int w = 4; w >= 1; w /= 2)
-      for (int k = 0; k < w; k++)
-        m[k] = (m[k + w] > m[k] || m[k + w] != m[k + w]) ? m[k + w] : m[k];
+      for (int k = 0; k < w; k++) m[k] = m[k + w] > m[k] ? m[k + w] : m[k];
     return m[0];
 }
 static TuriValue native_nvk_f64vec_max(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -229,7 +342,18 @@ static void nvk_f32vec_fill_x(TuriEnv *nvk_env, int64_t v, float x) {
     struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
     int64_t n = a->len;
     float *d = a->data;
-    for (int64_t i = 0; i < n; i++) d[i] = x;
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      d[i] = x;
+      d[i + 1] = x;
+      d[i + 2] = x;
+      d[i + 3] = x;
+      d[i + 4] = x;
+      d[i + 5] = x;
+      d[i + 6] = x;
+      d[i + 7] = x;
+    }
+    for (; i < n; i++) d[i] = x;
 }
 static TuriValue native_nvk_f32vec_fill_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -260,7 +384,23 @@ static void nvk_f32vec_scale_x(TuriEnv *nvk_env, int64_t v, float s) {
     struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
     int64_t n = a->len;
     float *d = a->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     for (int64_t i = 0; i < n; i++) d[i] = d[i] * s;
+    #else
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      d[i] = d[i] * s;
+      d[i + 1] = d[i + 1] * s;
+      d[i + 2] = d[i + 2] * s;
+      d[i + 3] = d[i + 3] * s;
+      d[i + 4] = d[i + 4] * s;
+      d[i + 5] = d[i + 5] * s;
+      d[i + 6] = d[i + 6] * s;
+      d[i + 7] = d[i + 7] * s;
+    }
+    for (; i < n; i++) d[i] = d[i] * s;
+    #endif
 }
 static TuriValue native_nvk_f32vec_scale_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -280,7 +420,31 @@ static void nvk_f32vec_add_x(TuriEnv *nvk_env, int64_t dst, int64_t src) {
     int64_t n = y->len;
     float *yd = y->data;
     const float *xd = x->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     for (int64_t i = 0; i < n; i++) yd[i] = yd[i] + xd[i];
+    #else
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      float y0 = yd[i], x0 = xd[i];
+      float y1 = yd[i + 1], x1 = xd[i + 1];
+      float y2 = yd[i + 2], x2 = xd[i + 2];
+      float y3 = yd[i + 3], x3 = xd[i + 3];
+      float y4 = yd[i + 4], x4 = xd[i + 4];
+      float y5 = yd[i + 5], x5 = xd[i + 5];
+      float y6 = yd[i + 6], x6 = xd[i + 6];
+      float y7 = yd[i + 7], x7 = xd[i + 7];
+      yd[i] = y0 + x0;
+      yd[i + 1] = y1 + x1;
+      yd[i + 2] = y2 + x2;
+      yd[i + 3] = y3 + x3;
+      yd[i + 4] = y4 + x4;
+      yd[i + 5] = y5 + x5;
+      yd[i + 6] = y6 + x6;
+      yd[i + 7] = y7 + x7;
+    }
+    for (; i < n; i++) yd[i] = yd[i] + xd[i];
+    #endif
 }
 static TuriValue native_nvk_f32vec_add_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -300,7 +464,39 @@ static void nvk_f32vec_axpy_x(TuriEnv *nvk_env, int64_t dst, float s, int64_t sr
     int64_t n = y->len;
     float *yd = y->data;
     const float *xd = x->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     for (int64_t i = 0; i < n; i++) { float m = s * xd[i]; yd[i] = yd[i] + m; }
+    #else
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      float y0 = yd[i], x0 = xd[i];
+      float y1 = yd[i + 1], x1 = xd[i + 1];
+      float y2 = yd[i + 2], x2 = xd[i + 2];
+      float y3 = yd[i + 3], x3 = xd[i + 3];
+      float y4 = yd[i + 4], x4 = xd[i + 4];
+      float y5 = yd[i + 5], x5 = xd[i + 5];
+      float y6 = yd[i + 6], x6 = xd[i + 6];
+      float y7 = yd[i + 7], x7 = xd[i + 7];
+      float m0 = s * x0;
+      float m1 = s * x1;
+      float m2 = s * x2;
+      float m3 = s * x3;
+      float m4 = s * x4;
+      float m5 = s * x5;
+      float m6 = s * x6;
+      float m7 = s * x7;
+      yd[i] = y0 + m0;
+      yd[i + 1] = y1 + m1;
+      yd[i + 2] = y2 + m2;
+      yd[i + 3] = y3 + m3;
+      yd[i + 4] = y4 + m4;
+      yd[i + 5] = y5 + m5;
+      yd[i + 6] = y6 + m6;
+      yd[i + 7] = y7 + m7;
+    }
+    for (; i < n; i++) { float m = s * xd[i]; yd[i] = yd[i] + m; }
+    #endif
 }
 static TuriValue native_nvk_f32vec_axpy_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -316,8 +512,16 @@ static float nvk_f32vec_sum(TuriEnv *nvk_env, int64_t v) {
     const float *d = a->data;
     float s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     int64_t i = 0;
-    for (; i + 8 <= n; i += 8)
-      for (int k = 0; k < 8; k++) s[k] = s[k] + d[i + k];
+    for (; i + 8 <= n; i += 8) {
+      s[0] = s[0] + d[i];
+      s[1] = s[1] + d[i + 1];
+      s[2] = s[2] + d[i + 2];
+      s[3] = s[3] + d[i + 3];
+      s[4] = s[4] + d[i + 4];
+      s[5] = s[5] + d[i + 5];
+      s[6] = s[6] + d[i + 6];
+      s[7] = s[7] + d[i + 7];
+    }
     for (; i < n; i++) s[i & 7] = s[i & 7] + d[i];
     return ((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7]));
 }
@@ -357,8 +561,16 @@ static float nvk_f32vec_dot(TuriEnv *nvk_env, int64_t a, int64_t b) {
     const float *xd = x->data;
     float s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     int64_t i = 0;
-    for (; i + 8 <= n; i += 8)
-      for (int k = 0; k < 8; k++) { float m = yd[i + k] * xd[i + k]; s[k] = s[k] + m; }
+    for (; i + 8 <= n; i += 8) {
+      { float m = yd[i] * xd[i]; s[0] = s[0] + m; }
+      { float m = yd[i + 1] * xd[i + 1]; s[1] = s[1] + m; }
+      { float m = yd[i + 2] * xd[i + 2]; s[2] = s[2] + m; }
+      { float m = yd[i + 3] * xd[i + 3]; s[3] = s[3] + m; }
+      { float m = yd[i + 4] * xd[i + 4]; s[4] = s[4] + m; }
+      { float m = yd[i + 5] * xd[i + 5]; s[5] = s[5] + m; }
+      { float m = yd[i + 6] * xd[i + 6]; s[6] = s[6] + m; }
+      { float m = yd[i + 7] * xd[i + 7]; s[7] = s[7] + m; }
+    }
     for (; i < n; i++) { float m = yd[i] * xd[i]; s[i & 7] = s[i & 7] + m; }
     return ((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7]));
 }
@@ -379,20 +591,27 @@ static float nvk_f32vec_min(TuriEnv *nvk_env, int64_t v) {
       }
     const float *d = a->data;
     float m[8];
-    for (int k = 0; k < 8; k++) m[k] = d[0];
+    int32_t bad[8];
+    for (int k = 0; k < 8; k++) { m[k] = d[0]; bad[k] = 0; }
     int64_t i = 0;
     for (; i + 8 <= n; i += 8)
       for (int k = 0; k < 8; k++) {
         float x = d[i + k];
-        m[k] = (x < m[k] || x != x) ? x : m[k];
+        m[k] = x < m[k] ? x : m[k];
+        bad[k] = bad[k] | (int32_t)(x != x);
       }
     for (; i < n; i++) {
       float x = d[i];
-      m[i & 7] = (x < m[i & 7] || x != x) ? x : m[i & 7];
+      m[i & 7] = x < m[i & 7] ? x : m[i & 7];
+      bad[i & 7] = bad[i & 7] | (int32_t)(x != x);
+    }
+    int32_t any = 0;
+    for (int k = 0; k < 8; k++) any = any | bad[k];
+    if (any) {
+      for (int64_t j = 0; j < n; j++) if (d[j] != d[j]) return d[j];
     }
     for (int w = 4; w >= 1; w /= 2)
-      for (int k = 0; k < w; k++)
-        m[k] = (m[k + w] < m[k] || m[k + w] != m[k + w]) ? m[k + w] : m[k];
+      for (int k = 0; k < w; k++) m[k] = m[k + w] < m[k] ? m[k + w] : m[k];
     return m[0];
 }
 static TuriValue native_nvk_f32vec_min(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -412,20 +631,27 @@ static float nvk_f32vec_max(TuriEnv *nvk_env, int64_t v) {
       }
     const float *d = a->data;
     float m[8];
-    for (int k = 0; k < 8; k++) m[k] = d[0];
+    int32_t bad[8];
+    for (int k = 0; k < 8; k++) { m[k] = d[0]; bad[k] = 0; }
     int64_t i = 0;
     for (; i + 8 <= n; i += 8)
       for (int k = 0; k < 8; k++) {
         float x = d[i + k];
-        m[k] = (x > m[k] || x != x) ? x : m[k];
+        m[k] = x > m[k] ? x : m[k];
+        bad[k] = bad[k] | (int32_t)(x != x);
       }
     for (; i < n; i++) {
       float x = d[i];
-      m[i & 7] = (x > m[i & 7] || x != x) ? x : m[i & 7];
+      m[i & 7] = x > m[i & 7] ? x : m[i & 7];
+      bad[i & 7] = bad[i & 7] | (int32_t)(x != x);
+    }
+    int32_t any = 0;
+    for (int k = 0; k < 8; k++) any = any | bad[k];
+    if (any) {
+      for (int64_t j = 0; j < n; j++) if (d[j] != d[j]) return d[j];
     }
     for (int w = 4; w >= 1; w /= 2)
-      for (int k = 0; k < w; k++)
-        m[k] = (m[k + w] > m[k] || m[k + w] != m[k + w]) ? m[k + w] : m[k];
+      for (int k = 0; k < w; k++) m[k] = m[k + w] > m[k] ? m[k + w] : m[k];
     return m[0];
 }
 static TuriValue native_nvk_f32vec_max(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -440,7 +666,18 @@ static void nvk_i64vec_fill_x(TuriEnv *nvk_env, int64_t v, int64_t x) {
     struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
     int64_t n = a->len;
     int64_t *d = a->data;
-    for (int64_t i = 0; i < n; i++) d[i] = x;
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      d[i] = x;
+      d[i + 1] = x;
+      d[i + 2] = x;
+      d[i + 3] = x;
+      d[i + 4] = x;
+      d[i + 5] = x;
+      d[i + 6] = x;
+      d[i + 7] = x;
+    }
+    for (; i < n; i++) d[i] = x;
 }
 static TuriValue native_nvk_i64vec_fill_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -471,7 +708,23 @@ static void nvk_i64vec_scale_x(TuriEnv *nvk_env, int64_t v, int64_t s) {
     struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
     int64_t n = a->len;
     int64_t *d = a->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     for (int64_t i = 0; i < n; i++) d[i] = (int64_t)((uint64_t)d[i] * (uint64_t)s);
+    #else
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      d[i] = (int64_t)((uint64_t)d[i] * (uint64_t)s);
+      d[i + 1] = (int64_t)((uint64_t)d[i + 1] * (uint64_t)s);
+      d[i + 2] = (int64_t)((uint64_t)d[i + 2] * (uint64_t)s);
+      d[i + 3] = (int64_t)((uint64_t)d[i + 3] * (uint64_t)s);
+      d[i + 4] = (int64_t)((uint64_t)d[i + 4] * (uint64_t)s);
+      d[i + 5] = (int64_t)((uint64_t)d[i + 5] * (uint64_t)s);
+      d[i + 6] = (int64_t)((uint64_t)d[i + 6] * (uint64_t)s);
+      d[i + 7] = (int64_t)((uint64_t)d[i + 7] * (uint64_t)s);
+    }
+    for (; i < n; i++) d[i] = (int64_t)((uint64_t)d[i] * (uint64_t)s);
+    #endif
 }
 static TuriValue native_nvk_i64vec_scale_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -491,7 +744,31 @@ static void nvk_i64vec_add_x(TuriEnv *nvk_env, int64_t dst, int64_t src) {
     int64_t n = y->len;
     int64_t *yd = y->data;
     const int64_t *xd = x->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     for (int64_t i = 0; i < n; i++) yd[i] = (int64_t)((uint64_t)yd[i] + (uint64_t)xd[i]);
+    #else
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      int64_t y0 = yd[i], x0 = xd[i];
+      int64_t y1 = yd[i + 1], x1 = xd[i + 1];
+      int64_t y2 = yd[i + 2], x2 = xd[i + 2];
+      int64_t y3 = yd[i + 3], x3 = xd[i + 3];
+      int64_t y4 = yd[i + 4], x4 = xd[i + 4];
+      int64_t y5 = yd[i + 5], x5 = xd[i + 5];
+      int64_t y6 = yd[i + 6], x6 = xd[i + 6];
+      int64_t y7 = yd[i + 7], x7 = xd[i + 7];
+      yd[i] = (int64_t)((uint64_t)y0 + (uint64_t)x0);
+      yd[i + 1] = (int64_t)((uint64_t)y1 + (uint64_t)x1);
+      yd[i + 2] = (int64_t)((uint64_t)y2 + (uint64_t)x2);
+      yd[i + 3] = (int64_t)((uint64_t)y3 + (uint64_t)x3);
+      yd[i + 4] = (int64_t)((uint64_t)y4 + (uint64_t)x4);
+      yd[i + 5] = (int64_t)((uint64_t)y5 + (uint64_t)x5);
+      yd[i + 6] = (int64_t)((uint64_t)y6 + (uint64_t)x6);
+      yd[i + 7] = (int64_t)((uint64_t)y7 + (uint64_t)x7);
+    }
+    for (; i < n; i++) yd[i] = (int64_t)((uint64_t)yd[i] + (uint64_t)xd[i]);
+    #endif
 }
 static TuriValue native_nvk_i64vec_add_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -511,7 +788,39 @@ static void nvk_i64vec_axpy_x(TuriEnv *nvk_env, int64_t dst, int64_t s, int64_t 
     int64_t n = y->len;
     int64_t *yd = y->data;
     const int64_t *xd = x->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     for (int64_t i = 0; i < n; i++) { uint64_t m = (uint64_t)s * (uint64_t)xd[i]; yd[i] = (int64_t)((uint64_t)yd[i] + m); }
+    #else
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      int64_t y0 = yd[i], x0 = xd[i];
+      int64_t y1 = yd[i + 1], x1 = xd[i + 1];
+      int64_t y2 = yd[i + 2], x2 = xd[i + 2];
+      int64_t y3 = yd[i + 3], x3 = xd[i + 3];
+      int64_t y4 = yd[i + 4], x4 = xd[i + 4];
+      int64_t y5 = yd[i + 5], x5 = xd[i + 5];
+      int64_t y6 = yd[i + 6], x6 = xd[i + 6];
+      int64_t y7 = yd[i + 7], x7 = xd[i + 7];
+      uint64_t m0 = (uint64_t)s * (uint64_t)x0;
+      uint64_t m1 = (uint64_t)s * (uint64_t)x1;
+      uint64_t m2 = (uint64_t)s * (uint64_t)x2;
+      uint64_t m3 = (uint64_t)s * (uint64_t)x3;
+      uint64_t m4 = (uint64_t)s * (uint64_t)x4;
+      uint64_t m5 = (uint64_t)s * (uint64_t)x5;
+      uint64_t m6 = (uint64_t)s * (uint64_t)x6;
+      uint64_t m7 = (uint64_t)s * (uint64_t)x7;
+      yd[i] = (int64_t)((uint64_t)y0 + m0);
+      yd[i + 1] = (int64_t)((uint64_t)y1 + m1);
+      yd[i + 2] = (int64_t)((uint64_t)y2 + m2);
+      yd[i + 3] = (int64_t)((uint64_t)y3 + m3);
+      yd[i + 4] = (int64_t)((uint64_t)y4 + m4);
+      yd[i + 5] = (int64_t)((uint64_t)y5 + m5);
+      yd[i + 6] = (int64_t)((uint64_t)y6 + m6);
+      yd[i + 7] = (int64_t)((uint64_t)y7 + m7);
+    }
+    for (; i < n; i++) { uint64_t m = (uint64_t)s * (uint64_t)xd[i]; yd[i] = (int64_t)((uint64_t)yd[i] + m); }
+    #endif
 }
 static TuriValue native_nvk_i64vec_axpy_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -525,9 +834,20 @@ static int64_t nvk_i64vec_sum(TuriEnv *nvk_env, int64_t v) {
     struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
     int64_t n = a->len;
     const int64_t *d = a->data;
-    uint64_t s = 0;
-    for (int64_t i = 0; i < n; i++) s = s + (uint64_t)d[i];
-    return (int64_t)s;
+    uint64_t s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      s[0] = s[0] + (uint64_t)d[i];
+      s[1] = s[1] + (uint64_t)d[i + 1];
+      s[2] = s[2] + (uint64_t)d[i + 2];
+      s[3] = s[3] + (uint64_t)d[i + 3];
+      s[4] = s[4] + (uint64_t)d[i + 4];
+      s[5] = s[5] + (uint64_t)d[i + 5];
+      s[6] = s[6] + (uint64_t)d[i + 6];
+      s[7] = s[7] + (uint64_t)d[i + 7];
+    }
+    for (; i < n; i++) s[i & 7] = s[i & 7] + (uint64_t)d[i];
+    return (int64_t)(((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7])));
 }
 static TuriValue native_nvk_i64vec_sum(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -547,9 +867,20 @@ static int64_t nvk_i64vec_dot(TuriEnv *nvk_env, int64_t a, int64_t b) {
     int64_t n = y->len;
     const int64_t *yd = y->data;
     const int64_t *xd = x->data;
-    uint64_t s = 0;
-    for (int64_t i = 0; i < n; i++) s = s + (uint64_t)yd[i] * (uint64_t)xd[i];
-    return (int64_t)s;
+    uint64_t s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      s[0] = s[0] + (uint64_t)yd[i] * (uint64_t)xd[i];
+      s[1] = s[1] + (uint64_t)yd[i + 1] * (uint64_t)xd[i + 1];
+      s[2] = s[2] + (uint64_t)yd[i + 2] * (uint64_t)xd[i + 2];
+      s[3] = s[3] + (uint64_t)yd[i + 3] * (uint64_t)xd[i + 3];
+      s[4] = s[4] + (uint64_t)yd[i + 4] * (uint64_t)xd[i + 4];
+      s[5] = s[5] + (uint64_t)yd[i + 5] * (uint64_t)xd[i + 5];
+      s[6] = s[6] + (uint64_t)yd[i + 6] * (uint64_t)xd[i + 6];
+      s[7] = s[7] + (uint64_t)yd[i + 7] * (uint64_t)xd[i + 7];
+    }
+    for (; i < n; i++) s[i & 7] = s[i & 7] + (uint64_t)yd[i] * (uint64_t)xd[i];
+    return (int64_t)(((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7])));
 }
 static TuriValue native_nvk_i64vec_dot(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -567,9 +898,30 @@ static int64_t nvk_i64vec_min(TuriEnv *nvk_env, int64_t v) {
         return 0;
       }
     const int64_t *d = a->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     int64_t m = d[0];
     for (int64_t i = 1; i < n; i++) m = d[i] < m ? d[i] : m;
     return m;
+    #else
+    int64_t m[8];
+    for (int k = 0; k < 8; k++) m[k] = d[0];
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      m[0] = d[i] < m[0] ? d[i] : m[0];
+      m[1] = d[i + 1] < m[1] ? d[i + 1] : m[1];
+      m[2] = d[i + 2] < m[2] ? d[i + 2] : m[2];
+      m[3] = d[i + 3] < m[3] ? d[i + 3] : m[3];
+      m[4] = d[i + 4] < m[4] ? d[i + 4] : m[4];
+      m[5] = d[i + 5] < m[5] ? d[i + 5] : m[5];
+      m[6] = d[i + 6] < m[6] ? d[i + 6] : m[6];
+      m[7] = d[i + 7] < m[7] ? d[i + 7] : m[7];
+    }
+    for (; i < n; i++) m[i & 7] = d[i] < m[i & 7] ? d[i] : m[i & 7];
+    for (int w = 4; w >= 1; w /= 2)
+      for (int k = 0; k < w; k++) m[k] = m[k + w] < m[k] ? m[k + w] : m[k];
+    return m[0];
+    #endif
 }
 static TuriValue native_nvk_i64vec_min(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -587,9 +939,30 @@ static int64_t nvk_i64vec_max(TuriEnv *nvk_env, int64_t v) {
         return 0;
       }
     const int64_t *d = a->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     int64_t m = d[0];
     for (int64_t i = 1; i < n; i++) m = d[i] > m ? d[i] : m;
     return m;
+    #else
+    int64_t m[8];
+    for (int k = 0; k < 8; k++) m[k] = d[0];
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      m[0] = d[i] > m[0] ? d[i] : m[0];
+      m[1] = d[i + 1] > m[1] ? d[i + 1] : m[1];
+      m[2] = d[i + 2] > m[2] ? d[i + 2] : m[2];
+      m[3] = d[i + 3] > m[3] ? d[i + 3] : m[3];
+      m[4] = d[i + 4] > m[4] ? d[i + 4] : m[4];
+      m[5] = d[i + 5] > m[5] ? d[i + 5] : m[5];
+      m[6] = d[i + 6] > m[6] ? d[i + 6] : m[6];
+      m[7] = d[i + 7] > m[7] ? d[i + 7] : m[7];
+    }
+    for (; i < n; i++) m[i & 7] = d[i] > m[i & 7] ? d[i] : m[i & 7];
+    for (int w = 4; w >= 1; w /= 2)
+      for (int k = 0; k < w; k++) m[k] = m[k + w] > m[k] ? m[k + w] : m[k];
+    return m[0];
+    #endif
 }
 static TuriValue native_nvk_i64vec_max(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -603,7 +976,18 @@ static void nvk_i32vec_fill_x(TuriEnv *nvk_env, int64_t v, int32_t x) {
     struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
     int64_t n = a->len;
     int32_t *d = a->data;
-    for (int64_t i = 0; i < n; i++) d[i] = x;
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      d[i] = x;
+      d[i + 1] = x;
+      d[i + 2] = x;
+      d[i + 3] = x;
+      d[i + 4] = x;
+      d[i + 5] = x;
+      d[i + 6] = x;
+      d[i + 7] = x;
+    }
+    for (; i < n; i++) d[i] = x;
 }
 static TuriValue native_nvk_i32vec_fill_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -634,7 +1018,23 @@ static void nvk_i32vec_scale_x(TuriEnv *nvk_env, int64_t v, int32_t s) {
     struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
     int64_t n = a->len;
     int32_t *d = a->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     for (int64_t i = 0; i < n; i++) d[i] = (int32_t)((uint32_t)d[i] * (uint32_t)s);
+    #else
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      d[i] = (int32_t)((uint32_t)d[i] * (uint32_t)s);
+      d[i + 1] = (int32_t)((uint32_t)d[i + 1] * (uint32_t)s);
+      d[i + 2] = (int32_t)((uint32_t)d[i + 2] * (uint32_t)s);
+      d[i + 3] = (int32_t)((uint32_t)d[i + 3] * (uint32_t)s);
+      d[i + 4] = (int32_t)((uint32_t)d[i + 4] * (uint32_t)s);
+      d[i + 5] = (int32_t)((uint32_t)d[i + 5] * (uint32_t)s);
+      d[i + 6] = (int32_t)((uint32_t)d[i + 6] * (uint32_t)s);
+      d[i + 7] = (int32_t)((uint32_t)d[i + 7] * (uint32_t)s);
+    }
+    for (; i < n; i++) d[i] = (int32_t)((uint32_t)d[i] * (uint32_t)s);
+    #endif
 }
 static TuriValue native_nvk_i32vec_scale_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -654,7 +1054,31 @@ static void nvk_i32vec_add_x(TuriEnv *nvk_env, int64_t dst, int64_t src) {
     int64_t n = y->len;
     int32_t *yd = y->data;
     const int32_t *xd = x->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     for (int64_t i = 0; i < n; i++) yd[i] = (int32_t)((uint32_t)yd[i] + (uint32_t)xd[i]);
+    #else
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      int32_t y0 = yd[i], x0 = xd[i];
+      int32_t y1 = yd[i + 1], x1 = xd[i + 1];
+      int32_t y2 = yd[i + 2], x2 = xd[i + 2];
+      int32_t y3 = yd[i + 3], x3 = xd[i + 3];
+      int32_t y4 = yd[i + 4], x4 = xd[i + 4];
+      int32_t y5 = yd[i + 5], x5 = xd[i + 5];
+      int32_t y6 = yd[i + 6], x6 = xd[i + 6];
+      int32_t y7 = yd[i + 7], x7 = xd[i + 7];
+      yd[i] = (int32_t)((uint32_t)y0 + (uint32_t)x0);
+      yd[i + 1] = (int32_t)((uint32_t)y1 + (uint32_t)x1);
+      yd[i + 2] = (int32_t)((uint32_t)y2 + (uint32_t)x2);
+      yd[i + 3] = (int32_t)((uint32_t)y3 + (uint32_t)x3);
+      yd[i + 4] = (int32_t)((uint32_t)y4 + (uint32_t)x4);
+      yd[i + 5] = (int32_t)((uint32_t)y5 + (uint32_t)x5);
+      yd[i + 6] = (int32_t)((uint32_t)y6 + (uint32_t)x6);
+      yd[i + 7] = (int32_t)((uint32_t)y7 + (uint32_t)x7);
+    }
+    for (; i < n; i++) yd[i] = (int32_t)((uint32_t)yd[i] + (uint32_t)xd[i]);
+    #endif
 }
 static TuriValue native_nvk_i32vec_add_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -674,7 +1098,39 @@ static void nvk_i32vec_axpy_x(TuriEnv *nvk_env, int64_t dst, int32_t s, int64_t 
     int64_t n = y->len;
     int32_t *yd = y->data;
     const int32_t *xd = x->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     for (int64_t i = 0; i < n; i++) { uint32_t m = (uint32_t)s * (uint32_t)xd[i]; yd[i] = (int32_t)((uint32_t)yd[i] + m); }
+    #else
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      int32_t y0 = yd[i], x0 = xd[i];
+      int32_t y1 = yd[i + 1], x1 = xd[i + 1];
+      int32_t y2 = yd[i + 2], x2 = xd[i + 2];
+      int32_t y3 = yd[i + 3], x3 = xd[i + 3];
+      int32_t y4 = yd[i + 4], x4 = xd[i + 4];
+      int32_t y5 = yd[i + 5], x5 = xd[i + 5];
+      int32_t y6 = yd[i + 6], x6 = xd[i + 6];
+      int32_t y7 = yd[i + 7], x7 = xd[i + 7];
+      uint32_t m0 = (uint32_t)s * (uint32_t)x0;
+      uint32_t m1 = (uint32_t)s * (uint32_t)x1;
+      uint32_t m2 = (uint32_t)s * (uint32_t)x2;
+      uint32_t m3 = (uint32_t)s * (uint32_t)x3;
+      uint32_t m4 = (uint32_t)s * (uint32_t)x4;
+      uint32_t m5 = (uint32_t)s * (uint32_t)x5;
+      uint32_t m6 = (uint32_t)s * (uint32_t)x6;
+      uint32_t m7 = (uint32_t)s * (uint32_t)x7;
+      yd[i] = (int32_t)((uint32_t)y0 + m0);
+      yd[i + 1] = (int32_t)((uint32_t)y1 + m1);
+      yd[i + 2] = (int32_t)((uint32_t)y2 + m2);
+      yd[i + 3] = (int32_t)((uint32_t)y3 + m3);
+      yd[i + 4] = (int32_t)((uint32_t)y4 + m4);
+      yd[i + 5] = (int32_t)((uint32_t)y5 + m5);
+      yd[i + 6] = (int32_t)((uint32_t)y6 + m6);
+      yd[i + 7] = (int32_t)((uint32_t)y7 + m7);
+    }
+    for (; i < n; i++) { uint32_t m = (uint32_t)s * (uint32_t)xd[i]; yd[i] = (int32_t)((uint32_t)yd[i] + m); }
+    #endif
 }
 static TuriValue native_nvk_i32vec_axpy_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -688,9 +1144,20 @@ static int64_t nvk_i32vec_sum(TuriEnv *nvk_env, int64_t v) {
     struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
     int64_t n = a->len;
     const int32_t *d = a->data;
-    uint64_t s = 0;
-    for (int64_t i = 0; i < n; i++) s = s + (uint64_t)(int64_t)d[i];
-    return (int64_t)s;
+    uint64_t s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      s[0] = s[0] + (uint64_t)(int64_t)d[i];
+      s[1] = s[1] + (uint64_t)(int64_t)d[i + 1];
+      s[2] = s[2] + (uint64_t)(int64_t)d[i + 2];
+      s[3] = s[3] + (uint64_t)(int64_t)d[i + 3];
+      s[4] = s[4] + (uint64_t)(int64_t)d[i + 4];
+      s[5] = s[5] + (uint64_t)(int64_t)d[i + 5];
+      s[6] = s[6] + (uint64_t)(int64_t)d[i + 6];
+      s[7] = s[7] + (uint64_t)(int64_t)d[i + 7];
+    }
+    for (; i < n; i++) s[i & 7] = s[i & 7] + (uint64_t)(int64_t)d[i];
+    return (int64_t)(((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7])));
 }
 static TuriValue native_nvk_i32vec_sum(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -710,9 +1177,20 @@ static int64_t nvk_i32vec_dot(TuriEnv *nvk_env, int64_t a, int64_t b) {
     int64_t n = y->len;
     const int32_t *yd = y->data;
     const int32_t *xd = x->data;
-    uint64_t s = 0;
-    for (int64_t i = 0; i < n; i++) s = s + (uint64_t)((int64_t)yd[i] * (int64_t)xd[i]);
-    return (int64_t)s;
+    uint64_t s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      s[0] = s[0] + (uint64_t)((int64_t)yd[i] * (int64_t)xd[i]);
+      s[1] = s[1] + (uint64_t)((int64_t)yd[i + 1] * (int64_t)xd[i + 1]);
+      s[2] = s[2] + (uint64_t)((int64_t)yd[i + 2] * (int64_t)xd[i + 2]);
+      s[3] = s[3] + (uint64_t)((int64_t)yd[i + 3] * (int64_t)xd[i + 3]);
+      s[4] = s[4] + (uint64_t)((int64_t)yd[i + 4] * (int64_t)xd[i + 4]);
+      s[5] = s[5] + (uint64_t)((int64_t)yd[i + 5] * (int64_t)xd[i + 5]);
+      s[6] = s[6] + (uint64_t)((int64_t)yd[i + 6] * (int64_t)xd[i + 6]);
+      s[7] = s[7] + (uint64_t)((int64_t)yd[i + 7] * (int64_t)xd[i + 7]);
+    }
+    for (; i < n; i++) s[i & 7] = s[i & 7] + (uint64_t)((int64_t)yd[i] * (int64_t)xd[i]);
+    return (int64_t)(((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7])));
 }
 static TuriValue native_nvk_i32vec_dot(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -730,9 +1208,30 @@ static int32_t nvk_i32vec_min(TuriEnv *nvk_env, int64_t v) {
         return 0;
       }
     const int32_t *d = a->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     int32_t m = d[0];
     for (int64_t i = 1; i < n; i++) m = d[i] < m ? d[i] : m;
     return m;
+    #else
+    int32_t m[8];
+    for (int k = 0; k < 8; k++) m[k] = d[0];
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      m[0] = d[i] < m[0] ? d[i] : m[0];
+      m[1] = d[i + 1] < m[1] ? d[i + 1] : m[1];
+      m[2] = d[i + 2] < m[2] ? d[i + 2] : m[2];
+      m[3] = d[i + 3] < m[3] ? d[i + 3] : m[3];
+      m[4] = d[i + 4] < m[4] ? d[i + 4] : m[4];
+      m[5] = d[i + 5] < m[5] ? d[i + 5] : m[5];
+      m[6] = d[i + 6] < m[6] ? d[i + 6] : m[6];
+      m[7] = d[i + 7] < m[7] ? d[i + 7] : m[7];
+    }
+    for (; i < n; i++) m[i & 7] = d[i] < m[i & 7] ? d[i] : m[i & 7];
+    for (int w = 4; w >= 1; w /= 2)
+      for (int k = 0; k < w; k++) m[k] = m[k + w] < m[k] ? m[k + w] : m[k];
+    return m[0];
+    #endif
 }
 static TuriValue native_nvk_i32vec_min(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -750,9 +1249,30 @@ static int32_t nvk_i32vec_max(TuriEnv *nvk_env, int64_t v) {
         return 0;
       }
     const int32_t *d = a->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     int32_t m = d[0];
     for (int64_t i = 1; i < n; i++) m = d[i] > m ? d[i] : m;
     return m;
+    #else
+    int32_t m[8];
+    for (int k = 0; k < 8; k++) m[k] = d[0];
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      m[0] = d[i] > m[0] ? d[i] : m[0];
+      m[1] = d[i + 1] > m[1] ? d[i + 1] : m[1];
+      m[2] = d[i + 2] > m[2] ? d[i + 2] : m[2];
+      m[3] = d[i + 3] > m[3] ? d[i + 3] : m[3];
+      m[4] = d[i + 4] > m[4] ? d[i + 4] : m[4];
+      m[5] = d[i + 5] > m[5] ? d[i + 5] : m[5];
+      m[6] = d[i + 6] > m[6] ? d[i + 6] : m[6];
+      m[7] = d[i + 7] > m[7] ? d[i + 7] : m[7];
+    }
+    for (; i < n; i++) m[i & 7] = d[i] > m[i & 7] ? d[i] : m[i & 7];
+    for (int w = 4; w >= 1; w /= 2)
+      for (int k = 0; k < w; k++) m[k] = m[k + w] > m[k] ? m[k + w] : m[k];
+    return m[0];
+    #endif
 }
 static TuriValue native_nvk_i32vec_max(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -766,7 +1286,18 @@ static void nvk_u8vec_fill_x(TuriEnv *nvk_env, int64_t v, uint8_t x) {
     struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
     int64_t n = a->len;
     uint8_t *d = a->data;
-    for (int64_t i = 0; i < n; i++) d[i] = x;
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      d[i] = x;
+      d[i + 1] = x;
+      d[i + 2] = x;
+      d[i + 3] = x;
+      d[i + 4] = x;
+      d[i + 5] = x;
+      d[i + 6] = x;
+      d[i + 7] = x;
+    }
+    for (; i < n; i++) d[i] = x;
 }
 static TuriValue native_nvk_u8vec_fill_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -803,7 +1334,31 @@ static void nvk_u8vec_add_x(TuriEnv *nvk_env, int64_t dst, int64_t src) {
     int64_t n = y->len;
     uint8_t *yd = y->data;
     const uint8_t *xd = x->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     for (int64_t i = 0; i < n; i++) yd[i] = (uint8_t)((uint8_t)yd[i] + (uint8_t)xd[i]);
+    #else
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      uint8_t y0 = yd[i], x0 = xd[i];
+      uint8_t y1 = yd[i + 1], x1 = xd[i + 1];
+      uint8_t y2 = yd[i + 2], x2 = xd[i + 2];
+      uint8_t y3 = yd[i + 3], x3 = xd[i + 3];
+      uint8_t y4 = yd[i + 4], x4 = xd[i + 4];
+      uint8_t y5 = yd[i + 5], x5 = xd[i + 5];
+      uint8_t y6 = yd[i + 6], x6 = xd[i + 6];
+      uint8_t y7 = yd[i + 7], x7 = xd[i + 7];
+      yd[i] = (uint8_t)((uint8_t)y0 + (uint8_t)x0);
+      yd[i + 1] = (uint8_t)((uint8_t)y1 + (uint8_t)x1);
+      yd[i + 2] = (uint8_t)((uint8_t)y2 + (uint8_t)x2);
+      yd[i + 3] = (uint8_t)((uint8_t)y3 + (uint8_t)x3);
+      yd[i + 4] = (uint8_t)((uint8_t)y4 + (uint8_t)x4);
+      yd[i + 5] = (uint8_t)((uint8_t)y5 + (uint8_t)x5);
+      yd[i + 6] = (uint8_t)((uint8_t)y6 + (uint8_t)x6);
+      yd[i + 7] = (uint8_t)((uint8_t)y7 + (uint8_t)x7);
+    }
+    for (; i < n; i++) yd[i] = (uint8_t)((uint8_t)yd[i] + (uint8_t)xd[i]);
+    #endif
 }
 static TuriValue native_nvk_u8vec_add_x(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -817,9 +1372,26 @@ static int64_t nvk_u8vec_sum(TuriEnv *nvk_env, int64_t v) {
     struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
     int64_t n = a->len;
     const uint8_t *d = a->data;
-    uint64_t s = 0;
-    for (int64_t i = 0; i < n; i++) s = s + (uint64_t)d[i];
-    return (int64_t)s;
+    uint64_t total = 0;
+    int64_t i = 0;
+    while (i + 8 <= n) {
+      int64_t stop = n - i < ((int64_t)1 << 24) ? n : i + ((int64_t)1 << 24);
+      uint32_t s[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+      for (; i + 8 <= stop; i += 8) {
+        s[0] = s[0] + (uint32_t)d[i];
+        s[1] = s[1] + (uint32_t)d[i + 1];
+        s[2] = s[2] + (uint32_t)d[i + 2];
+        s[3] = s[3] + (uint32_t)d[i + 3];
+        s[4] = s[4] + (uint32_t)d[i + 4];
+        s[5] = s[5] + (uint32_t)d[i + 5];
+        s[6] = s[6] + (uint32_t)d[i + 6];
+        s[7] = s[7] + (uint32_t)d[i + 7];
+      }
+      total = total + ((((uint64_t)s[0] + s[1]) + ((uint64_t)s[2] + s[3]))
+                     + (((uint64_t)s[4] + s[5]) + ((uint64_t)s[6] + s[7])));
+    }
+    for (; i < n; i++) total = total + (uint64_t)d[i];
+    return (int64_t)total;
 }
 static TuriValue native_nvk_u8vec_sum(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -837,9 +1409,30 @@ static uint8_t nvk_u8vec_min(TuriEnv *nvk_env, int64_t v) {
         return 0;
       }
     const uint8_t *d = a->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     uint8_t m = d[0];
     for (int64_t i = 1; i < n; i++) m = d[i] < m ? d[i] : m;
     return m;
+    #else
+    uint8_t m[8];
+    for (int k = 0; k < 8; k++) m[k] = d[0];
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      m[0] = d[i] < m[0] ? d[i] : m[0];
+      m[1] = d[i + 1] < m[1] ? d[i + 1] : m[1];
+      m[2] = d[i + 2] < m[2] ? d[i + 2] : m[2];
+      m[3] = d[i + 3] < m[3] ? d[i + 3] : m[3];
+      m[4] = d[i + 4] < m[4] ? d[i + 4] : m[4];
+      m[5] = d[i + 5] < m[5] ? d[i + 5] : m[5];
+      m[6] = d[i + 6] < m[6] ? d[i + 6] : m[6];
+      m[7] = d[i + 7] < m[7] ? d[i + 7] : m[7];
+    }
+    for (; i < n; i++) m[i & 7] = d[i] < m[i & 7] ? d[i] : m[i & 7];
+    for (int w = 4; w >= 1; w /= 2)
+      for (int k = 0; k < w; k++) m[k] = m[k + w] < m[k] ? m[k + w] : m[k];
+    return m[0];
+    #endif
 }
 static TuriValue native_nvk_u8vec_min(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -857,9 +1450,30 @@ static uint8_t nvk_u8vec_max(TuriEnv *nvk_env, int64_t v) {
         return 0;
       }
     const uint8_t *d = a->data;
+    /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+    #if defined(__clang__)
     uint8_t m = d[0];
     for (int64_t i = 1; i < n; i++) m = d[i] > m ? d[i] : m;
     return m;
+    #else
+    uint8_t m[8];
+    for (int k = 0; k < 8; k++) m[k] = d[0];
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+      m[0] = d[i] > m[0] ? d[i] : m[0];
+      m[1] = d[i + 1] > m[1] ? d[i + 1] : m[1];
+      m[2] = d[i + 2] > m[2] ? d[i + 2] : m[2];
+      m[3] = d[i + 3] > m[3] ? d[i + 3] : m[3];
+      m[4] = d[i + 4] > m[4] ? d[i + 4] : m[4];
+      m[5] = d[i + 5] > m[5] ? d[i + 5] : m[5];
+      m[6] = d[i + 6] > m[6] ? d[i + 6] : m[6];
+      m[7] = d[i + 7] > m[7] ? d[i + 7] : m[7];
+    }
+    for (; i < n; i++) m[i & 7] = d[i] > m[i & 7] ? d[i] : m[i & 7];
+    for (int w = 4; w >= 1; w /= 2)
+      for (int k = 0; k < w; k++) m[k] = m[k + w] > m[k] ? m[k + w] : m[k];
+    return m[0];
+    #endif
 }
 static TuriValue native_nvk_u8vec_max(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;

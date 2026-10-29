@@ -1,8 +1,9 @@
 # SIMD and vectorization -- typed numeric arrays, then explicit vector types
 
 > **Status: N0, N1 and N2 (approaches A + B) LANDED 2026-10-28** (`stdlib/numvec.tur`;
-> each phase's "As built" note in section 3). N2's `-fvect-cost-model=cheap`
-> decision, N2 approaches D/E, S0 and S1 not started. Proposed 2026-10-24. Written in response to
+> each phase's "As built" note in section 3); N2's `-fvect-cost-model=cheap`
+> question decided (no) 2026-10-29. N2 approaches D/E, S0 and S1 not started.
+> Proposed 2026-10-24. Written in response to
 > "are (1) SIMD functions for manual calling and (2) vectorization
 > optimizations, likely in MIR, useful or viable for Turmeric?", with Racket's
 > `flvector` raised as a related idea. Short answer: (1) yes, as an
@@ -355,20 +356,65 @@ Choices made on the way:
   contraction off for the interpreter's own build.
 - **Integer arithmetic wraps**, computed in the unsigned type; `int32` and
   `uint8` sums widen to `int`, and an `int32` product is formed in 64 bits.
-- **`min` / `max` propagate NaN**, and are eight-lane too, so they vectorize.
+- **`min` / `max` propagate NaN**: the result is the first NaN by index.
+  The lanes are a plain `x < m ? x : m` (one SSE `minpd`, no `-ffast-math`)
+  and a separate flag notes any NaN; only then does a second pass find the
+  first one, so a NaN-free array never pays for it.
+- **Fast at the default `-O2`, not only at `--release`** (2026-10-29). gcc's
+  `-O2` vectorizes no loop whose trip count it cannot see, and only `-O3`
+  fully unrolls an inner lane loop, so the first spelling of every kernel
+  ran 2-5x slower in a default build. Each kernel's spelling is now chosen by
+  measurement (`tools/gen-numvec.py`, "How a loop is spelled"): the eight
+  steps written out, so `-O2` vectorizes the main loop itself; loads first
+  then stores where two arrays are involved (`add!`, `axpy!`), since `-O2`
+  cannot reorder a store past a load it cannot prove independent; 32-bit
+  lanes flushed every 2^24 elements for the u8 sum; and the plain loop kept
+  under clang for `add!` / `scale!` / `axpy!` / integer `min` / `max`, where
+  clang vectorizes it already and runs the written-out body slower. Every
+  spelling does the same arithmetic in the same order, so the result is
+  unchanged (`numvec-kernels` still matches bit for bit). Measured over
+  200,000 calls on 4096 elements, gcc 13 / clang 18, best of three:
+
+  | kernel | gcc `-O2` | gcc `-O3` | clang `-O2` | clang `-O3` |
+  |---|---|---|---|---|
+  | `f64vec-sum` | 0.272 -> 0.068 | 0.073 -> 0.067 | 0.073 -> 0.067 | 0.081 -> 0.068 |
+  | `f64vec-dot` | 0.308 -> 0.198 | 0.187 -> 0.179 | 0.321 -> 0.312 | 0.326 -> 0.314 |
+  | `f64vec-min` | 0.470 -> 0.374 | 1.079 -> 0.372 | 0.336 -> 0.189 | 0.367 -> 0.188 |
+  | `f32vec-min` | 0.292 -> 0.302 | 1.064 -> 0.366 | 0.377 -> 0.128 | 0.343 -> 0.125 |
+  | `f64vec-add!` | 0.465 -> 0.183 | 0.211 -> 0.185 | 0.184 -> 0.180 | 0.186 -> 0.198 |
+  | `f64vec-axpy!` | 0.417 -> 0.213 | 0.222 -> 0.205 | 0.209 -> 0.207 | 0.212 -> 0.207 |
+  | `f64vec-scale!` | 0.264 -> 0.091 | 0.133 -> 0.084 | 0.124 -> 0.129 | 0.114 -> 0.097 |
+  | `i64vec-sum` | 0.271 -> 0.070 | 0.143 -> 0.069 | 0.083 -> 0.068 | 0.079 -> 0.067 |
+  | `i32vec-min` | 0.524 -> 0.135 | 0.215 -> 0.136 | 0.143 -> 0.147 | 0.139 -> 0.141 |
+  | `u8vec-sum` | 0.264 -> 0.111 | 0.125 -> 0.114 | 0.130 -> 0.075 | 0.132 -> 0.072 |
+
+  Note the old float `min` at `-O3`: 1.08s, slower than at `-O2`, because
+  gcc unrolled the lane loop into branches -- `--release` made it worse.
+  **Open:** clang's `dot` is ~0.31s both before and after. Isolated, the
+  length check at the top is what costs it (0.34s with, 0.19s without);
+  checking after the loop (legal: `dot` has no effect) gets clang to 0.21s
+  but costs gcc `-O2` 0.17 -> 0.23s, so it is not taken; a per-compiler
+  spelling would do it if clang's `dot` matters.
 - **The vectorization check** is `tests/check-numvec-vectorized.py` (ctest
-  `tur_numvec_vectorized`), over `tests/vectorize/numvec-probe.tur`: 34 loops
-  must report `loop vectorized` at `-O3`, x86-64 with gcc only (it skips
-  elsewhere). Not on the list, because SSE2 has no instruction for them:
-  64-bit integer multiply and min/max (`i64vec-scale!`, `-dot`, `-min`,
-  `-max`) and `i32vec-dot`'s widening multiply; nor `-copy!` (a `memmove`).
+  `tur_numvec_vectorized`), over `tests/vectorize/numvec-probe.tur`, x86-64
+  with gcc only (it skips elsewhere). It compiles the probe at `-O2` and
+  `-O3` and requires 57 reports of a vectorized main loop: at `-O2` on the
+  main loop's own `for` line (the old spelling's inner lane loop is also
+  "loop vectorized" at `-O2`, at its own line, yet runs at a quarter of the
+  speed -- putting `f64vec-sum` back in that spelling fails the check). Not
+  on the list, because SSE2 has no instruction for them: 64-bit integer
+  multiply and min/max (`i64vec-scale!`, `-dot`, `-min`, `-max`) and
+  `i32vec-dot`'s widening multiply; nor `-copy!` (a `memmove`). At `-O2`
+  only: float `min` / `max` (at `-O3` gcc unrolls their lane loop and leaves
+  it scalar, but branch-free and as fast). At `-O3` only: `i64vec-axpy!` and
+  the u8 sum / `min` / `max`.
   Two traps the probe has to avoid, both recorded in it: a constant length
   lets gcc unroll instead of vectorize, and code it estimates runs once (only
   from `main`) is optimized for size, which skips vectorization entirely.
 - **Benchmark:** `benchmarks/f64vec-dot-results.md`. `f64vec-dot` over 4096
-  doubles x 200,000 takes 0.20s at `--release` against 2.19s for the same
-  dot product over `(Vec float)`: 11x, within 25% of the same loop in C,
-  and faster than a plain C loop without `-ffast-math`.
+  doubles x 200,000 takes 0.18s in a default build and at `--release` alike,
+  against 2.17s for the same dot product over `(Vec float)`: 12x, as fast as
+  the same loop in C, and faster than a plain C loop without `-ffast-math`.
 
 ### N2 -- a loop-friendly element access path
 
@@ -479,6 +525,22 @@ Also in N2, as a separate small decision: whether `tur build` (not only
 `--release`) should pass `-fvect-cost-model=cheap`, so unknown-trip-count
 loops vectorize at the default `-O2`. Measure compile time on the fixture
 corpus before deciding; the default `-O2` was chosen for build time.
+
+**Decided 2026-10-29: no.** Measured, it costs nothing and buys nothing:
+
+- Compile time, 282 fixtures from a seeded sample, each gcc run three times:
+  gcc CPU 255.8s -> 256.5s (+0.3%), median per-file ratio 1.00, `.text`
+  +0.04%. (It does change array-heavy code: on the numvec probe 12 -> 59
+  loops vectorized, `.text` +14%.)
+- Runtime, the 74 cc-engine programs of `benchmarks/audit/corpus.txt` plus
+  the two dot benchmarks, five alternating runs: geometric mean 0.9976,
+  every program over 20 ms within +-5%, no output change -- and
+  `bench-f64vec-dot` 0.292 -> 0.296s, nothing.
+- It cannot help the kernels: what `-O3` had and `-O2` lacked was full
+  unrolling of the inner lane loop, not the cost model. The kernels'
+  spelling closed that gap instead (N1 "As built").
+- clang rejects the flag (`unknown argument`), so it would have needed a
+  compiler check on every build.
 
 ### S0 -- an explicit-SIMD spice
 

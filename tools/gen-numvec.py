@@ -67,7 +67,8 @@ HDR = """;;; tur/numvec -- typed numeric arrays: F64Vec, F32Vec, I64Vec, I32Vec,
 ;;;
 ;;; - access: `P-new`, `P-of`, `P-len`, `P-ref`, `P-set!`, `P-copy`, `P->vec`,
 ;;;   `vec->P`, `P-show`;
-;;; - bulk kernels (phase N1), each one C loop gcc vectorizes at -O3:
+;;; - bulk kernels (phase N1), each one C loop that vectorizes at tur's default
+;;;   -O2 build as well as at `--release`:
 ;;;   `P-fill!`, `P-copy!`, `P-add!`, `P-sum`, `P-min`, `P-max`, and except on
 ;;;   U8Vec `P-scale!`, `P-axpy!`, `P-dot`; the float types add
 ;;;   `P-sum-ordered`.  A float reduction uses a fixed eight-lane order, so it
@@ -439,11 +440,55 @@ def same_len(t, name, ret):
             "  }") % (t["p"], name, ret)
 
 
+# How a loop is spelled is chosen by measurement (simd-and-vectorization-plan
+# N2, "closing the -O2 gap"), never by taste:
+#   - `unrolled`: the main loop's body is the eight steps written out.  gcc's
+#     default -O2 vectorizes no loop whose trip count it cannot see, and only
+#     -O3 unrolls an inner lane loop itself; written out, the body is
+#     straight-line code its basic-block vectorizer takes at -O2.  2-5x at
+#     -O2, and as fast as before at -O3.
+#   - `by_compiler`: clang vectorizes the plain loop at -O2 already, and runs
+#     the written-out body of `add!` / `scale!` / `axpy!` / integer `min` /
+#     `max` slower (with two arrays it cannot prove the written-out stores do
+#     not overlap the loads), so it keeps the loop.
+#   - float `min` / `max` keep an inner lane loop but take NaN out of the
+#     select (a separate flag), which is what lets it vectorize.  Every spelling computes the same
+#     element-by-element arithmetic, so the result is the same either way.
+
+def idx(k):
+    return "i" if k == 0 else "i + %d" % k
+
+
+def unrolled(step, tail):
+    """`step(index_expr, lane)` -> one C statement; `tail` covers i..n-1."""
+    return (["int64_t i = 0;", "for (; i + 8 <= n; i += 8) {"]
+            + ["  " + step(idx(k), k) for k in range(8)]
+            + ["}", "for (; i < n; i++) " + tail])
+
+
+def unrolled_loads_first(loads, computes, stores, tail):
+    """The eight-wide body as all loads, then all arithmetic, then all stores.
+    With two arrays gcc's -O2 basic-block vectorizer cannot reorder a store
+    past a load it cannot prove independent; written in this order nothing
+    needs reordering, and it vectorizes (2x on `add!` / `axpy!`).  Each
+    argument maps (index_expr, lane) to a statement, or is None."""
+    body = []
+    for part in (loads, computes, stores):
+        if part:
+            body += ["  " + part(idx(k), k) for k in range(8)]
+    return (["int64_t i = 0;", "for (; i + 8 <= n; i += 8) {"] + body
+            + ["}", "for (; i < n; i++) " + tail])
+
+
+def by_compiler(loop_lines, hand_lines):
+    return (["/* clang vectorizes the plain loop; gcc -O2 only the written-out body */",
+             "#if defined(__clang__)"] + loop_lines + ["#else"] + hand_lines + ["#endif"])
+
+
 def k_fill(t):
-    return "\n".join([hdr(t, "a", "v"),
-                      "int64_t n = a->len;",
-                      "%s *d = a->data;" % t["C"],
-                      "for (int64_t i = 0; i < n; i++) d[i] = x;"])
+    return "\n".join([hdr(t, "a", "v"), "int64_t n = a->len;",
+                      "%s *d = a->data;" % t["C"]]
+                     + unrolled(lambda j, k: "d[%s] = x;" % j, "d[i] = x;"))
 
 
 def k_copy(t):
@@ -455,39 +500,52 @@ def k_copy(t):
 def k_scale(t):
     C = t["C"]
     if IS_FLOAT[t["p"]]:
-        op = "d[i] = d[i] * s;"
+        op = lambda j: "d[%s] = d[%s] * s;" % (j, j)
     else:
-        op = "d[i] = (%s)((%s)d[i] * (%s)s);" % (C, UNS[t["p"]], UNS[t["p"]])
-    return "\n".join([hdr(t, "a", "v"), "int64_t n = a->len;",
-                      "%s *d = a->data;" % C,
-                      "for (int64_t i = 0; i < n; i++) " + op])
+        U = UNS[t["p"]]
+        op = lambda j: "d[%s] = (%s)((%s)d[%s] * (%s)s);" % (j, C, U, j, U)
+    return "\n".join([hdr(t, "a", "v"), "int64_t n = a->len;", "%s *d = a->data;" % C]
+                     + by_compiler(["for (int64_t i = 0; i < n; i++) " + op("i")],
+                                   unrolled(lambda j, k: op(j), op("i"))))
 
 
 def k_add(t):
     C = t["C"]
     if IS_FLOAT[t["p"]]:
-        op = "yd[i] = yd[i] + xd[i];"
+        op = lambda j: "yd[%s] = yd[%s] + xd[%s];" % (j, j, j)
+        st = lambda j, k: "yd[%s] = y%d + x%d;" % (j, k, k)
     else:
-        op = "yd[i] = (%s)((%s)yd[i] + (%s)xd[i]);" % (C, UNS[t["p"]], UNS[t["p"]])
+        U = UNS[t["p"]]
+        op = lambda j: "yd[%s] = (%s)((%s)yd[%s] + (%s)xd[%s]);" % (j, C, U, j, U, j)
+        st = lambda j, k: "yd[%s] = (%s)((%s)y%d + (%s)x%d);" % (j, C, U, k, U, k)
+    ld = lambda j, k: "%s y%d = yd[%s], x%d = xd[%s];" % (C, k, j, k, j)
     return "\n".join([hdr(t, "y", "dst"), hdr(t, "x", "src"),
                       same_len(t, "add!", ""),
                       "int64_t n = y->len;",
-                      "%s *yd = y->data;" % C, "const %s *xd = x->data;" % C,
-                      "for (int64_t i = 0; i < n; i++) " + op])
+                      "%s *yd = y->data;" % C, "const %s *xd = x->data;" % C]
+                     + by_compiler(["for (int64_t i = 0; i < n; i++) " + op("i")],
+                                   unrolled_loads_first(ld, None, st, op("i"))))
 
 
 def k_axpy(t):
     C = t["C"]
+    ld = lambda j, k: "%s y%d = yd[%s], x%d = xd[%s];" % (C, k, j, k, j)
     if IS_FLOAT[t["p"]]:
-        op = "{ %s m = s * xd[i]; yd[i] = yd[i] + m; }" % C
+        op = lambda j: "{ %s m = s * xd[%s]; yd[%s] = yd[%s] + m; }" % (C, j, j, j)
+        cp = lambda j, k: "%s m%d = s * x%d;" % (C, k, k)
+        st = lambda j, k: "yd[%s] = y%d + m%d;" % (j, k, k)
     else:
         U = UNS[t["p"]]
-        op = "{ %s m = (%s)s * (%s)xd[i]; yd[i] = (%s)((%s)yd[i] + m); }" % (U, U, U, C, U)
+        op = lambda j: "{ %s m = (%s)s * (%s)xd[%s]; yd[%s] = (%s)((%s)yd[%s] + m); }" % (
+            U, U, U, j, j, C, U, j)
+        cp = lambda j, k: "%s m%d = (%s)s * (%s)x%d;" % (U, k, U, U, k)
+        st = lambda j, k: "yd[%s] = (%s)((%s)y%d + m%d);" % (j, C, U, k, k)
     return "\n".join([hdr(t, "y", "dst"), hdr(t, "x", "src"),
                       same_len(t, "axpy!", ""),
                       "int64_t n = y->len;",
-                      "%s *yd = y->data;" % C, "const %s *xd = x->data;" % C,
-                      "for (int64_t i = 0; i < n; i++) " + op])
+                      "%s *yd = y->data;" % C, "const %s *xd = x->data;" % C]
+                     + by_compiler(["for (int64_t i = 0; i < n; i++) " + op("i")],
+                                   unrolled_loads_first(ld, cp, st, op("i"))))
 
 
 TREE = "((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7]))"
@@ -496,24 +554,37 @@ TREE = "((s[0] + s[1]) + (s[2] + s[3])) + ((s[4] + s[5]) + (s[6] + s[7]))"
 def k_sum(t):
     C = t["C"]
     if IS_FLOAT[t["p"]]:
-        return "\n".join([
-            hdr(t, "a", "v"), "int64_t n = a->len;",
-            "const %s *d = a->data;" % C,
-            "%s s[8] = {0, 0, 0, 0, 0, 0, 0, 0};" % C,
-            "int64_t i = 0;",
-            "for (; i + 8 <= n; i += 8)",
-            "  for (int k = 0; k < 8; k++) s[k] = s[k] + d[i + k];",
-            "for (; i < n; i++) s[i & 7] = s[i & 7] + d[i];",
-            "return %s;" % TREE])
-    # exact modulo 2^64, so any order gives the same answer
-    if t["p"] == "i32vec":
-        add = "s = s + (uint64_t)(int64_t)d[i];"
-    else:
-        add = "s = s + (uint64_t)d[i];"
+        return "\n".join([hdr(t, "a", "v"), "int64_t n = a->len;",
+                          "const %s *d = a->data;" % C,
+                          "%s s[8] = {0, 0, 0, 0, 0, 0, 0, 0};" % C]
+                         + unrolled(lambda j, k: "s[%d] = s[%d] + d[%s];" % (k, k, j),
+                                    "s[i & 7] = s[i & 7] + d[i];")
+                         + ["return %s;" % TREE])
+    if t["p"] == "u8vec":
+        # 32-bit lanes (a byte widens to 64 bits poorly), flushed into the
+        # 64-bit total every 2^24 elements: 8 lanes x 2^21 x 255 < 2^32
+        return "\n".join([hdr(t, "a", "v"), "int64_t n = a->len;",
+                          "const %s *d = a->data;" % C,
+                          "uint64_t total = 0;", "int64_t i = 0;",
+                          "while (i + 8 <= n) {",
+                          "  int64_t stop = n - i < ((int64_t)1 << 24) ? n : i + ((int64_t)1 << 24);",
+                          "  uint32_t s[8] = {0, 0, 0, 0, 0, 0, 0, 0};",
+                          "  for (; i + 8 <= stop; i += 8) {"]
+                         + ["    s[%d] = s[%d] + (uint32_t)d[%s];" % (k, k, idx(k)) for k in range(8)]
+                         + ["  }",
+                            "  total = total + ((((uint64_t)s[0] + s[1]) + ((uint64_t)s[2] + s[3]))",
+                            "                 + (((uint64_t)s[4] + s[5]) + ((uint64_t)s[6] + s[7])));",
+                            "}",
+                            "for (; i < n; i++) total = total + (uint64_t)d[i];",
+                            "return (int64_t)total;"])
+    # exact modulo 2^64, so the eight lanes give the same answer as one
+    wid = "(uint64_t)(int64_t)" if t["p"] == "i32vec" else "(uint64_t)"
     return "\n".join([hdr(t, "a", "v"), "int64_t n = a->len;",
-                      "const %s *d = a->data;" % C, "uint64_t s = 0;",
-                      "for (int64_t i = 0; i < n; i++) " + add,
-                      "return (int64_t)s;"])
+                      "const %s *d = a->data;" % C,
+                      "uint64_t s[8] = {0, 0, 0, 0, 0, 0, 0, 0};"]
+                     + unrolled(lambda j, k: "s[%d] = s[%d] + %sd[%s];" % (k, k, wid, j),
+                                "s[i & 7] = s[i & 7] + %sd[i];" % wid)
+                     + ["return (int64_t)(%s);" % TREE])
 
 
 def k_sum_ordered(t):
@@ -531,54 +602,69 @@ def k_dot(t):
            "int64_t n = y->len;",
            "const %s *yd = y->data;" % C, "const %s *xd = x->data;" % C]
     if IS_FLOAT[t["p"]]:
-        return "\n".join(pre + [
-            "%s s[8] = {0, 0, 0, 0, 0, 0, 0, 0};" % C,
-            "int64_t i = 0;",
-            "for (; i + 8 <= n; i += 8)",
-            "  for (int k = 0; k < 8; k++) { %s m = yd[i + k] * xd[i + k]; s[k] = s[k] + m; }" % C,
-            "for (; i < n; i++) { %s m = yd[i] * xd[i]; s[i & 7] = s[i & 7] + m; }" % C,
-            "return %s;" % TREE])
+        return "\n".join(pre + ["%s s[8] = {0, 0, 0, 0, 0, 0, 0, 0};" % C]
+                         + unrolled(lambda j, k: "{ %s m = yd[%s] * xd[%s]; s[%d] = s[%d] + m; }"
+                                    % (C, j, j, k, k),
+                                    "{ %s m = yd[i] * xd[i]; s[i & 7] = s[i & 7] + m; }" % C)
+                         + ["return %s;" % TREE])
     if t["p"] == "i32vec":
-        prod = "(uint64_t)((int64_t)yd[i] * (int64_t)xd[i])"
+        prod = lambda j: "(uint64_t)((int64_t)yd[%s] * (int64_t)xd[%s])" % (j, j)
     else:
-        prod = "(uint64_t)yd[i] * (uint64_t)xd[i]"
-    return "\n".join(pre + ["uint64_t s = 0;",
-                            "for (int64_t i = 0; i < n; i++) s = s + %s;" % prod,
-                            "return (int64_t)s;"])
+        prod = lambda j: "(uint64_t)yd[%s] * (uint64_t)xd[%s]" % (j, j)
+    return "\n".join(pre + ["uint64_t s[8] = {0, 0, 0, 0, 0, 0, 0, 0};"]
+                     + unrolled(lambda j, k: "s[%d] = s[%d] + %s;" % (k, k, prod(j)),
+                                "s[i & 7] = s[i & 7] + %s;" % prod("i"))
+                     + ["return (int64_t)(%s);" % TREE])
 
 
 def k_minmax(t, which):
     C = t["C"]
-    lt = "<" if which == "min" else ">"
+    op = "<" if which == "min" else ">"
     pre = [hdr(t, "a", "v"), "int64_t n = a->len;",
            "if (n == 0) {",
            '    tur_panic("%s-%s: empty array");' % (t["p"], which),
            "    return 0;", "  }",
            "const %s *d = a->data;" % C]
     if IS_FLOAT[t["p"]]:
-        # NaN-propagating: once a lane holds NaN it keeps it (x OP NaN is
-        # false and NaN != NaN is never asked of x); a NaN element replaces
-        # whatever the lane held.
+        # A NaN anywhere makes the result NaN: the FIRST NaN by index.  The
+        # lanes are a plain `x OP m ? x : m` -- one SSE min/max instruction,
+        # with no -ffast-math -- and a separate flag notes whether any element
+        # is NaN; only then does a second pass find the first one.  A NaN-free
+        # array never pays for it.
+        it = "int64_t" if t["p"] == "f64vec" else "int32_t"
         return "\n".join(pre + [
-            "%s m[8];" % C,
-            "for (int k = 0; k < 8; k++) m[k] = d[0];",
-            "int64_t i = 0;",
-            "for (; i + 8 <= n; i += 8)",
-            "  for (int k = 0; k < 8; k++) {",
-            "    %s x = d[i + k];" % C,
-            "    m[k] = (x %s m[k] || x != x) ? x : m[k];" % lt,
-            "  }",
-            "for (; i < n; i++) {",
-            "  %s x = d[i];" % C,
-            "  m[i & 7] = (x %s m[i & 7] || x != x) ? x : m[i & 7];" % lt,
-            "}",
-            "for (int w = 4; w >= 1; w /= 2)",
-            "  for (int k = 0; k < w; k++)",
-            "    m[k] = (m[k + w] %s m[k] || m[k + w] != m[k + w]) ? m[k + w] : m[k];" % lt,
-            "return m[0];"])
-    return "\n".join(pre + ["%s m = d[0];" % C,
-                            "for (int64_t i = 1; i < n; i++) m = d[i] %s m ? d[i] : m;" % lt,
-                            "return m;"])
+            "%s m[8];" % C, "%s bad[8];" % it,
+            "for (int k = 0; k < 8; k++) { m[k] = d[0]; bad[k] = 0; }"]
+            + ["int64_t i = 0;",
+               "for (; i + 8 <= n; i += 8)",
+               "  for (int k = 0; k < 8; k++) {",
+               "    %s x = d[i + k];" % C,
+               "    m[k] = x %s m[k] ? x : m[k];" % op,
+               "    bad[k] = bad[k] | (%s)(x != x);" % it,
+               "  }",
+               "for (; i < n; i++) {",
+               "  %s x = d[i];" % C,
+               "  m[i & 7] = x %s m[i & 7] ? x : m[i & 7];" % op,
+               "  bad[i & 7] = bad[i & 7] | (%s)(x != x);" % it,
+               "}"]
+            + ["%s any = 0;" % it,
+               "for (int k = 0; k < 8; k++) any = any | bad[k];",
+               "if (any) {",
+               "  for (int64_t j = 0; j < n; j++) if (d[j] != d[j]) return d[j];",
+               "}",
+               "for (int w = 4; w >= 1; w /= 2)",
+               "  for (int k = 0; k < w; k++) m[k] = m[k + w] %s m[k] ? m[k + w] : m[k];" % op,
+               "return m[0];"])
+    hand = (["%s m[8];" % C, "for (int k = 0; k < 8; k++) m[k] = d[0];"]
+            + unrolled(lambda j, k: "m[%d] = d[%s] %s m[%d] ? d[%s] : m[%d];" % (k, j, op, k, j, k),
+                       "m[i & 7] = d[i] %s m[i & 7] ? d[i] : m[i & 7];" % op)
+            + ["for (int w = 4; w >= 1; w /= 2)",
+               "  for (int k = 0; k < w; k++) m[k] = m[k + w] %s m[k] ? m[k + w] : m[k];" % op,
+               "return m[0];"])
+    loop = ["%s m = d[0];" % C,
+            "for (int64_t i = 1; i < n; i++) m = d[i] %s m ? d[i] : m;" % op,
+            "return m;"]
+    return "\n".join(pre + by_compiler(loop, hand))
 
 
 def k_ref_unchecked(t):
@@ -672,12 +758,12 @@ KERNEL_NOTES = {
         "2^64; an `int32` product is formed in 64 bits.",
     ],
     "min": [
-        "A NaN element makes the result NaN.  Which of two equal elements",
+        "A NaN element makes the result NaN (the first NaN, by index).  Which of two equal elements",
         "(0.0 and -0.0) is returned is fixed by the reduction order, the same",
         "on every engine.",
     ],
     "max": [
-        "A NaN element makes the result NaN.  Which of two equal elements",
+        "A NaN element makes the result NaN (the first NaN, by index).  Which of two equal elements",
         "(0.0 and -0.0) is returned is fixed by the reduction order, the same",
         "on every engine.",
     ],
