@@ -1135,18 +1135,20 @@ static void remove_string_stream (c2m_ctx_t c2m_ctx) {
 
 /* We use UTF-32 for 32-bit wchars and UTF-16 for 16-bit wchar (LE/BE
    depending on endianess of the target), UTF-8 for anything else. */
-static void push_str_char (VARR (char) * temp, uint64_t ch, int type) {
+/* Push one element of a string or char literal of TYPE.  CH is a code unit
+   -- a source byte, or the value of a \x or octal escape -- unless UCN_P,
+   when it is the code point of a \u or \U universal character name.  In a
+   narrow or u8 literal only a code point is UTF-8 encoded: a code unit is
+   one byte, as written (u8"\xc3\xa9" is two bytes, and so is u8"<e-acute>"
+   typed in UTF-8 source), while "\u00e9" is the two bytes of its UTF-8
+   encoding, not the single byte 0xe9. */
+static void push_str_char (VARR (char) * temp, uint64_t ch, int type, int ucn_p) {
   int i, len = 0;
 
   switch (type) {
   case ' ':
-    if (ch <= 0xFF) {
-      VARR_PUSH (char, temp, (char) ch);
-      return;
-    }
-    /* Fall through */
   case '8':
-    if (ch <= 0x7F) {
+    if (!ucn_p || ch <= 0x7F) {
       VARR_PUSH (char, temp, (char) ch);
     } else if (ch <= 0x7FF) {
       VARR_PUSH (char, temp, (char) (0xC0 | (ch >> 6)));
@@ -1183,7 +1185,7 @@ static void push_str_char (VARR (char) * temp, uint64_t ch, int type) {
 static int pre_skip_if_part_p (c2m_ctx_t c2m_ctx);
 
 static void set_string_val (c2m_ctx_t c2m_ctx, token_t t, VARR (char) * temp, int type) {
-  int i, str_len;
+  int i, str_len, ucn_p;
   int64_t curr_c, last_c = -1;
   uint64_t max_char = (type == 'u'   ? UINT16_MAX
                        : type == 'U' ? UINT32_MAX
@@ -1204,10 +1206,11 @@ static void set_string_val (c2m_ctx_t c2m_ctx, token_t t, VARR (char) * temp, in
       error (c2m_ctx, t->pos, "multibyte character");
     last_c = curr_c = (unsigned char) str[i];
     if (curr_c != '\\') {
-      push_str_char (temp, curr_c, type);
+      push_str_char (temp, curr_c, type, FALSE);
       continue;
     }
     last_c = curr_c = str[++i];
+    ucn_p = curr_c == 'u' || curr_c == 'U';
     switch (curr_c) {
     case 'a': last_c = curr_c = '\a'; break;
     case 'b': last_c = curr_c = '\b'; break;
@@ -1319,9 +1322,9 @@ static void set_string_val (c2m_ctx_t c2m_ctx, token_t t, VARR (char) * temp, in
         curr_c = -1;
       }
     }
-    if (!string_p || curr_c >= 0) push_str_char (temp, curr_c, type);
+    if (!string_p || curr_c >= 0) push_str_char (temp, curr_c, type, ucn_p);
   }
-  push_str_char (temp, '\0', type);
+  push_str_char (temp, '\0', type, FALSE);
   if (string_p)
     t->node->u.s = uniq_str (c2m_ctx, VARR_ADDR (char, temp), VARR_LENGTH (char, temp));
   else if (last_c < 0) {

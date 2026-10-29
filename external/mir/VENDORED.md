@@ -371,4 +371,18 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     header mentions it (Darwin's <assert.h>, in skipped #if parts).  The last
     drops an unused `__func__` array from every function of such programs;
     nothing else changes.  c-tests/prepro-split.sh covers it.
+
+  e4728bc (merged as d00e8c1, turmeric-lang/mir#20) -- a narrow or u8
+    string literal UTF-8 encoded the wrong values: u8"\xc3\xa9" -- and
+    u8"<e-acute>" typed in UTF-8 source -- came out four bytes, every value
+    above 0x7F in a u8 literal being encoded, while a backslash-u escape
+    below U+0100 in a narrow literal came out as one raw byte.  A code unit
+    (source byte, \x, octal) is now one byte as written and only a universal
+    character name is encoded, as gcc and clang do; u/U/L literals are
+    unchanged.  Reaches user inline C under `tur jit` only: the emitter
+    writes neither u8 literals nor backslash-u escapes.  Also the regression
+    test the u8-identifier fix in #19 lacked
+    (docs/archive/c2mir-paste-of-u8-prefixed-token.md).  Covered by
+    c-tests/new/narrow-u8-string-encoding.c and
+    c-tests/new/u8-prefixed-identifier.c.
 ```
