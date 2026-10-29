@@ -17,6 +17,7 @@ future-linear
 future-split-free
 httpd-async-limit
 httpd-async-throughput
+jit-inline-c-thread-local
 promise-linear
 region-escape-via-store-future
 thread-local-basic

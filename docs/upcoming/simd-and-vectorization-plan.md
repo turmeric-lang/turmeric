@@ -230,7 +230,7 @@ worth having:
   one flat `(let [v (new n zero)] (do (set! v 0 x0) ... v))`. A per-element
   template recursion stops at the 256-deep expansion limit, and
   `syntax-gensym` is fresh only against the macro-time env
-  ([syntax-gensym-not-fresh-against-program-names](../reported/syntax-gensym-not-fresh-against-program-names.md)).
+  ([syntax-gensym-not-fresh-against-program-names](../archive/syntax-gensym-not-fresh-against-program-names.md)).
   A binding initialised by that `let` was at first never dropped; the
   compiler now drops it
   ([affine-let-init-yielding-moved-local-skips-scope-drop](../archive/affine-let-init-yielding-moved-local-skips-scope-drop.md)).

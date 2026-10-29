@@ -1,0 +1,20 @@
+;; syntax-gensym-fresh-against-program -- docs/archive/syntax-gensym-not-fresh-
+;; against-program-names.md.  `syntax-gensym` in a defmacro* skipped only the
+;; macro-time env's names, so it handed out `tmp_0` while the call site bound
+;; `tmp_0`, and the expansion captured it (20, not 11).
+(defmacro* with-ten [e]
+  (let [t (syntax-gensym "tmp")]
+    `(let [~t 10] (+ ~t ~e))))
+
+(defmacro* with-two [e]
+  (let [t (syntax-gensym "tmp")]
+    `(let [~t 2] (* ~t ~e))))
+
+(defn main [] : int
+  (let [tmp_0 1
+        tmp_1 3
+        tmp_2 5]
+    (println (with-ten tmp_0))
+    (println (with-ten tmp_1))
+    (println (with-two (with-ten tmp_2))))
+  0)

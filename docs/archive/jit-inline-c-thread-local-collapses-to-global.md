@@ -69,3 +69,23 @@ nothing turns that warning into a compile failure. Under
   makes `_Thread_local` an error. Batch it into the fork's one open PR.
 - Pin it with the repro as a `tests/run-jit.sh` case: the expected output is `7`,
   with TUR-W0070 allowed.
+
+## Resolution (2026-10-29)
+
+Fixed in-tree, at the warning itself rather than with a prelude `#define`.
+That route would also have poisoned the preamble's own `TUR_THREAD_LOCAL`,
+which expands to `_Thread_local` under c2mir. `jit_compile`
+(`src/jit_engine.c`) now gives c2mir an `open_memstream` as its
+`message_file` and turns warnings on. After the compile it relays the
+messages to stderr (still dropping warnings when quiet). If one of them is
+"Thread local is not implemented", it reports the compile as
+`TUR_JIT_ERR_COMPILE` with a one-line reason. cmd_jit's TUR-W0070 fallback
+then runs the program with cc, as it already did for `__thread`. The warning
+fires only for a declaration c2mir actually compiles, so a guarded one (the
+r7rs prelude's, behind `__GNUC__`) does not trip it. Windows keeps the old
+behaviour: it has no `open_memstream`.
+
+The repro now prints `7` under `tur jit`, after TUR-W0070. Pinned by the
+fixture `jit-inline-c-thread-local`, which `tests/run-jit.sh` allows to fall
+back (`tests/jit-fallback-baseline.txt`). The JIT guide's "always take the
+fallback" line now says how.

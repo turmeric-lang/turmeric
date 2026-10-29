@@ -56,3 +56,25 @@ argument. That is an accident of the wrapper, not a check.
   treats it), or the fix will reject calls the nominal path allows.
 - Pin it with an `errors/` fixture per row above. A positive fixture should
   run on both engines, since the interpreter disagrees with compiled code today.
+
+## Resolution (2026-10-29)
+
+`elab_poly_call` (`src/compiler/elab_call.c`) now checks a call through an F5
+typed carrier whose `poly_type` is a concrete `TY_FN`, in a non-dynamic file:
+
+- **Arity.** Too few arguments, or too many when the result is not a
+  function, is `TUR-E0002` ("function 'f' expects 1 argument(s), got 2"). An
+  under-applied call used to produce a value that was not callable either
+  (`'g' is not a function`).
+- **Scalar arguments.** An argument of one scalar class (`int`/`int64`,
+  `float`/`float64`, `float32`, `bool`, `cstr`) at a parameter of another is
+  `TUR-E0001` with the nominal path's wording. That is what a direct call
+  says, `(halfp 7)` included, so no widening was needed.
+
+Every other argument shape (type variables, `any`, carriers, aggregates) keeps
+its existing tolerance. The narrow check is deliberate: it covers every row
+of the table above without re-deriving the nominal path's list of carrier
+bridges.
+
+Pinned by `errors/fn-param-call-{float-into-int,int-into-float,cstr-into-int,bool-into-int,too-many-args}`,
+and by `fn-param-call-checked`, which runs well-typed calls on both engines.

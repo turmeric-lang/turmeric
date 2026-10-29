@@ -55,17 +55,17 @@ directory is worse for triage than no index.
 | --- | --- | --- |
 | [borrowed-drop-temporary-leaks-outside-the-hoist](borrowed-drop-temporary-leaks-outside-the-hoist.md) | low (leak) | A fresh move-only Drop value passed straight to a `^borrow` parameter is freed after the call only when the call returns a scalar and no earlier argument has an effect; `(f64vec-show (f64vec-new 4 7.1))` and `(peek2 (g) (mk))` still leak it |
 | [partial-application-of-borrow-param-consumes-affine-arg](partial-application-of-borrow-param-consumes-affine-arg.md) | low (refusal) | `(u8vec-set! a)` spends affine `a` (TUR-E0150 on its next use) though a saturated call into the same `^borrow` slot does not: `elab_partial_apply` has no use rollback, and adding one needs a non-escape check on the closure |
-| [syntax-gensym-not-fresh-against-program-names](syntax-gensym-not-fresh-against-program-names.md) | medium-low (silent capture) | `syntax-gensym` in a `defmacro*` is fresh only against the macro-time env's symbols, so it can return `tmp_0` while the call site binds `tmp_0`, and the expansion captures it; the template `(gensym)` checks the program's names and does not |
+| ~~[syntax-gensym-not-fresh-against-program-names](../archive/syntax-gensym-not-fresh-against-program-names.md)~~ | medium-low (silent capture) | **RESOLVED 2026-10-29** (archived): `syntax-gensym` in a `defmacro*` draws from the elaborator's counter and skips names either symbol table holds, so it no longer hands out a name the call site binds. Pinned by `syntax-gensym-fresh-against-program` |
 
 ## Found by the refined-fn-types optimization scan (filed 2026-10-28)
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [call-through-fn-param-skips-argument-checks](call-through-fn-param-skips-argument-checks.md) | high (silent wrong value) | A call through a plain `(fn [...] R)` parameter checks neither argument types nor arity: `(f 7)` at `(fn [float] float)` prints `1.97626e-323` compiled and a different garbage integer interpreted, and `(f 1 2)` is accepted. `elab_poly_call` never compares the arguments with `poly_type`. Every other spelling of the call is checked |
-| [effect-row-check-skips-let-bound-fn-values](effect-row-check-skips-let-bound-fn-values.md) | medium | A function that performs `IO` passes into a `#fx{}` parameter through `(let [h noisy] ...)`, plain or annotated; passed by name it is `TUR-E0009`. Also why a `#fx{}` parameter cannot be used to skip CPS colouring (R-1) |
+| ~~[call-through-fn-param-skips-argument-checks](../archive/call-through-fn-param-skips-argument-checks.md)~~ | high (silent wrong value) | **RESOLVED 2026-10-29** (archived): a call through a plain `(fn [...] R)` parameter checks its arity (TUR-E0002) and refuses a scalar argument of another scalar class (TUR-E0001), as a direct call does. Pinned by `errors/fn-param-call-*` and `fn-param-call-checked` |
+| ~~[effect-row-check-skips-let-bound-fn-values](../archive/effect-row-check-skips-let-bound-fn-values.md)~~ | medium | **RESOLVED 2026-10-29** (archived): the ER4 check follows a `let` alias (plain, annotated, chained) or a let-bound lambda to its row, so laundering `IO` into a `#fx{}` slot is TUR-E0009. Pinned by `errors/effect-row-*let*`; the row-less-parameter half moves to fn-param-not-forwardable-to-effect-rowed-param |
 | [fn-param-not-forwardable-to-effect-rowed-param](fn-param-not-forwardable-to-effect-rowed-param.md) | medium-low | A plain `(fn [int] int)` parameter cannot be passed to a parameter typed with any effect row, `#fx{e}` included: `expected (fn [int] : int), got ptr<void>`. The carrier and nominal representations are never bridged in that direction |
 | [turi-contract-check-is-a-full-native-call](turi-contract-check-is-a-full-native-call.md) | low (performance) | Under `tur --interpret` every contract check is a full native call (+0.29 us, about three times an `if` + `panic`), which roughly doubles a tight loop with a check in it |
-| [cps-fn-unreached-rescans-all-inline-c](cps-fn-unreached-rescans-all-inline-c.md) | low (compile time) | `fn_unreached` byte-scans all of the program's inline C, stdlib included, once per unreferenced coloured user function: about 0.5 ms each, and 42--55% of `emit-c` on a generated program with hundreds of them. No measurable effect on the corpus |
+| ~~[cps-fn-unreached-rescans-all-inline-c](../archive/cps-fn-unreached-rescans-all-inline-c.md)~~ | low (compile time) | **RESOLVED 2026-10-29** (archived): the inline-C name test is one hash probe into a set of identifier suffixes built once per program; the emitted C is byte-identical |
 | ~~[float-conversion-check-ignores-fixture-flags](../archive/float-conversion-check-ignores-fixture-flags.md)~~ | low (test coverage) | **RESOLVED 2026-10-29** (archived): the checker passes each fixture's `flags`, and `--corpus` names the fixtures whose `emit-c` failed |
 
 ## Found landing refined-function-types-plan F1 (filed 2026-10-28)
@@ -147,7 +147,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [jit-inline-c-thread-local-collapses-to-global](jit-inline-c-thread-local-collapses-to-global.md) | medium (silent wrong value) | Under `tur jit`, c2mir only warns on inline C's `_Thread_local` and compiles it as one global shared by all threads (a two-thread probe prints `99` where cc prints `7`). The JIT guide promises a cc fallback, which happens only for `__thread` |
+| ~~[jit-inline-c-thread-local-collapses-to-global](../archive/jit-inline-c-thread-local-collapses-to-global.md)~~ | medium (silent wrong value) | **RESOLVED 2026-10-29** (archived): c2mir's "Thread local is not implemented" warning now fails the JIT compile, so the program falls back to cc (TUR-W0070) and prints 7. Pinned by `jit-inline-c-thread-local` |
 
 ## Found checking the wasm residue of mir-interp-tail-calls-grow-the-stack (filed 2026-10-24)
 

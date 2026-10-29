@@ -1,0 +1,20 @@
+;; fn-param-call-checked -- docs/archive/call-through-fn-param-skips-argument-
+;; checks.md.  Calls through a plain function-typed parameter whose arguments
+;; DO match its signature still compile and run, on both engines.
+(defn inc1 [x : int] : int (+ x 1))
+(defn halfp [x : float] : float (* x 0.5))
+(defn shout [s : cstr] : cstr (if (= 1 1) s "no"))
+(defn flip [b : bool] : bool (not b))
+(defn add [x : int y : int] : int (+ x y))
+(defn via-int [f : (fn [int] int)] : int (f 7))
+(defn via-flt [f : (fn [float] float)] : float (f 7.1))
+(defn via-str [f : (fn [cstr] cstr)] : cstr (f "hi"))
+(defn via-bool [f : (fn [bool] bool)] : bool (f false))
+(defn via-two [f : (fn [int int] int)] : int (f 3 4))
+(defn main [] : int
+  (println (via-int inc1))
+  (println (via-flt halfp))
+  (println (via-str shout))
+  (println (via-bool flip))
+  (println (via-two add))
+  0)

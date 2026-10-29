@@ -47,3 +47,20 @@ elaborator's `gensym_fresh`.
 
 `stdlib/numvec.tur` mints the binder in a template `defmacro` with `(gensym)`
 and passes it to its `defmacro*` (`numvec-of__`) as an argument.
+
+## Resolution (2026-10-29)
+
+The macro-time env now registers its own `syntax-gensym`
+(`native_macro_syntax_gensym`, `src/turi/macro_env.c`), next to
+`syntax-struct-fields`. While an expansion runs, it reads the compile through
+the same reflection window (`g_reflect_elab`) and takes the second fix
+direction. It draws from the elaborator's own counter (`next_gensym_id`, the
+one `gensym_fresh` uses), skips any candidate that either symbol table holds,
+and interns the winner in both. So neither later `syntax-gensym`s nor
+template `(gensym)`s hand it out again. Outside an expansion it behaves as
+the interpreter's native always did.
+
+The repro now prints `11`. Pinned by `syntax-gensym-fresh-against-program`,
+which binds `tmp_0`, `tmp_1` and `tmp_2` at the call site and nests two
+expansions. The `numvec-of__` workaround in `stdlib/numvec.tur` still works
+and was left alone.

@@ -1,0 +1,5 @@
+;; call-through-fn-param-skips-argument-checks: a call through a plain
+;; `(fn [int] int)` parameter checks its argument (it passed the double bits).
+(defn inc1 [x : int] : int (+ x 1))
+(defn via-int [f : (fn [int] int)] : int (f 7.1))
+(defn main [] : int (println (via-int inc1)) 0)

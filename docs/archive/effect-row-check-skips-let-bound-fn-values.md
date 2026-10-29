@@ -48,3 +48,29 @@ accepted into a slot with an explicit row instead of being treated as
   parameter cannot be used to skip CPS colouring: today such a parameter is
   coloured like any other (found by refined-fn-types-optimization-scan-plan,
   candidate 1).
+
+## Resolution (2026-10-29)
+
+Took the first fix direction. The ER4 call-site walk
+(`check_call_site_rows_in_expr`, `src/passes/effect_check.c`) notes the
+initializer of every immutable `let` binding it passes, when that
+initializer is a variable or a lambda (`let_fn_init_note`). An argument that
+names such a binding is followed back through the chain
+(`let_fn_init_resolve`, bounded) to the named function or lambda, and that
+row is checked. A plain alias, an annotated `h : (fn [int] int)`, an alias of
+an alias, and a let-bound lambda that performs `IO` are all `TUR-E0009` now.
+A `^mut` binding is not followed: it may hold something else by the time of
+the call.
+
+The second direction, deciding what a row-less function type means when it
+flows into a slot with a row, is not done. It has no live repro today: a
+row-less `(fn [int] int)` PARAMETER cannot be passed to a rowed slot at all
+(`expected (fn [int] : int), got ptr<void>`), which is the open
+[fn-param-not-forwardable-to-effect-rowed-param](../reported/fn-param-not-forwardable-to-effect-rowed-param.md).
+Whoever fixes that one must decide this question there, or the hole opens
+through a parameter. Until then R-1 (skipping CPS colouring for a `#fx{}`
+parameter) is not safe on this fix alone.
+
+Pinned by `errors/effect-row-let-alias-into-pure-param`,
+`errors/effect-row-annotated-let-alias-into-pure-param` and
+`errors/effect-row-let-lambda-into-pure-param`.

@@ -66,3 +66,29 @@ a `memcmp` at each offset for each of two spellings of the name (lines
   smaller cost (43 M instructions at p1000) but the same shape.
 - Gate the result: the emitted C must stay byte-identical (the table above was
   checked that way).
+
+## Resolution (2026-10-29)
+
+Both fix directions landed in `src/compiler/emit_cps_ir.c`, with the scan's
+exact match rule kept:
+
+- `g_reach_refs.called` is mirrored into a pointer hash set.
+- The inline C is indexed once per program (`reach_index_build`, built on the
+  first `fn_unreached` call and freed by `reach_refs_reset`). The old test
+  matched a spelling wherever the next byte is not alphanumeric and is not a
+  lone `_`, and it required nothing before the match. So the set holds every
+  suffix of every identifier run that ends at such a byte, a run followed by
+  `__` included. An identifier-only spelling is then one hash probe. A
+  spelling with any other byte (a source name such as `foo-bar`) still takes
+  the byte scan, so the answer is the same in every case.
+
+Checked 2026-10-29 on the Debug (ASan) `tur`, `emit-c`, two runs each, with the
+emitted C byte-identical before and after:
+
+| program | before | after |
+|---|---|---|
+| p250 | 1.14 / 1.20 s | 0.60 / 0.56 s |
+| p1000 | 4.63 / 4.56 s | 1.95 / 2.50 s |
+
+`tests/run.sh`'s `expected.c` snapshot comparisons pass unchanged, which is
+the corpus half of the byte-identity gate.

@@ -1,0 +1,20 @@
+;; jit-inline-c-thread-local -- docs/archive/jit-inline-c-thread-local-
+;; collapses-to-global.md.  Inline C's `_Thread_local` is per thread: the
+;; worker's write must not reach main's copy.  c2mir compiles the keyword as
+;; one shared global (with a warning), so `tur jit` printed 99; it now refuses
+;; that compile and falls back to cc (TUR-W0070), which prints 7.
+(defn tls-probe [] : int
+  ```c
+  /* __tur_include__: #include <pthread.h> */
+  /* __tur_include__: static _Thread_local long tl_counter; */
+  /* __tur_include__: static void *tls_worker(void *a) { (void)a; tl_counter = 99; return 0; } */
+  pthread_t t;
+  tl_counter = 7;
+  pthread_create(&t, 0, tls_worker, 0);
+  pthread_join(t, 0);
+  return (int)tl_counter;
+  ```)
+
+(defn main [] : int
+  (println (tls-probe))
+  0)
