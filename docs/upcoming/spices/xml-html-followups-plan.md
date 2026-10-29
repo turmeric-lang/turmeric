@@ -1,6 +1,6 @@
 # Plan: XML/HTML spice follow-ups -- markup literals, CSS selectors, hiccup
 
-> Status: in progress (2026-10-28). Done: C1-C4 (`dom/select`; turmeric-spices
+> Status: all phases built (2026-10-29), awaiting merge. Done: C1-C4 (`dom/select`; turmeric-spices
 > branch `claude/ecstatic-cori-ikodwq`), A1-A2 (`dom/holes`, `dom/markupc`,
 > tur-html `html/markup`, tur-xml `xml/markup`), A3-A4 (`html->dom`,
 > `#html-live{...}` and `tpl-update!`) and D1-D3 (tur-html `html/hiccup`:
@@ -9,7 +9,9 @@
 > `claude/ecstatic-cori-ikodwq-markup`, since D builds on A2's hole classes.
 > D2's `RenderHtml` and tourist's `html-response` (A-3) are on the same
 > branch; A5 (`read-string-at`) is on turmeric's `claude/ecstatic-cori-ikodwq`.
-> Not started: A6.
+> A6 (holes in JavaScript, CSS and srcdoc) is on the markup branch too.
+> Nothing is left unbuilt; the plan moves to `docs/archive/` once both
+> branches have merged.
 > What changed against the plan while
 > building it is under "Implementation notes (2026-10-28)" at the end. The
 > compiler fixes A and D needed are on turmeric's
@@ -921,6 +923,34 @@ What building C, A1-A2 and D1 changed against the text above.
   a hole of `#html{...}`, `#xml{...}` or a direct `html*` / `xml*` call
   points at the hole. Pinned by `tests/fixtures/errors/read-string-at-hole-position`
   and the spices' error tables.
+- **A6 (2026-10-29).** Built as planned, HTML only (`#xml{...}` keeps code
+  holes compile errors: XML has no raw text, so a `<script>` body there
+  is entity-decoded before the JavaScript parser sees it). Two template
+  markers carry code holes -- `k` (in attribute NAME) and `r` (in the raw
+  text of TAG) -- and the first-render check confirms the attribute or the
+  element; the value is escaped for its language at the hole, so the
+  runtime adds only the outer layer (attribute escaping, or a check that a
+  trusted value cannot end its `<script>` / `<style>`). The classes are
+  `ToJs`, `ToCodeText` (inside a JavaScript or CSS string, shared),
+  `ToCss`, `ToSrcdoc`, plus `ToUrlAttr` reused for CSS `url(...)`. The
+  attribute decoder reads `&quot;` `&apos;` `&amp;` `&lt;` `&gt;` and
+  numeric ASCII references and refuses any other, rather than modelling
+  the HTML spec's legacy rules. A CSS hole in a declaration that a later
+  `{` turns into a nested rule is caught by a second pass over the whole
+  region. Live literals take code holes: a `<script>` / `<style>` text is
+  a patch group like an attribute's value.
+- A6's tests: an escaping table per context, the structure gate (37
+  hostile values in 14 code contexts parse like `x`), and the browser
+  check (`fixtures/browser.sh`: one page per hostile value, every handler
+  clicked, a sentinel that must stay unset, and every JavaScript, JSON and
+  CSS string hole and the srcdoc text read back as the value). The Go
+  `html/template` oracle was not built: the browser read-back checks the
+  same thing against the real parsers. Hiccup did not gain code holes; its
+  dynamic `on*` / `style` / `srcdoc` values and `<script>` bodies remain
+  compile errors.
+- A `#html{...}` written inside another literal's hole does not read (the
+  macro-time reader has no `#html` reader macro); bind the inner fragment
+  in a `let` first.
 - D3's gate holds for every element of the 54 html5lib files except those
   holding what dom/edit refuses to rebuild (a `<plaintext>`, raw text
   holding its end tag or `<!--`, a comment holding `<!--` or `-->`):
