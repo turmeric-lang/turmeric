@@ -40,3 +40,25 @@ git checkout tests/fixtures/refine-class-param-inheritance/expected.diag
 4. Make the mistake loud: have `run.sh` FAIL a happy-path fixture that carries
    `expected.diag` (or `unexpected.diag`), naming `expected.stderr` as the file
    it wanted.
+
+## Resolution (2026-10-29)
+
+All four fix directions landed:
+
+1. The three pins that held were renamed to `expected.stderr` and pass.
+2. `gadt-struct-namespace-prefer` now pins the current wording ("defdata
+   'Stack' supersedes the same-named struct 'Stack'" / "uses of ':Stack'
+   resolve to the new type"), as `expected.stderr`.
+3. `warn-no-entry-point-near-miss`: this was a real regression. Def and
+   defdynamic initializers became statements of the synthesized `main` at
+   their source position (toplevel-def-initializers-run-before-toplevel-
+   expressions). Every program carries the stdlib's, so `body.len` was never 0
+   and TUR-W0624 never fired. `emit_module.c` now counts the bytes of `body`
+   those initializers contribute (`body_def_init_len`), and the warning fires
+   when nothing else is in `body`. A program with a real top-level statement
+   still does not warn. The fixture's pin is `expected.stderr` now, and it
+   passes.
+4. `tests/run.sh`'s `run_happy` FAILs a happy-path fixture that carries
+   `expected.diag` or `unexpected.diag`, and names the `.stderr` file it
+   should have used. Checked by dropping an `expected.diag` into a passing
+   fixture.

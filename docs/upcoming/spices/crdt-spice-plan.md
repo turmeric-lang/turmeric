@@ -425,7 +425,7 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
     of them, from its own module `crdt/replica` so every module can import
     it, and it is exported now. `replica` returns `(:: s ReplicaId)` rather
     than `s`: the bare return drops `const` in the emitted C,
-    [defopaque-over-sym-implicit-return-drops-const](../../reported/defopaque-over-sym-implicit-return-drops-const.md).)*
+    [defopaque-over-sym-implicit-return-drops-const](../../archive/defopaque-over-sym-implicit-return-drops-const.md).)*
   - **A `defalias` is not an exportable name**, so `ReplicaId` cannot appear in
     the module's `(export ...)` list. Callers spell `Sym` or use `replica`.
     Another reason to want the newtype.

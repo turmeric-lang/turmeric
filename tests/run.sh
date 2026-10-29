@@ -6,6 +6,10 @@
 #     input.tur (or <name>.tur)
 #     expected.stdout
 #     expected.c          (optional codegen snapshot)
+#     expected.stderr     (optional: substrings that must appear in stderr)
+#     unexpected.stderr   (optional: substrings that must NOT appear)
+#                         -- not expected.diag / unexpected.diag, which a
+#                         happy-path fixture FAILs on
 #     expected.xfail      (optional: a named failing test -- the stdout
 #                          mismatch is expected and passes; a match fails
 #                          and says to delete the marker)
@@ -747,6 +751,21 @@ run_happy() {
     if   [ -f "$dir/input.tur" ]; then input="$dir/input.tur"
     elif [ -f "$dir/$(basename "$dir").tur" ]; then input="$dir/$(basename "$dir").tur"
     else no_input_fail "$dir" "$name" "$(basename "$dir").tur"; return; fi
+
+    # expected.diag / unexpected.diag are the errors/ path's files.  A
+    # happy-path fixture pins warnings with expected.stderr; one carrying
+    # .diag instead used to pass whatever the compiler printed, and two such
+    # pins drifted unnoticed (docs/archive/positive-fixture-expected-diag-ignored.md).
+    local _diag
+    for _diag in expected.diag unexpected.diag; do
+        if [ -f "$dir/$_diag" ]; then
+            local _want="${_diag%.diag}.stderr"
+            local _log="$RESULTS_DIR/$(printf '%s' "happy-$name" | tr '/ ' '__').log"
+            echo "FAIL $name — happy-path fixture carries $_diag, which only errors/ fixtures read; rename it to $_want" > "$_log"
+            write_result "FAIL" "$name" "$_diag in a happy-path fixture (wanted $_want)" "$_log"
+            return
+        fi
+    done
 
     # T19: Skip fixtures requiring TSan when TSan is not active.
     if [ -f "$dir/requires.tsan" ] && [ "$TUR_TSAN" != "1" ]; then

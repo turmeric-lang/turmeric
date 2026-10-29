@@ -1,0 +1,37 @@
+;; bare-nullary-ctor-value -- docs/archive/bare-nullary-ctor-as-value-emits-
+;; undeclared-c.md.  A nullary constructor named as a value (`Red`, not
+;; `(Red)`) used to emit an undeclared C identifier; it is its application.
+(defdata ^copy Color (Red) (Green) (Rgb int int int))
+(defdata Flag (Create) (Dup) (Named cstr))
+(defdata Maybe [a] (Nada) (Got a))
+
+(defn code [c : Color] : int
+  (match c
+    (Red) 1
+    (Green) 2
+    (Rgb r g b) (+ r (+ g b))))
+
+(defn flag-name [f : Flag] : cstr
+  (match f
+    (Create) "create"
+    (Dup) "dup"
+    (Named s) s))
+
+(defn got-or [m : (Maybe int) d : int] : int
+  (match m
+    (Nada) d
+    (Got x) x))
+
+(defn main [] : int
+  (let [c Red
+        g Green]
+    (println (code c))
+    (println (code g)))
+  (println (code Green))
+  (let [v [Red Green (Rgb 1 2 3)]]
+    (println (code (vec-get v 0)))
+    (println (code (vec-get v 2))))
+  (println (flag-name Dup))
+  (let [n : (Maybe int) Nada]
+    (println (got-or n 7)))
+  0)

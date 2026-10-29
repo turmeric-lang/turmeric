@@ -124,7 +124,7 @@ optimization scan" in `docs/reported/README.md`.
    accident, with a misleading `TUR-E0042`.
 
 Also found while checking candidate 4:
-[float-conversion-check-ignores-fixture-flags](../reported/float-conversion-check-ignores-fixture-flags.md).
+[float-conversion-check-ignores-fixture-flags](float-conversion-check-ignores-fixture-flags.md).
 The float-conversion mechanism check never sees an experiment-gated fixture,
 the refined-fn-types ones included.
 

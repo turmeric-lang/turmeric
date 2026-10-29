@@ -10764,7 +10764,7 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
         } else if (spec->fn->param_types[i].kind == TY_FN) {
             pc = "int64_t";
         } else {
-            pc = type_c_name(spec->arg_types[i]);
+            pc = emit_param_c_spell(type_c_name(spec->arg_types[i]));
         }
         buf_puts(out, pc);
         /* gcc14-int-conversion (carrier-representation-tracking): record this ABI
@@ -11603,7 +11603,7 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 if (!fd->closure && !_fwd_inline_c && type_struct_pass_by_ptr(_fwd_pty)) {
                     buf_printf(out, "const %s *", type_c_name(_fwd_pty));
                 } else {
-                    buf_puts(out, type_c_name(_fwd_pty));
+                    buf_puts(out, emit_param_c_spell(type_c_name(_fwd_pty)));
                 }
             }
             /* Record the just-emitted param type substring (ground truth). */
@@ -21274,6 +21274,12 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * under user_has_main. Filed under
      * docs/archive/history/top-level-def-init-dropped.md. */
     Buf def_init_body; buf_init(&def_init_body);
+    /* warn-no-entry-point-near-miss: the bytes of `body` that are def /
+     * defdynamic initializers.  Since those became statements of the
+     * synthesized main at their source position, every program's `body` holds
+     * the stdlib's, so `!body.len` no longer meant "no top-level statements"
+     * and TUR-W0624 never fired. */
+    size_t body_def_init_len = 0;
     /* Phase 19: separate buffers for ordered final assembly:
      *   early_file   - pass 0: struct typedefs + drop glue
      *   fwd_decls    - pass 1: function forward declarations
@@ -22128,6 +22134,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                                               fp_ret);
                     if (slot && !def_declare_only) {
                         Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
+                        size_t _b0 = body.len;
                         emit_repl_slot_init_open(init_sink, ctx.indent, e->as.def_.binding,
                                                  bn, slot_cast);
                         if (e->as.def_.init) {
@@ -22138,13 +22145,16 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                             free(iv);
                         }
                         emit_repl_slot_init_close(init_sink, ctx.indent, bn);
+                        body_def_init_len += body.len - _b0;
                     } else if (e->as.def_.init && !def_declare_only) {
                         Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
+                        size_t _b0 = body.len;
                         char *iv = emit_value(&ctx, init_sink, e->as.def_.init);
                         indent_buf(init_sink, ctx.indent);
                         buf_printf(init_sink, "%s = (%s (*)(%s))(intptr_t)(%s);\n",
                                    bn, fp_ret, fp_args, iv);
                         free(iv);
+                        body_def_init_len += body.len - _b0;
                     }
                     free(fp_args);
                     free(bn);
@@ -22160,9 +22170,11 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                 if (!e->as.def_.init && !def_declare_only) {
                     /* No initializer: the slot is bound all the same. */
                     Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
+                    size_t _b0 = body.len;
                     emit_repl_slot_init_open(init_sink, ctx.indent, e->as.def_.binding,
                                              bn, slot_cast);
                     emit_repl_slot_init_close(init_sink, ctx.indent, bn);
+                    body_def_init_len += body.len - _b0;
                 }
             } else {
                 buf_printf(&file, "%s%s %s;\n", split_def_storage(e->as.def_.binding),
@@ -22179,6 +22191,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                  * run in the order they are written -- what the interpreter
                  * does, and what R7RS 5.1 requires of a Scheme program. */
                 Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
+                size_t _b0 = body.len;
                 if (slot)
                     emit_repl_slot_init_open(init_sink, ctx.indent, e->as.def_.binding,
                                              bn, slot_cast);
@@ -22193,6 +22206,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                 if (slot) emit_repl_slot_init_close(init_sink, ctx.indent, bn);
                 free(biv);
                 free(iv);
+                body_def_init_len += body.len - _b0;
             }
             free(bn);
         } else if (e->kind == EX_FN_DEF) {
@@ -22283,9 +22297,11 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             DynVarEntry *entry = e->as.defdynamic_.entry;
             char *mname = mangle_dynvar_name(entry->name->name);
             Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
+            size_t _b0 = body.len;
             char *rv = emit_value(&ctx, init_sink, e->as.defdynamic_.root_expr);
             indent_buf(init_sink, ctx.indent);
             buf_printf(init_sink, "_dynvar_root_%s = %s;\n", mname, rv);
+            body_def_init_len += body.len - _b0;
             free(rv);
             free(mname);
         } else if (e->kind == EX_INLINE_C) {
@@ -23092,7 +23108,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
          * `examples/minikanren` and `examples/snake` silently did for weeks
          * with a `-main` nobody called.  A near-miss name is the signal an
          * entry point was intended; say so at its definition. */
-        if (!body.len && near_miss_main) {
+        if (body.len == body_def_init_len && near_miss_main) {
             diag_emit_with_code(DIAG_WARNING, near_miss_main->binding->span,
                                 TUR_W0624_NO_ENTRY_POINT_NEAR_MISS,
                                 "no `main` and no top-level statements: the "
