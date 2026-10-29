@@ -627,6 +627,19 @@ extern void MIR_scan_string (MIR_context_t ctx, const char *str);
 extern MIR_item_t MIR_get_global_item (MIR_context_t ctx, const char *name);
 extern void MIR_load_module (MIR_context_t ctx, MIR_module_t m);
 extern void MIR_load_external (MIR_context_t ctx, const char *name, void *addr);
+
+#if defined(__wasm32__) || defined(__EMSCRIPTEN__)
+/* wasm32: a foreign call from interpreted code goes through a JS trampoline
+   unless a stub for its exact wasm signature is registered.  SIG is the
+   result's wasm type code then each argument's ('i' i32, 'j' i64, 'f' f32,
+   'd' f64; 'v' for no result), e.g. "jji" for int64_t f (int64_t, int32_t);
+   a variadic callee takes its fixed arguments then 'i' for the va buffer.
+   The stub calls FN with the arguments read from SLOTS (8 bytes apart) and
+   stores any result at RETBUF.  Returns 0 when the registry is full or SIG
+   is malformed.  See mir-wasm.c "Exact-signature stubs". */
+typedef void (*MIR_wasm_ff_stub_t) (void *fn, const void *slots, void *retbuf);
+extern int MIR_wasm_register_ff_stub (const char *sig, MIR_wasm_ff_stub_t stub);
+#endif
 extern void MIR_link (MIR_context_t ctx, void (*set_interface) (MIR_context_t ctx, MIR_item_t item),
                       void *(*import_resolver) (const char *) );
 

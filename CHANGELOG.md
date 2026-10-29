@@ -2,7 +2,23 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.72.0] -- 2026-10-29
+
+### Added
+
+- **Try Turmeric gains a Compile engine.** Run can compile the buffer to C and
+  execute it on MIR's interpreter in the page, so inline C works in the browser;
+  the language menu's Engine section picks Interpret (default) or Compile. Under
+  Compile, a prompt turn's inline-C defn compiles on its first call and runs
+  natively thereafter.
+- **Refined function types, behind `--enable=refined-fn-types`.** A `(fn ...)`
+  type may carry `#refine{...}` predicates on its parameters and result;
+  refinements are erased for type identity, and call sites check them. The
+  experiment is a prototype introduced in 0.72.0.
+- **`read-string-at` maps forms read from a string literal to their source.** A
+  procedural macro reading code out of a string literal -- the `${...}` holes of
+  `#html{...}` and `#xml{...}` -- now reports errors in a hole at the hole's
+  place in the user's file, not `<read-string>`.
 
 ### Added
 
@@ -43,16 +59,22 @@ All notable changes to Turmeric are documented here.
 - **TUR-W0037 (narrow parameter reaches an inline-C body) no longer fires on
   stdlib code.** It is advice to a body's author, and printed on every program
   that loaded such a module, where nobody could act on it.
-- **A bin-name collision no longer fails `tur install`.** When another
-  installed spice already provides `tur-foo`, the new spice installs with a
-  warning: its `tur-foo` is built but not linked, and its modules are
-  importable as usual. `tur <spice>/<bin>` (and `tur x <spice>/<bin>`) runs a
-  given spice's binary whichever spice holds the bare name, and
-  `tur install --link <spice>/<bin>` moves the bare name without rebuilding.
-  `tur uninstall` of the holder leaves the name unlinked rather than promoting
-  another provider. `state.tur` records each bin's `:linked` flag; an older
-  registry reads as all-linked. `tur list` marks a shadowed bin, and
-  `tur list --json` adds a `"bins"` list with the flags.
+- **BREAKING -- type-declaration flags go before the name as `^attrs`.**
+  `defopaque`, `defstruct`, `defdata` and `defgadt` take `^copy`, `^move`,
+  `^linear`, `^affine`, `^heap`, `^sealed`, `^non-null` and `^no-auto-ctor`
+  before the name, and `defeffect`'s `^extends`/`^capability` and `defn`'s
+  `^no-unwind`/`^used`/`^export-as` move too. The old keyword spellings are hard
+  errors `TUR-E0717`/`TUR-E0718`; `tur fmt` migrates them.
+- **A bin-name collision no longer fails `tur install`.** When another installed
+  spice already provides `tur-foo`, the new spice installs with a warning: its
+  `tur-foo` is built but not linked, and its modules are importable as usual.
+  `tur <spice>/<bin>` (and `tur x <spice>/<bin>`) runs a given spice's binary
+  whichever spice holds the bare name, and `tur install --link <spice>/<bin>`
+  moves the bare name without rebuilding. `tur uninstall` of the holder leaves
+  the name unlinked rather than promoting another provider. `state.tur` records
+  each bin's `:linked` flag; an older registry reads as all-linked. `tur list`
+  marks a shadowed bin, and `tur list --json` adds a `"bins"` list with the
+  flags.
 
 ### Fixed
 
@@ -116,6 +138,25 @@ All notable changes to Turmeric are documented here.
   `src/main.tur`; inside a project, to a `:spices` dependency's. An entry file
   is a program, so it now reports `module 'main' not found`, matching the
   install-time module conflict check that already skipped it.
+- **`tur fmt` keeps user reader macros and `#[attr]` attributes.** Formatting
+  printed a reader macro's expansion in place of the invocation and dropped
+  `#use-reader-macros` lines, and wrote `#[used]` back as the unparseable
+  `#used`; directory walks also choked on `*.html.tur` markup files. All are
+  handled, and a `defn` headed by attributes lays out normally.
+- **`defmacro*` compiles again beside `^used` modules, and reader macros can be
+  re-registered identically.** A `^used` defn on the search path no longer makes
+  every `defmacro*` fail with `module ... not found`, and reaching one define
+  form twice -- `#use-reader-macros` followed by the import -- is a no-op
+  instead of a collision error.
+- **An undecided instance-vs-class variance pair warns as `TUR-W0372`.** The
+  solver could previously stay silent when it could neither prove nor refute the
+  pair, so a generic caller could hit the instance's entry check with no
+  compile-time signal; `--strict-refine` and `--dump-refine=json` now see it
+  too.
+- **64-bit values survive effects and handlers on the browser's Compile
+  engine.** Floats through an effect, handler or CPS entry no longer lose their
+  upper half, and setjmp-based programs no longer force a fallback, so the
+  engine runs the whole corpus family.
 
 ## [0.71.2] -- 2026-10-27
 

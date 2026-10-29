@@ -27,6 +27,8 @@ import { parseLangDirective } from './lang-picker.js';
 import { maybeShowDoc } from './doc-panel.js';
 import { tabs, activeId, lastRunByTab } from './tabs.js';
 import { promptSetEnabled, replSessionReset, replSessionAccept } from './repl.js';
+import { getEngine } from './engine.js';
+import { configureJitClient, runCompiled, evalCompiled, jitPendingStats, stopCompiled } from './jit-client.js';
 
 // The eval Worker, its state and its outstanding requests live in
 // eval-client.js; these are its hooks back into the console and the Run queue.
@@ -38,6 +40,22 @@ configureEvalClient({
     nextEval: () => processQueue(),
     onPending: () => armEvalWatchdog(),
 });
+
+// The Compile engine's worker (wasm-jit-plan P4): its output goes to the same
+// console, and its runs count toward the same watchdog and Stop.
+configureJitClient({
+    onPrint: (text) => appendToConsole(`<span class="console-output">${escapeHtml(text)}</span>`),
+    onPrintErr: (text) => appendToConsole(`<span class="console-error">${escapeHtml(text)}</span>`),
+    onLoading: (on) => on ? showStatus('Loading the compiler...', 'info') : showStatus('Ready', 'success'),
+    onPending: () => armEvalWatchdog(),
+});
+
+/** Outstanding requests across both engines' workers, for the watchdog. */
+function allPendingStats() {
+    const a = pendingStats();
+    const b = jitPendingStats();
+    return { count: a.count + b.count, oldestStart: Math.min(a.oldestStart, b.oldestStart) };
+}
 
 let executionQueue = [];
 let isExecuting = false;
@@ -80,6 +98,22 @@ function processQueue() {
     // directive tail now -- set_lang rejects anything after it.
     const { lang } = parseLangDirective(code);
 
+    // wasm-jit-plan P6: with the Compile engine picked, a prompt turn goes to
+    // that engine's own session, where an inline-C defn compiles on its first
+    // call.  (Only the prompt reaches here then: a Compile Run is
+    // runCompiledProgram.)
+    if (getEngine() === 'compile') {
+        const next = () => setTimeout(processQueue, 0);
+        evalCompiled(code).then((r) => {
+            if (r.trapped) {
+                r.result += '\nthe Compile engine\'s session is gone; the next turn starts a fresh one';
+            }
+            resolve(r);
+            next();
+        }, (err) => { reject(err); next(); });
+        return;
+    }
+
     send({ type: 'eval', input: code, lang, quiet }, { resolve, reject, isEval: true });
 }
 
@@ -98,7 +132,7 @@ function armEvalWatchdog() {
 function evalWatchdogTick() {
     const panel = document.getElementById('console-loading');
     const stopBtn = document.getElementById('stop-btn');
-    const { count, oldestStart } = pendingStats();
+    const { count, oldestStart } = allPendingStats();
     if (count === 0) {
         clearInterval(evalWatchdogTimer);
         evalWatchdogTimer = null;
@@ -110,7 +144,7 @@ function evalWatchdogTick() {
     }
     const age = performance.now() - oldestStart;
     if (age >= CONFIG.EXECUTION_TIMEOUT) {
-        stopEvalWorker(`Stopped: still running after ${CONFIG.EXECUTION_TIMEOUT / 1000} s`);
+        stopRun(`Stopped: still running after ${CONFIG.EXECUTION_TIMEOUT / 1000} s`);
     } else if (age >= EVAL_STOP_OFFER_MS) {
         if (stopBtn) stopBtn.hidden = false;
         if (panel && panel.style.display === 'none') {
@@ -118,6 +152,20 @@ function evalWatchdogTick() {
             evalWatchdogShowedPanel = true;
         }
     }
+}
+
+/**
+ * Stop whatever is running: a Compile run stops its own worker, which holds no
+ * session, so the interpreter's session survives it; anything else stops the
+ * interpreter's worker (stopEvalWorker).
+ */
+export function stopRun(reason) {
+    if (jitPendingStats().count > 0) {
+        stopCompiled(reason);
+        evalWatchdogTick();   // nothing is pending now: hides Stop and its panel
+        return;
+    }
+    stopEvalWorker(reason);
 }
 
 /**
@@ -210,6 +258,12 @@ export async function executeCode(source, promptHtml, showTiming = false, echoSo
 
         if (isError) {
             appendToConsole(`<span class="console-error">${escapeHtml(result)}</span>`);
+            // The interpreter's own advice names `tur run`, which the page does
+            // not have; the page's way to run inline C is the Compile engine.
+            if (/inline-C not supported in interpreter mode/.test(result)) {
+                appendToConsole('<span class="console-engine">To run inline C here, pick Compile '
+                                + 'in the language menu\'s Engine section.</span>');
+            }
         } else if (!suppressResult && result && result !== 'nil') {
             appendToConsole(`<span class="console-result">${escapeHtml(result)}</span>`);
         }
@@ -242,6 +296,15 @@ export function definesMainEntry(code) {
  * Run the current editor contents
  */
 export async function runCode() {
+    if (getEngine() === 'compile') {
+        const code = getEditor().getValue();
+        if (!code.trim()) {
+            appendToConsole('<span class="console-error">Error: No code to evaluate</span>');
+            return;
+        }
+        await runCompiledProgram(code);
+        return;
+    }
     if (wasmState() !== WASM_STATE.READY) {
         showStatus('WASM not ready', 'error');
         return;
@@ -272,6 +335,48 @@ export async function runCode() {
 
     const { isError } = await executeCode(code, '', true, false);
     recordRun(tabId, code, isError);
+}
+
+/** One-line summary of how a Compile run went: which engine ran it, and when
+ * it compiled, what each stage cost. */
+function engineLine(a) {
+    const ms = (x) => `${Math.round(x)} ms`;
+    const exit = a.exit ? `, exit ${a.exit}` : '';
+    if (a.engine === 'compiled') {
+        return `compiled${exit} -- front ${ms(a.front_ms || 0)}, c2mir ${ms(a.compile_ms || 0)}, `
+             + `run ${ms(a.run_ms || 0)}`;
+    }
+    if (a.engine === 'interpreted') return `interpreted (the compiler fell back)${exit}`;
+    return `not run${a.reason ? `: ${a.reason}` : ''}`;
+}
+
+/**
+ * Run the buffer on the Compile engine (wasm-jit-plan P4): compiled to C and
+ * run on MIR's interpreter, as a whole program -- `main` if it defines one --
+ * the way `tur run` would.  It does not touch the interpreter's session: what
+ * the program defines is not callable at the prompt afterwards, and the other
+ * tabs' runs are not replayed first.
+ */
+async function runCompiledProgram(code) {
+    const consoleLoading = document.getElementById('console-loading');
+    if (consoleLoading) consoleLoading.style.display = 'flex';
+    try {
+        const a = await runCompiled(code);
+        if (a.trapped) {
+            // The module instance is gone (wasm-jit-plan 5.8); jit-client.js
+            // already dropped it, so the next Run boots a fresh one.
+            appendToConsole(`<span class="console-error">Error: ${escapeHtml(a.reason)}</span>`);
+            appendToConsole('<span class="console-engine">the Compile engine restarts on the next Run</span>');
+        } else {
+            appendToConsole(`<span class="console-engine">${escapeHtml(engineLine(a))}</span>`);
+        }
+        updateExecTime(a.wallMs || 0);
+    } catch (err) {
+        appendToConsole(`<span class="console-error">Error: ${escapeHtml(err.message)}</span>`);
+        updateExecTime(0);
+    } finally {
+        if (consoleLoading) consoleLoading.style.display = 'none';
+    }
 }
 
 /**

@@ -33,7 +33,8 @@ import { promptSetEnabled, initReplInput, configureRepl } from './repl.js';
 import { startLspClient } from './lsp.js';
 import { CONFIG } from './config.js';
 import { updateUrlHash, loadFromUrlHash, shareCode } from './share.js';
-import { stopEvalWorker, resetWasm, executeCode, definesMainEntry, runCode, formatCode, traceResetEnv } from './session.js';
+import { stopRun, resetWasm, executeCode, definesMainEntry, runCode, formatCode, traceResetEnv } from './session.js';
+import { initEnginePicker } from './engine.js';
 
 // ============================================================================
 // The editor, and the hookups that cannot be imports
@@ -442,9 +443,10 @@ function initEventListeners() {
     // Run button
     document.getElementById('run-btn')?.addEventListener('click', runCode);
 
-    // Stop: shown by the eval watchdog while a request runs long (W-3).
+    // Stop: shown by the eval watchdog while a request runs long (W-3) --
+    // on either engine's worker.
     document.getElementById('stop-btn')?.addEventListener('click',
-        () => stopEvalWorker('Stopped'));
+        () => stopRun('Stopped'));
 
     // Clear button (Shift+click = reset full workspace)
     document.getElementById('clear-btn')?.addEventListener('click', (e) => {
@@ -532,6 +534,7 @@ function initEventListeners() {
 
     // Language picker (dialect radio group + layer checkboxes)
     initLangPicker();
+    initEnginePicker();
 
     // Mobile overflow menu (⋯) — forwards each menu item to the underlying
     // button or the examples <select>, so the existing wiring stays the

@@ -1,7 +1,7 @@
 ;; refined-function-types-plan F2 (D4b): the result of a call through a refined
-;; function type is checked after the call -- never elided in v1 (F4 measures
-;; first) -- because the static coercion check cannot always prove a function
-;; delivers it.  `neg` states no result refinement, so passing it is TUR-W0372
+;; function type is checked after the call -- always, since F4 measured the
+;; check as free next to the call and kept it -- because the static coercion
+;; check cannot always prove a function delivers it.  `neg` states no result refinement, so passing it is TUR-W0372
 ;; at the coercion (F3), and the call through `g` panics at run time.
 (defn sq1 [x : int] : int (+ (* x x) 1))
 (defn neg [x : int] : int (- 0 x))

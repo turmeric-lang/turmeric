@@ -154,6 +154,12 @@ struct Form {
     LiteralSuffix lit_suffix; /* Phase N: type suffix for F_INT/F_FLOAT; LIT_SUF_NONE otherwise */
     uint8_t       fx_prov;    /* FxProvenance: only meaningful for F_MAP forms */
     uint8_t       lit_spell;  /* LitSpelling: only meaningful for F_INT / F_STR */
+    /* fmt-expands-user-reader-macros: set on the form a user reader macro
+     * (`reader-macros/define`) expanded to, whose span then covers the whole
+     * `#name{...}` invocation.  `tur fmt` prints such a form as its source
+     * text, so formatting keeps the syntax the author wrote.  Nothing else
+     * reads it. */
+    uint8_t       rm_src;
     union {
         bool          b;
         int64_t       i;

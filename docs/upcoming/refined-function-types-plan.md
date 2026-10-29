@@ -1,11 +1,11 @@
 # Plan: Refinements in Function Types (Contravariant Subtyping)
 
 > **Status:** PROTOTYPE (2026-10-28), behind `--enable=refined-fn-types` (an
-> `EXPERIMENTS[]` row, introduced 0.72.0). F0-F3 are implemented, and F5's
-> docs and its `--warn-unrefined-fn-slot` lint (`TUR-W0388`). Open: F4 (decide
-> the result-check elision by measurement) and graduation, which waits on a
-> named first consumer (open question 6) -- see "Implementation status" at the
-> end. Lower priority; not on the v1 critical path.
+> `EXPERIMENTS[]` row, introduced 0.72.0). F0-F3 are implemented, F4 is
+> decided by measurement (keep the check), and F5's docs and its
+> `--warn-unrefined-fn-slot` lint (`TUR-W0388`) are in. Open: graduation, which
+> waits on a named first consumer (open question 6) -- see "Implementation
+> status" at the end. Lower priority; not on the v1 critical path.
 > **Type:** Compiler / Type System (refinement types)
 > **Predecessors:** `docs/archive/refinement-types-plan.md` ("Indirect calls",
 > 2026-07-24 -- the function-typed parameter case was left open there)
@@ -309,6 +309,19 @@ result refinement. Two ways to drop it, in increasing cost:
 
 Pick one with numbers, not by default.
 
+**Decided 2026-10-28: option 1, keep the check.** Measured in
+[benchmarks/refined-fn-result-check-results.md](../../benchmarks/refined-fn-result-check-results.md).
+Compiled, the check is noise next to the call it guards. As emitted today,
+where every function calling through a function value is CPS-colored (R-1), it
+is -1% to +7% across two runs, within their run-to-run spread. On a direct loop
+it is within noise, about 1.5 ns a call either way. A wrapper for an unproved
+coercion costs a second indirect call on every call: +123--132% today and
++65--80% on a direct loop. It would save nothing on a proved
+coercion, because that check is already free. Release builds pay nothing
+unless `--keep-contracts` is given. In the interpreter a check costs about
+0.3--0.5 us a call, but an ordinary `defn` return check costs the same: it is
+the generic contract-check call, and a wrapper does not remove it.
+
 ### F5 -- Docs and graduation
 
 - `refinement-types-guide.md`: replace the "[prototype] Higher-order callees
@@ -369,8 +382,8 @@ Pick one with numbers, not by default.
    rather than writing a new one.
 3. Named parameters in function types (D3): which spelling, and is there
    demand beyond `(> r x)`-style result bounds? **Deferred** (2026-10-27).
-4. F4: wrapper or keep the check. **Decided by measurement** (2026-10-27),
-   as F4 says.
+4. ~~F4: wrapper or keep the check.~~ **Resolved 2026-10-28 by measurement:
+   keep the check** (see F4).
 5. **D4a reporting policy.** An argument at a call through `f` is reported
    with the lenient `runtime_guarded` policy (error only on a closed
    refutation). The alternative is to treat it like a function's own return
@@ -438,8 +451,8 @@ except the lint.
   evaluated once into a temporary, with every non-trivial argument before it,
   so evaluation order is unchanged. The crossing is a `RefineCallSite` with
   `fn_type` set, decided by `rt_resolve_fn_type_crossing` under the D4a policy;
-  a proof nils the check. The result is checked after the call (never elided:
-  F4) and assumed through `rt_resolve_fn_with_locals`, for parameters the body
+  a proof nils the check. The result is checked after the call (never elided;
+  F4 decided to keep it) and assumed through `rt_resolve_fn_with_locals`, for parameters the body
   does not rebind. Under `--no-contracts` there are no checks and nothing is
   assumed. The interpreter runs the same `Expr` tree, so `run-turi.sh` sees the
   same panic text and location. Fixtures: `refine-fn-type-call-proved`
@@ -459,10 +472,16 @@ except the lint.
   Fixtures: `refine-fn-variance-ok`, `errors/refine-fn-variance-param`,
   `errors/refine-fn-variance-result`, `errors/refine-in-fn-type-scope` (D3,
   D6).
-- **F4.** Not started; still "measure first".
+- **F4.** Decided by measurement: keep the check (option 1), so no code
+  changed. `benchmarks/bench-refined-fn-result-check.sh` times the hot loop as
+  emitted plus the isolated check sequence
+  (`benchmarks/refined-fn-result-check-isolated.c`). Results and reasoning are
+  in `benchmarks/refined-fn-result-check-results.md`. Its finding that the
+  call costs far more than the check is followed up in
+  [refined-fn-types-optimization-scan-plan](../archive/refined-fn-types-optimization-scan-plan.md).
 - **F5.** The guide's "Limits" bullet, the internals guide's RT1 list and codes
   table, the `TUR-E0378` explain text and the rationale's "Subtyping" row are
   updated. `--warn-unrefined-fn-slot` / `TUR-W0388` is in, off by default and
   independent of the gate (fixture `refine-fn-unrefined-slot-lint`).
-  Graduation is not done: it waits on F4 and on a first consumer.
+  Graduation is not done: it waits on a first consumer.
 

@@ -155,6 +155,11 @@ int reader_macros_register(ReaderMacroRegistry *reg,
         if (existing->delim != delim) continue;
         if (existing->name.len != name.len) continue;
         if (memcmp(existing->name.p, name.p, name.len) != 0) continue;
+        /* The same definition read twice -- a `#use-reader-macros` of a
+         * module's file and then an import of that module, which registers
+         * its defines again -- is not a collision: nothing would change. */
+        if (existing->mode == mode && form_equal(existing->template, template))
+            return 0;
         if (reg->strict) {
             char msg[128];
             snprintf(msg, sizeof(msg),

@@ -914,6 +914,43 @@ fi
 rm -rf "$TMPDIR_T"
 
 # ---------------------------------------------------------------------------
+# fmt-expands-user-reader-macros: a user reader macro's invocation is printed
+# back as written, and a `#use-reader-macros` directive survives.  Formatting
+# used to print the macro's EXPANSION (`#tag{a}` became `(+ "a")`) and drop
+# the directive line entirely -- so `tur fmt --check` in CI rewrote, or could
+# no longer read, every file using a user reader macro.
+# ---------------------------------------------------------------------------
+NAME="fmt-keeps-user-reader-macros"
+TMPDIR_T=$(mktemp -d)
+cat > "$TMPDIR_T/macros.tur" <<'EOF'
+(reader-macros/define 'tag :raw-brace '(str-concat "tag:" $body))
+(reader-macros/define 'sum :datum-bracket '(+ $body))
+EOF
+cat > "$TMPDIR_T/main.tur" <<'EOF'
+#use-reader-macros "macros.tur"
+(defn main [] : int
+  (println #tag{<p class="a">  {x}  \} </p>})
+  (println   #sum[1 2   3])
+  0)
+EOF
+cat > "$TMPDIR_T/want.tur" <<'EOF'
+#use-reader-macros "macros.tur"
+(defn main [] : int
+  (println #tag{<p class="a">  {x}  \} </p>})
+  (println #sum[1 2   3])
+  0)
+EOF
+"$TUR" fmt "$TMPDIR_T/main.tur" > /dev/null 2>&1
+"$TUR" fmt --check "$TMPDIR_T/main.tur" > /dev/null 2>&1
+RC_CHECK=$?
+if diff -q "$TMPDIR_T/main.tur" "$TMPDIR_T/want.tur" > /dev/null && [ "$RC_CHECK" -eq 0 ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "check rc=$RC_CHECK; got: $(cat "$TMPDIR_T/main.tur")"
+fi
+rm -rf "$TMPDIR_T"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo

@@ -2240,7 +2240,7 @@ jobs:
       - name: Configure + build WASM
         run: |
           cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-          cmake --build build-wasm -j --target tur_wasm
+          cmake --build build-wasm -j --target tur_wasm tur_wasm_jit
 
       - name: Install web deps
         working-directory: web
@@ -2335,7 +2335,7 @@ jobs:
           tests/docs-offline.spec.js tests/lsp.spec.js
           tests/minimap.spec.js tests/footer.spec.js
           tests/lang-picker.spec.js tests/sw-dev.spec.js tests/trace.spec.js
-          tests/security.spec.js tests/ci.spec.js
+          tests/security.spec.js tests/ci.spec.js tests/jit-engine.spec.js
 
       # Not the default `success()`, because the desktop step above now
       # BLOCKS: a desktop failure would skip this step, mobile would produce no

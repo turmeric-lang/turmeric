@@ -332,4 +332,19 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     integer promotions (docs/archive/c2mir-generic-promotes-controlling-expression.md),
     and a character constant is an int, so sizeof ('a') is sizeof (int).
     Covered by wasm-tests/ffi-test.c and c-tests/new/generic-no-promotion.c.
+
+  0979689, 7572866 (merged as 9859f851, turmeric-lang/mir#17) -- wasm32:
+    emcc refuses any indirect use of setjmp, so a program calling it failed
+    to link; the embedder resolves setjmp to any stand-in, MIR_load_external
+    swaps in a marker, and eval calls setjmp by name in its own frame
+    (wasm-jit-plan 5.6).  MIR_wasm_register_ff_stub (mir.h) lets an embedder
+    register an exact-signature call stub per wasm signature, which
+    wasm_ff_dispatch prefers to the JS trampoline (5.5).  IC_MOVP, LADDR,
+    BSTART, a pointer result and a va pointer argument wrote a 4-byte
+    address into an 8-byte register and left the upper half stale, so
+    c2mir's (long long) f carried garbage high bits.  Every target: a
+    function with no [J]RET (one that only loops) asserted in
+    process_inlines when inlined, and is no longer inlined
+    (docs/archive/mir-inliner-asserts-on-function-with-no-return.md).
+    Covered by wasm-tests/ffi-test.c and c-tests/new/inline-no-return.c.
 ```

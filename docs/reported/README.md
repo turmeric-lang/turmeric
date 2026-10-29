@@ -42,6 +42,17 @@ directory is worse for triage than no index.
 | [partial-application-of-borrow-param-consumes-affine-arg](partial-application-of-borrow-param-consumes-affine-arg.md) | low (refusal) | `(u8vec-set! a)` spends affine `a` (TUR-E0150 on its next use) though a saturated call into the same `^borrow` slot does not: `elab_partial_apply` has no use rollback, and adding one needs a non-escape check on the closure |
 | [syntax-gensym-not-fresh-against-program-names](syntax-gensym-not-fresh-against-program-names.md) | medium-low (silent capture) | `syntax-gensym` in a `defmacro*` is fresh only against the macro-time env's symbols, so it can return `tmp_0` while the call site binds `tmp_0`, and the expansion captures it; the template `(gensym)` checks the program's names and does not |
 
+## Found by the refined-fn-types optimization scan (filed 2026-10-28)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [call-through-fn-param-skips-argument-checks](call-through-fn-param-skips-argument-checks.md) | high (silent wrong value) | A call through a plain `(fn [...] R)` parameter checks neither argument types nor arity: `(f 7)` at `(fn [float] float)` prints `1.97626e-323` compiled and a different garbage integer interpreted, and `(f 1 2)` is accepted. `elab_poly_call` never compares the arguments with `poly_type`. Every other spelling of the call is checked |
+| [effect-row-check-skips-let-bound-fn-values](effect-row-check-skips-let-bound-fn-values.md) | medium | A function that performs `IO` passes into a `#fx{}` parameter through `(let [h noisy] ...)`, plain or annotated; passed by name it is `TUR-E0009`. Also why a `#fx{}` parameter cannot be used to skip CPS colouring (R-1) |
+| [fn-param-not-forwardable-to-effect-rowed-param](fn-param-not-forwardable-to-effect-rowed-param.md) | medium-low | A plain `(fn [int] int)` parameter cannot be passed to a parameter typed with any effect row, `#fx{e}` included: `expected (fn [int] : int), got ptr<void>`. The carrier and nominal representations are never bridged in that direction |
+| [turi-contract-check-is-a-full-native-call](turi-contract-check-is-a-full-native-call.md) | low (performance) | Under `tur --interpret` every contract check is a full native call (+0.29 us, about three times an `if` + `panic`), which roughly doubles a tight loop with a check in it |
+| [cps-fn-unreached-rescans-all-inline-c](cps-fn-unreached-rescans-all-inline-c.md) | low (compile time) | `fn_unreached` byte-scans all of the program's inline C, stdlib included, once per unreferenced coloured user function: about 0.5 ms each, and 42--55% of `emit-c` on a generated program with hundreds of them. No measurable effect on the corpus |
+| [float-conversion-check-ignores-fixture-flags](float-conversion-check-ignores-fixture-flags.md) | low (test coverage) | `check-emitted-float-conversions.py` ignores `flags`: 15 experiment-gated fixtures are silently never checked (all four refined-fn-types ones among them), and the rest are linted under flags they do not run with |
+
 ## Found landing refined-function-types-plan F1 (filed 2026-10-28)
 
 | Report | Severity | One line |
@@ -52,7 +63,8 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [ilp32-word-slots-truncate-64-bit-carriers](ilp32-word-slots-truncate-64-bit-carriers.md) | high (wasm JIT, `tur build --target wasm`) | On wasm32, carriers kept in `intptr_t`/`void *` slots (the CPS backend's `DK` slots, `tur_hamt_get`'s values) or declared at the wrong width (`tur_hamt_count`) lose their top 32 bits. Doubles and large ints come back wrong with no diagnostic: 44 corpus fixtures printed a wrong answer, and more once mir#16 let former traps run to the end |
+| [ilp32-word-slots-truncate-64-bit-carriers](ilp32-word-slots-truncate-64-bit-carriers.md) | high (wasm JIT, `tur build --target wasm`) | On wasm32, carriers kept in `intptr_t`/`void *` slots (`tur_hamt_get`'s values; the CPS backend's `DK` slots were fixed in P5) or declared at the wrong width (`tur_hamt_count`) lose their top 32 bits. Doubles and large ints come back wrong with no diagnostic: 44 corpus fixtures printed a wrong answer, and more once mir#16 let former traps run to the end |
+| [wasm-jit-comparator-result-varies-between-runs](wasm-jit-comparator-result-varies-between-runs.md) | medium (browser JIT) | `typed/list-concat` and `eq-carrier-capturing-comparator` print `false` for `true` on some runs of one module instance and not others (`run.js --repeat 4`); native is right. Present on `main` before P5; not the DK word, the call stubs, `setjmp` or the register fix |
 
 ## Found adding the instance-variance warning (filed 2026-10-27)
 
@@ -3439,6 +3451,15 @@ the `__int128` work only surfaced them.  Both resolved the same day.
 | --- | --- | --- |
 | ~~[c2mir-bool-conversion-truncates](../archive/c2mir-bool-conversion-truncates.md)~~ | medium-high | **RESOLVED 2026-10-10** (archived): conversion to `_Bool` now compares with zero at every conversion site (`gen_conv_if`/`gen_to_bool`), after `++`/`--`/compound assignment, in the constant folder, and into a `_Bool` bit-field (turmeric-lang/mir#8).  Pinned by `tests/fixtures/jit-inline-c-bool-conversion` |
 | ~~[mir-x86-64-long-double-union-pun](../archive/mir-x86-64-long-double-union-pun.md)~~ | medium | **RESOLVED 2026-10-10** (archived): not the generator -- c2mir tagged an element of a union's array member with its element type's alias instead of the union's, so MIR-gen let the read see memory from before the store.  `N_IND` keeps the union alias (turmeric-lang/mir#9); c2mir.c's long double literals are back.  Pinned by `tests/fixtures/jit-inline-c-union-array-pun` |
+
+## Found building the XML/HTML follow-ups (filed 2026-10-28)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [qualified-adt-constructor-mistyped-as-argument](qualified-adt-constructor-mistyped-as-argument.md) | low | `(lib/shapes/Square 4)` passed to a function types as an anonymous `<adt>` and is refused (TUR-E0001); the unqualified constructor and qualified function calls work. tur-html's `hiccup` expands to wrapper functions to avoid it |
+| [module-type-names-collide-across-modules](module-type-names-collide-across-modules.md) | medium | Types are bound by bare name program-wide: two modules that each define `Attr` cannot both load (`defopaque: 'Attr' is already defined`), and a module type sharing a `load`ed type's name fails only at its export check. No program using tur-dom-core can load `stdlib/list-typed.tur` (`String`); tur-html's hiccup types are `H`-prefixed because of it |
+| [generic-callee-tyvar-captured-by-caller](generic-callee-tyvar-captured-by-caller.md) | medium | In `(defn f [A] [xs : (Cons A)] : (Cons int) (if (tnil? xs) (tnil) ...))` the `(tnil)` specializes at `(Cons A)` with the caller's `A`, so the C returns a `Cons__cstr *` from a `Cons__int *` function (an error on gcc 14 / clang 15+); an ascription does not help, renaming the variable does |
+| [for-comprehension-pure-picks-the-payload-type](for-comprehension-pure-picks-the-payload-type.md) | low-medium | `(for [x (some 3)] (P x))` in a `(Option Pt)` defn looks for `Applicative [Pt]`: `.pure` dispatches on a concrete payload type. And a `for` outside a defn's return position (an argument, an annotated `let`) is ambiguous |
 
 ## Filing conventions
 

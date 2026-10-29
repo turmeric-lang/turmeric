@@ -550,6 +550,7 @@ static const TuriNativeCapRow k_rows[] = {
     { "reactor-new", TURI_CAP_IO },                          /* epoll/kqueue fd and a blocking poll */
     { "read-async", TURI_CAP_IO },                           /* read(2)/write(2) on a caller-supplied raw fd -- 0/1/2 need no open */
     { "read-string", 0 },
+    { "read-string-at", 0 },
     { "reload", TURI_CAP_FFI },                              /* reloads the dlopened spice image */
     { "result-collect", 0 },
     { "result-debug", 0 },

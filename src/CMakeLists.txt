@@ -2037,6 +2037,34 @@ if(TUR_WASM)
         )
         # Deduplicate (tutorial.c appears in both WASM_GLUE_SOURCES and TUR_CORE_SOURCES)
         list(REMOVE_DUPLICATES WASM_SOURCES)
+
+        # wasm-jit-plan 5.11: the stdlib as ONE package both modules load,
+        # rather than a copy embedded in each.  Emscripten's file_packager
+        # writes stdlib.data (the files) and stdlib.data.js (their list and
+        # offsets, plus a loader); each module links the loader with --pre-js,
+        # and the loader fetches stdlib.data beside the module's script and
+        # mounts it at /stdlib before main runs.  One build of the package
+        # feeds both links: the offsets are baked into each module, so two
+        # packages would let a module read a file list that does not match
+        # the data it fetched.  The page fetches stdlib.data once and the
+        # service worker caches it for every worker that boots a module.
+        get_filename_component(_tur_emcc_dir "${EMCC}" REALPATH)
+        get_filename_component(_tur_emcc_dir "${_tur_emcc_dir}" DIRECTORY)
+        set(TUR_STDLIB_PKG_DIR ${CMAKE_BINARY_DIR}/stdlib-pkg)
+        file(MAKE_DIRECTORY ${TUR_STDLIB_PKG_DIR})   # the command runs in it
+        file(GLOB_RECURSE _tur_stdlib_files CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/stdlib/*)
+        add_custom_command(
+            OUTPUT ${TUR_STDLIB_PKG_DIR}/stdlib.data ${TUR_STDLIB_PKG_DIR}/stdlib.data.js
+            COMMAND python3 ${_tur_emcc_dir}/tools/file_packager.py stdlib.data
+                    --preload ${CMAKE_SOURCE_DIR}/stdlib@/stdlib
+                    --js-output=stdlib.data.js --quiet
+            WORKING_DIRECTORY ${TUR_STDLIB_PKG_DIR}
+            DEPENDS ${_tur_stdlib_files}
+            COMMENT "Packaging the stdlib for the wasm modules (stdlib.data)"
+            VERBATIM
+        )
+        add_custom_target(tur_stdlib_pkg
+            DEPENDS ${TUR_STDLIB_PKG_DIR}/stdlib.data ${TUR_STDLIB_PKG_DIR}/stdlib.data.js)
         
         # Build the WASM module using Emscripten
         # We compile all sources into object files first, then link with emcc
@@ -2050,12 +2078,15 @@ if(TUR_WASM)
                 -I${CMAKE_CURRENT_SOURCE_DIR}/async
                 -I${CMAKE_CURRENT_SOURCE_DIR}/web
                 ${WASM_SOURCES}
-                # Bundle the stdlib into the module's virtual FS at /stdlib so the
-                # interpreter can (load ...) macros + typed collections at init.
-                # The default cwd is "/", so a cwd-relative "stdlib/<file>" load
-                # (the form the stdlib modules use internally) resolves here too.
-                # web-repl-missing-stdlib-preload.
-                --embed-file ${CMAKE_SOURCE_DIR}/stdlib@/stdlib
+                # The stdlib at /stdlib, so the interpreter can (load ...)
+                # macros + typed collections at init.  The default cwd is "/",
+                # so a cwd-relative "stdlib/<file>" load (the form the stdlib
+                # modules use internally) resolves here too
+                # (web-repl-missing-stdlib-preload).  It comes from the shared
+                # package above; FORCE_FILESYSTEM gives its loader the FS calls
+                # it uses.
+                --pre-js ${TUR_STDLIB_PKG_DIR}/stdlib.data.js
+                -sFORCE_FILESYSTEM=1
                 -o ${CMAKE_BINARY_DIR}/wasm/turmeric.js
                 -sMODULARIZE=1
                 -sALLOW_MEMORY_GROWTH=1
@@ -2084,10 +2115,11 @@ if(TUR_WASM)
             # The emitter's embedded region runtime is a generated TU in
             # TUR_CORE_SOURCES; emcc compiles it straight from the list above,
             # so it must exist before this target runs.
-            DEPENDS ${TUR_REGION_EMBED_C}
+            DEPENDS ${TUR_REGION_EMBED_C} ${TUR_STDLIB_PKG_DIR}/stdlib.data.js
             COMMENT "Building Turmeric WASM module (pthreads, lazy pool)"
             VERBATIM
         )
+        add_dependencies(tur_wasm tur_stdlib_pkg)
 
         # Copy the WASM output to the web directory for development
         add_custom_command(TARGET tur_wasm POST_BUILD
@@ -2097,6 +2129,9 @@ if(TUR_WASM)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${CMAKE_BINARY_DIR}/wasm/turmeric.wasm
                 ${CMAKE_SOURCE_DIR}/web/public/turmeric.wasm
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${TUR_STDLIB_PKG_DIR}/stdlib.data
+                ${CMAKE_SOURCE_DIR}/web/public/stdlib.data
             COMMENT "Copying WASM module to web/public"
         )
 
@@ -2139,10 +2174,27 @@ if(TUR_WASM)
                         ${CMAKE_BINARY_DIR}/wasm-jit/sources.txt
                         ${_TUR_VERSION_STR}
                         ${TUR_MIR_SOURCE_DIR}
+                        ${TUR_STDLIB_PKG_DIR}
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-                DEPENDS ${TUR_REGION_EMBED_C}
+                DEPENDS ${TUR_REGION_EMBED_C} ${TUR_STDLIB_PKG_DIR}/stdlib.data.js
                 COMMENT "Building the Turmeric browser JIT module (turmeric-jit.wasm)"
                 VERBATIM
+            )
+            add_dependencies(tur_wasm_jit tur_stdlib_pkg)
+            # Beside turmeric.{js,wasm} in web/public, where the page's JIT
+            # worker loads it (jit-worker.js); stdlib.data is shared and
+            # tur_wasm copies it.
+            add_custom_command(TARGET tur_wasm_jit POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${CMAKE_BINARY_DIR}/wasm-jit/turmeric-jit.js
+                    ${CMAKE_SOURCE_DIR}/web/public/turmeric-jit.js
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${CMAKE_BINARY_DIR}/wasm-jit/turmeric-jit.wasm
+                    ${CMAKE_SOURCE_DIR}/web/public/turmeric-jit.wasm
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${TUR_STDLIB_PKG_DIR}/stdlib.data
+                    ${CMAKE_SOURCE_DIR}/web/public/stdlib.data
+                COMMENT "Copying the JIT module to web/public"
             )
         endif()
     endif()

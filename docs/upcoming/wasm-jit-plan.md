@@ -1,16 +1,21 @@
 # Plan: the JIT engine in the browser (c2mir + MIR on wasm32)
 
-> **Status:** P0 to P3 done 2026-10-28. The engine builds from CMake as a
-> second module, `turmeric-jit.{js,wasm}` (9.5 MB, `tur_wasm_jit`), and
-> `tests/run-jit-wasm.sh` runs the corpus through it against
-> `tests/jit-wasm-baseline.txt`: 1,915 fixtures compiled, 643 fell back to the
-> interpreter with the right answer, 374 failed, 236 skipped (section 7, P3).
-> The gate passes: every Try Turmeric example compiles or falls back with a
-> reason. It took a fork change -- an interpreted function's address is a
-> real wasm table entry -- which merged as turmeric-lang/mir#16 and is
-> vendored (`f887547f`). Next: P4, which also moves the stdlib into one
-> package both modules share (5.11); P5's `setjmp` and Asyncify are most of
-> what still falls back or fails.
+> **Status:** P0 to P5 done 2026-10-28, and P6's C1. Try Turmeric has a Compile engine
+> (the language menu's Engine section): Run compiles the program to C and
+> runs it on MIR's interpreter in the page, so inline C works there. It is a
+> second module, `turmeric-jit.{js,wasm}` (5.3 MB, `tur_wasm_jit`), loaded on
+> first use; both modules read the stdlib from one shared `stdlib.data`
+> (5.11). P5 made `setjmp` work (the interpreter calls it in its own frame,
+> turmeric-lang/mir#17), gave the runtime's calls exact-signature stubs, and
+> widened the DK machine's word to 64 bits on wasm32 (`tur_dkw`).
+> `tests/run-jit-wasm.sh` against `tests/jit-wasm-baseline.txt`: 2,488
+> fixtures compiled, 191 fell back right, 254 failed, 241 skipped (section
+> 7, P5). Every Try Turmeric example compiles or falls back with a reason.
+> **P6's C1 done 2026-10-28:** with Compile picked, the prompt is a session
+> in the JIT module, where an inline-C defn compiles on its first call. C2
+> waits on [aot-compiled-repl-plan](aot-compiled-repl-plan.md). Asyncify
+> (49 fixtures) and the threads family (260, a fallback by design) are most
+> of what is left of the corpus.
 > **P0 run 2026-10-23** (section 7): the corpus under `TUR_JIT_GEN=interp`
 > on a Release build is 3853/113/70; every interpreter-only failure is in
 > one of three families (threads 82, continuations 10, deep recursion 2),
@@ -281,9 +286,10 @@ As built in P3 (2026-10-28). The design originally added the engine to the
 - `turi_wasm_jit_run(src, args)` (`src/web/wasm_jit_glue.c`) answers with the
   engine line as JSON:
   `{"engine":"compiled"|"interpreted"|"error","exit":N,"reason":...}`.
-- Size, measured: 9.54 MB (2.94 MB gzipped). Of that, 3.67 MB is code and
-  5.86 MB is data, and 4.30 MB of the data is the embedded stdlib. The stock
-  module embeds the same stdlib, which is what 5.11 is about.
+- Size, measured: 9.54 MB (2.94 MB gzipped) at P3. Of that, 3.67 MB was code
+  and 5.86 MB data, and 4.30 MB of the data was the embedded stdlib. Since P4
+  the stdlib is a package both modules share (5.11), and the module is
+  5.27 MB (1.84 MB gzipped).
 
 ### 5.2 The front half moves into a library
 
@@ -377,6 +383,9 @@ the problem for most programs.
 
 ### 5.5 Foreign calls: exact-signature stubs for the runtime
 
+> **Done, P5:** `gen-symtab.py --stubs` and `MIR_wasm_register_ff_stub`
+> (turmeric-lang/mir#17). See P5.
+
 Under T1 every call from the program half into the runtime half is a foreign
 call, and `mir-wasm.c` makes each one a JS round trip with BigInt
 conversions. For a tree-walker replacement that is the hot path, not the
@@ -400,6 +409,9 @@ different problem. This is a fork change (`mir-wasm.c` gains a stub
 registry), so it rides one fork PR with anything else P1 finds.
 
 ### 5.6 `setjmp` in the program half
+
+> **Done differently, P5:** no emitter knob -- the interpreter calls `setjmp`
+> itself in `eval`'s frame on wasm (turmeric-lang/mir#17). See P5.
 
 The emitter puts `setjmp` landings **in the program half**: effect handler
 escapes (`emit_effects.c`, `tur_handler_node { jmp_buf buf; ... }` in the
@@ -524,7 +536,13 @@ the reference for the parts C2 has not specified, and its measured cost
 
 ### 5.11 The stdlib as one package both modules share
 
-Looked into 2026-10-28, prototyped on the JIT module; P4 builds it.
+Looked into 2026-10-28, prototyped on the JIT module, and built in P4
+(`tur_stdlib_pkg` in `src/CMakeLists.txt`). As built: `turmeric.wasm` went
+from 6.85 MB to 2.57 MB (0.96 MB gzipped), `turmeric-jit.wasm` from 9.54 MB to
+5.27 MB (1.84 MB gzipped), and `stdlib.data` is 4.31 MB (1.10 MB gzipped).
+Both links also need `-sFORCE_FILESYSTEM`, for the FS calls the loader
+makes. The loader returns early in a pthread worker, so the pool does not
+fetch it again.
 
 **The problem.** Both modules embed `stdlib/` (`--embed-file stdlib@/stdlib`)
 in their wasm data segment. It is 4.30 MB of the JIT module's 9.54 MB and of
@@ -955,21 +973,153 @@ address, which mir#16 made a table entry.
   line's `front_ms` and `compile_ms`). The page shows these numbers. Cutting
   them for short programs is P6's business (C1's images), not P3's.
 
-### P4 -- the page
+### P4 -- the page: DONE 2026-10-28
 
-The engine toggle, the console's engine line, `RangeError` as a stack
-overflow message, Stop still working (worker teardown), a fresh module
-instance after a trap (5.8), and the shared stdlib package (5.11). Playwright
-covers one inline-C example end to end.
+As built:
+
+- **The engine choice** is a second section of the language popover,
+  `Engine`: Interpret (the default) or Compile, each with a one-line note
+  on what it trades (session and depth against inline C). The language
+  button carries a `compile` chip while Compile is on. The choice is kept in
+  localStorage (`web/engine.js`). The toolbar did not grow, which keeps the
+  action row's overflow behaviour (`toolbar-overflow.spec.js`) as it was.
+- **The worker.** `web/public/jit-worker.js` loads `/turmeric-jit.js` on the
+  first Compile (`web/jit-client.js`), runs `turi_wasm_jit_run`, and posts
+  the program's output as lines, the way `eval-worker.js` does.
+- **Each Run is a whole program**, `main` included, as `tur run` does. It
+  leaves the interpreter's session alone.
+- **The engine line.** After the output comes `compiled -- front, c2mir,
+  run` timings, or `interpreted (the compiler fell back)`, under the glue's
+  own fallback notice (5.7).
+- **Stop and the watchdog** cover Compile runs (`stopRun` in
+  `web/session.js`). Stopping one terminates only the JIT worker: no session
+  is lost, and the interpreter's prompt keeps its definitions.
+- **A trap retires the instance (5.8).** A JS exception out of the module --
+  a wasm trap, or the JS stack limit's `RangeError` -- is answered with
+  `trapped`. The page prints it (`stack overflow: recursion too deep` for
+  the `RangeError`, matching the native line) and terminates the worker. The
+  next Run boots a fresh instance.
+- **An inline-C example** joins the Examples menu. Under Interpret, the
+  interpreter's refusal now carries a pointer to Compile.
+- **The shared stdlib package** (5.11). The service worker precaches
+  `stdlib.data` and `jit-worker.js`. It does not precache the JIT module,
+  which only Compile users fetch; the runtime cache keeps it once they have.
+  CI, the deploy and `tur run wasm` build both modules.
+- **Tests.** `web/tests/jit-engine.spec.js` (on CI's blocking desktop list)
+  covers the inline-C example picked through the menus and kept across a
+  reload, the interpreter's refusal and its pointer, a stack overflow
+  followed by a fresh instance, and Stop on a runaway compiled program with
+  the interpreter's session intact. `tools/wasm-jit/check-examples.sh` now
+  passes all 19 examples.
+
+Found on the way:
+
+- **The emitter deadlocked in the browser.** `compile_to_c` runs the emitter
+  through `tur_run_on_big_stack` (`src/compiler/stack_guard.c`), which
+  creates a pthread with a big stack and joins it. A browser worker cannot
+  start that thread until it yields to its event loop, so the join waited
+  forever. Node starts it regardless, which is why P3's node harness never
+  saw it. On Emscripten the job now runs on the caller's stack, the module's
+  16 MiB. Any other create-then-join in code the page reaches would hang the
+  same way, so it is worth a look whenever the page hangs where node does not.
+- **`math.h` in inline C fell back** on `import of undefined item
+  __fpclassifyl`, which section 6 had predicted. All three `__fpclassify*`
+  functions are in the import table now.
+- **A function that only loops** -- `(defn spin [n : int] : int (spin (+ n
+  1)))` -- trips an assertion in MIR's inliner, natively as well
+  ([mir-inliner-asserts-on-function-with-no-return](../archive/mir-inliner-asserts-on-function-with-no-return.md)).
+  Fixed in P5 by turmeric-lang/mir#17.
 
 ### P5 -- stubs and `setjmp`
 
 5.5 (fork PR, then sync) and 5.6 (emitter knob). Re-run P3's harness; the
 baseline file should shrink, and that shrink is the test.
 
+**Done 2026-10-28.** The baseline went from 1,017 lines to 445:
+
+| | P3 | P5 |
+|---|---|---|
+| compiled | 1,915 | 2,488 |
+| interpreted, right answer | 643 | 191 |
+| failed | 374 | 254 |
+| skipped | 236 | 241 |
+
+Gate (`check-examples.sh`): all 19 examples right, 11 compiled (`effects`
+and `inline-c` among them) and 8 falling back on threads.
+
+What it took, and how it differs from 5.6 as written:
+
+- **`setjmp` without an emitter knob.** The plan's `tur_rt_try` outlining
+  was not needed. The fork's interpreter already runs `setjmp` in `eval`'s
+  own frame natively (`func_addr == setjmp_addr`); on wasm, where its address
+  cannot be taken, `eval` now calls `setjmp` by name, `jit_import_resolver`
+  hands MIR a stand-in for the import, and `MIR_load_external` swaps in a
+  marker (turmeric-lang/mir#17, `INTERP_SETJMP`). `longjmp` goes through the
+  FFI as before. Measured: no loop slowdown -- the module already used
+  Emscripten's SjLj for `jit_engine.c`'s own landings.
+- **5.5's stubs.** `gen-symtab.py --stubs` writes one per wasm signature among
+  the runtime objects' functions plus every small libc shape (196); the fork's
+  `MIR_wasm_register_ff_stub` takes them. A loop of libm calls runs 2-3x
+  faster. A stub's `call_indirect` is checked where the JS trampoline coerced,
+  so a C function declared at the wrong type now traps (`function signature
+  mismatch`) instead of computing garbage: the five `reactor-fd-*` /
+  `reactor-signal-*` rows moved from a BigInt error to that trap.
+- **A 64-bit DK word.** With `setjmp` working, the CPS backend's programs
+  reached the engine and printed wrong floats: the DK machine carried values
+  as `intptr_t`, 32 bits here (shape 1 of
+  [ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md)).
+  `tur_dkw` is `int64_t` where `intptr_t` is narrower and `intptr_t`
+  elsewhere, so native output is unchanged.
+- **Two fork bugs on the way.** An address stored into an 8-byte interpreter
+  register through `void **` left the upper half stale, and c2mir's
+  `(long long) f` read it whole, so the CPS registry missed (fixed in mir#17).
+  The inliner's assert on a function with no return (found in P4) rides the
+  same PR.
+
+What is left in the baseline, by reason (a fixture counts once):
+
+| Family | Fixtures | Owner |
+|---|---|---|
+| The program starts threads (refused by design) | 190 fell back right; 70 fell back and the interpreter got it wrong too | stays a fallback (risk 7) |
+| Wrong answer on the compiled path | 56 | shapes 2-3 of the ILP32 report (HAMT/vec `void *` values, wrong-width `extern-c`); P0's continuations family, wrong under `TUR_JIT_GEN=interp` natively too (`direct-shift-outside-lexical-reset`, `shift0-receiver-runs-outside-its-reset`); [wasm-jit-comparator-result-varies-between-runs](../reported/wasm-jit-comparator-result-varies-between-runs.md) |
+| Asyncify: `emscripten_fiber_swap` | 49 | unowned; the stubs remove one JS frame per runtime call, the trampoline's interp entries remain |
+| Other traps: `Aborted()` (26), signature mismatch (16), `exit` reaching JS (12), JS stack (8, deep recursion such as `escape-deep-capture`), out-of-bounds (2), `unwind` (2) | 66 | unsorted |
+| Imports with no host (`fork`, `socket`, `popen`, ...) | 13 | stay fallbacks |
+
 ### P6 -- REPL session
 
 5.9: C1's images on the page, then C2 as its plan specifies.
+
+**C1 done 2026-10-28.** With Compile picked, the page's prompt goes to a
+session in the browser JIT module (`jit-worker.js` answers `eval` with
+`turi_wasm_eval`), and that module installs its own C1 hook
+(`src/web/wasm_jit_glue.c`, `wasm_inline_c_jit_build`): the defn's program
+through `compile_to_c` with the export shims, the S2 split and the pruner, then
+`tur_jit_compile_image`, which on this target links with MIR's interpreter.
+The image stays for the session; the interpreter calls its `__ffi` shim as it
+does natively. Under Interpret the prompt is the interpreter module's session,
+as before, so the two sessions are separate.
+
+- **Cost.** A defn's first call compiles in 100-270 ms in node (native C1:
+  ~135 ms); later calls take under a millisecond.
+- **A Run that falls back no longer resets the session.**
+  `turi_wasm_run_program` ran the program in the session's env after a
+  `turi_wasm_reset`, which would have taken the prompt's definitions with it.
+  It now runs the program in an env of its own and puts the session back.
+- **Tests.** `jit-engine.spec.js` defines a loop-bearing inline-C defn at the
+  prompt under both engines: Interpret refuses it and points at Compile, and
+  Compile answers 128 and keeps it across a Run. `run.js --turns
+  tools/wasm-jit/smoke/turns.tur` does the same under node.
+- **Limits, as C1's.** Only a defn whose whole body is inline C, with a scalar
+  signature, that calls no other Turmeric definition; a refusal is an error
+  value and the session carries on. The prompt is one line, so the fence is
+  too: ``(defn seven [] : int ```c return 7; ```)``.
+
+**C2 is not started**, natively or here: [aot-compiled-repl-plan](aot-compiled-repl-plan.md)
+records it as designed and investigated, with open questions it needs settled
+before it lands (C2, point 5). It stays this plan's next step once that plan
+starts it, and the page should get it the way it got C1 -- the module's own
+hook over the same driver code.
 
 ## 8. T2, scoped but not scheduled
 

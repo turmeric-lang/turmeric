@@ -6,506 +6,88 @@
 # line FAILs the run; a better one is reported so the line can go.
 # Regenerate from an unsharded, unfiltered run:
 #   TUR_JIT_WASM_BASELINE_UPDATE=1 bash tests/run-jit-wasm.sh
-all-any-fn-param interpreted  # import of undefined item setjmp
-annotated-fat-lambda-param interpreted  # import of undefined item setjmp
-any-value-call interpreted  # import of undefined item setjmp
-any-widen-frame-box-dyn-call-operand interpreted  # import of undefined item setjmp
-any-widen-frame-box-past-dyn-call interpreted  # import of undefined item setjmp
-any-widen-fresh-payload-aliases interpreted  # import of undefined item setjmp
-any-widen-of-a-borrowed-local interpreted  # import of undefined item setjmp
-any-widen-retaining-callee fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-args-evaluated-left-to-right-effect-unit fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-args-option-implicit fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-arrow-compose-float interpreted  # import of undefined item setjmp
-ascribe-fat-closure-call interpreted  # import of undefined item setjmp
-async-await-basic fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+all-any-fn-param interpreted  # the program starts threads (pthread_create), which this engine cannot run
+any-widen-frame-box-dyn-call-operand interpreted  # the program starts threads (pthread_create), which this engine cannot run
+any-widen-frame-box-past-dyn-call interpreted  # the program starts threads (pthread_create), which this engine cannot run
+any-widen-fresh-payload-aliases interpreted  # the program starts threads (pthread_create), which this engine cannot run
+any-widen-of-a-borrowed-local interpreted  # the program starts threads (pthread_create), which this engine cannot run
+args-option-implicit fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 async-await-channel fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-async-await-payload-types fail  # stdout mismatch on the compiled path
-async-capturing-body-env-dropped fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-async-capturing-closure fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 async-echo-server fail  # stdout mismatch on the interpreted path: import of undefined item socket
-async-effect-spawn fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-async-error fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 async-file fail  # stdout mismatch on the interpreted path: the program starts threads (tur_timer_wheel_new), which this engine cannot run
-async-let-bound-body-env-dropped fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-async-let-bound-body-env-dropped-cps fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-async-on-thread-body-env-dropped fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-async-panic-rejects-future fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-async-park-reaped-after-settle fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-async-struct-capturing-body-env-dropped fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+async-on-thread-body-env-dropped fail  # stdout mismatch on the error path: the module threw: unwind
 async-timer-basic fail  # stdout mismatch on the interpreted path: the program starts threads (tur_timer_wheel_new), which this engine cannot run
-async-with-handler fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-await-below-evicted-caller-or-nontail-resume fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-await-below-struct-capturing-lambda fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-await-below-unthreaded-frame-refused interpreted  # import of undefined item setjmp
-await-fresh-spawn-future-freed fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-await-in-generic-capturing-lambda fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-await-in-generic-capturing-lambda-struct fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-await-in-struct-capturing-async-body fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-await-through-constrained-rank2-value fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-await-through-fn-value fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-await-through-rank2-param fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-backtrack-integration-effects interpreted  # import of undefined item setjmp
-bare-fat-float-result interpreted  # import of undefined item setjmp
-bare-fat-float-result-dedup interpreted  # import of undefined item setjmp
-bare-fat-int-and-float-combinator interpreted  # import of undefined item setjmp
-bare-fat-lambda-closure-returning interpreted  # import of undefined item setjmp
-bare-fat-lambda-param interpreted  # import of undefined item setjmp
-bare-fat-let-float-binding interpreted  # import of undefined item setjmp
-bare-fat-nontail-float-noannot interpreted  # import of undefined item setjmp
-bare-fat-nontail-int-roundtrip interpreted  # import of undefined item setjmp
+await-below-evicted-caller-or-nontail-resume fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+await-below-struct-capturing-lambda fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+await-in-generic-capturing-lambda fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+await-in-generic-capturing-lambda-struct fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+await-through-fn-value fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 barrier-rendezvous fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-byval-spine-drop-refused-nonscalar-param interpreted  # import of undefined item setjmp
-call-cc-star interpreted  # import of undefined item setjmp
-callcc-in-fiber fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-callcc-kv-sugar interpreted  # import of undefined item setjmp
-callcc-linear-k interpreted  # import of undefined item setjmp
-callcc-real-capture interpreted  # import of undefined item setjmp
-callcc-star-context interpreted  # import of undefined item setjmp
+byval-spine-drop-refused-nonscalar-param interpreted  # the program starts threads (pthread_create), which this engine cannot run
+callcc-in-fiber fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 cancel-chan fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 cancel-cooperative fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-cancel-guard-typed-closures fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 cancel-select fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-capability-effect-poly interpreted  # import of undefined item setjmp
-cfnptr-vs-boxed-monomorph-split interpreted  # import of undefined item setjmp
 childhandle-linear fail  # stdout mismatch on the interpreted path: import of undefined item fork
-class-var-applied-result-in-constrained-generic interpreted  # import of undefined item setjmp
-classic-list-surface interpreted  # import of undefined item setjmp
-cloneable-capture-precision interpreted  # import of undefined item setjmp
-cloneable-context-if interpreted  # import of undefined item setjmp
-cloneable-context-if-outer-frames interpreted  # import of undefined item setjmp
-cloneable-context-let interpreted  # import of undefined item setjmp
-cloneable-context-multishot interpreted  # import of undefined item setjmp
-cloneable-defer-replay interpreted  # import of undefined item setjmp
-cloneable-defer-suspend interpreted  # import of undefined item setjmp
-cloneable-drop-rc interpreted  # import of undefined item setjmp
-cloneable-multi-resume interpreted  # import of undefined item setjmp
-cloneable-owning-borrow-capture interpreted  # import of undefined item setjmp
-cloneable-rc interpreted  # import of undefined item setjmp
-cloneable-ref interpreted  # import of undefined item setjmp
-cloneable-shift-receiver-cont-freed interpreted  # import of undefined item setjmp
-closure-calls-let-bound-lambda interpreted  # import of undefined item setjmp
-closure-captured-mut-opaque fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-closure-captured-mut-shared interpreted  # import of undefined item setjmp
-closure-captures-under-every-form fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-closure-combinator-env-released fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-closure-env-free-fresh-returning-call interpreted  # import of undefined item setjmp
-closure-env-free-nonretain-fatparam interpreted  # import of undefined item setjmp
-closure-let-in-self-tail-loop interpreted  # import of undefined item setjmp
-closure-slot-ptr-void-fn-word interpreted  # import of undefined item setjmp
-closure-slot-ptr-void-param-sinks fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-colored-generic-erased-carrier-param interpreted  # import of undefined item setjmp
-comonad-capturing-closure interpreted  # import of undefined item setjmp
-comonad-extend-witness interpreted  # import of undefined item setjmp
+class-var-applied-result-in-constrained-generic fail  # stdout mismatch on the compiled path
+classic-list-surface interpreted  # the program starts threads (pthread_create), which this engine cannot run
 comparator-float-elements-word-adapter fail  # stdout mismatch on the compiled path
 constrained-defn-cons-return-monomorphize fail  # stdout mismatch on the compiled path
-constrained-generic-instance-inheritance interpreted  # import of undefined item setjmp
-constrained-generic-relay-word-temp-return interpreted  # import of undefined item setjmp
 constrained-instance-dispatch-nested-parametric-element fail  # stdout mismatch on the compiled path
 constrained-instance-element-dispatch fail  # stdout mismatch on the compiled path
-cont-flavors interpreted  # import of undefined item setjmp
-cont-pred-every-flavor interpreted  # import of undefined item setjmp
-cont-query-wrapped-handler-k interpreted  # import of undefined item setjmp
-cont-value-typed fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-context-call-frame interpreted  # import of undefined item setjmp
-context-division interpreted  # import of undefined item setjmp
-continuation-callcc interpreted  # import of undefined item setjmp
-continuation-escape interpreted  # import of undefined item setjmp
-continuation-escape-fn interpreted  # import of undefined item setjmp
-conv-adt-record-fn-field-call interpreted  # import of undefined item setjmp
-conv-defstruct-fn-field-lowering interpreted  # import of undefined item setjmp
-conv-defstruct-option-fn-element fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-conv-defstruct-option-hkt-instance-bodies fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
+conv-defstruct-option-hkt-instance-bodies fail  # stdout mismatch on the compiled path
 conv-defstruct-result-struct-field-typedef-order fail  # stdout mismatch on the compiled path
 conv-defstruct-return-bridge-inline-c fail  # stdout mismatch on the compiled path
-cps-backend-capture-borrow interpreted  # import of undefined item setjmp
-cps-backend-capture-fnvalue interpreted  # import of undefined item setjmp
-cps-backend-capture-handle interpreted  # import of undefined item setjmp
-cps-backend-capture-handler-case interpreted  # import of undefined item setjmp
-cps-backend-capture-intermediate interpreted  # import of undefined item setjmp
-cps-backend-capture-nonscalar interpreted  # import of undefined item setjmp
-cps-backend-capture-perform interpreted  # import of undefined item setjmp
-cps-backend-capture-shift-body interpreted  # import of undefined item setjmp
-cps-backend-composite-in-continuation interpreted  # import of undefined item setjmp
-cps-backend-core interpreted  # import of undefined item setjmp
-cps-backend-delegate-match interpreted  # import of undefined item setjmp
-cps-backend-fallback-intermediary interpreted  # import of undefined item setjmp
-cps-backend-float fail  # stdout mismatch on the compiled path
-cps-backend-float-effect fail  # stdout mismatch on the compiled path
-cps-backend-fn-param interpreted  # import of undefined item setjmp
-cps-backend-fn-param-effectful interpreted  # import of undefined item setjmp
-cps-backend-generic-island interpreted  # import of undefined item setjmp
-cps-backend-handler-fallback interpreted  # import of undefined item setjmp
-cps-backend-indirect-call interpreted  # import of undefined item setjmp
-cps-backend-mixed interpreted  # import of undefined item setjmp
-cps-backend-multi-handle interpreted  # import of undefined item setjmp
-cps-backend-multiarg-effect interpreted  # import of undefined item setjmp
-cps-backend-multiarg-effect-float fail  # stdout mismatch on the compiled path
-cps-backend-rc-drop-branch interpreted  # import of undefined item setjmp
-cps-backend-rc-nonatomic-operand interpreted  # import of undefined item setjmp
-cps-backend-ref-noncrossing-drop interpreted  # import of undefined item setjmp
-cps-backend-two-perform interpreted  # import of undefined item setjmp
-cps-bt-scope-thunk-calls-user-fn interpreted  # import of undefined item setjmp
-cps-callback-registry-past-256 fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-capture-named-env interpreted  # import of undefined item setjmp
-cps-capturing-letrec-loop-deep fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-capturing-local-lambda-called-in-place fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-catch-unwind-across-perform fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-catch-unwind-in-clause interpreted  # import of undefined item setjmp
-cps-catch-unwind-multishot interpreted  # import of undefined item setjmp
-cps-clone-float-arg-from-carrier interpreted  # import of undefined item setjmp
-cps-closure-arg-kept-by-callee interpreted  # import of undefined item setjmp
-cps-colored-generic-clone-join fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-continuation-many-captures interpreted  # import of undefined item setjmp
-cps-defer-in-nested-let-body interpreted  # import of undefined item setjmp
-cps-direct-ascribed-adt-int-bridge interpreted  # import of undefined item setjmp
-cps-direct-tail-erasing-ascription interpreted  # import of undefined item setjmp
-cps-direct-tail-float-spec-clone interpreted  # import of undefined item setjmp
-cps-effectful-and-pure-fnval-one-param interpreted  # import of undefined item setjmp
-cps-effectful-callback-aggregate-args fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-effectful-callback-multi-arg interpreted  # import of undefined item setjmp
-cps-effectful-callback-pointer-args interpreted  # import of undefined item setjmp
-cps-effectful-callback-pointer-result interpreted  # import of undefined item setjmp
-cps-effectful-callback-scalar-kinds interpreted  # import of undefined item setjmp
-cps-effectful-capturing-callback-scalar-kinds fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-effectful-capturing-closure-callback fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-effectful-closure-returned-handles-its-own-effect interpreted  # import of undefined item setjmp
-cps-effectful-closure-through-unannotated-param fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-generic-performs-caller-handled interpreted  # import of undefined item setjmp
-cps-handle-byvalue-adt-result-into-call interpreted  # import of undefined item setjmp
-cps-handler-clause-calls-pure-hof interpreted  # import of undefined item setjmp
-cps-heap-join-outer-join-escape interpreted  # import of undefined item setjmp
-cps-join-after-cloneable-reset-kont interpreted  # import of undefined item setjmp
-cps-join-generic-let-byvalue-adt interpreted  # import of undefined item setjmp
-cps-let-alias-of-effectful-fn-param interpreted  # import of undefined item setjmp
-cps-local-closure-value-and-call fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-local-fn-alias-called-in-place interpreted  # import of undefined item setjmp
-cps-local-lambda-called-from-another-closure fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-local-thin-lambda-value-and-call interpreted  # import of undefined item setjmp
-cps-match-builtin-sum-colored-arm interpreted  # import of undefined item setjmp
-cps-match-byvalue-scrutinee-colored-arm interpreted  # import of undefined item setjmp
-cps-match-guarded-colored-arm interpreted  # import of undefined item setjmp
-cps-mut-cell-bound-by-call interpreted  # import of undefined item setjmp
-cps-oracle-async-basic fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-oracle-async-placement fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-oracle-callcc-capture interpreted  # import of undefined item setjmp
-cps-oracle-callcc-capturing-recv interpreted  # import of undefined item setjmp
-cps-oracle-callcc-native interpreted  # import of undefined item setjmp
-cps-oracle-cloneable-closure-recv interpreted  # import of undefined item setjmp
-cps-oracle-cloneable-closure-shape2 interpreted  # import of undefined item setjmp
-cps-oracle-cloneable-multi-resume interpreted  # import of undefined item setjmp
-cps-oracle-cloneable-native-shape2-if interpreted  # import of undefined item setjmp
-cps-oracle-cloneable-native-shape2-let interpreted  # import of undefined item setjmp
-cps-oracle-cloneable-native-shape2-var interpreted  # import of undefined item setjmp
-cps-oracle-cloneable-nested-op interpreted  # import of undefined item setjmp
-cps-oracle-colored-callcc interpreted  # import of undefined item setjmp
-cps-oracle-colored-escape interpreted  # import of undefined item setjmp
-cps-oracle-colored-escape-capture interpreted  # import of undefined item setjmp
-cps-oracle-escape-abort interpreted  # import of undefined item setjmp
-cps-oracle-escape-capture-after-handle interpreted  # import of undefined item setjmp
-cps-oracle-escape-capture-in-handler-case fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-oracle-escape-capture-in-shift-body interpreted  # import of undefined item setjmp
-cps-oracle-escape-search interpreted  # import of undefined item setjmp
-cps-oracle-reset-both-branch-shift interpreted  # import of undefined item setjmp
-cps-oracle-reset-if-escape interpreted  # import of undefined item setjmp
-cps-oracle-reset-if-straightline-else interpreted  # import of undefined item setjmp
-cps-oracle-reset-join-escape interpreted  # import of undefined item setjmp
-cps-oracle-reset-nested interpreted  # import of undefined item setjmp
-cps-oracle-reset-nested-if-escape interpreted  # import of undefined item setjmp
-cps-oracle-reset-nested-siblings interpreted  # import of undefined item setjmp
-cps-oracle-reset-shift interpreted  # import of undefined item setjmp
-cps-oracle-serial-callframe-2arg interpreted  # import of undefined item setjmp
-cps-oracle-serial-closure-recv interpreted  # import of undefined item setjmp
-cps-oracle-serial-native-letif interpreted  # import of undefined item setjmp
-cps-oracle-serial-passthrough interpreted  # import of undefined item setjmp
-cps-oracle-shift-capture-body interpreted  # import of undefined item setjmp
-cps-oracle-shift-under-handle interpreted  # import of undefined item setjmp
-cps-pap-inline-ignores-wrapper-arguments interpreted  # import of undefined item setjmp
-cps-param-named-like-a-global-fn interpreted  # import of undefined item setjmp
-cps-pending-bindings-past-32 interpreted  # import of undefined item setjmp
-cps-perform-and-await-parking fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-cps-perform-and-await-ready fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-perform-continuation-tail-call-byvalue-arg fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-cps-result-carrier-unbox fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-cps-returned-capturing-closure-handles-own-effect interpreted  # import of undefined item setjmp
-cps-spec-erased-base-fallback-typechecks interpreted  # import of undefined item setjmp
-cps-spec-selected-by-result-type interpreted  # import of undefined item setjmp
-cps-tramp-resume-e1-byval-struct-param interpreted  # import of undefined item setjmp
-cps-tramp-resume-e2-fat-fnvalue-param interpreted  # import of undefined item setjmp
-cps-tramp-resume-e2a-fnvalue interpreted  # import of undefined item setjmp
-cps-tramp-resume-e2a-fnvalue-multiarg interpreted  # import of undefined item setjmp
-cps-tramp-resume-e2b-capture-fnvalue interpreted  # import of undefined item setjmp
-cps-tramp-resume-e2b-indirect-call interpreted  # import of undefined item setjmp
-cps-tramp-resume-e2c-effectful-fnvalue-nontail interpreted  # import of undefined item setjmp
-cps-tramp-resume-effect-subtype-capability interpreted  # import of undefined item setjmp
-cps-tramp-resume-effect-subtype-capability-effectful interpreted  # import of undefined item setjmp
-cps-tramp-resume-join interpreted  # import of undefined item setjmp
-cps-tramp-resume-loop-in-handle-continuation interpreted  # import of undefined item setjmp
-cps-tramp-resume-reopen interpreted  # import of undefined item setjmp
-cps-two-resets-with-capture interpreted  # import of undefined item setjmp
-cps-typed-pointer-into-carrier-slot interpreted  # import of undefined item setjmp
-cps-unused-hof-does-not-taint interpreted  # import of undefined item setjmp
-cps-wide-adt-handle-call-arg fail  # stdout mismatch on the compiled path
-cps-wide-adt-param-perform interpreted  # import of undefined item setjmp
-curried-fn-typed-param-application interpreted  # import of undefined item setjmp
-currying-effect-partial fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-currying-point-free interpreted  # import of undefined item setjmp
-currying-rank2-partial interpreted  # import of undefined item setjmp
+cps-effectful-callback-aggregate-args fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+cps-effectful-capturing-callback-scalar-kinds fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+cps-effectful-capturing-closure-callback fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+cps-effectful-closure-through-unannotated-param fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+cps-local-closure-value-and-call fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 data-literal-typed-empty fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-defalias-composite interpreted  # import of undefined item setjmp
+defalias-composite interpreted  # the program starts threads (pthread_create), which this engine cannot run
 defdynamic-option-convey fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-defer-abortive-handler-no-inline-c interpreted  # import of undefined item setjmp
-defer-cps-abortive-handler fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-defer-cps-caught-panic fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-define-in-fn interpreted  # import of undefined item setjmp
-defmodule-fat-fn-param-export interpreted  # import of undefined item setjmp
-defmodule-pap-forward-ref-fat-fn interpreted  # import of undefined item setjmp
-defn-spaced-compound interpreted  # import of undefined item setjmp
-defstruct-field-handler interpreted  # import of undefined item setjmp
-defstruct-field-handler-multi interpreted  # import of undefined item setjmp
 defstruct-field-session fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 defstruct-field-session-project fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 defstruct-field-session-role fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-delimited-control-guide-examples interpreted  # import of undefined item setjmp
-direct-fiber-effect-float-arg fail  # stdout mismatch on the compiled path
-direct-fiber-effect-float-result fail  # stdout mismatch on the compiled path
-direct-shift-outside-lexical-reset interpreted  # import of undefined item setjmp
-dk-entry-landing-restores-pending-perform interpreted  # import of undefined item setjmp
-do-discarded-reset-shift-evicted interpreted  # import of undefined item setjmp
-do-tail-carrier-into-heap-ptr-temp fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+direct-shift-outside-lexical-reset fail  # stdout mismatch on the compiled path
 docs-introducing-saffron-examples fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 docs-r7rs-guide-examples fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
-docs-saffron-guide-examples interpreted  # import of undefined item setjmp
+docs-saffron-guide-examples interpreted  # the program starts threads (pthread_create), which this engine cannot run
 docs-sicp-guide-examples fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-docs-sicp-guide-no-import interpreted  # import of undefined item setjmp
+docs-sicp-guide-no-import interpreted  # the program starts threads (pthread_create), which this engine cannot run
 dynvar-binding-moves-with-fiber fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 dynvar-convey fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 dynvar-convey-isolation fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-effect-abort interpreted  # import of undefined item setjmp
-effect-capture-k interpreted  # import of undefined item setjmp
-effect-capturing-closure-thin-param fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-effect-case-reopen-outer-capture interpreted  # import of undefined item setjmp
-effect-console fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-effect-cont-abort interpreted  # import of undefined item setjmp
-effect-cont-aggregate-result fail  # stdout mismatch on the compiled path
-effect-cont-kv-sugar fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-effect-cont-linear interpreted  # import of undefined item setjmp
-effect-cont-pred interpreted  # import of undefined item setjmp
-effect-cont-pred-after-resume interpreted  # import of undefined item setjmp
-effect-cont-pred-multishot-after-resume interpreted  # import of undefined item setjmp
-effect-cont-unique interpreted  # import of undefined item setjmp
-effect-copies-freed-after-run interpreted  # import of undefined item setjmp
-effect-declaration interpreted  # import of undefined item setjmp
-effect-deep-handler interpreted  # import of undefined item setjmp
-effect-defer interpreted  # import of undefined item setjmp
-effect-do-union interpreted  # import of undefined item setjmp
-effect-error-codes interpreted  # import of undefined item setjmp
-effect-fat-callback-capturing interpreted  # import of undefined item setjmp
-effect-flag-off interpreted  # import of undefined item setjmp
-effect-fn-payload-capturing fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-effect-fn-type-annot interpreted  # import of undefined item setjmp
-effect-handle-reduce interpreted  # import of undefined item setjmp
-effect-handle-unreachable interpreted  # import of undefined item setjmp
-effect-handle-unreachable-in-builtin-arg interpreted  # import of undefined item setjmp
-effect-handler interpreted  # import of undefined item setjmp
-effect-handler-capture-nested interpreted  # import of undefined item setjmp
-effect-handler-capture-struct interpreted  # import of undefined item setjmp
-effect-handler-clause-setbang-enclosing-mut interpreted  # import of undefined item setjmp
-effect-handler-clause-statement-position interpreted  # import of undefined item setjmp
-effect-handler-compose interpreted  # import of undefined item setjmp
-effect-handler-shadow interpreted  # import of undefined item setjmp
-effect-handler-subtype interpreted  # import of undefined item setjmp
-effect-handler-type interpreted  # import of undefined item setjmp
-effect-hierarchy interpreted  # import of undefined item setjmp
-effect-if-union interpreted  # import of undefined item setjmp
-effect-inner-tail-resume-under-outer interpreted  # import of undefined item setjmp
-effect-let-subsumption interpreted  # import of undefined item setjmp
-effect-log interpreted  # import of undefined item setjmp
-effect-loop-resumes-in-place fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-effect-main-pure interpreted  # import of undefined item setjmp
-effect-multiple interpreted  # import of undefined item setjmp
-effect-multishot-nontail-resume-inner-handle interpreted  # import of undefined item setjmp
-effect-multishot-resume-in-loop interpreted  # import of undefined item setjmp
-effect-nested interpreted  # import of undefined item setjmp
-effect-nontail-resume-once-in-place fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-effect-nontail-resume-once-shapes interpreted  # import of undefined item setjmp
-effect-nontail-resume-under-outer fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-effect-oneshot interpreted  # import of undefined item setjmp
-effect-perform-conditional-join interpreted  # import of undefined item setjmp
-effect-perform-handle interpreted  # import of undefined item setjmp
-effect-perform-in-loop-conditional-set interpreted  # import of undefined item setjmp
-effect-perform-in-tail-while interpreted  # import of undefined item setjmp
-effect-poly-bracket interpreted  # import of undefined item setjmp
-effect-poly-infer interpreted  # import of undefined item setjmp
-effect-poly-map interpreted  # import of undefined item setjmp
-effect-poly-typeclass interpreted  # import of undefined item setjmp
-effect-rc fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-effect-ref fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-effect-reopen interpreted  # import of undefined item setjmp
-effect-reopen-resume-once-in-place fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-effect-reopen-resume-once-shapes interpreted  # import of undefined item setjmp
-effect-resume-value interpreted  # import of undefined item setjmp
-effect-row-compose interpreted  # import of undefined item setjmp
-effect-row-defn interpreted  # import of undefined item setjmp
-effect-row-forty-effects interpreted  # import of undefined item setjmp
-effect-row-ho interpreted  # import of undefined item setjmp
-effect-row-poly interpreted  # import of undefined item setjmp
-effect-row-through-constructor-arg interpreted  # import of undefined item setjmp
-effect-row-under-match-and-cast interpreted  # import of undefined item setjmp
-effect-row-var-unused interpreted  # import of undefined item setjmp
-effect-stdlib-io interpreted  # import of undefined item setjmp
-effect-stored-k-with-defer-resumed-after-handle interpreted  # import of undefined item setjmp
-effect-struct-field-row interpreted  # import of undefined item setjmp
-effect-subtype-assign interpreted  # import of undefined item setjmp
-effect-subtype-capability interpreted  # import of undefined item setjmp
-effect-subtype-ho interpreted  # import of undefined item setjmp
-effect-tags-past-128 interpreted  # import of undefined item setjmp
-effect-tail-resume-copy-under-outer interpreted  # import of undefined item setjmp
-effect-through-open-fn-param interpreted  # import of undefined item setjmp
-effect-toplevel-handler-forms interpreted  # import of undefined item setjmp
-effect-type-alias interpreted  # import of undefined item setjmp
-effect-with-fail fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-effect-with-getenv fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-effect-with-read-console fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-effect-with-write fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-effectful-fat-fn-param interpreted  # import of undefined item setjmp
-effectful-fat-fn-param-named interpreted  # import of undefined item setjmp
-effects-async fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-either-generic-payloads interpreted  # import of undefined item setjmp
-enclosing-tyvar-closure-param-copy interpreted  # import of undefined item setjmp
-eq-carrier-capturing-comparator interpreted  # import of undefined item setjmp
-eq-nested-binary-class-method-spec fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
+effect-capturing-closure-thin-param fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+effect-nontail-resume-once-in-place fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
+effect-nontail-resume-under-outer fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
+eq-carrier-capturing-comparator fail  # stdout mismatch on the compiled path
+eq-nested-binary-class-method-spec fail  # stdout mismatch on the compiled path
 eqmap-cstr-content fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-eqmap-struct-content fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-eqmap-struct-float-fields fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-erased-capture-aggregate-box-freed interpreted  # import of undefined item setjmp
-erased-fn-param-to-typed-fat-sink interpreted  # import of undefined item setjmp
-escape-deep-capture interpreted  # import of undefined item setjmp
-escape-float-through-k interpreted  # import of undefined item setjmp
-escape-in-main fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-escape-nested-reset interpreted  # import of undefined item setjmp
-escape-real interpreted  # import of undefined item setjmp
-fat-captureless-closure-ptr-void interpreted  # import of undefined item setjmp
-fat-closure-float-compose interpreted  # import of undefined item setjmp
-fat-closure-nested-option-result-sret interpreted  # import of undefined item setjmp
-fat-dispatch-parametric-monomorph-return interpreted  # import of undefined item setjmp
-fat-dispatch-wide-byval-arg interpreted  # import of undefined item setjmp
-fat-let-of-thin-fn interpreted  # import of undefined item setjmp
-fat-param-capturing-closure interpreted  # import of undefined item setjmp
-fat-param-direct-call fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-fat-param-nullary-closure fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-fat-shim-arg-to-mutual-pair-freed interpreted  # import of undefined item setjmp
-fh-compose-handlers interpreted  # import of undefined item setjmp
-fh-discharge-row interpreted  # import of undefined item setjmp
-fh-handler-value interpreted  # import of undefined item setjmp
-fh-multi-effect-type interpreted  # import of undefined item setjmp
-fh-multishot-value interpreted  # import of undefined item setjmp
+escape-deep-capture fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 fiber-basic fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-fiber-effect fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+fiber-effect fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 fiber-local fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 fiber-scheduler fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 fiber-scheduler-mt-migration fail  # stdout mismatch on the interpreted path: the program starts threads (tur_scheduler_mt_new), which this engine cannot run
 fiber-yield fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-float-fat-closure interpreted  # import of undefined item setjmp
 fmap-byvalue-struct-element fail  # stdout mismatch on the compiled path
-fn-arg-any-result-bridge interpreted  # import of undefined item setjmp
-fn-arg-let-bound-noncapturing interpreted  # import of undefined item setjmp
 fn-arity-100-param fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
-fn-arity-20-fnvalue interpreted  # import of undefined item setjmp
-fn-field-typed-float interpreted  # import of undefined item setjmp
-fn-first-class-application interpreted  # import of undefined item setjmp
-fn-first-class-application-typed interpreted  # import of undefined item setjmp
-fn-param-closure-typed-result-shim interpreted  # import of undefined item setjmp
-fn-type-bare-identifier interpreted  # import of undefined item setjmp
-fn-type-borrow-param interpreted  # import of undefined item setjmp
-fn-type-constraint interpreted  # import of undefined item setjmp
-fn-type-curried interpreted  # import of undefined item setjmp
-fn-type-neoteric interpreted  # import of undefined item setjmp
-fn-type-shorthand interpreted  # import of undefined item setjmp
-fn-type-spaced interpreted  # import of undefined item setjmp
-fn-value-at-tyvar-slot-static-box interpreted  # import of undefined item setjmp
-fn-value-call-join-reclaimed interpreted  # import of undefined item setjmp
-fn-value-fat-normalized-params interpreted  # import of undefined item setjmp
-fn-value-fat-normalized-tyvar-params interpreted  # import of undefined item setjmp
-fn-value-matrix-ok-rows interpreted  # import of undefined item setjmp
-fn-value-static-fatbox interpreted  # import of undefined item setjmp
-fn-void-annotation-discards-value interpreted  # import of undefined item setjmp
-forall-dict-byvalue-receiver interpreted  # import of undefined item setjmp
-forall-dict-float-result interpreted  # import of undefined item setjmp
-forall-dict-fmap interpreted  # import of undefined item setjmp
-forall-dict-mixed-return fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-forall-dict-show fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-forall-dict-two-scalar fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-forward-call-generic-callee interpreted  # import of undefined item setjmp
-forward-call-generic-callee-in-module interpreted  # import of undefined item setjmp
 fs-interp-basics interpreted  # import of undefined item fnmatch
 fs-process-typed-errors fail  # stdout mismatch on the interpreted path: import of undefined item popen
-fs-stream-walk fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-fs-symlink-perms fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+fs-symlink-perms fail  # stdout mismatch on the interpreted path: import of undefined item symlink
 g4b-thread-local-global fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-gadt-stdlib-vec-stdlib interpreted  # import of undefined item setjmp
 gc-registry-growth fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
-gde-generic-dict-eq-map fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-gde7-generic-dict-coerced-fn-arg interpreted  # import of undefined item setjmp
-generic-call-result-binds-from-expected interpreted  # import of undefined item setjmp
-generic-closure-float-fn-callback interpreted  # import of undefined item setjmp
-generic-compose-int interpreted  # import of undefined item setjmp
-generic-fn-element-word-pointer-crossings interpreted  # import of undefined item setjmp
-generic-forward-nullary-arg-tyvar-name interpreted  # import of undefined item setjmp
-generic-hof-effectful-callback fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-generic-hof-effectful-callback-scalar interpreted  # import of undefined item setjmp
-generic-hof-unannotated-fat-param-mixed fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-generic-local-closure-result-sig-tyvar interpreted  # import of undefined item setjmp
+gde-generic-dict-eq-map fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
+generic-hof-effectful-callback fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+generic-hof-unannotated-fat-param-mixed fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 generic-map-assoc-sig-tyvar-value fail  # stdout mismatch on the compiled path
-generic-performer-heap-handle-param interpreted  # import of undefined item setjmp
-generic-spec-carrier-crossings-2 interpreted  # import of undefined item setjmp
-generic-spec-carrier-crossings-3 fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-generic-spec-carrier-crossings-4 interpreted  # import of undefined item setjmp
-generic-spec-carrier-crossings-5 fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+generic-spec-carrier-crossings-4 fail  # stdout mismatch on the compiled path
 generic-wrapper-over-return-dispatch-method fail  # stdout mismatch on the compiled path
 generic-wrapper-tail-forwards-return-dispatch fail  # stdout mismatch on the compiled path
 ghe3-generic-map-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-global-fn-value-def interpreted  # import of undefined item setjmp
 gmk-map-literal-cstr-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-handle-beside-applied-lambda-generic interpreted  # import of undefined item setjmp
-handle-effectful-fn-param-same-fn interpreted  # import of undefined item setjmp
-handle-field-call-joined-arg fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-handle-fn-with-k-param fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-handle-in-nontail-branch interpreted  # import of undefined item setjmp
-handle-in-rank2-call-operand interpreted  # import of undefined item setjmp
-handle-over-effectful-fn-field-shapes interpreted  # import of undefined item setjmp
-handle-sequential-widened-closure fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-handle-under-generic-call-reinterpret fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-handle-under-match-in-main interpreted  # import of undefined item setjmp
-heap-adt-arg-to-closure-call interpreted  # import of undefined item setjmp
-hkt-ap-fn-in-container fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-hkt-constrained-continuation-dict interpreted  # import of undefined item setjmp
-hkt-constrained-middle-vector-dict interpreted  # import of undefined item setjmp
-hkt-constrained-pure-two-instances interpreted  # import of undefined item setjmp
-hkt-fmap-rc-result-droppable fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-hkt-instance-rc-construct-result fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-hkt-rank2-forall-pure-two-instances interpreted  # import of undefined item setjmp
-hkt-rank2-result-only-pin interpreted  # import of undefined item setjmp
-hkt-stdlib-option-result-instances fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-hkt-stdlib-parser-instances fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-hrt-curried-fn-result interpreted  # import of undefined item setjmp
-hrt-forall-constraint-multi fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-hrt-forall-constraint-show fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-hrt-hkt-aggregate-container interpreted  # import of undefined item setjmp
-hrt-hkt-aggregate-functor-dispatch interpreted  # import of undefined item setjmp
-hrt-hkt-list-instantiation interpreted  # import of undefined item setjmp
-hrt-hkt-option-instantiation interpreted  # import of undefined item setjmp
-hrt-impred-closure interpreted  # import of undefined item setjmp
-hrt-impred-let interpreted  # import of undefined item setjmp
-hrt-impred-reuse interpreted  # import of undefined item setjmp
-hrt-poly-call-cstr-result interpreted  # import of undefined item setjmp
-hrt-rank2-aggregate-arg interpreted  # import of undefined item setjmp
-hrt-rank2-annotation interpreted  # import of undefined item setjmp
-hrt-rank2-apply interpreted  # import of undefined item setjmp
-hrt-rank2-identity interpreted  # import of undefined item setjmp
-hrt-rankn-propagation interpreted  # import of undefined item setjmp
-hrt-rankn-rank3 interpreted  # import of undefined item setjmp
-hrt-stdlib-cont interpreted  # import of undefined item setjmp
+hkt-stdlib-option-result-instances fail  # stdout mismatch on the compiled path
 httpd-async-echo fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-async-limit fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-async-mw-attr fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
@@ -533,7 +115,6 @@ httpd-mw-cors fail  # stdout mismatch on the interpreted path: the program start
 httpd-mw-cors-opts fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-mw-cors-origins fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-mw-etag fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-httpd-mw-fold-many fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 httpd-mw-form fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-mw-json fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-mw-multipart fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
@@ -551,354 +132,259 @@ httpd-pool-pending-limit fail  # stdout mismatch on the interpreted path: the pr
 httpd-read-deadline fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-request-hardening fail  # stdout mismatch on the interpreted path: import of undefined item symlink
 httpd-static-index-listing fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-if-joins-closure-and-thin-fn interpreted  # import of undefined item setjmp
-image-globals-roundtrip fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-image-hooks-tracked fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-image-reload-hook fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-image-roundtrip fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+image-globals-roundtrip fail  # stdout mismatch on the compiled path
+image-hooks-tracked fail  # stdout mismatch on the compiled path
+image-reload-hook fail  # stdout mismatch on the compiled path
+image-roundtrip fail  # stdout mismatch on the compiled path
 inline-c-result-builder fail  # stdout mismatch on the compiled path
 inline-c-result-nested-sum fail  # stdout mismatch on the compiled path
 inline-c-typed-result-option fail  # stdout mismatch on the compiled path
 inline-c-variadic-definition fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
 io-read-line-stdin fail  # stdout mismatch on the compiled path
-jit-ffi-call-ptr fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+jit-ffi-call-ptr fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 jit-ffi-call-ptr-struct fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-jit-ffi-callback-ptr fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+jit-ffi-callback-ptr fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 json-decode-hostile-input fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
-lambda-thin-fn-result-read-as-fat interpreted  # import of undefined item setjmp
-let-alias-of-fat-fn-param interpreted  # import of undefined item setjmp
-let-alias-of-fn-param-call interpreted  # import of undefined item setjmp
-letrec-lifted-lambda-frame interpreted  # import of undefined item setjmp
-letrec-self-in-nested-closure fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-linear-effect-handler interpreted  # import of undefined item setjmp
-linear-fn-type interpreted  # import of undefined item setjmp
-list-byvalue-adt-elements fail  # stdout mismatch on the compiled path
-list-helpers-wide-head-element interpreted  # import of undefined item setjmp
-load-inside-defmodule-injects-names interpreted  # import of undefined item setjmp
-loop-invariant-declines interpreted  # import of undefined item setjmp
-macro-typed-inline-lambda-arg interpreted  # import of undefined item setjmp
-map-get-miss-on-any-value-is-nil interpreted  # import of undefined item setjmp
+list-helpers-wide-head-element interpreted  # the program starts threads (pthread_create), which this engine cannot run
+map-get-miss-on-any-value-is-nil interpreted  # the program starts threads (pthread_create), which this engine cannot run
 map-literal-frees-intermediates fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-map-multiword-struct-key interpreted  # import of undefined item setjmp
-map-typed-consumer interpreted  # import of undefined item setjmp
-markdown-headings interpreted  # import of undefined item setjmp
-multishot-continuation-borrow-after-perform interpreted  # import of undefined item setjmp
-multishot-copy-capture interpreted  # import of undefined item setjmp
-multishot-handler interpreted  # import of undefined item setjmp
-multishot-snapshot interpreted  # import of undefined item setjmp
-mut-cell-freed-at-scope-exit interpreted  # import of undefined item setjmp
+map-typed-consumer fail  # stdout mismatch on the compiled path
 mut-map-reassign fail  # stdout mismatch on the compiled path
 neoteric-ascription-sweet fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 nested-construct-byvalue-decode fail  # stdout mismatch on the compiled path
 net-blocking-tcp fail  # stdout mismatch on the interpreted path: import of undefined item socket
-never-call-panic-propagates interpreted  # import of undefined item setjmp
-niche-elem-comparator-conventions fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-nil-call-panic-propagates interpreted  # import of undefined item setjmp
-nil-closure-into-erased-result interpreted  # import of undefined item setjmp
-option-construct-byvalue-return-spec interpreted  # import of undefined item setjmp
-option-consumers-byvalue-arg interpreted  # import of undefined item setjmp
-option-map-byvalue-result-into-carrier-consumer-let-inside-arg interpreted  # import of undefined item setjmp
-option-map-capturing-closure interpreted  # import of undefined item setjmp
-option-map-generic-partial interpreted  # import of undefined item setjmp
-option-map-literal-none-unannotated-lambda interpreted  # import of undefined item setjmp
+niche-elem-comparator-conventions fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 option-niche-vec-closure-cmp fail  # stdout mismatch on the compiled path
 os-misc-surface fail  # stdout mismatch on the interpreted path: import of undefined item getgid
-p19-8-fiber-effect-chain fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-pair-signals-typed interpreted  # import of undefined item setjmp
+p19-8-fiber-effect-chain fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 panic-catch-unwind-signal fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 panic-payload-accessors fail  # stdout mismatch on the compiled path
 panic-payload-forms fail  # stdout mismatch on the compiled path
-panic-site-through-poly-fn-value fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-panic-site-through-stdlib-hof fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 panic-with-source-location fail  # stdout mismatch on the compiled path
-parsec-generic-do-m-binder fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-parsec-guide-parse-first-fails interpreted  # import of undefined item setjmp
-parsec-guide-patterns fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-parsec-guide-step2-pchar fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-parsec-guide-step3-do-m fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-parsec-guide-step4-alt-or fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-parsec-guide-step5-many fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-parsec-guide-step6-optional fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-parsec-guide-step7-fmap fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-parsec-guide-step8-key-value fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-parsec-pure-byvalue-aggregate fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-parsec-tutorial interpreted  # import of undefined item setjmp
-perform-arg-aggregate-and-pointer-shapes interpreted  # import of undefined item setjmp
-perform-arg-primitive-aliases interpreted  # import of undefined item setjmp
-perform-with-any-param fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-phase-f-poly-concrete interpreted  # import of undefined item setjmp
-phase-f-poly-concrete-unsigned interpreted  # import of undefined item setjmp
-poly-closure-compose-float interpreted  # import of undefined item setjmp
-poly-closure-result-tyvar-float interpreted  # import of undefined item setjmp
-poly-fat-float-closure-eqmap fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-poly-hof-constrained-arg-spec interpreted  # import of undefined item setjmp
-poly-hof-reversed-order-primitive-pin interpreted  # import of undefined item setjmp
-poly-to-fat-bare-fat-sink interpreted  # import of undefined item setjmp
-poly-to-fat-float-named-fn interpreted  # import of undefined item setjmp
-poly-to-fat-float-roundtrip interpreted  # import of undefined item setjmp
-poly-to-fat-multiarg-roundtrip interpreted  # import of undefined item setjmp
-poly-to-fat-pbp-aggregate-arg interpreted  # import of undefined item setjmp
-poly-to-fat-wide-byval-arg interpreted  # import of undefined item setjmp
-println-io-row interpreted  # import of undefined item setjmp
 process-kill-signal fail  # stdout mismatch on the interpreted path: import of undefined item fork
 process-output fail  # stdout mismatch on the interpreted path: import of undefined item fork
-question-op-as-call-argument interpreted  # import of undefined item setjmp
-r7rs-apply-long interpreted  # import of undefined item setjmp
-r7rs-apply-many-args interpreted  # import of undefined item setjmp
-r7rs-apply-standard-variadic-many interpreted  # import of undefined item setjmp
-r7rs-base-library interpreted  # import of undefined item setjmp
-r7rs-bignums interpreted  # import of undefined item setjmp
-r7rs-brackets-are-parens interpreted  # import of undefined item setjmp
-r7rs-bytevector-range-errors interpreted  # import of undefined item setjmp
+r7rs-apply-long interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-apply-many-args interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-apply-standard-variadic-many interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-base-library interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-bignums interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-brackets-are-parens interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-bytevector-range-errors interpreted  # the program starts threads (pthread_create), which this engine cannot run
 r7rs-callcc-escape-only fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
 r7rs-callcc-reclaimed-images fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
 r7rs-callcc-reentry-many fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(70)
-r7rs-case-lambda-define-recurs interpreted  # import of undefined item setjmp
-r7rs-closure-one-capture-call interpreted  # import of undefined item setjmp
-r7rs-colon-identifiers interpreted  # import of undefined item setjmp
-r7rs-complex interpreted  # import of undefined item setjmp
-r7rs-conformance-fixes interpreted  # import of undefined item setjmp
+r7rs-case-lambda-define-recurs interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-closure-one-capture-call interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-colon-identifiers interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-complex interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-conformance-fixes interpreted  # the program starts threads (pthread_create), which this engine cannot run
 r7rs-continuation-after-return fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
 r7rs-continuations fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
-r7rs-control interpreted  # import of undefined item setjmp
-r7rs-core-forms interpreted  # import of undefined item setjmp
-r7rs-core-forms-interp interpreted  # import of undefined item setjmp
-r7rs-data-forms interpreted  # import of undefined item setjmp
-r7rs-datum-comment-anywhere interpreted  # import of undefined item setjmp
-r7rs-dead-mistyped-call interpreted  # import of undefined item setjmp
-r7rs-deep-recursion-million interpreted  # import of undefined item setjmp
-r7rs-eval interpreted  # import of undefined item setjmp
+r7rs-control interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-core-forms interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-core-forms-interp interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-data-forms interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-datum-comment-anywhere interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-dead-mistyped-call interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-deep-recursion-million interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-eval interpreted  # the program starts threads (pthread_create), which this engine cannot run
 r7rs-eval-callcc-reentry fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
-r7rs-eval-macros-and-set-persist interpreted  # import of undefined item setjmp
-r7rs-eval-pool-sweep interpreted  # import of undefined item setjmp
-r7rs-features-agree interpreted  # import of undefined item setjmp
-r7rs-file-ports interpreted  # import of undefined item setjmp
-r7rs-forward-reference interpreted  # import of undefined item setjmp
+r7rs-eval-macros-and-set-persist interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-eval-pool-sweep interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-features-agree interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-file-ports interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-forward-reference interpreted  # the program starts threads (pthread_create), which this engine cannot run
 r7rs-gc-basic fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
-r7rs-gc-seam interpreted  # import of undefined item setjmp
-r7rs-guard-calls-local-lambda interpreted  # import of undefined item setjmp
-r7rs-hygiene-binder-made-later interpreted  # import of undefined item setjmp
-r7rs-import-sets interpreted  # import of undefined item setjmp
-r7rs-internal-define-forward-set interpreted  # import of undefined item setjmp
-r7rs-internal-defines-mutual-capture interpreted  # import of undefined item setjmp
-r7rs-internal-procedure-identity interpreted  # import of undefined item setjmp
-r7rs-internal-record-type interpreted  # import of undefined item setjmp
-r7rs-let-star-not-deprecated interpreted  # import of undefined item setjmp
-r7rs-named-let-sum interpreted  # import of undefined item setjmp
-r7rs-number-syntax interpreted  # import of undefined item setjmp
-r7rs-numbers interpreted  # import of undefined item setjmp
-r7rs-numbers-values interpreted  # import of undefined item setjmp
-r7rs-pool-sweep-places interpreted  # import of undefined item setjmp
-r7rs-ports interpreted  # import of undefined item setjmp
-r7rs-procedure-identity interpreted  # import of undefined item setjmp
-r7rs-program-redefines-scheme-eval interpreted  # import of undefined item setjmp
-r7rs-program-redefinition interpreted  # import of undefined item setjmp
-r7rs-program-shadows-names interpreted  # import of undefined item setjmp
-r7rs-raise-under-musttail interpreted  # import of undefined item setjmp
-r7rs-rationals interpreted  # import of undefined item setjmp
-r7rs-read interpreted  # import of undefined item setjmp
-r7rs-reader-lexemes interpreted  # import of undefined item setjmp
-r7rs-record-type-without-fields interpreted  # import of undefined item setjmp
-r7rs-redefine-eval-with-scheme-eval interpreted  # import of undefined item setjmp
-r7rs-saved-scheme-eval-before-redefinition interpreted  # import of undefined item setjmp
-r7rs-saved-standard-procedure-before-redefinition interpreted  # import of undefined item setjmp
-r7rs-segmented-stack-deep-recursion interpreted  # import of undefined item setjmp
+r7rs-gc-seam interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-guard-calls-local-lambda interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-hygiene-binder-made-later interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-import-sets interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-internal-define-forward-set interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-internal-defines-mutual-capture interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-internal-procedure-identity interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-internal-record-type interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-let-star-not-deprecated interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-named-let-sum interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-number-syntax interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-numbers interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-numbers-values interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-pool-sweep-places interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-ports interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-procedure-identity interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-program-redefines-scheme-eval interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-program-redefinition interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-program-shadows-names interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-raise-under-musttail interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-rationals interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-read interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-reader-lexemes interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-record-type-without-fields interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-redefine-eval-with-scheme-eval interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-saved-scheme-eval-before-redefinition interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-saved-standard-procedure-before-redefinition interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-segmented-stack-deep-recursion interpreted  # the program starts threads (pthread_create), which this engine cannot run
 r7rs-sicp-extras fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
-r7rs-sicp-metacircular-evaluator interpreted  # import of undefined item setjmp
-r7rs-srfi-1 interpreted  # import of undefined item setjmp
-r7rs-srfi-13 interpreted  # import of undefined item setjmp
-r7rs-srfi-14 interpreted  # import of undefined item setjmp
-r7rs-srfi-17 interpreted  # import of undefined item setjmp
+r7rs-sicp-metacircular-evaluator interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-1 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-13 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-14 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-17 interpreted  # the program starts threads (pthread_create), which this engine cannot run
 r7rs-srfi-18 fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-r7rs-srfi-2-8-26-31 interpreted  # import of undefined item setjmp
+r7rs-srfi-2-8-26-31 interpreted  # the program starts threads (pthread_create), which this engine cannot run
 r7rs-srfi-216 fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-r7rs-srfi-27 interpreted  # import of undefined item setjmp
-r7rs-srfi-28 interpreted  # import of undefined item setjmp
-r7rs-srfi-35 interpreted  # import of undefined item setjmp
-r7rs-srfi-4 interpreted  # import of undefined item setjmp
-r7rs-srfi-41 interpreted  # import of undefined item setjmp
-r7rs-srfi-42 interpreted  # import of undefined item setjmp
-r7rs-srfi-48 interpreted  # import of undefined item setjmp
-r7rs-srfi-60 interpreted  # import of undefined item setjmp
-r7rs-srfi-61 interpreted  # import of undefined item setjmp
-r7rs-srfi-64 interpreted  # import of undefined item setjmp
-r7rs-srfi-64-read-eval interpreted  # import of undefined item setjmp
-r7rs-srfi-66 interpreted  # import of undefined item setjmp
-r7rs-srfi-69 interpreted  # import of undefined item setjmp
-r7rs-srfi-78 interpreted  # import of undefined item setjmp
-r7rs-srfi-builtins interpreted  # import of undefined item setjmp
-r7rs-srfi-cond-expand interpreted  # import of undefined item setjmp
-r7rs-srfi-conflict-fixes interpreted  # import of undefined item setjmp
-r7rs-stdlib-seam interpreted  # import of undefined item setjmp
-r7rs-string-escape-emit interpreted  # import of undefined item setjmp
-r7rs-strings interpreted  # import of undefined item setjmp
-r7rs-syntax-rules interpreted  # import of undefined item setjmp
-r7rs-syntax-rules-do interpreted  # import of undefined item setjmp
-r7rs-syntax-rules-hygiene interpreted  # import of undefined item setjmp
-r7rs-syntax-rules-referential-transparency interpreted  # import of undefined item setjmp
-r7rs-system-libraries fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-r7rs-tail-call-hand-on-through-static-call interpreted  # import of undefined item setjmp
-r7rs-tail-call-through-procedure-value interpreted  # import of undefined item setjmp
-r7rs-too-few-arguments interpreted  # import of undefined item setjmp
-r7rs-toplevel-define-reads-command-line fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-r7rs-toplevel-define-refers-to-itself interpreted  # import of undefined item setjmp
-r7rs-toplevel-define-sets-its-parameter interpreted  # import of undefined item setjmp
-r7rs-toplevel-form-names interpreted  # import of undefined item setjmp
-r7rs-toplevel-order interpreted  # import of undefined item setjmp
+r7rs-srfi-27 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-28 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-35 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-4 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-41 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-42 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-48 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-60 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-61 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-64 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-64-read-eval interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-66 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-69 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-78 interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-builtins interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-cond-expand interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-srfi-conflict-fixes interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-stdlib-seam interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-string-escape-emit interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-strings interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-syntax-rules interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-syntax-rules-do interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-syntax-rules-hygiene interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-syntax-rules-referential-transparency interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-system-libraries fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
+r7rs-tail-call-hand-on-through-static-call interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-tail-call-through-procedure-value interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-too-few-arguments interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-toplevel-define-reads-command-line fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
+r7rs-toplevel-define-refers-to-itself interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-toplevel-define-sets-its-parameter interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-toplevel-form-names interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-toplevel-order interpreted  # the program starts threads (pthread_create), which this engine cannot run
 r7rs-toplevel-reentry fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
-r7rs-turmeric-seam-imports interpreted  # import of undefined item setjmp
+r7rs-turmeric-seam-imports interpreted  # the program starts threads (pthread_create), which this engine cannot run
 r7rs-type-errors-raise fail  # exited 1 (expected 70) on the error path: the module threw: Program terminated with exit(70)
-r7rs-unicode-case interpreted  # import of undefined item setjmp
-r7rs-vector-index-error interpreted  # import of undefined item setjmp
-r7rs-write-labels interpreted  # import of undefined item setjmp
-rank2-argument-generic fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-rank2-class-result-word-converted interpreted  # import of undefined item setjmp
-re-string fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+r7rs-unicode-case interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-vector-index-error interpreted  # the program starts threads (pthread_create), which this engine cannot run
+r7rs-write-labels interpreted  # the program starts threads (pthread_create), which this engine cannot run
+re-string fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 reactor-captureless-callbacks fail  # stdout mismatch on the compiled path
 reactor-chan-typed fail  # stdout mismatch on the compiled path
 reactor-chan-watch-nonempty fail  # stdout mismatch on the compiled path
 reactor-fd-captureless fail  # stdout mismatch on the compiled path
-reactor-fd-modify fail  # stdout mismatch on the error path: the module threw: Cannot convert a BigInt value to a number
-reactor-fd-readable fail  # stdout mismatch on the error path: the module threw: Cannot convert a BigInt value to a number
-reactor-fd-remove fail  # stdout mismatch on the error path: the module threw: Cannot convert a BigInt value to a number
-reactor-fd-writable fail  # stdout mismatch on the error path: the module threw: Cannot convert a BigInt value to a number
+reactor-fd-modify fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
+reactor-fd-readable fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
+reactor-fd-remove fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
+reactor-fd-writable fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 reactor-fibers-cancel-on-free fail  # stdout mismatch on the compiled path
 reactor-fibers-park-chan fail  # stdout mismatch on the compiled path
 reactor-fibers-park-chan-typed fail  # stdout mismatch on the compiled path
 reactor-fibers-park-fd fail  # stdout mismatch on the compiled path
 reactor-fibers-smoke fail  # stdout mismatch on the compiled path
 reactor-fibers-stop-mid-run fail  # stdout mismatch on the compiled path
-reactor-signal-process-directed fail  # stdout mismatch on the error path: the module threw: Cannot convert a BigInt value to a number
-refine-early-return-contracts interpreted  # import of undefined item setjmp
-region-bracket-effect-reaches-outer-handler interpreted  # import of undefined item setjmp
-region-escape-via-erasure fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-region-escape-via-inline-c fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-region-escape-via-main-loop fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-region-escape-via-store fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-region-retired-index-owns fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-region-scope-value-survives interpreted  # import of undefined item setjmp
-region-scope-void-body interpreted  # import of undefined item setjmp
-region-with-region interpreted  # import of undefined item setjmp
-reset-shift-in-evicted-function interpreted  # import of undefined item setjmp
+reactor-signal-process-directed fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 result-bridge-tail-call-to-inline-c fail  # stdout mismatch on the compiled path
-resume-handler-k-outside-its-case interpreted  # import of undefined item setjmp
-resume-typed-as-handle-result fail  # stdout mismatch on the compiled path
 return-dispatched-sum-mint-constrained-instance fail  # stdout mismatch on the compiled path
 rwlock-basic fail  # stdout mismatch on the interpreted path: import of undefined item pthread_rwlock_tryrdlock
-saffron-any-div-mod-minus-one interpreted  # import of undefined item setjmp
-saffron-any-key-into-typed-map interpreted  # import of undefined item setjmp
-saffron-any-map-beside-opaque-hash interpreted  # import of undefined item setjmp
-saffron-any-map-into-map-get interpreted  # import of undefined item setjmp
-saffron-borrowed-struct-key-widened interpreted  # import of undefined item setjmp
-saffron-boundary-check interpreted  # import of undefined item setjmp
-saffron-callcc-any-receiver interpreted  # import of undefined item setjmp
-saffron-callcc-under-any-nodes interpreted  # import of undefined item setjmp
-saffron-capturing-lambda interpreted  # import of undefined item setjmp
-saffron-catch-unwind-cps-panic interpreted  # import of undefined item setjmp
-saffron-class-fn-extra interpreted  # import of undefined item setjmp
-saffron-closure-captured-mut-shared interpreted  # import of undefined item setjmp
-saffron-closure-sets-global interpreted  # import of undefined item setjmp
-saffron-cons-list interpreted  # import of undefined item setjmp
-saffron-cons-list-walk-through-any interpreted  # import of undefined item setjmp
-saffron-container-param-cast-shape interpreted  # import of undefined item setjmp
+saffron-any-div-mod-minus-one interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-any-key-into-typed-map interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-any-map-beside-opaque-hash interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-any-map-into-map-get interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-borrowed-struct-key-widened interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-boundary-check interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-callcc-any-receiver interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-callcc-under-any-nodes interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-capturing-lambda interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-catch-unwind-cps-panic interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-class-fn-extra interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-closure-captured-mut-shared interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-closure-sets-global interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-cons-list interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-cons-list-walk-through-any interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-container-param-cast-shape interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-cps-vec-element-and-perform fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-saffron-ctor-under-all-any-expectation interpreted  # import of undefined item setjmp
-saffron-data-literal-lambda-values interpreted  # import of undefined item setjmp
+saffron-ctor-under-all-any-expectation interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-data-literal-lambda-values interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-defeffect-param-defaults-to-any fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-saffron-defn-empty-params-literal-body interpreted  # import of undefined item setjmp
-saffron-dyn-any-result-method interpreted  # import of undefined item setjmp
-saffron-dyn-applied-class-var-result interpreted  # import of undefined item setjmp
-saffron-dyn-arith-float interpreted  # import of undefined item setjmp
-saffron-dyn-bare-extra interpreted  # import of undefined item setjmp
-saffron-dyn-binary-fn-method interpreted  # import of undefined item setjmp
-saffron-dyn-bind-on-any-option interpreted  # import of undefined item setjmp
-saffron-dyn-call-expression-head interpreted  # import of undefined item setjmp
-saffron-dyn-constrained-instance interpreted  # import of undefined item setjmp
-saffron-dyn-default-method interpreted  # import of undefined item setjmp
-saffron-dyn-dispatch-payload-adt interpreted  # import of undefined item setjmp
-saffron-dyn-field interpreted  # import of undefined item setjmp
-saffron-dyn-field-on-generic-adt interpreted  # import of undefined item setjmp
-saffron-dyn-field-read-dispatch interpreted  # import of undefined item setjmp
-saffron-dyn-hkt-dispatch interpreted  # import of undefined item setjmp
-saffron-dyn-hkt-partial-head interpreted  # import of undefined item setjmp
-saffron-dyn-method-extra-args interpreted  # import of undefined item setjmp
-saffron-dyn-method-in-argument-position interpreted  # import of undefined item setjmp
-saffron-dyn-ops-on-vec-elements interpreted  # import of undefined item setjmp
-saffron-dyn-read-of-any-field interpreted  # import of undefined item setjmp
-saffron-dyn-shift-parity interpreted  # import of undefined item setjmp
-saffron-dyn-spelled-int-extra interpreted  # import of undefined item setjmp
-saffron-dyn-truthy interpreted  # import of undefined item setjmp
-saffron-dyn-typeclass-dispatch interpreted  # import of undefined item setjmp
-saffron-dynamic-body-concrete-return interpreted  # import of undefined item setjmp
+saffron-defn-empty-params-literal-body interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-any-result-method interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-applied-class-var-result interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-arith-float interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-bare-extra interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-binary-fn-method interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-bind-on-any-option interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-call-expression-head interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-constrained-instance interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-default-method interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-dispatch-payload-adt interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-field interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-field-on-generic-adt interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-field-read-dispatch interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-hkt-dispatch interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-hkt-partial-head interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-method-extra-args interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-method-in-argument-position interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-ops-on-vec-elements interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-read-of-any-field interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-shift-parity interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-spelled-int-extra interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-truthy interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dyn-typeclass-dispatch interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-dynamic-body-concrete-return interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-effect-through-dyn-operand fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-saffron-eq-vec-any interpreted  # import of undefined item setjmp
-saffron-forward-ref-any-and-variadic interpreted  # import of undefined item setjmp
-saffron-forward-reference-defaults-any interpreted  # import of undefined item setjmp
-saffron-fwd-decl-app-param-seam interpreted  # import of undefined item setjmp
-saffron-heap-parametric-self-typed-field interpreted  # import of undefined item setjmp
-saffron-higher-order interpreted  # import of undefined item setjmp
-saffron-if-join-to-any interpreted  # import of undefined item setjmp
-saffron-instance-any-result-widens-element interpreted  # import of undefined item setjmp
-saffron-keyword-literal-body interpreted  # import of undefined item setjmp
-saffron-lambda-arg-env-freed interpreted  # import of undefined item setjmp
-saffron-lambda-literal-body-dyn-call interpreted  # import of undefined item setjmp
-saffron-lang-line-accepted interpreted  # import of undefined item setjmp
-saffron-lang-sweet interpreted  # import of undefined item setjmp
-saffron-letrec-any-closure interpreted  # import of undefined item setjmp
-saffron-literal-under-typed-return interpreted  # import of undefined item setjmp
-saffron-macro-any-seam-and-truthiness interpreted  # import of undefined item setjmp
-saffron-map-assoc-widens-value interpreted  # import of undefined item setjmp
-saffron-map-literal interpreted  # import of undefined item setjmp
-saffron-match-any-stdlib-sum interpreted  # import of undefined item setjmp
-saffron-match-parametric-adt interpreted  # import of undefined item setjmp
-saffron-nullary-parametric-ctor-any interpreted  # import of undefined item setjmp
-saffron-open-generic-grounded interpreted  # import of undefined item setjmp
+saffron-eq-vec-any interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-forward-ref-any-and-variadic interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-forward-reference-defaults-any interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-fwd-decl-app-param-seam interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-heap-parametric-self-typed-field interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-higher-order interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-if-join-to-any interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-instance-any-result-widens-element interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-keyword-literal-body interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-lambda-arg-env-freed interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-lambda-literal-body-dyn-call interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-lang-line-accepted interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-lang-sweet interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-letrec-any-closure interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-literal-under-typed-return interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-macro-any-seam-and-truthiness interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-map-assoc-widens-value interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-map-literal interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-match-any-stdlib-sum interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-match-parametric-adt interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-nullary-parametric-ctor-any interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-open-generic-grounded interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-perform-any-argument-mismatch fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 saffron-perform-any-argument-seam fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-saffron-prelude interpreted  # import of undefined item setjmp
-saffron-record-opaque-ptr-field fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-saffron-refinement-contract interpreted  # import of undefined item setjmp
-saffron-returned-closure-env-freed interpreted  # import of undefined item setjmp
-saffron-returned-closure-set-not-dropped interpreted  # import of undefined item setjmp
-saffron-seam-into-typed-fn-param interpreted  # import of undefined item setjmp
-saffron-set-literal interpreted  # import of undefined item setjmp
-saffron-static-guarantees-still-hold interpreted  # import of undefined item setjmp
-saffron-static-instance-spec-any-lambda interpreted  # import of undefined item setjmp
-saffron-sym-in-any interpreted  # import of undefined item setjmp
-saffron-typed-defn-in-any interpreted  # import of undefined item setjmp
-saffron-unannotated-container-param interpreted  # import of undefined item setjmp
-saffron-unannotated-main interpreted  # import of undefined item setjmp
-saffron-variadic-dynamic-call interpreted  # import of undefined item setjmp
-saffron-variadic-fixed-arg-narrow interpreted  # import of undefined item setjmp
-saffron-variadic-rest-any interpreted  # import of undefined item setjmp
-saffron-vector-literal interpreted  # import of undefined item setjmp
-saffron-vector-literal-homogeneous interpreted  # import of undefined item setjmp
-saffron-while-any-condition interpreted  # import of undefined item setjmp
+saffron-prelude interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-record-opaque-ptr-field fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
+saffron-refinement-contract interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-returned-closure-env-freed interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-returned-closure-set-not-dropped interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-seam-into-typed-fn-param interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-set-literal interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-static-guarantees-still-hold interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-static-instance-spec-any-lambda interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-sym-in-any interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-typed-defn-in-any interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-unannotated-container-param interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-unannotated-main interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-variadic-dynamic-call interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-variadic-fixed-arg-narrow interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-variadic-rest-any interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-vector-literal interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-vector-literal-homogeneous interpreted  # the program starts threads (pthread_create), which this engine cannot run
+saffron-while-any-condition interpreted  # the program starts threads (pthread_create), which this engine cannot run
 schan-worker-pool fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 scheduler-basic fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 scheduler-io-park fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 schema-decode-union fail  # stdout mismatch on the compiled path
 schema-reader-json-file fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-serial-cont-receiver-chain-freed interpreted  # import of undefined item setjmp
-serial-cont-roundtrip-freed fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-serial-context-call1 interpreted  # import of undefined item setjmp
-serial-context-do interpreted  # import of undefined item setjmp
-serial-context-do-cfg interpreted  # import of undefined item setjmp
-serial-context-do-struct fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-serial-context-if interpreted  # import of undefined item setjmp
-serial-context-if-outer-frames interpreted  # import of undefined item setjmp
-serial-context-let interpreted  # import of undefined item setjmp
-serial-context-marshal interpreted  # import of undefined item setjmp
-serial-reset-basic interpreted  # import of undefined item setjmp
-serial-reset-in-defmodule fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-serial-resume-rejects-forged-env fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-serial-shift-closure-receiver-effect fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-serial-shift-colored-receiver fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-serial-shift-receiver-effect-reaches-handler fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-serial-shift-receiver-effect-under-if fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-serial-struct-env fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-serial-typed-surface fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-session-async-peer-on-thread fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+session-async-peer-on-thread fail  # stdout mismatch on the error path: the module threw: unwind
 session-async-warn fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 session-calc-rpc fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 session-choose-left fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
@@ -938,88 +424,30 @@ session-timeout-ok fail  # stdout mismatch on the error path: the module threw: 
 set-add-elem-typed-member fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 set-cstr-content fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 set-of-any-elements fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-sf-apply-fat-arg-bridge interpreted  # import of undefined item setjmp
-sf-compose-typed interpreted  # import of undefined item setjmp
-sf-let-bind-with-inner-call interpreted  # import of undefined item setjmp
-sf-vec-of interpreted  # import of undefined item setjmp
-shallow-clause-handle-around-resume interpreted  # import of undefined item setjmp
-shift-abort-across-nested-dk-entries fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-shift-abort-crossfn interpreted  # import of undefined item setjmp
-shift-in-callee-delimited-by-direct-reset interpreted  # import of undefined item setjmp
-shift-receiver-multishot-effect-cont interpreted  # import of undefined item setjmp
-shift-receiver-panic-passes-inner-catch interpreted  # import of undefined item setjmp
-shift-reset-capability-folding interpreted  # import of undefined item setjmp
-shift-result-typing interpreted  # import of undefined item setjmp
-shift-single-shot interpreted  # import of undefined item setjmp
-shift-typed-cont interpreted  # import of undefined item setjmp
-shift-without-reset-panics interpreted  # import of undefined item setjmp
-shift0-receiver-runs-outside-its-reset interpreted  # import of undefined item setjmp
-shift0-receiver-shift-without-outer-reset-panics interpreted  # import of undefined item setjmp
-shift0-result-typing interpreted  # import of undefined item setjmp
+shift0-receiver-runs-outside-its-reset fail  # stdout mismatch on the compiled path
 signal-handle-poll fail  # stdout mismatch on the interpreted path: import of undefined item socket
-single-body-effect-handlers interpreted  # import of undefined item setjmp
-sized-int-arith-wraps interpreted  # import of undefined item setjmp
-spec-selected-by-result-type-direct interpreted  # import of undefined item setjmp
 stackless-catch-unwind-byref-aggregate-group-bail fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
-stdlib-applicative-entails-functor interpreted  # import of undefined item setjmp
-stdlib-effects-annotated interpreted  # import of undefined item setjmp
-stdlib-test-runner-callback interpreted  # import of undefined item setjmp
 stm-retry-wakeup fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 stm-stress fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-string-trim-transform interpreted  # import of undefined item setjmp
-struct-param-closure-env-freed interpreted  # import of undefined item setjmp
-struct-temporary-fn-field-released interpreted  # import of undefined item setjmp
-subword-payload-box-read-at-wrong-offset interpreted  # import of undefined item setjmp
-sum-closure-payload-dict-dispatch interpreted  # import of undefined item setjmp
-sum-closure-payload-dropped interpreted  # import of undefined item setjmp
-sum-closure-payload-dropped-cps fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-sum-closure-payload-kept interpreted  # import of undefined item setjmp
-sum-closure-payload-unwrap-dropped interpreted  # import of undefined item setjmp
-sum-passthrough-param-not-dropped interpreted  # import of undefined item setjmp
 sum-payload-drop-dictionary-dispatch fail  # stdout mismatch on the compiled path
-sx1-bt-row-checked interpreted  # import of undefined item setjmp
 tail-call-inline-c-carrier-bridge fail  # stdout mismatch on the compiled path
-tailcall-dyn-leak interpreted  # import of undefined item setjmp
-taskgroup-async fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+tailcall-dyn-leak interpreted  # the program starts threads (pthread_create), which this engine cannot run
+taskgroup-async fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 taskgroup-timeout fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 tce3-map-cstr-val fail  # stdout mismatch on the compiled path
 tce4-map-cstr-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 term-raw-cooked-roundtrip fail  # stdout mismatch on the interpreted path: import of undefined item fork
 thread-local-basic fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-threads-effects-tail-resume fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+threads-effects-tail-resume fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 time-dates-iso8601 fail  # stdout mismatch on the compiled path
-toplevel-statements-run-before-user-main fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-try-with-basic interpreted  # import of undefined item setjmp
-try-with-nested interpreted  # import of undefined item setjmp
-turi-catch-panic-of-mismatch-in-fiber-body fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-turi-fiber-abortive-defer interpreted  # import of undefined item setjmp
-turi-fiber-defer-resume-from-clause-scope fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-turi-hof-effectful-callback-no-w0033 fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-turi-option-result-map-deep-recursion interpreted  # import of undefined item setjmp
+turi-option-result-map-deep-recursion fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 tvar-float-payload-value-converted fail  # stdout mismatch on the compiled path
-typeclass-effect-row-caller interpreted  # import of undefined item setjmp
-typeclass-unsafe-passbyptr-struct-arg fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-typed-signal-smoke interpreted  # import of undefined item setjmp
-typed-slots/fmap-float-list fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
+typeclass-unsafe-passbyptr-struct-arg fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
+typed/list-concat fail  # stdout mismatch on the compiled path
 typed/list-macro fail  # stdout mismatch on the compiled path
-typed/option-basic interpreted  # import of undefined item setjmp
-typed/result-basic interpreted  # import of undefined item setjmp
 typed/vec-basic fail  # stdout mismatch on the compiled path
-van-laarhoven-lens-show fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-van-laarhoven-lens-show-capture fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-van-laarhoven-lens-show-deep fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-van-laarhoven-lens-show-mapper fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-van-laarhoven-lens-show-rank fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-vec-captureless-fat-closure-readback interpreted  # import of undefined item setjmp
-vec-get-closure interpreted  # import of undefined item setjmp
 vec-of-tvec-eq fail  # stdout mismatch on the compiled path
 vec-of-tvec-eq-manual fail  # stdout mismatch on the compiled path
-vec-typed-fat-closure-readback interpreted  # import of undefined item setjmp
-w3-letrec-open-capture interpreted  # import of undefined item setjmp
-warn-image-global-unregistered fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 weak-upgrade-after-drop fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
 weak-upgrade-option fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
-with-handler-literal-lowers-as-handle interpreted  # import of undefined item setjmp
-with-handler-value interpreted  # import of undefined item setjmp
-workflow-roundtrip interpreted  # import of undefined item setjmp
 workstealing-balance fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run

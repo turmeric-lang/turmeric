@@ -17989,6 +17989,8 @@ static bool elab_session_replay(TuriEnv *env, Arena *arena, Form **forms,
          * above mutes the warnings a capture frame lets through. */
         diag_push_capture();
         scheme_lower_set_session_prior(forms, from);   /* the turns before it */
+        const UsedModulesCtx *used_saved = used_modules_ctx_active();
+        used_modules_ctx_set(NULL);   /* see turi_eval_impl */
         Expr *p = elaborate_program_session(arena, &env->st, forms + from,
                                             to - from, /*stdlib_prefix=*/0,
                                             mbase,
@@ -17998,6 +18000,7 @@ static bool elab_session_replay(TuriEnv *env, Arena *arena, Form **forms,
                                             env->include_dirs,
                                             env->n_include_dirs,
                                             &n_fsd, env->reader_macros, sess);
+        used_modules_ctx_set(used_saved);
         scheme_lower_set_session_prior(NULL, 0);
         if (!p || diag_had_error()) ok = false;
         if (diag_pop_capture() > 0) ok = false;
@@ -18597,6 +18600,17 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * the macros they defined.  (The whole-program path has them in the
      * stream already.) */
     scheme_lower_set_session_prior(forms, elab_from);
+    /* macro-env-force-loads-driver-used-modules: the driver publishes its
+     * `^used` force-load list (used-attr-whole-program) for the duration of
+     * the compile it is running, and a defmacro* expansion, a `:for-macros`
+     * import or the macro env's stdlib preload runs THIS elaboration in the
+     * middle of that compile.  The list names modules on the driver's search
+     * path, not this env's, so applying it here fails every macro-time
+     * elaboration with "module ... not found" -- in any workspace with a
+     * sibling spice that has a `^used` defn.  The list is the outer
+     * compile's alone: hide it while this one runs. */
+    const UsedModulesCtx *used_saved = used_modules_ctx_active();
+    used_modules_ctx_set(NULL);
     Expr *prog = elaborate_program_session(eval_arena, &env->st,
                                    forms + elab_from, nforms - elab_from,
                                    /*stdlib_prefix=*/prior - elab_from,
@@ -18612,6 +18626,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                     * see the same macros the entry did. */
                                    env->reader_macros,
                                    env->elab_session);
+    used_modules_ctx_set(used_saved);
     scheme_lower_set_session_prior(NULL, 0);
     if (!prog || diag_had_error()) {
         env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */

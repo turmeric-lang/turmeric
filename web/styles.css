@@ -1606,6 +1606,18 @@ html.pwa {
     align-self: center;
     white-space: nowrap;
 }
+/* The Engine section (engine.js): a row is the engine's name over a one-line
+   note on what it trades, since the choice is about those trades. */
+.engine-label { margin-top: 6px; }
+.engine-row { align-items: flex-start; }
+.engine-row input { align-self: flex-start; margin-top: 3px; }
+.engine-row-text { display: flex; flex-direction: column; gap: 1px; }
+.engine-row-name { font-size: 13px; }
+.engine-row-note { font-size: 11px; color: var(--text-dim); white-space: normal; }
+.engine-chip { margin-inline-start: 6px; }
+/* The engine line a Compile run ends with (session.js): which engine ran the
+   program and what it cost, quieter than the program's own output. */
+.console-engine { color: var(--text-dim); font-size: 12px; }
 /* One-line confirm in the footer, matching how the Clear button's
    shift-click reset already behaves: warn, don't modal. */
 .lang-menu-footer {

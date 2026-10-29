@@ -3,7 +3,7 @@
 # turmeric-jit.{js,wasm} (wasm-jit-plan P3).  Run by the tur_wasm_jit CMake
 # target; it can be run by hand with the same arguments.
 #
-#   build-module.sh OUT_DIR SOURCES_FILE VERSION [MIR_DIR]
+#   build-module.sh OUT_DIR SOURCES_FILE VERSION [MIR_DIR [STDLIB_PKG_DIR]]
 #
 # SOURCES_FILE lists one source per line as "<group> <path>", paths absolute:
 #   rt      the stock module's sources (tur_core and the web glue) and tur_front
@@ -12,6 +12,9 @@
 #   mir     MIR's translation units, with MIR's own flags
 # MIR_DIR is the MIR tree those come from and whose headers the engine
 # includes: external/mir unless CMake's TUR_MIR_SOURCE_DIR says otherwise.
+# STDLIB_PKG_DIR holds the shared stdlib package (stdlib.data and its loader
+# stdlib.data.js, CMake's tur_stdlib_pkg; wasm-jit-plan 5.11); it defaults to
+# OUT_DIR's sibling stdlib-pkg/, which is where CMake writes it.
 # Needs emcc and em-config on PATH (the emsdk environment), python3 and make.
 #
 # Four steps:
@@ -22,8 +25,8 @@
 #   3. collect the headers c2mir may open: the musl closure of
 #      tools/wasm-jit/headers.txt, tools/wasm-jit/stdatomic.h, runtime/hamt.h
 #      and turi/r7rs_embed.h;
-#   4. link, embedding the stdlib at /stdlib and the headers at /sysinclude
-#      and /src.
+#   4. link, with the shared stdlib package's loader (it mounts /stdlib) and
+#      the headers embedded at /sysinclude and /src.
 set -euo pipefail
 
 OUT=$1
@@ -32,6 +35,8 @@ VERSION=$3
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 MIR=${4:-$ROOT/external/mir}
+PKG=${5:-$(dirname "$OUT")/stdlib-pkg}
+[ -f "$PKG/stdlib.data.js" ] || { echo "build-module.sh: no stdlib package in $PKG (cmake --build <dir> --target tur_stdlib_pkg)" >&2; exit 2; }
 JOBS=${TUR_WASM_JIT_JOBS:-$(nproc 2>/dev/null || echo 4)}
 
 command -v emcc >/dev/null || { echo "build-module.sh: emcc is not on PATH" >&2; exit 2; }
@@ -107,10 +112,12 @@ for _attempt in 1 2 3 4 5 6 7 8; do
   python3 "$HERE/gen-symtab.py" "$DECLS" "$OUT/nm.txt" "$SYMTAB" "$OUT/exclude.txt" \
     --header "runtime/hamt.h=$ROOT/src/runtime/hamt.h" \
     --accessors "$ROOT/src/runtime/tur_tls.c" \
-    --wasm-objects "$OUT/runtime-objects.txt" "$OUT/tur_wasm_jit_symtab_rt.c"
+    --wasm-objects "$OUT/runtime-objects.txt" "$OUT/tur_wasm_jit_symtab_rt.c" \
+    --stubs "$OUT/tur_wasm_jit_stubs.c"
   # shellcheck disable=SC2086
   if emcc -c "$SYMTAB" -o "$OUT/symtab.o" $RT_FLAGS -w 2> "$OUT/symtab-cc.log" \
-     && emcc -c "$OUT/tur_wasm_jit_symtab_rt.c" -o "$OUT/symtab_rt.o" -O2 -w 2>> "$OUT/symtab-cc.log"; then
+     && emcc -c "$OUT/tur_wasm_jit_symtab_rt.c" -o "$OUT/symtab_rt.o" -O2 -w 2>> "$OUT/symtab-cc.log" \
+     && emcc -c "$OUT/tur_wasm_jit_stubs.c" -o "$OUT/stubs.o" -O2 -w 2>> "$OUT/symtab-cc.log"; then
     symtab_ok=1
     break
   fi
@@ -140,8 +147,8 @@ cp "$ROOT/src/turi/r7rs_embed.h" "$HDR/src/turi/r7rs_embed.h"
 # --- 4. link -----------------------------------------------------------------
 EXPORTS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_free_string,_turi_wasm_version,_turi_wasm_jit_run,_malloc,_free
 METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8,ccall,cwrap,FS,ENV,wasmTable,addFunction,stackAlloc,stackSave,stackRestore
-emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" -o "$OUT/turmeric-jit.js" \
-  --embed-file "$ROOT/stdlib@/stdlib" \
+emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" "$OUT/stubs.o" -o "$OUT/turmeric-jit.js" \
+  --pre-js "$PKG/stdlib.data.js" -sFORCE_FILESYSTEM=1 \
   --embed-file "$HDR/sysinclude@/sysinclude" \
   --embed-file "$HDR/src@/src" \
   -sMODULARIZE=1 -sEXPORT_NAME=TurmericJitModule \
@@ -152,4 +159,7 @@ emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" -o "$OUT/turmeric-jit.js"
   -sEXPORTED_FUNCTIONS="$EXPORTS" \
   -sEXPORTED_RUNTIME_METHODS="$METHODS" \
   -O2 -Wno-pthreads-mem-growth
+# The loader fetches stdlib.data beside the module's script: put a copy here
+# so node (run.js, tests/run-jit-wasm.sh) finds it as the page does.
+cp "$PKG/stdlib.data" "$OUT/stdlib.data"
 echo "turmeric-jit: $(wc -c < "$OUT/turmeric-jit.wasm") bytes ($(grep -c . "$OUT/headers.d" >/dev/null; tr ' \\' '\n\n' < "$OUT/headers.d" | grep -c "^$SYSINC/") headers embedded)"
