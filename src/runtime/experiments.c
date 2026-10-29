@@ -495,9 +495,11 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       &g_opt_refined_fn_types },
     /* compiled-repl (aot-compiled-repl-plan C2): a REPL turn runs as a
      * compiled program -- the session's definition table plus the turn --
-     * instead of being evaluated.  Prototype at step 1: every turn re-runs
-     * every initializer (no host slots yet), types other than scalars print
-     * as #<Type>, and only `tur repl` on a JIT build has the hook. */
+     * instead of being evaluated, with its globals in host slots.
+     * Prototype: every turn's program stays resident (1.2 GB after 1,000
+     * turns, the plan's open image-memory question), types other than
+     * scalars print as #<Type>, and only `tur repl` on a JIT build has the
+     * hook. */
     { "compiled-repl",
       "REPL turns run as compiled programs (the session's definitions plus the turn) instead of being interpreted",
       "docs/upcoming/aot-compiled-repl-plan.md",

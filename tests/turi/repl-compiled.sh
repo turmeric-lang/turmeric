@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# tests/turi/repl-compiled.sh -- aot-compiled-repl-plan C2, step 1.
+# tests/turi/repl-compiled.sh -- aot-compiled-repl-plan C2, steps 1 and 2.
 #
 # Under --enable=compiled-repl every REPL turn runs as a compiled program: the
 # session's definition table plus a `main` that runs the turn and prints its
-# result as the REPL would.  This checks the transcript a session prints, and
-# the differences step 1 documents: a mutable global does not survive a turn
-# (every initializer re-runs), and a value with no scalar printer shows as
-# #<Type>.  Without the flag nothing changes.
+# result as the REPL would.  A `def` lives in a host slot (step 2), so its
+# value and its mutations carry from turn to turn, and a redefinition
+# initializes it again.  This checks the transcripts a session prints against
+# the interpreter's, and the difference left: a value with no scalar printer
+# shows as #<Type>.  Without the flag nothing changes.
 #
 # Asserts on the evaluated output, never on exit status alone: a feature that
 # silently did nothing would still exit 0.
@@ -109,17 +110,53 @@ same "a turn that fails to elaborate or compile leaves the table as it was" \
      "$(printf '=> #<fn g>\n=> 2\n=> 3')" "$(results "$out")"
 has "the c2mir rejection is reported" "the turn did not compile" "$out"
 
-# --- Step 1's documented differences --------------------------------------------
-out="$(repl_out --enable=compiled-repl <<'EOF'
+# --- Globals live in slots: mutation, redefinition, closures, strings -----------
+cat > "$WORK/t2" <<'EOF'
 (def ^mut n 5)
 (defn bump [] : int (do (set! n (+ n 1)) n))
 (bump)
 (bump)
+n
+(def ^mut n 100)
+(bump)
+(def greeting "hello")
+(defn greet [] : cstr greeting)
+(greet)
+(def scale 2.5)
+(* scale 2.0)
+(def g (fn [x : int] : int (+ x n)))
+(g 1)
+(bump)
+(g 1)
+EOF
+interp="$(repl_out < "$WORK/t2")"
+comp="$(repl_out --enable=compiled-repl < "$WORK/t2")"
+# The one line that differs: the interpreter names a lambda's FnDef.
+same "a mutable global, a redefinition, a closure over a global: as interpreted" \
+     "$(results "$interp" | sed 's/^=> #<fn __fn_[0-9]*>$/=> #<fn>/')" "$(results "$comp")"
+
+# --- A slot outlives a region bracket (CLAUDE.md, region store hooks) -----------
+cat > "$WORK/t3" <<'EOF'
+(defdata ^heap Link (Link [v : int nxt : int]))
+(defn link-v [l : Link] : int (match l (Link a b) a))
+(def kept (with-region (fn [] (Link 41 0))))
+(link-v kept)
+(def ^mut held (Link 0 0))
+(defn grab [n : int] : int (with-region (fn [] (do (set! held (Link n 0)) 1))))
+(grab 7)
+(link-v held)
+EOF
+out="$(repl_out --enable=compiled-repl < "$WORK/t3")"
+same "a node made in a bracket and kept in a def is read after it" \
+     "$(printf '=> #<fn link-v>\n=> #<Link>\n=> 41\n=> #<Link>\n=> #<fn grab>\n=> 1\n=> 7')" \
+     "$(results "$out" | grep -v 'adt-type')"
+
+# --- The difference left: no Show printer yet -------------------------------------
+out="$(repl_out --enable=compiled-repl <<'EOF'
 [1 2 3]
 EOF
 )"
-same "step 1: every initializer re-runs, so a mutation lasts one turn; a Vec is #<Type>" \
-     "$(printf '=> 5\n=> #<fn bump>\n=> 6\n=> 6\n=> #<(Vec int)>')" "$(results "$out")"
+same "a Vec prints as #<Type>" "=> #<(Vec int)>" "$(results "$out")"
 
 # --- Off by default ----------------------------------------------------------------
 out="$(repl_out <<'EOF'

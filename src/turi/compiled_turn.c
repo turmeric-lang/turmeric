@@ -22,8 +22,78 @@ bool turi_compiled_turn_applies(const TuriEnv *env) {
            env->lang == LANG_TURMERIC && env->reader_type == READER_TURMERIC;
 }
 
+/* ---- global slots (step 2) ------------------------------------------------- */
+
+typedef struct {
+    char  *name, *typesig;
+    size_t size;
+    void  *ptr;
+} ReplSlot;
+
+static ReplSlot *g_slots;
+static uint32_t  g_n_slots, g_cap_slots;
+/* The defs the running turn (re)defines: their slots initialize again. */
+static char    **g_redefined;
+static uint32_t  g_n_redefined;
+
+void *tur_repl_slot(const char *name, const char *typesig, size_t size, int *fresh) {
+    bool redefined = false;
+    for (uint32_t i = 0; i < g_n_redefined; i++)
+        if (strcmp(g_redefined[i], name) == 0) redefined = true;
+    for (uint32_t i = 0; i < g_n_slots; i++) {
+        ReplSlot *s = &g_slots[i];
+        if (strcmp(s->name, name) != 0) continue;
+        if (strcmp(s->typesig, typesig) == 0 && s->size == size) {
+            *fresh = redefined;
+            return s->ptr;
+        }
+        /* A new type: new storage.  The old stays, for the code of earlier
+         * turns that was bound to it. */
+        void *p = calloc(1, size ? size : 1);
+        char *t = strdup(typesig);
+        if (!p || !t) { free(p); free(t); *fresh = 0; return s->ptr; }
+        free(s->typesig);
+        s->typesig = t;
+        s->size = size;
+        s->ptr = p;
+        *fresh = 1;
+        return p;
+    }
+    if (g_n_slots == g_cap_slots) {
+        uint32_t cap = g_cap_slots ? g_cap_slots * 2 : 32;
+        ReplSlot *grown = (ReplSlot *)realloc(g_slots, cap * sizeof *grown);
+        if (!grown) { fprintf(stderr, "tur: out of memory for a REPL slot\n"); abort(); }
+        g_slots = grown;
+        g_cap_slots = cap;
+    }
+    ReplSlot *s = &g_slots[g_n_slots++];
+    s->name = strdup(name);
+    s->typesig = strdup(typesig);
+    s->size = size;
+    s->ptr = calloc(1, size ? size : 1);
+    if (!s->name || !s->typesig || !s->ptr) {
+        fprintf(stderr, "tur: out of memory for a REPL slot\n");
+        abort();
+    }
+    *fresh = 1;
+    return s->ptr;
+}
+
+static void slots_clear(void) {
+    /* The storage itself stays: images of the session that is ending may
+     * still name it, and none of them is freed either. */
+    for (uint32_t i = 0; i < g_n_slots; i++) {
+        free(g_slots[i].name);
+        free(g_slots[i].typesig);
+    }
+    free(g_slots);
+    g_slots = NULL;
+    g_n_slots = g_cap_slots = 0;
+}
+
 void turi_compiled_defs_clear(TuriEnv *env) {
     if (!env) return;
+    if (env->compiled_repl) slots_clear();
     for (uint32_t i = 0; i < env->n_compiled_defs; i++) {
         free(env->compiled_defs[i].key);
         free(env->compiled_defs[i].text);
@@ -294,9 +364,20 @@ TuriValue turi_compiled_turn_run(TuriEnv *env, Form **forms, uint32_t first, uin
     }
     buf_puts(&prog, "  0)\n");
 
+    /* The defs this turn writes initialize again, in the slot they have. */
+    char **redefined = (char **)calloc(n_nd ? n_nd : 1, sizeof *redefined);
+    uint32_t n_redefined = 0;
+    for (uint32_t j = 0; redefined && j < n_nd; j++)
+        if (strncmp(nd[j].key, "def ", 4) == 0) redefined[n_redefined++] = nd[j].key + 4;
+    g_redefined = redefined;
+    g_n_redefined = n_redefined;
+
     int rc = 0;
     fflush(stdout);
     int hrc = g_hook->run(prog.data, prog.len, &rc);
+    g_redefined = NULL;
+    g_n_redefined = 0;
+    free(redefined);
     fflush(stdout);
     fflush(stderr);
     buf_free(&prog);

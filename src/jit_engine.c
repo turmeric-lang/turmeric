@@ -49,6 +49,9 @@
 #include "c2mir.h"
 #include "runtime/buf.h"
 #include "prof.h"   /* --timings: the jit and run zones */
+/* turi/compiled_turn.h, by its one declaration: the engine does not need the
+ * interpreter's headers. */
+extern void *tur_repl_slot (const char *name, const char *typesig, size_t size, int *fresh);
 
 /* ------------------------------------------------------------------ */
 /* I0 SPIKE INSTRUMENTATION (mir-interp-tier-plan phase I0)            */
@@ -82,6 +85,14 @@ static bool g_jit_quiet_warnings;  /* tur_jit_set_quiet_warnings */
 bool tur_jit_set_quiet_warnings (bool quiet) {
   bool was = g_jit_quiet_warnings;
   g_jit_quiet_warnings = quiet;
+  return was;
+}
+
+static bool g_jit_keep_contexts;   /* tur_jit_set_keep_contexts */
+
+bool tur_jit_set_keep_contexts (bool keep) {
+  bool was = g_jit_keep_contexts;
+  g_jit_keep_contexts = keep;
   return was;
 }
 
@@ -450,6 +461,10 @@ static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"__builtin_inf", (void *) jit_builtin_inf},
   {"atexit", (void *) jit_atexit},
   {"pthread_create", (void *) jit_pthread_create},
+  /* aot-compiled-repl-plan C2: a compiled REPL turn's globals live in the
+   * host's slots (turi/compiled_turn.c); named here so the wasm module, which
+   * has no dlsym, resolves it as tur does. */
+  {"tur_repl_slot", (void *) tur_repl_slot},
   {"_OSSwapInt16", (void *) jit_osswap16},
   {"_OSSwapInt32", (void *) jit_osswap32},
   {"_OSSwapInt64", (void *) jit_osswap64},
@@ -1311,6 +1326,7 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
   {
     const char *g = getenv ("TUR_JIT_GEN");
     if (g != NULL && strcmp (g, "eager") == 0) gen_iface = MIR_set_gen_interface;
+    if (g_jit_keep_contexts) gen_iface = MIR_set_gen_interface;   /* see the knob */
     /* I0 spike: see the mode selection above. */
     if (g_jit_interp_mode) gen_iface = MIR_set_interp_interface;
   }
@@ -1504,7 +1520,11 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
 
   prof_enter (PROF_JIT);   /* --timings: tearing the MIR context down is the engine's */
   jit_forget_lazy_ctx (ctx);
-  if (__atomic_load_n (&g_jit_program_started_threads, __ATOMIC_SEQ_CST)) {
+  if (g_jit_keep_contexts) {
+    /* Resident for the session (tur_jit_set_keep_contexts): only the C front
+     * end goes, as an image's does once it is initialized. */
+    c2mir_finish (ctx);
+  } else if (__atomic_load_n (&g_jit_program_started_threads, __ATOMIC_SEQ_CST)) {
     g_jit_retired_ctx = ctx;   /* its threads may still be running in it */
   } else {
     if (g_jit_gen_inited) MIR_gen_finish (ctx);

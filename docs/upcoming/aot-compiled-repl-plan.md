@@ -6,10 +6,12 @@
 > C1, and **graduated 2026-10-17** (0.65 line, past its advisory `expires_at`
 > of 0.65.0): on by default on every `TUR_JIT` build, with
 > `TUR_REPL_JIT_INLINE_C=0` as the off switch. C2 was investigated 2026-10-02 and
-> again 2026-10-04 (findings under C2); **its step 1 landed 2026-10-28** behind
-> `--enable=compiled-repl` (prototype): every turn compiles the session's
-> definition table plus the turn, with per-program globals (C2, "Step 1, as
-> built"). **Rewritten 2026-09-29.** The 2026-06-28 draft (in
+> again 2026-10-04 (findings under C2); **its steps 1 and 2 landed 2026-10-28/29**
+> behind `--enable=compiled-repl` (prototype): every turn compiles the
+> session's definition table plus the turn, and its globals live in host
+> slots (C2, "Step 1, as built" and "Step 2, as built"). Resident memory after
+> 1,000 turns is 1.2 GB, which makes point 5's image-memory decision the
+> next step. **Rewritten 2026-09-29.** The 2026-06-28 draft (in
 > git history) proposed compiling each prompt form with a `cc` subprocess into
 > a `.so` and `dlopen`ing it. It predates the in-process MIR JIT (graduated
 > 0.34.0). The JIT and the spice REPL now provide most of the machinery the
@@ -566,8 +568,8 @@ per-program globals.
 
 - Every initializer re-runs each turn, so a mutation of a global lasts one
   turn: `(def ^mut n 5)`, then `(bump)` twice prints `6`, `6` (interpreted:
-  `6`, `7`). Step 2's slots fix it, and a `def` whose initializer has an
-  effect repeats that effect every turn until then.
+  `6`, `7`). Step 2's slots fix it (below), and a `def` whose initializer has
+  an effect repeats that effect every turn until then.
 - A value with no scalar printer prints `#<Type>` -- `#<Pt>`, `#<(Vec int)>`
   -- where the interpreter uses its `Show` instance or its struct repr (the
   plan's turn-entry printer, point 8).
@@ -592,6 +594,62 @@ only what `main` reaches, so the fixed c2mir floor is the cost. That is
 inside the 200 ms budget here; on arm64 macOS the floor alone was ~245 ms, so
 C4 item 2 still decides that platform. Nothing stays resident, so step 1 has
 no image-memory question; step 2's slots bring it back.
+
+#### Step 2, as built (2026-10-29)
+
+The recommendation's second item: globals in host slots. With it, a compiled
+session's globals behave as the interpreter's: the transcript of a mutable
+global bumped across turns, then redefined, then read by a closure from an
+earlier turn, prints the same `=>` lines both ways (`tests/turi/repl-compiled.sh`).
+
+- **The emitter** (`g_emit_repl_slots`, set only by the compiled turn's
+  compile; ordinary emission is byte-identical, every snapshot regenerated
+  unchanged): a top-level `def` of the program's own -- not the stdlib's, not
+  an imported library's, not a `^thread-local` -- is
+  `static T *__tur_slot_x_N; #define x_N (*__tur_slot_x_N)` in place of its
+  storage, point 6's shape, and so is its forward declaration (a lifted
+  lambda is emitted before the def and must reach the slot too). Its
+  initializer binds the pointer with `tur_repl_slot("x", "<type>", size,
+  &fresh)` and runs only when the slot is fresh; the store notes its word
+  (`TUR_REGION_NOTE_WORDS`), since a slot outlives every region bracket.
+- **The slots** (`tur_repl_slot`, `turi/compiled_turn.c`, resolved through
+  the engine's `JIT_SHIMS` so the wasm module finds it too): keyed by the
+  Turmeric name. Fresh when the name is new, when its type or size changed
+  (new storage; the old stays for earlier turns' code), or when the turn
+  redefines it (the same storage, initialized again -- so a closure from an
+  earlier turn sees the new value, as interpreted). `:reset` drops the table.
+- **Programs stay resident** (`tur_jit_set_keep_contexts`): a slot can hold a
+  pointer into the program that made it -- a string literal, a function. Only
+  the C front end is released after a turn, as for an image. Code is
+  generated eagerly, since a function of an earlier program may be called by
+  a later one after lazy generation moved to another context.
+- **The region case** the corpus list asks for: a `^heap` node made inside a
+  `with-region` and kept in a `def` (by the initializer, and by `set!` from a
+  function), read in a later turn, prints its field.
+
+**Cost, step 2.** The same Release build and sessions as step 1:
+
+| session | turns | total | per turn | peak RSS |
+| --- | --- | --- | --- | --- |
+| 1 defn + 10 calls | 11 | 1.7 s | ~155 ms | 67 MB |
+| 50 defns + 10 calls | 60 | 11.1 s | ~185 ms | 135 MB |
+| 200 defns + 10 calls | 210 | 48.7 s | ~232 ms | 312 MB |
+| 1 defn + 999 calls | 1,000 | 345 s | ~345 ms | 1,221 MB |
+
+Resident memory after 1,000 turns -- the success criterion's number -- is
+**1.2 GB, ~1.2 MB per turn**. And the per-turn time now grows with the
+session (turns 1-50 ~188 ms, 251-300 ~302 ms): stack samples late in a long
+session are all in c2mir's parse and in malloc/free, nothing linear in the
+slot or definition tables, so it is the allocator working through the
+resident heap. Both say the same thing: point 5's image-memory decision, (a)
+or (b), is what C2 needs before it can soak, and it is now measured rather
+than estimated.
+
+**Left before C2 can leave prototype:** the image-memory decision (point 5);
+the turn-entry printer for non-scalars (point 8); continuations crossing
+turns; the transcript corpus's remaining cases (a string literal read 100
+turns later, a `defstruct` redefined with values in slots); the page (the
+browser JIT module installs the same hook, as for C1).
 
 #### Investigation (2026-10-02)
 

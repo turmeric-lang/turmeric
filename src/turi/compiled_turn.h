@@ -8,9 +8,10 @@
  * expressions and prints the last one the way the REPL would, `=> 128`.
  * The whole program goes through the same compiler as `tur jit`, and runs.
  *
- * Step 1 of the plan: every turn re-runs every initializer, so a `def` is
- * recomputed each turn and a mutation does not survive to the next one.
- * Step 2 (globals in host slots) is what fixes that.
+ * The program's own globals live in host slots (step 2, tur_repl_slot
+ * below), so a `def`'s value and its mutations carry from turn to turn and
+ * its initializer runs only when the slot is fresh; each turn's program stays
+ * resident, since a slot may point into it.
  *
  * Like C1 (inline_c_jit.h) this half is engine-free and lives in tur_core;
  * the compile-and-run is the host's hook, so a build with no engine has no
@@ -67,8 +68,17 @@ TuriValue turi_compiled_turn_run(TuriEnv *env, struct Form **forms,
                                  uint32_t first, uint32_t n, const char *src,
                                  const struct Type *last_type, bool last_is_def);
 
-/* Drop the definition table (turi_env_free, :reset). */
+/* Drop the definition table and the global slots (turi_env_free, :reset). */
 void turi_compiled_defs_clear(TuriEnv *env);
+
+/* Step 2: a compiled turn's top-level `def` lives in a host slot, not in its
+ * program, so its value -- and a mutation of it -- carries to the next turn.
+ * The emitter (g_emit_repl_slots) binds each user global to the slot this
+ * returns for its Turmeric name and runs the initializer only when *fresh is
+ * set: the name is new, its type or size changed (a new slot), or the turn
+ * redefines it (the same slot, initialized again).  Slots are never freed
+ * while a session runs: a function from an earlier turn may still read one. */
+void *tur_repl_slot(const char *name, const char *typesig, size_t size, int *fresh);
 
 #ifdef __cplusplus
 }

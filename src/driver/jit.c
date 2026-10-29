@@ -950,9 +950,10 @@ const TuriInlineCJitHook g_repl_inline_c_jit_hook = {
  * and prints its result (turi/compiled_turn.c builds it) -- and run it, as
  * cmd_jit runs a file: the split and the prune, then tur_jit_execute, with
  * the full-preamble retry.  It runs in the middle of a turn, so it puts back
- * what compile_to_c resets, as repl_inline_c_jit_build_here does.  Nothing
- * stays resident: step 1 of C2 recompiles and reruns every definition each
- * turn. */
+ * what compile_to_c resets, as repl_inline_c_jit_build_here does.  Step 2:
+ * the program's own globals are host slots (g_emit_repl_slots), and the
+ * program stays resident (tur_jit_set_keep_contexts), since a slot may hold a
+ * pointer into it. */
 static int repl_compiled_turn_here(const char *src, size_t len, int *out_rc) {
     *out_rc = 0;
     const char *tmp = getenv("TMPDIR");
@@ -984,11 +985,14 @@ static int repl_compiled_turn_here(const char *src, size_t len, int *out_rc) {
 
     bool saved_efl = g_emit_for_link;
     bool saved_interp = g_interpret_mode;
+    bool saved_slots = g_emit_repl_slots;
     Buf csrc;
     buf_init(&csrc);
     g_emit_for_link = true;
     g_interpret_mode = false;
+    g_emit_repl_slots = true;
     int rc = compile_to_c(path, &csrc, NULL, 0, NULL, 0);
+    g_emit_repl_slots = saved_slots;
     g_interpret_mode = saved_interp;
     g_emit_for_link = saved_efl;
     unlink(path);
@@ -1013,6 +1017,7 @@ static int repl_compiled_turn_here(const char *src, size_t len, int *out_rc) {
                                           inc2, sizeof inc2, incs);
         char *argv[] = { (char *)"repl", NULL };
         bool was_quiet = tur_jit_set_quiet_warnings(true);
+        bool was_kept = tur_jit_set_keep_contexts(true);
         if (!scan_autolink_markers(&csrc, &autolink)) {
             rc = -1;
         } else {
@@ -1024,6 +1029,7 @@ static int repl_compiled_turn_here(const char *src, size_t len, int *out_rc) {
                 jrc = tur_jit_execute(csrc.data, csrc.len, al, incs, n_incs, 1, argv, out_rc);
             if (jrc != TUR_JIT_OK) rc = -1;
         }
+        tur_jit_set_keep_contexts(was_kept);
         tur_jit_set_quiet_warnings(was_quiet);
         buf_free(&reduced);
         buf_free(&autolink);
