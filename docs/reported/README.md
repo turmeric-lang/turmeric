@@ -3462,6 +3462,20 @@ the `__int128` work only surfaced them.  Both resolved the same day.
 | [monomorph-emitted-before-its-type-argument](monomorph-emitted-before-its-type-argument.md) | medium | With `tourist/app` imported before the markup spices, the C for `ctor_Cons_Cons__Hole` (which takes a `Hole` by value) precedes `struct tur_adt_Hole`, and cc rejects the incomplete type; the other import order compiles |
 | [unused-module-global-heap-init-reported-as-leak](unused-module-global-heap-init-reported-as-leak.md) | low | A module `def` holding a heap constructor box that nothing reads is a `static` global the C compiler drops with its store, so LeakSanitizer reports the box (dom/core's `__syntax-node` and friends) |
 
+## Found executing stats-formula-plan (filed 2026-10-29)
+
+The spice is turmeric-spices `spices/stats-formula`; each report says what it
+does to work around the bug. The plan also added a one-module repro to
+[monomorph-emitted-before-its-type-argument](monomorph-emitted-before-its-type-argument.md):
+any struct with an `Option` field triggers it.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [closure-with-adt-param-rejected-by-generic-fn-param](closure-with-adt-param-rejected-by-generic-fn-param.md) | low-medium | A capturing lambda `(fn [a : int b : Box] ...)`, `Box` a `defdata`, passed to a generic `(fn [B A] B)` parameter is refused with `got (fn [int <adt>] : int)`; a non-capturing lambda, a named defn or a `defstruct` is accepted |
+| [stdlib-cstr-import-breaks-spice-library-build](stdlib-cstr-import-breaks-spice-library-build.md) | medium | A spice module that imports stdlib `cstr` checks, runs and tests, but `tur build <spice-dir>` fails on `#include "cstr.h"`, a header the project build never writes |
+| [list-typed-load-collides-with-frame-ownstr-string](list-typed-load-collides-with-frame-ownstr-string.md) | low-medium | An imported module that loads `stdlib/list-typed.tur` and an import of `frame/print` cannot be compiled together: stdlib's `String` meets `frame/ownstr`'s (`defopaque: 'String' is already defined`) |
+| [stats-ols-pvalues-wrong-continued-fraction](stats-ols-pvalues-wrong-continued-fraction.md) | medium | tur-stats' `ols` / `ols-frame` compute p-values through an incomplete-beta continued fraction with the wrong terms: slightly off everywhere, and -0.8967 for t = 1.56 on 144 df (R: 0.1203); the coefficients are right |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

@@ -34,6 +34,33 @@ is imported first, and the `Cons__Hole` instance seems to be written at that
 group's position, not after `Hole`. Not traced further: the ADT emission order
 is in src/compiler/emit_module.c (Pass 0).
 
+## A one-module repro (added 2026-10-29)
+
+Found executing stats-formula-plan. Any struct with an `Option` field, in the
+same program as a `(Cons T)` of a user `defdata` T, puts the `Cons T`
+instance first -- for a `^heap` T it then has no typedef for T at all:
+
+```turmeric
+(defmodule rp/c
+  (export main)
+  (defstruct Unrelated [x : (Option int)])
+  (defdata ^heap ^copy Foo (Foo int))
+  (defn mk [n : int acc : (Cons Foo)] : (Cons Foo)
+    (if (= n 0) acc (mk (- n 1) (tcons-of (Foo n) acc))))
+  (defn main [] : int (println (tlength (mk 3 (tnil)))) 0))
+```
+
+```
+error: unknown type name 'tur_adt_Foo'
+```
+
+Delete the `Unrelated` line (or make its field an `int`) and it prints 3. The
+`Option` instance, emitted with the stdlib's list instances, seems to pull
+every `Cons` instance in the program forward with it. Reproduces on `main`
+(1ecdacc9) and v0.72.0. spices/stats-formula keeps every `Option` out of its
+struct fields for this reason (an `ErrPos` ADT for the error position, an
+`Lhs` ADT for the response).
+
 ## Fix directions
 
 - Emit a monomorphic instance after the definitions of its type arguments

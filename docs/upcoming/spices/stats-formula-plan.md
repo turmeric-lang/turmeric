@@ -1,14 +1,10 @@
 # Plan: Wilkinson-Style Formula DSL for tur-stats
 
-> **Status:** On hold, not started; every phase in "Phase Status" is
-> Pending. The plan sat in `docs/upcoming/hold/` until the 2026-10-16
-> flatten. Checked 2026-10-18 against turmeric-spices `main`: there is no
-> `stats-formula` spice, `tur-stats` is still 0.1.0, and `tur-frame`, its one
-> dependency, is 0.2.0. Before SF0, retype `formula-terms` and
-> `identity-term` in "Result Types": their frame and column handles, cons
-> list and 0/1 flag are all `:int`, which CLAUDE.md's no-`:int`-stand-ins
-> rule forbids.
-> **Last Updated:** 2026-05-26
+> **Status:** Implemented 2026-10-29: SF0-SF8 done and SF9's docs done, in
+> turmeric-spices `spices/stats-formula` (branch `claude/stats-formula`).
+> Left: merge, then the `stats-formula-v0.1.0` tag, then archive this plan.
+> What changed from the design below is in "Outcome", at the end.
+> **Last Updated:** 2026-10-29
 > **Type:** Spice Design
 > **Spice Location:** `turmeric-spices/spices/stats-formula`
 
@@ -128,19 +124,28 @@ turmeric-spices/spices/stats-formula/
 
 ## Result Types
 
-```turmeric
-;;; formula-terms -- output of formula parsing and expansion.
-(defstruct formula-terms
-  response    :int    ;; tur-frame column handle for the response (LHS)
-  predictors  :int    ;; cons list of column handles (RHS expanded terms)
-  intercept?  :int    ;; 1 to include intercept (default), 0 to suppress
-  data        :int)   ;; tur-frame handle (for error messages and type checks)
+As shipped (the original sketch typed every handle, list and flag `:int`):
 
-;;; For identity terms that create computed columns:
-(defstruct identity-term
-  expr        :cstr  ;; the original expression inside I(...)
-  computed-col :int) ;; new column handle (ownership: caller must free)
+```turmeric
+;;; FormulaTerms -- a formula fitted to a frame (formula/terms).
+(defstruct ^copy FormulaTerms
+  [response   : cstr        ;; the response's column name in `data` ("mpg", "log(mpg)")
+   predictors : (Cons cstr) ;; model-matrix column names in `data`, in order
+   intercept  : bool
+   terms      : (Cons Term) ;; the expanded terms ("wt", "wt:hp")
+   data       : ModelFrame  ;; response + predictor columns, float64, complete rows
+   dropped    : int])       ;; incomplete rows left out
+
+;;; ModelFrame -- a tur-frame frame this spice built; the caller frees it
+;;; (formula/model-frame). model-frame-handle unwraps it for frame/* and stats/*.
+(defopaque ModelFrame :int)
+
+;;; FormulaError -- kind (a FormulaErrorKind), message, and a byte position
+;;; for syntax errors (formula-error-pos : (Option int)).
 ```
+
+An `I()` term is not a separate result: it is a column of the model frame,
+and `formula-eval-identity` returns a one-column `ModelFrame`.
 
 ---
 
@@ -382,45 +387,45 @@ But v0.1.0 keeps the formula layer separate to avoid coupling.
 
 ## Implementation Phases
 
-- [ ] **SF0** -- `build.tur`; spice deps on `tur-frame`; `formula/ast` with
+- [x] **SF0** -- `build.tur`; spice deps on `tur-frame`; `formula/ast` with
   node types and constructors; basic AST manipulation.
 
-- [ ] **SF1** -- `formula/lexer`: token lexer for formula syntax; handles
+- [x] **SF1** -- `formula/lexer`: token lexer for formula syntax; handles
   names, operators (`~ + * / ^`), parentheses, `I()`, numeric literals;
   position tracking for error messages.
 
-- [ ] **SF2** -- `formula/parser`: Pratt parser implementing operator
+- [x] **SF2** -- `formula/parser`: Pratt parser implementing operator
   precedence; builds AST from token stream; error recovery and
   meaningful error messages.
 
-- [ ] **SF3** -- `formula/expand`: term expansion algorithms; expands `*`
+- [x] **SF3** -- `formula/expand`: term expansion algorithms; expands `*`
   (interaction), `/` (nesting), `^` (power/poly) into flat `+` term lists;
   handles `+0` and `-1` for intercept control.
 
-- [ ] **SF4** -- `formula/factors`: categorical column detection via
+- [x] **SF4** -- `formula/factors`: categorical column detection via
   `tur-frame` type introspection; `formula-is-factor`; `formula-factor-levels`;
   basic dummy coding for single factors.
 
-- [ ] **SF5** -- `formula/identity`: `I()` expression parser and evaluator;
+- [x] **SF5** -- `formula/identity`: `I()` expression parser and evaluator;
   supports arithmetic operators and math functions; delegates to `tur-math`
   for `log`, `exp`, `sqrt`, etc.; creates computed columns.
 
-- [ ] **SF6** -- `formula/terms`: top-level interface; `formula-parse-terms`
+- [x] **SF6** -- `formula/terms`: top-level interface; `formula-parse-terms`
   orchestrates lexing, parsing, expansion, factor detection, identity
   evaluation; returns `formula-terms` struct; handles frame lifecycle
   for computed columns.
 
-- [ ] **SF7** -- **Interaction terms**: support for `a:b` interaction
+- [x] **SF7** -- **Interaction terms**: support for `a:b` interaction
   terms in dummy coding; `formula-dummy-code-interaction` creates product
   columns for categorical-by-categorical and categorical-by-numeric
   interactions.
 
-- [ ] **SF8** -- **Tests and validation**: comprehensive test suite
+- [x] **SF8** -- **Tests and validation**: comprehensive test suite
   covering formula parsing edge cases, expansion correctness, factor
   handling, identity expressions; validate against R's `model.frame`
   behavior on representative formulas.
 
-- [ ] **SF9** -- **Documentation and release**: README in spice repo;
+- [x] **SF9** -- **Documentation and release**: README in spice repo;
   `docs/guides/formula-guide.md`; `stats-formula-v0.1.0` tag.
 
 ---
@@ -577,8 +582,8 @@ While `tur-stats-formula` is independent, we should coordinate with the
 | `turmeric-spices/spices/stats-formula/src/formula/terms.tur` | New - top-level interface |
 | `turmeric-spices/spices/stats-formula/tests/formula/*` | New - test suite |
 | `turmeric-spices/README.md` | Add spice entry |
-| `docs/guides/formula-guide.md` | New - user guide |
-| `docs/stats-formula-plan.md` | This document (status updates) |
+| `turmeric-spices/docs/guides/formula-guide.md` | New - user guide (spice guides live in the spices repo; see spices-guide-coverage-plan) |
+| `docs/upcoming/spices/stats-formula-plan.md` | This document (status updates) |
 
 ---
 
@@ -586,13 +591,68 @@ While `tur-stats-formula` is independent, we should coordinate with the
 
 | Phase | Title | Status |
 |-------|-------|--------|
-| SF0 | AST types and build setup | Pending |
-| SF1 | Lexer | Pending |
-| SF2 | Pratt parser | Pending |
-| SF3 | Term expansion | Pending |
-| SF4 | Factor detection | Pending |
-| SF5 | Identity evaluation | Pending |
-| SF6 | Top-level interface | Pending |
-| SF7 | Interaction terms | Pending |
-| SF8 | Tests and validation | Pending |
-| SF9 | Documentation and release | Pending |
+| SF0 | AST types and build setup | Done |
+| SF1 | Lexer | Done |
+| SF2 | Pratt parser | Done |
+| SF3 | Term expansion | Done |
+| SF4 | Factor detection | Done |
+| SF5 | Identity evaluation | Done |
+| SF6 | Top-level interface | Done |
+| SF7 | Interaction terms | Done |
+| SF8 | Tests and validation | Done |
+| SF9 | Documentation and release | Docs done; tag after merge |
+
+---
+
+## Outcome (2026-10-29)
+
+Shipped as planned: the lexer, Pratt parser, expansion of `+ - * / ^ :`,
+intercept control, `I()`, factor detection, treatment contrasts,
+interactions with factors, `formula-parse-terms` and the shorthands, and a
+test suite of ~150 cases (`spices/stats-formula/tests/formula/`, one file per
+module). SF8's validation is against R itself: term labels against
+`terms()`, column names against `model.matrix()`, and seven `lm()` fits on
+mtcars and iris through `ols-frame`, to 1e-6.
+
+Changed from the design above:
+
+- **`A ^ 2` is `A`, not `A + A:A`.** In R a variable crossed with itself is
+  itself, so `x^2` in a formula is `x` and `(a + b)^2` is `a + b + a:b`. The
+  spice follows R; a squared column is `I(x^2)`.
+- **A new model frame, not columns added to the input.** tur-frame frames are
+  immutable (`with-col` returns a new one), so `formula-parse-terms` builds a
+  model frame -- the response, then every model-matrix column, all float64,
+  over the complete rows -- which the caller frees. Risk 3 (a computed column
+  clashing with an input column) goes away; two *model* columns with one name
+  (`g` with level `b` beside a column `gb`) is a `NameCollision` error.
+- **Factor coding is R's model.matrix rule**, not only "drop the base level":
+  contrasts when the term without the factor is empty or earlier in the
+  model, every level otherwise, and with no intercept the first factor gets
+  every level. That is what makes `y ~ g:x` and `y ~ x + g:x` come out as R's.
+- **What is a factor:** a utf8 column. bool is numeric 0 / 1 (R: `xTRUE`).
+  Levels sort by byte order. A one-level factor is `TooFewLevels`.
+- **Functions:** `I`, `log`, `exp`, `sqrt`, `abs`, from stdlib/math.tur (not
+  the tur-math spice). They work bare too -- `log(x)` is a variable, as in R
+  -- and on the left of `~`.
+- **A non-finite computed value is an error** naming the row (risk 5's
+  na.omit still applies to nulls). R would carry NaN and drop the row with a
+  warning.
+- **Backticked names** for non-syntactic columns (`` `fuel economy` ``).
+- `formula-response`, `formula-intercept?` and the added
+  `formula-term-labels` take only the formula text: they need no frame.
+- The AST, tokens and terms are `^heap` defdatas (freed by a region, not by
+  `formula-ast-free` / `token-list-free`).
+- tur-stats is an optional dependency, for the tests only.
+
+Not done: `y ~ .` (a syntax error that says so), and everything in the
+"Out of scope" table.
+
+Turmeric bugs found on the way, each worked around in the spice and filed
+(the spice README says where):
+[closure-with-adt-param-rejected-by-generic-fn-param](../../reported/closure-with-adt-param-rejected-by-generic-fn-param.md),
+[stdlib-cstr-import-breaks-spice-library-build](../../reported/stdlib-cstr-import-breaks-spice-library-build.md),
+[list-typed-load-collides-with-frame-ownstr-string](../../reported/list-typed-load-collides-with-frame-ownstr-string.md),
+and a one-module repro added to
+[monomorph-emitted-before-its-type-argument](../../reported/monomorph-emitted-before-its-type-argument.md).
+Fitting through tur-stats also showed its p-values are computed wrongly:
+[stats-ols-pvalues-wrong-continued-fraction](../../reported/stats-ols-pvalues-wrong-continued-fraction.md).
