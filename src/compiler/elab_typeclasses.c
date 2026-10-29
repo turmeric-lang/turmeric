@@ -727,6 +727,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
         return NULL;
     }
     const Symbol *name = name_form->as.sym;
+    uint32_t borrow_param_mask = 0;
     
     /* Parse parameter vector */
     Form *params_form = method_form->as.list.items[1];
@@ -826,8 +827,13 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
 
         /* actual_p: number of real parameters encountered (keywords don't count). */
         uint8_t actual_p = 0;
+        bool pending_borrow = false;
         for (uint32_t i = 0; i < n_params; i++) {
             Form *p = params_form->as.list.items[i];
+            if (p->tag == F_SYM && p->as.sym == e->sym_caret_borrow) {
+                pending_borrow = true;
+                continue;
+            }
             /* ECS E2d-P6 (Issue 2 secondary): substructural / borrow caret
              * markers (^borrow, ^mut, ^unique, ^linear, ^affine, ^relevant,
              * ^fat) annotate the *next* parameter; they are not parameters
@@ -852,6 +858,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                 /* Default to int for now - type inference for method params deferred */
                 param_types[actual_p] = TYPE_INT;
                 param_is_fn[actual_p] = false;
+                if (pending_borrow && actual_p < 32) borrow_param_mask |= 1u << actual_p;
+                pending_borrow = false;
                 actual_p++;
             } else if (p->tag == F_KEYWORD) {
                 /* Inline type annotation for the previous parameter:
@@ -1225,6 +1233,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     method->param_refine_preds = param_refine_preds;
     method->param_refine_vars  = param_refine_vars;
     method->param_explicit_type = param_explicit_type;
+    method->borrow_param_mask = borrow_param_mask;
     method->n_params = n_params;
     method->return_type = return_type;
     method->return_refine_pred = return_refine_pred;
@@ -4857,6 +4866,10 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                         /* Simple parameter name */
                         method_params[n_method_params] = binding_new(e, p->as.sym, elab_param_type, false, false, p->span);
                         method_params[n_method_params]->is_param = true;
+                        /* The class signature's `^borrow` (borrow_param_mask). */
+                        if (n_method_params < 32 &&
+                            (tc->methods[i].borrow_param_mask & (1u << n_method_params)))
+                            method_params[n_method_params]->is_borrow = true;
                         if (param_is_poly) {
                             method_params[n_method_params]->is_poly_fn = true;
                             Type *pt = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -4915,6 +4928,9 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                             c_param_type = param_is_poly ? TYPE_PTR_VOID : param_type;
                             method_params[n_method_params] = binding_new(e, name_f->as.sym, c_param_type, false, false, p->span);
                             method_params[n_method_params]->is_param = true;
+                            if (n_method_params < 32 &&
+                                (tc->methods[i].borrow_param_mask & (1u << n_method_params)))
+                                method_params[n_method_params]->is_borrow = true;
                             if (param_is_poly) {
                                 method_params[n_method_params]->is_poly_fn = true;
                                 Type *pt = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -7206,6 +7222,50 @@ static void saffron_mint_constraint_any_instances(Elab *e, const TypeClassInstan
 
 PROF_TYPECLASS_WRAP(Expr *, elab_method_call, (Elab *e, const Form *call), (e, call))
 
+/* The `^borrow` mask every class declaring a method called `name` agrees on
+ * (a bit survives only if each such method sets it), or 0 when none does. */
+static uint32_t method_borrow_mask_by_name(const TypeClassEnv *env, const Symbol *name) {
+    /* A concrete-receiver call re-enters as the dot form, `(.na-len a)`. */
+    const char *nm = name->name;
+    uint32_t len = name->len;
+    if (len > 1 && nm[0] == '.') { nm++; len--; }
+    uint32_t mask = 0;
+    bool seen = false;
+    for (const TypeClass *c = env->typeclasses; c; c = c->next) {
+        for (uint8_t mi = 0; mi < c->n_methods; mi++) {
+            const TypeClassMethod *m = &c->methods[mi];
+            if (!m->name || m->name->len != len || memcmp(m->name->name, nm, len) != 0)
+                continue;
+            mask = seen ? (mask & m->borrow_param_mask) : m->borrow_param_mask;
+            seen = true;
+        }
+    }
+    return mask;
+}
+
+/* A class method's `^borrow` parameter reads its argument without spending
+ * it.  The var-use elaboration of the argument just recorded a use (a second
+ * one would have been refused there), so undo it for a borrowed slot, right
+ * after that argument -- as the ordinary call path does (elab_call.c, LB1),
+ * so `(na-dot a a)` borrows `a` twice and a later non-borrowed slot of the
+ * same call still spends it.  Without this a borrowing method could be called
+ * on an affine value only once: `(na-len a)` then `(na-len a)` was TUR-E0150. */
+static void method_arg_release_if_borrowed(Elab *e, const Form *call, uint32_t slot,
+                                           Expr *arg) {
+    if (!arg || slot >= 32 || call->tag != F_LIST || call->as.list.len < 1) return;
+    const Form *head = call->as.list.items[0];
+    if (head->tag != F_SYM) return;
+    if (!(method_borrow_mask_by_name(&e->typeclass_env, head->as.sym) & (1u << slot))) return;
+    Expr *a = arg;
+    while (a && (a->kind == EX_ASCRIBE || a->kind == EX_REINTERPRET))
+        a = a->kind == EX_ASCRIBE ? a->as.ascribe_.inner : a->as.reinterpret_.expr;
+    if (!a || a->kind != EX_VAR || !a->as.var.binding) return;
+    Binding *b = a->as.var.binding;
+    if (b->is_linear) b->is_linear_consumed = false;
+    if (b->is_affine && b->usage_state == USAGE_USED_ONCE) b->usage_state = USAGE_UNUSED;
+}
+
+
 /* The argument coercions a typeclass method call applies before it calls the
  * instance impl, against that impl's parameter list: a `: fn` (rank-N)
  * parameter gets its argument wrapped as EX_POLY_WRAP so it crosses as a
@@ -7733,6 +7793,7 @@ static Expr *elab_method_call_impl(Elab *e, const Form *call) {
      * different types (e.g. MyShow[int] vs MyShow[bool]). */
     Expr *obj = elab_form(e, call->as.list.items[1]);
     if (!obj) return NULL;
+    method_arg_release_if_borrowed(e, call, 0, obj);
 
     /* Existential-open witness dispatch.
      * When the receiver `v` was bound by `(open e [a v] ...)` over a
@@ -9515,6 +9576,7 @@ resolved_user_fallback:;
         args[i] = elab_form(e, af);
         if (lam_push) e->expected_type = lam_saved;
         if (!args[i]) return NULL;
+        method_arg_release_if_borrowed(e, call, 1 + i, args[i]);
         if (lam_cm && 1 + i < lam_cm->n_params)
             m7_collect_tyvar_bindings(e, lam_cm->param_types[1 + i], args[i]->type,
                                       lam_bn, lam_bt, &lam_nb, 16);

@@ -48,6 +48,20 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A float associated-type value held inside a generic keeps its value.**
+  In a constrained generic, `(let [t (c-get a)] (c-put a t))` with
+  `(type E = float)` printed `1.25` as `4.94066e-324`: the projection
+  `(E V)` was bound for a spec only when the generic's own signature named it,
+  so a body-only one stayed the integer carrier and the float was converted on
+  the way in. The same happened through a `^mut` binder, an `if`, an
+  annotated `let`, and a generic calling a generic that returns `(E V)`
+  (typed `int` outright). The emitter now reduces such a projection through
+  its instance once the spec fixes its argument.
+- **A class method's `^borrow` parameter borrows.** The caret was skipped
+  when the class was parsed, so `(na-len a)` on a move-only value spent it and
+  a second call was TUR-E0150, as was `(na-dot a a)`. The class now records
+  the mask, the instance's parameter inherits it, and the call leaves the
+  argument unspent, exactly as an ordinary `^borrow` function does.
 - **A class method returning its associated type works in a generic over
   applied-opaque instances.** With instances keyed on `(NumVec float)` and
   `(NumVec float32)`, a method with an untyped parameter, called on the
