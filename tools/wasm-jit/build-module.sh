@@ -57,7 +57,9 @@ put_rsp() {   # put_rsp FILE FLAG...
   if cmp -s "$f.new" "$f"; then rm -f "$f.new"; else mv "$f.new" "$f"; fi
 }
 # shellcheck disable=SC2086
-BASE=($INCS -O2 -std=c11 -Wall -Wextra -Wno-unused-parameter -D_DEFAULT_SOURCE -pthread
+# -msimd128 as in tur_wasm: the interpreter's numvec natives vectorize
+# (simd-and-vectorization-plan, open question 5).
+BASE=($INCS -O2 -msimd128 -std=c11 -Wall -Wextra -Wno-unused-parameter -D_DEFAULT_SOURCE -pthread
       "-DTUR_VERSION=\\\"$VERSION\\\"")
 put_rsp "$OUT/rt.rsp" "${BASE[@]}" -pedantic
 # The engine as tur_jit_obj builds it natively: no -pedantic, which MIR's

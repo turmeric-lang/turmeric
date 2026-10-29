@@ -2,6 +2,18 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **wasm SIMD is on by default.** `tur build --target wasm` passes
+  `-msimd128`, and the Try Turmeric modules are built with it, so the
+  numvec kernels vectorize in the browser: 1.2-29x faster on 15 of 16
+  measured kernels (the u8 sum gains nothing), with bit-identical
+  results. An engine without wasm SIMD (before Chrome 91, Firefox 89,
+  Safari 16.4) refuses such a module; `:web #{:simd false}` in `build.tur`
+  builds one without it.
+
 ## [0.72.0] -- 2026-10-29
 
 ### Added

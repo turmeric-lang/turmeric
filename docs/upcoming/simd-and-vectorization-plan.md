@@ -8,8 +8,8 @@
 > approaches D/E, S0 and S1 not started.
 > **Open questions reviewed 2026-10-29** (section 6): the class is `NumArray`
 > with `na-` methods (Q2, decided); D and E deferred (Q3); wasm `-msimd128`
-> measured at 1.0-29x on the kernels, bit-identical results (Q5, decision
-> pending); multiversioning deferred (Q6); the store-loop gap is the new Q7,
+> measured at 1.0-29x on the kernels, bit-identical results, and turned
+> on by default (Q5, done); multiversioning deferred (Q6); the store-loop gap is the new Q7,
 > decided as views plus a few fixed-operation kernels (needs an emitter
 > change too).
 > Proposed 2026-10-24. Written in response to
@@ -701,7 +701,7 @@ measured no slower than its inline-C version.
 
 | | cc | `tur jit` | turi | wasm |
 |---|---|---|---|---|
-| N0/N1 | vectorized kernels at `-O2` and `-O3` (gcc and clang) | same C, MIR scalar code | the same kernel C, built with the host's `tur` | scalar; 1.0-29x with `-msimd128` (Q5) |
+| N0/N1 | vectorized kernels at `-O2` and `-O3` (gcc and clang) | same C, MIR scalar code | the same kernel C, built with the host's `tur` | vectorized with `-msimd128`, on by default (Q5) |
 | N2 | read loops vectorize at `-O3`; store loops do not (Q7) | scalar | scalar | scalar |
 | S1 | vector extensions (SSE2 baseline, AVX with `-march`) | struct-of-lanes helpers | struct-of-lanes natives | simd128 if enabled |
 
@@ -796,9 +796,14 @@ Results identical in every cell.
    the cost). Kernel code grew 20% (13.1 KB -> 15.8 KB of the module). The
    cost is reach: an engine without wasm SIMD refuses the *whole* module,
    not only the SIMD functions -- Chrome 91 and Firefox 89 (2021), Safari
-   16.4 (2023) and later accept it. Recommendation: on by default for both
-   builds, with a `:web :simd false` opt-out for `--target wasm`; not tied
-   to S1.
+   16.4 (2023) and later accept it.
+
+   **Decided and done 2026-10-29: on by default, not tied to S1.** `tur
+   build --target wasm` passes `-msimd128` unless the manifest says
+   `:web #{:simd false}` (`PkgWebOpts.simd`, beside `:tail-calls`; checked
+   by `tests/run-build-project.sh` with a stub emcc), and both Try Turmeric
+   modules build with it (`tur_wasm` in `src/CMakeLists.txt`,
+   `tools/wasm-jit/build-module.sh`).
 6. Multiversioned N1 kernels on x86-64 Linux -- worth it, and does a
    portable fallback exist for the other hosts? **Deferred 2026-10-29.**
    The portable spelling is not `target_clones` (glibc ifunc, Linux only)

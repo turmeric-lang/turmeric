@@ -2109,6 +2109,9 @@ if(TUR_WASM)
                 -sEXPORT_NAME=TurmericModule
                 -sMODULARIZE=1
                 -O2
+                # wasm SIMD: the interpreter's numvec natives vectorize, with
+                # bit-identical results (simd-and-vectorization-plan, Q5).
+                -msimd128
                 -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pedantic
                 -D_DEFAULT_SOURCE
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
