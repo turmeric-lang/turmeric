@@ -408,7 +408,7 @@ A few families always take the fallback, deliberately:
   `spawn`. c2mir rejects `__thread` outright. It accepts `_Thread_local` with
   a warning and compiles a plain global, so the engine treats that warning as
   a failed compile and falls back
-  ([jit-inline-c-thread-local-collapses-to-global](../archive/jit-inline-c-thread-local-collapses-to-global.md)).
+  ([jit-inline-c-thread-local-collapses-to-global](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-inline-c-thread-local-collapses-to-global.md)).
 
 ### The two ladders
 
