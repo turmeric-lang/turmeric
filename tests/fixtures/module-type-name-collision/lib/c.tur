@@ -1,0 +1,6 @@
+;; lib/c -- a Pair of its own beside the stdlib's.
+(defmodule lib/c
+  (export Pair mk-pair pair-sum)
+  (defstruct ^copy Pair [l : int r : int])
+  (defn mk-pair [l : int r : int] : Pair (Pair l r))
+  (defn pair-sum [p : Pair] : int (+ (.l p) (.r p))))

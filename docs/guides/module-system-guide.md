@@ -210,6 +210,50 @@ defmodule list-utils
   runtime lookup under the interpreter.)
 - **Stdlib (`tur/...`) bindings**: globally visible -- see Auto-Loaded Stdlib Modules.
 
+### Two modules with the same name
+
+Two modules may each define, and export, a function of one name. A module
+that refers one of them gets that one, whichever was loaded last; the other is
+reachable qualified. Referring the same name from both is an error, because
+which one a bare use meant would depend on the import order:
+
+```turmeric
+(defmodule main
+  (import lib/a :refer [f])   ; this module's `f` is lib/a's
+  (import lib/b)              ; lib/b's is `lib/b/f`
+  (defn main [] : int
+    (+ (f) (lib/b/f))))
+```
+
+```sweet-exp
+defmodule main
+  import lib/a :refer [f]   ; this module's `f` is lib/a's
+  import lib/b              ; lib/b's is `lib/b/f`
+  defn main [] : int
+    +(f() lib/b/f())
+```
+
+Types work the same way. A type is named by its bare name everywhere, so
+when a module defines a type, or a constructor, whose name something else
+already holds -- another module, the stdlib, a file loaded outside any
+module -- that module's definition is renamed `<module>/<name>` throughout its
+body. Inside the module nothing changes: `Attr` still means its own `Attr`. A
+file the module `load`s counts as the module's own. Another module reaches
+the renamed type by:
+
+- referring it: `(import lib/b :refer [Attr])`, then a bare `Attr`;
+- its alias, `b/Attr`, after `(import lib/b :as b)`;
+- its full name, `lib/b/Attr`;
+- a bare `Attr`, when `lib/b` is the only import that provides `Attr` and
+  nothing outside any module (the stdlib, a top-level `load`) has that name.
+
+The two are different types, and a diagnostic names the renamed one by its
+full name (`expected Attr, got lib/b/Attr`). Only a definition that collides
+is renamed, so a program whose names never collide compiles exactly as
+before. The rename changes the type's C name, so inline C that spells
+`tur_adt_Attr` by hand names the first definer's type; an `extern-c` or a
+`^export-as` name is unaffected.
+
 ### Macros are exported the same way
 
 ```turmeric

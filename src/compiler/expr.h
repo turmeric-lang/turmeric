@@ -1607,6 +1607,15 @@ typedef struct DefModule {
     uint32_t n_imports;
     Expr **body;                 /* elaborated body expressions */
     uint32_t n_body;
+    /* module-type-names-collide-across-modules: the type and constructor
+     * names this module defines that another module (or the stdlib, or a
+     * file outside any module) already held when it was elaborated.  Each is
+     * renamed `<module>/<name>` throughout the body, so rename_to[i] is the
+     * name the type really has; an importer that refers rename_from[i] gets
+     * it (elab_module_type_renames). */
+    const Symbol **rename_from;
+    const Symbol **rename_to;
+    uint32_t       n_renames;
 } DefModule;
 
 /* Phase G0: A single pattern in a match arm */

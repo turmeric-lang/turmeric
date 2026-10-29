@@ -873,7 +873,9 @@ What building C, A1-A2 and D1 changed against the text above.
   `HAttrName`, `HRawBody` (and D2's `HCommentBody`, `HCdataBody`,
   `HPiBody`): a type name is global, and tur-dom-core's SAX `Attr` and ecs's
   `Tag` were taken
-  ([module-type-names-collide-across-modules](../reported/module-type-names-collide-across-modules.md)).
+  ([module-type-names-collide-across-modules](module-type-names-collide-across-modules.md)).
+  Since that was fixed (2026-10-29) they are `Tag`, `Attr`, `AttrName`,
+  `RawBody`, `CommentBody`, `CdataBody` and `PiBody`.
 - Content holes go through a new `ToHtml` class rather than `ToChild`, so a
   nested `Html` stays a tree (through `ToChild` it would be flattened to
   markup); `ToHtml` has `ToChild`'s instances plus `Html`, `Node` and
@@ -884,9 +886,9 @@ What building C, A1-A2 and D1 changed against the text above.
   for an instance on the body's type when that is concrete, and takes the
   monad only from a `defn`'s return type
   ([for-comprehension-pure-picks-the-payload-type](../reported/for-comprehension-pure-picks-the-payload-type.md)).
-  An inline `fn` given to `list-map` needs a typed parameter. tur-html
-  cannot load `stdlib/list-typed.tur` today (its `String` collides with
-  dom/ownstr's), so the test supplies `list-foldl`.
+  An inline `fn` given to `list-map` needs a typed parameter. The test
+  supplied its own `list-foldl` until 2026-10-29, when tur-html could load
+  `stdlib/list-typed.tur` beside dom/ownstr's `String` for the first time.
 - `HComment`, `HCdata` and `HPi` were added so `node->hiccup` loses
   nothing; HTML has no CDATA or PIs, so `hiccup->string` writes CDATA as
   text and leaves a PI out. `hiccup->xml-string` writes a `raw-html` child
@@ -904,8 +906,13 @@ What building C, A1-A2 and D1 changed against the text above.
   in tur-html, so tourist needs only tur-dom-core for the class.
   `tourist/markup`'s `html-response` sits behind optional tur-dom-core and
   tur-html dependencies, as `tourist/template` does behind tur-template. Its
-  test reads the Response directly: tourist's HTTP client loads
-  `json/ownstr`, whose `String` collides with `dom/ownstr`'s.
+  test reads the Response directly. It did so first because tourist's HTTP
+  client loads `json/ownstr`, whose `String` collided with `dom/ownstr`'s;
+  with that fixed, serving the pages turned up
+  [monomorph-emitted-before-its-type-argument](../reported/monomorph-emitted-before-its-type-argument.md),
+  [unused-module-global-heap-init-reported-as-leak](../reported/unused-module-global-heap-init-reported-as-leak.md)
+  and a live literal that leaked each content hole's markup (fixed in
+  turlive.c), and the test stayed direct.
 - **A5.** `read-string-at` (a macro-time native beside `read-string`):
   `(read-string-at text lit k)` reads text that starts at byte `k` of the
   string literal `lit`'s value and moves every form's span to that text's
