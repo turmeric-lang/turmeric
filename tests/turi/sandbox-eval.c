@@ -328,6 +328,14 @@ static void check_handle_forgery_refused(void) {
     /* Use-after-free: the freed vec's pointer is forgotten. */
     expect_forgery_refused(env, "forgery/use-after-free",
                            "(let [v (vec-new)] (vec-free v) (vec-len v))");
+    /* numvec.tur: one handle kind per element width, so a 4-byte U8Vec read
+     * at an I64Vec's 8-byte stride (past its block) is refused, as is a raw
+     * integer. */
+    expect_forgery_refused(env, "forgery/numvec-raw",  "(f64vec-ref 4096 0)");
+    expect_forgery_refused(env, "forgery/numvec-width",
+                           "(let [v (u8vec-new 4 1)] (i64vec-ref v 3))");
+    expect_forgery_refused(env, "forgery/numvec-width-set",
+                           "(let [v (u8vec-new 4 1)] (f64vec-set! v 3 7.1))");
     /* The continuation channel: resume / clone / serialize are folded by the
      * driver or dispatched as builtins, not through the native dispatch the
      * guard above sits on, so they carry a check of their own (TURI_HK_CONT). */

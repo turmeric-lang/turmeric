@@ -1,0 +1,13 @@
+; Loading the same reader-macro definition twice is not a collision.
+;
+; A program can reach one `(reader-macros/define ...)` form twice -- most
+; often a `#use-reader-macros` of a module's file followed by an import of
+; that module, which registers the module's defines again.  Re-registering an
+; identical definition (same delimiter, mode and template) is a no-op; only a
+; DIFFERENT definition under the same name is the "already registered" error
+; (errors/reader-macros-strict-collision).
+
+#use-reader-macros "macros.tur"
+#use-reader-macros "macros.tur"
+
+(println #twice[20 22])   ; 42

@@ -3703,6 +3703,17 @@ static Form *read_dedent_literal(Reader *r, uint32_t call_line,
  *
  * In RM1 only RM_BODY_NONE (bare) and RM_BODY_RAW are honored end-to-end;
  * RM_BODY_DATUM lands in RM2. */
+/* fmt-expands-user-reader-macros: mark the form a user reader macro expanded
+ * to, and give it the invocation's span, so `tur fmt` can print the
+ * invocation back as written (see Form.rm_src). */
+static Form *rm_stamp(Reader *r, Form *f, uint32_t call_line, uint32_t call_col,
+                      size_t call_off) {
+    if (!f) return f;
+    f->span   = span_from_to(r, call_line, call_col, call_off, r->pos);
+    f->rm_src = 1;
+    return f;
+}
+
 static Form *try_read_user_macro(Reader *r) {
     /* We always need to attempt parsing here because built-in named string
      * macros (currently `#rx"..."`) dispatch through this hook too — a
@@ -3842,7 +3853,8 @@ static Form *try_read_user_macro(Reader *r) {
 
     if (e->mode == RM_BODY_NONE) {
         /* Bare form: any following delimiter is not part of this macro. */
-        return expand_raw_template(r, e->template, "", 0, name_site);
+        return rm_stamp(r, expand_raw_template(r, e->template, "", 0, name_site),
+                        call_line, call_col, call_off);
     }
 
     if (try_delim == 0 || try_delim != e->delim) {
@@ -3867,8 +3879,9 @@ static Form *try_read_user_macro(Reader *r) {
         if (!str || r->error) return NULL;
         Span full_site =
             span_from_to(r, call_line, call_col, call_off, r->pos);
-        return expand_raw_template(r, e->template,
-                                   str->as.s.p, str->as.s.len, full_site);
+        return rm_stamp(r, expand_raw_template(r, e->template,
+                                               str->as.s.p, str->as.s.len, full_site),
+                        call_line, call_col, call_off);
     }
 
     int close = matching_close_for(e->delim);
@@ -3879,7 +3892,8 @@ static Form *try_read_user_macro(Reader *r) {
         if (r->error) return NULL;
         Span full_site =
             span_from_to(r, call_line, call_col, call_off, r->pos);
-        return expand_raw_template(r, e->template, body, body_len, full_site);
+        return rm_stamp(r, expand_raw_template(r, e->template, body, body_len, full_site),
+                        call_line, call_col, call_off);
     }
 
     /* RM_BODY_DATUM: recursively read forms until the matched close. */
@@ -3901,9 +3915,10 @@ static Form *try_read_user_macro(Reader *r) {
     Form *seq = read_seq(r, (char)e->delim, (char)close, body_tag, unterm_msg);
     if (!seq || r->error) return NULL;
     Span full_site = span_from_to(r, call_line, call_col, call_off, r->pos);
-    return expand_datum_template(r, e->template,
-                                 seq->as.list.items, seq->as.list.len,
-                                 full_site);
+    return rm_stamp(r, expand_datum_template(r, e->template,
+                                             seq->as.list.items, seq->as.list.len,
+                                             full_site),
+                    call_line, call_col, call_off);
 }
 
 /* Legible character literals: `#\a`, `#\space`, `#\u41`.  The reader emits a

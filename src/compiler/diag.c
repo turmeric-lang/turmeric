@@ -3631,7 +3631,8 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Add explicit casts in the body where the width matters, or declare the\n"
       "parameter as int.  The warning is an error under\n"
-      "--Werror=inline-c-narrow-params.\n"
+      "--Werror=inline-c-narrow-params.  Bodies in the stdlib are exempt: the\n"
+      "warning is advice to a body's author, not to a program that loads it.\n"
     },
     { TUR_W0038_LINT_PANIC_SITE,
       "TUR-W0038: Panic call site outside the allow-list\n"

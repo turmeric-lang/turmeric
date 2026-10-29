@@ -1,0 +1,30 @@
+;; module-type-names-collide-across-modules: two modules may each define a
+;; type (and constructors) of one name.  The later one is renamed
+;; `<module>/<name>`; an importer reaches it by :refer, an alias, the
+;; qualified name, or a bare name only one import provides.
+(defmodule main
+  (import lib/a :refer [mk-a attr-n Shape Circle Square area-a])
+  (import lib/b :as b :refer [Attr mk-b attr-k])
+  (import lib/c :refer [Pair mk-pair pair-sum])
+  (import lib/s :refer [s-new s-len])
+  (import lib/use :refer [use-b])
+  (load "stdlib/list-typed.tur")
+  ;; Attr is lib/b's (referred); Shape, Circle, Square are lib/a's.
+  (defn k-of [a : Attr] : int (attr-k a))
+  (defn b-area [s : b/Shape] : int (b/area-b s))
+  (defn main [] : int
+    (println (attr-n (mk-a 1)))
+    (println (k-of (mk-b 2)))
+    (println (k-of (Attr "x" 3)))
+    (println (area-a (Circle 2)))
+    (println (area-a (Square 3)))
+    (println (b-area (b/Circle 4 5)))
+    (println (b-area (lib/b/Square 6)))
+    (println (pair-sum (mk-pair 7 8)))
+    (println (pair-sum (Pair 1 2)))
+    (println (.fst (pair 9 10)))
+    (println (s-len (s-new)))
+    (println (string/to-cstr (string/from-cstr "stdlib String")))
+    (println (list-length (list-cons 1 (list-cons 2 (list-nil)))))
+    (println (use-b))
+    0))

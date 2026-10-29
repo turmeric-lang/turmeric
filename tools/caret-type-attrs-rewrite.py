@@ -25,7 +25,7 @@ Reads `.tur` files, `.tur.sweet` files (sweet-exp: a head at the start of a
 line), and the ```turmeric / ```sweet-exp blocks and `(def...)` code spans of
 `.md` files.  Idempotent: a second run changes nothing.
 
-See docs/upcoming/caret-type-attributes-plan.md (P2).
+See docs/archive/caret-type-attributes-plan.md (P2).
 
 Usage:
   tools/caret-type-attrs-rewrite.py [opts] PATH [PATH...]

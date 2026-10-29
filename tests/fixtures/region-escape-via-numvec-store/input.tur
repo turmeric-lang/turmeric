@@ -1,0 +1,41 @@
+;; region-escape-via-numvec-store: the numeric-array setters
+;; (stdlib/numvec.tur) store a NUMBER, so they carry no TUR_REGION_NOTE -- and
+;; an `I64Vec` slot still cannot smuggle a region node past its bracket.  A
+;; node reaches `i64vec-set!`'s `int` parameter only erased: written
+;; `(:: node :int)`, or a typed node handed to the inline-C `int` parameter,
+;; which the elaborator turns into the same erasing ascription.  Both are noted
+;; at the erasure, so the generation retires instead of rewinding.  Every chain
+;; is read AFTER the pop; TUR_REGIONS=0 prints the same (run-regions-seam.sh).
+(load "stdlib/numvec.tur")
+
+(defdata ^heap Link (Link [v : int nxt : int]))
+
+(defn chain-sum [c : int] : int
+  ```c
+  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)c;
+  int64_t acc = 0; while (p) { acc += p->v; p = (void *)(intptr_t)p->nxt; } return acc;
+  ```)
+
+(defn build [n : int acc : int] : int
+  (if (<= n 0) acc (build (- n 1) (:: (Link n acc) :int))))
+
+;; 1. an erased chain stored into an array that outlives the bracket.
+(defn store-erased [^borrow a : I64Vec n : int] : int
+  (with-region (fn [] (do (i64vec-set! a 0 (build n 0)) 1))))
+
+;; 2. a typed node passed straight to the `int` element parameter.
+(defn store-typed [^borrow a : I64Vec n : int] : int
+  (with-region (fn [] (do (i64vec-set! a 1 (Link n 0)) 1))))
+
+;; churn -- allocate in a fresh bracket, so reclaimed memory would be reused
+(defn churn [n : int] : int
+  (with-region (fn [] (chain-sum (build n 0)))))
+
+(defn main [] : int
+  (let [a (i64vec-new 2 0)]
+    (store-erased a 4)
+    (store-typed a 9)
+    (println (churn 50))
+    (println (chain-sum (i64vec-ref a 0)))   ;; 1+2+3+4 = 10
+    (println (chain-sum (i64vec-ref a 1))))  ;; 9
+  0)

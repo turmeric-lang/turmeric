@@ -20,7 +20,8 @@
 > - **Open:** the shim-toolchain question under WIN2; `-Werror` is still off
 >   for Windows builds (`src/CMakeLists.txt`); the pipe-fd reactor fixtures
 >   stay skipped behind `requires.posix-apis`, since Windows `select()` cannot
->   poll pipes; WIN4 is deferred.
+>   poll pipes; WIN4 is deferred; the `spices/lmdb` Windows assessment
+>   ([below](#lmdb-spice----windows-assessment)) has not been run.
 
 `tur.exe` builds under MSYS2/UCRT64, and `tur build` compiles and runs real
 programs. Measured on `windows-bringup` with gcc 16.1.0, Debug:
@@ -333,6 +334,21 @@ wanted.
   MSYS2. Confirm by unzipping with MSYS2 off `PATH` and running `tur --version`.
   Make sure the runner installs `mingw-w64-ucrt-x86_64-libedit`, or the build
   quietly succeeds and ships a REPL with no line editing.
+
+## lmdb spice -- Windows assessment
+
+Moved here when [lmdb-spice-plan](../archive/lmdb-spice-plan.md) was archived
+(2026-10-29); it is the one item of that plan still open. LMDB's Win32 path
+differs from the POSIX one in how the data file is sized, how locks work and
+which libraries it links, so the spice has only been run on POSIX hosts so far.
+The procedure is that plan's
+[section 7](../archive/lmdb-spice-plan.md#7-windows-assessment-run-by-hand-before-l0-closes):
+a self-contained LMDB probe (A1-A6, no `tur` needed) and `tur test` in
+`spices/lmdb` (A7), run under MSYS2 UCRT64 on an NTFS volume. Fill in the
+Windows column of its results table, and apply the answers as it says: A1 sets
+`:link-libs`, A2 sets the Windows default map size, A3/A4 confirm growing the
+map, A5/A6 decide whether the thread test and temp-directory cleanup need
+Windows handling.
 
 ---
 

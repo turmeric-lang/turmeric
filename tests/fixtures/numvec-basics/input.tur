@@ -1,0 +1,96 @@
+;; numvec-basics: the five typed numeric arrays of stdlib/numvec.tur
+;; (simd-and-vectorization-plan, phase N0): construction, ref / set!, len,
+;; of, copy, and the Vec conversions.  Floats probe with a fractional part
+;; (7.1, 3.25), never a whole number, so a truncation shows.
+(load "stdlib/numvec.tur")
+
+(defn show-it [s : String] : nil
+  (println (string/to-cstr s))
+  (string/release s))
+
+(defn f64-section [] : nil
+  (let [a (f64vec-new 4 7.1)
+        b (f64vec-of 1.5 2.5 3.25)]
+    (println (f64vec-len a))
+    (println (f64vec-ref a 3))
+    (f64vec-set! a 1 3.25)
+    (println (f64vec-ref a 1))
+    (println (f64vec-ref b 2))
+    (show-it (f64vec-show a))
+    (show-it (f64vec-show b))
+    ;; a copy is independent of its source
+    (let [c (f64vec-copy b)]
+      (f64vec-set! c 0 9.5)
+      (println (f64vec-ref b 0))
+      (println (f64vec-ref c 0)))
+    ;; the empty array is a real array
+    (let [e (f64vec-of)]
+      (println (f64vec-len e)))))
+
+(defn f32-section [] : nil
+  (let [a (f32vec-new 3 (:: 7.1 float32))
+        b (f32vec-of (:: 1.5 float32) (:: 3.25 float32))]
+    (println (f32vec-ref a 2))
+    (f32vec-set! a 0 (:: 3.25 float32))
+    (println (f32vec-ref a 0))
+    (println (f32vec-len b))
+    (show-it (f32vec-show b))))
+
+(defn i64-section [] : nil
+  (let [a (i64vec-new 3 7)
+        b (i64vec-of 9007199254740993 -5 0)]
+    (println (i64vec-ref a 1))
+    (println (i64vec-ref b 0))
+    (i64vec-set! a 2 -42)
+    (println (i64vec-ref a 2))
+    (show-it (i64vec-show b))))
+
+(defn i32-section [] : nil
+  (let [a (i32vec-new 2 (as int32 -6))
+        b (i32vec-of (as int32 2147483647) (as int32 -2147483648))]
+    (println (i32vec-ref a 1))
+    (println (i32vec-ref b 0))
+    (println (i32vec-ref b 1))
+    (i32vec-set! a 0 (as int32 123456))
+    (println (i32vec-ref a 0))))
+
+(defn u8-section [] : nil
+  (let [a (u8vec-new 3 (as uint8 200))
+        b (u8vec-of (as uint8 0) (as uint8 255) (as uint8 17))]
+    (println (u8vec-ref a 2))
+    (println (u8vec-ref b 1))
+    (u8vec-set! a 1 (as uint8 7))
+    (println (u8vec-ref a 1))
+    (show-it (u8vec-show b))))
+
+;; Vec conversions, both ways; the element round-trips bit for bit.
+(defn convert-section [] : nil
+  (let [a (f64vec-of 1.5 7.1 3.25)
+        v (f64vec->vec a)
+        back (vec->f64vec v)]
+    (println (vec-len v))
+    (println (:: (vec-get v 1) float))
+    (println (f64vec-ref back 1))
+    (println (f64vec-len back))
+    (vec-free v))
+  (let [v (vec-of 4 5 6)
+        a (vec->i64vec v)
+        w (i64vec->vec a)]
+    (println (i64vec-ref a 2))
+    (println (vec-get w 0))
+    (vec-free v)
+    (vec-free w))
+  (let [a (u8vec-of (as uint8 9) (as uint8 250))
+        w (u8vec->vec a)
+        b (vec->u8vec w)]
+    (println (u8vec-ref b 1))
+    (vec-free w)))
+
+(defn main [] : int
+  (f64-section)
+  (f32-section)
+  (i64-section)
+  (i32-section)
+  (u8-section)
+  (convert-section)
+  0)

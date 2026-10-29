@@ -1,6 +1,22 @@
 # A method returning an associated type fails inside a generic when the instances are keyed on an applied opaque
 
-**Severity: medium-low (blocks a generic numeric-array API; a workaround exists).**
+**Resolved 2026-10-29.** The return-directed representative search
+(`src/compiler/elab_typeclasses.c`, the `carrier_opaque` loop) now looks
+through a `TY_APP` head to the opaque it applies, under the same
+`tyvar_reaches_param` gate, so `(NumVec float)` is a representative just as a
+bare opaque is; emit-side re-resolution still picks each spec's own instance.
+Pinned by `tests/fixtures/assoc-type-method-applied-opaque-head` (also covers
+an applied struct head, and the typed-parameter spelling over three element
+types), and the typed-parameter spelling needed no fix:
+
+- **Narrower than first written.** Only a method whose parameter is UNTYPED
+  -- `(nv-sum [v] : Elem)` -- dispatches on its result and reached this
+  search. The conventional spelling, `(nv-sum [s : v] : Elem)`, dispatches on
+  the argument and already worked before the fix, element-typed results
+  included. So this never blocked a generic numeric-array API written the
+  usual way; the plan's open question 1 overstated it.
+
+**Severity (as filed): medium-low (blocks a generic numeric-array API; a workaround exists).**
 
 Found 2026-10-24 while prototyping the generic option of
 [simd-and-vectorization-plan](../upcoming/simd-and-vectorization-plan.md)

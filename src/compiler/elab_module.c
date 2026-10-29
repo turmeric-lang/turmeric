@@ -697,6 +697,10 @@ static void module_collect_exports(Elab *e, ElabModule *slot, const Symbol *name
     slot->exports   = exp_arr;
     slot->n_exports = idx;
 
+    slot->rename_from = loaded_defmod ? loaded_defmod->rename_from : NULL;
+    slot->rename_to   = loaded_defmod ? loaded_defmod->rename_to : NULL;
+    slot->n_renames   = loaded_defmod ? loaded_defmod->n_renames : 0;
+
     /* Phase M4: Collect exported macros from this module.
      * A macro is exported if its defining_module_name matches this module's name
      * AND its name appears in the module's (export ...) list. */
@@ -1561,15 +1565,51 @@ static bool elab_apply_import(Elab *e, const ImportSpec *imp) {
     for (uint32_t k = 0; k < imp->n_refer; k++) {
         const Symbol *ref_sym = imp->refer_syms[k];
 
-        /* First check bindings. */
+        /* First check bindings.  A type or constructor the module renamed
+         * (module-type-names-collide-across-modules) is exported under its
+         * renamed `<module>/<name>`; referring the name it was written with
+         * refers that binding, and elab_module_type_renames rewrites the
+         * importer's uses of it. */
+        const Symbol *ref_key = ref_sym;
+        for (uint32_t m = 0; m < loaded->n_renames; m++)
+            if (loaded->rename_from[m] == ref_sym) { ref_key = loaded->rename_to[m]; break; }
         Binding *ref_b = NULL;
         for (uint32_t m = 0; m < loaded->n_exports; m++) {
-            if (loaded->exports[m]->name == ref_sym) {
+            if (loaded->exports[m]->name == ref_key) {
                 ref_b = loaded->exports[m];
                 break;
             }
         }
         if (ref_b) {
+            /* exported-name-collision-ignores-refer: one module cannot refer
+             * the same name from two modules -- which one a bare use meant
+             * would depend on the import order. */
+            const DefModule *cm = e->current_module;
+            for (uint32_t j = 0; cm && j < cm->n_imports && &cm->imports[j] != imp; j++) {
+                const ImportSpec *pi = &cm->imports[j];
+                if (pi->for_macros || pi->module_name == imp->module_name) continue;
+                bool refers = false;
+                for (uint32_t q = 0; q < pi->n_refer && !refers; q++)
+                    refers = pi->refer_syms[q] == ref_sym;
+                if (!refers) continue;
+                ElabModule *pm = elab_find_loaded_module(e, pi->module_name);
+                if (!pm) continue;
+                const Symbol *pkey = ref_sym;
+                for (uint32_t q = 0; q < pm->n_renames; q++)
+                    if (pm->rename_from[q] == ref_sym) { pkey = pm->rename_to[q]; break; }
+                Binding *pb = NULL;
+                for (uint32_t q = 0; q < pm->n_exports && !pb; q++)
+                    if (pm->exports[q]->name == pkey) pb = pm->exports[q];
+                if (!pb || pb == ref_b) continue;
+                diag_emit(DIAG_ERROR, imp->span,
+                          "'%s' is referred from both module '%s' and module '%s'",
+                          ref_sym->name, pi->module_name->name, imp->module_name->name);
+                diag_emit(DIAG_NOTE, imp->span,
+                          "refer it from one of them and spell the other "
+                          "qualified (%s/%s), or import it under an alias",
+                          imp->module_name->name, ref_sym->name);
+                return false;
+            }
             scope_add(&e->global, ref_b);
             continue;
         }
@@ -1719,6 +1759,292 @@ Expr *elab_defscript(Elab *e, const Form *call) {
               "run, not in a file it imports or loads -- declare the spice in "
               "the script's own header");
     return NULL;
+}
+
+/* module-type-names-collide-across-modules: type and constructor names are
+ * bound by their bare name in the one global scope, and a type's C name is
+ * spelled from it, so two modules each defining `Attr` could not both be
+ * loaded -- even when neither exported it to the file loading them.  A
+ * module that defines a type or constructor name some other module (or the
+ * stdlib, or a file outside any module) already holds gets the name
+ * `<module>/<name>` instead: the whole body is rewritten to it before
+ * anything is declared, so every lookup, every diagnostic and the emitted C
+ * see a distinct name, and nothing downstream needs to know.  A name nobody
+ * else holds is left alone, so a program that compiled before compiles to
+ * the same C.
+ *
+ * An importer reaches a renamed type the way it would reach a function: a
+ * `:refer [Attr]` of it, an `alias/Attr` spelling, the full `<module>/Attr`
+ * spelling, or -- when exactly one of its imports provides the name and it
+ * does not define the name itself -- a bare `Attr`. */
+typedef struct TypeRenames {
+    const Symbol **from;
+    const Symbol **to;
+    uint32_t       n, cap;
+} TypeRenames;
+
+static const Symbol *type_renames_find(const TypeRenames *r, const Symbol *s) {
+    for (uint32_t i = 0; i < r->n; i++)
+        if (r->from[i] == s) return r->to[i];
+    return NULL;
+}
+
+/* Add `from` -> `to` unless `from` already has a rename: the first one added
+ * wins, so the callers add in precedence order. */
+static void type_renames_add(TypeRenames *r, const Symbol *from, const Symbol *to) {
+    if (type_renames_find(r, from)) return;
+    if (r->n == r->cap) {
+        r->cap = r->cap ? r->cap * 2 : 8;
+        r->from = (const Symbol **)realloc((void *)r->from, r->cap * sizeof *r->from);
+        r->to   = (const Symbol **)realloc((void *)r->to, r->cap * sizeof *r->to);
+        if (!r->from || !r->to) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    r->from[r->n] = from;
+    r->to[r->n++] = to;
+}
+
+static void type_renames_free(TypeRenames *r) {
+    free((void *)r->from);
+    free((void *)r->to);
+    memset(r, 0, sizeof *r);
+}
+
+/* The type and constructor names form `f` defines, into `out` (at most `cap`
+ * of them); the count.  A defstruct's constructor is its type's name. */
+static uint32_t module_type_decl_names(Elab *e, const Form *f,
+                                       const Symbol **out, uint32_t cap) {
+    if (f->tag != F_LIST || f->as.list.len < 2) return 0;
+    const Form *h = f->as.list.items[0];
+    if (h->tag != F_SYM) return 0;
+    const Symbol *hs = h->as.sym;
+    bool with_ctors = hs == e->sym_defdata || hs == e->sym_defgadt;
+    if (!with_ctors && hs != e->sym_defstruct && hs != e->sym_defopaque &&
+        hs != e->sym_deftype && hs != e->sym_defalias)
+        return 0;
+    uint32_t ni = elab_type_decl_name_index(f);
+    if (ni >= f->as.list.len || f->as.list.items[ni]->tag != F_SYM) return 0;
+    uint32_t n = 0;
+    out[n++] = f->as.list.items[ni]->as.sym;
+    if (!with_ctors) return n;
+    for (uint32_t i = ni + 1; i < f->as.list.len && n < cap; i++) {
+        const Form *c = f->as.list.items[i];
+        if (c->tag != F_LIST || c->as.list.len == 0 ||
+            c->as.list.items[0]->tag != F_SYM)
+            continue;
+        out[n++] = c->as.list.items[0]->as.sym;
+    }
+    return n;
+}
+
+/* Does a global binding of `name` belong to something other than module
+ * `mod`: another module, the stdlib, or a file outside any module? */
+static bool module_name_held_elsewhere(Elab *e, const Symbol *name, const Symbol *mod) {
+    Scope *g = &e->global;
+    if (g->idx) {
+        for (uint32_t k = scope_idx_newest(g, name); k; k = g->prev[k - 1])
+            if (g->bindings[k - 1]->defining_module_name != mod) return true;
+        return false;
+    }
+    for (uint32_t i = 0; i < g->n; i++)
+        if (g->bindings[i]->name == name &&
+            g->bindings[i]->defining_module_name != mod)
+            return true;
+    return false;
+}
+
+/* Is there a global binding of `name` that belongs to no module? */
+static bool module_name_held_outside_modules(Elab *e, const Symbol *name) {
+    Scope *g = &e->global;
+    if (g->idx) {
+        for (uint32_t k = scope_idx_newest(g, name); k; k = g->prev[k - 1])
+            if (!g->bindings[k - 1]->defining_module_name) return true;
+        return false;
+    }
+    for (uint32_t i = 0; i < g->n; i++)
+        if (g->bindings[i]->name == name && !g->bindings[i]->defining_module_name)
+            return true;
+    return false;
+}
+
+static const Symbol *module_qualified_sym(Elab *e, const Symbol *mod, const Symbol *name) {
+    size_t n = (size_t)mod->len + 1 + name->len;
+    char *buf = (char *)malloc(n + 1);
+    if (!buf) { fprintf(stderr, "tur: oom\n"); abort(); }
+    memcpy(buf, mod->name, mod->len);
+    buf[mod->len] = '/';
+    memcpy(buf + mod->len + 1, name->name, name->len);
+    buf[n] = '\0';
+    const Symbol *s = symtab_intern(e->st, strslice(buf, (uint32_t)n));
+    free(buf);
+    return s;
+}
+
+/* `s` renamed: itself when it is a renamed name, or a compound spelling with
+ * a renamed name inside its angle brackets (`ptr<Attr>`, `rc<Attr>`); NULL
+ * when nothing in it is renamed. */
+static const Symbol *type_renames_apply_sym(Elab *e, const TypeRenames *r, const Symbol *s) {
+    const Symbol *t = type_renames_find(r, s);
+    if (t) return t;
+    if (!memchr(s->name, '<', s->len)) return NULL;
+    Buf b;
+    buf_init(&b);
+    bool changed = false;
+    uint32_t i = 0;
+    while (i < s->len) {
+        char c = s->name[i];
+        if (c == '<' || c == '>' || c == ',' || c == ' ') {
+            buf_putc(&b, c);
+            i++;
+            continue;
+        }
+        uint32_t j = i;
+        while (j < s->len && s->name[j] != '<' && s->name[j] != '>' &&
+               s->name[j] != ',' && s->name[j] != ' ')
+            j++;
+        StrSlice tok = strslice(s->name + i, j - i);
+        const Symbol *ren = symtab_contains(e->st, tok)
+                          ? type_renames_find(r, symtab_intern(e->st, tok)) : NULL;
+        if (ren) {
+            buf_puts(&b, ren->name);
+            changed = true;
+        } else {
+            for (uint32_t k = i; k < j; k++) buf_putc(&b, s->name[k]);
+        }
+        i = j;
+    }
+    const Symbol *out = changed
+        ? symtab_intern(e->st, strslice(b.data, (uint32_t)b.len)) : NULL;
+    buf_free(&b);
+    return out;
+}
+
+/* `f` with every renamed name replaced, sharing every subtree that has none
+ * (the forms may be shared with another reader of the same file).  A quoted
+ * datum is data, not a type reference, and is left alone. */
+static Form *type_renames_apply(Elab *e, const TypeRenames *r, Form *f) {
+    if (!f) return f;
+    switch (f->tag) {
+        case F_SYM:
+        case F_KEYWORD: {
+            const Symbol *t = type_renames_apply_sym(e, r, f->as.sym);
+            if (!t) return f;
+            Form *nf = (Form *)arena_alloc(e->arena, sizeof(Form));
+            *nf = *f;
+            nf->as.sym = t;
+            return nf;
+        }
+        case F_LIST: case F_VEC: case F_MAP: case F_SET:
+        case F_QUASIQUOTE: case F_UNQUOTE: case F_UNQUOTE_SPLICING:
+        case F_TYPE_ANN: case F_CONTRACT_TYPE: case F_READER_COND:
+        case F_RANGE_VAR: case F_MAP_LITERAL: case F_SET_LITERAL:
+        case F_ROW_LITERAL: {
+            Form **items = NULL;
+            for (uint32_t i = 0; i < f->as.list.len; i++) {
+                Form *c = type_renames_apply(e, r, f->as.list.items[i]);
+                if (c != f->as.list.items[i] && !items) {
+                    items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
+                    memcpy(items, f->as.list.items, f->as.list.len * sizeof(Form *));
+                }
+                if (items) items[i] = c;
+            }
+            if (!items) return f;
+            Form *nf = (Form *)arena_alloc(e->arena, sizeof(Form));
+            *nf = *f;
+            nf->as.list.items = items;
+            return nf;
+        }
+        default:
+            return f;
+    }
+}
+
+/* Does imported module `lm` export a binding named `name`? */
+static bool module_exports_name(const ElabModule *lm, const Symbol *name) {
+    for (uint32_t i = 0; i < lm->n_exports; i++)
+        if (lm->exports[i]->name == name) return true;
+    return false;
+}
+
+/* `name` renamed by `lm` and exported under the new name: that name; else NULL. */
+static const Symbol *module_exported_rename(const ElabModule *lm, const Symbol *name) {
+    for (uint32_t i = 0; i < lm->n_renames; i++)
+        if (lm->rename_from[i] == name && module_exports_name(lm, lm->rename_to[i]))
+            return lm->rename_to[i];
+    return NULL;
+}
+
+static bool import_refers(const ImportSpec *imp, const Symbol *name) {
+    for (uint32_t i = 0; i < imp->n_refer; i++)
+        if (imp->refer_syms[i] == name) return true;
+    return false;
+}
+
+/* The renames module `mod`'s body forms `body[0..n)` are read with, once its
+ * imports are loaded: its own colliding names into `own` (and `all`), then
+ * what its imports renamed, in precedence order -- a `:refer`, an alias
+ * spelling, a sole provider of a bare name.  The module's own names, renamed
+ * or not, always mean its own definitions. */
+static void elab_module_type_renames(Elab *e, const DefModule *mod,
+                                     Form *const *body, uint32_t n,
+                                     TypeRenames *own, TypeRenames *all) {
+    TypeRenames defined = {0};
+    for (uint32_t i = 0; i < n; i++) {
+        const Symbol *names[64];
+        uint32_t k = module_type_decl_names(e, body[i], names, 64);
+        for (uint32_t j = 0; j < k; j++) {
+            type_renames_add(&defined, names[j], names[j]);
+            if (module_name_held_elsewhere(e, names[j], mod->name)) {
+                const Symbol *q = module_qualified_sym(e, mod->name, names[j]);
+                type_renames_add(own, names[j], q);
+                type_renames_add(all, names[j], q);
+            }
+        }
+    }
+    for (uint32_t i = 0; i < mod->n_imports; i++) {
+        const ImportSpec *imp = &mod->imports[i];
+        if (imp->for_macros) continue;
+        ElabModule *lm = elab_find_loaded_module(e, imp->module_name);
+        if (!lm) continue;
+        for (uint32_t k = 0; k < lm->n_renames; k++) {
+            const Symbol *q = module_exported_rename(lm, lm->rename_from[k]);
+            if (!q) continue;
+            if (imp->alias)
+                type_renames_add(all, module_qualified_sym(e, imp->alias,
+                                                           lm->rename_from[k]), q);
+            if (import_refers(imp, lm->rename_from[k]) &&
+                !type_renames_find(&defined, lm->rename_from[k]))
+                type_renames_add(all, lm->rename_from[k], q);
+        }
+    }
+    /* A bare name no `:refer` settles: the one import providing it, if it is
+     * the only one and renamed it -- and nothing outside any module (the
+     * stdlib, a top-level `load`) holds the bare name, which is what a bare
+     * name meant before. */
+    for (uint32_t i = 0; i < mod->n_imports; i++) {
+        const ImportSpec *imp = &mod->imports[i];
+        if (imp->for_macros) continue;
+        ElabModule *lm = elab_find_loaded_module(e, imp->module_name);
+        if (!lm) continue;
+        for (uint32_t k = 0; k < lm->n_renames; k++) {
+            const Symbol *nm = lm->rename_from[k];
+            const Symbol *q = module_exported_rename(lm, nm);
+            if (!q || type_renames_find(&defined, nm) || type_renames_find(all, nm) ||
+                module_name_held_outside_modules(e, nm))
+                continue;
+            bool other = false;
+            for (uint32_t j = 0; j < mod->n_imports && !other; j++) {
+                const ImportSpec *oi = &mod->imports[j];
+                if (j == i || oi->for_macros) continue;
+                if (import_refers(oi, nm)) { other = true; break; }
+                ElabModule *om = elab_find_loaded_module(e, oi->module_name);
+                if (om && om != lm &&
+                    (module_exports_name(om, nm) || module_exported_rename(om, nm)))
+                    other = true;
+            }
+            if (!other) type_renames_add(all, nm, q);
+        }
+    }
+    type_renames_free(&defined);
 }
 
 Expr *elab_defmodule(Elab *e, const Form *call) {
@@ -1980,9 +2306,40 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
         }
     }
 
+    /* module-type-names-collide-across-modules: read the body with this
+     * module's colliding type names renamed, and its imports' renamed ones
+     * resolved, before anything in it is declared. */
+    Form *const *mitems = call->as.list.items;
+    if (!e->in_stdlib_load &&
+        !(mod->name->len >= 4 && memcmp(mod->name->name, "tur/", 4) == 0)) {
+        TypeRenames own = {0}, all = {0};
+        elab_module_type_renames(e, mod, call->as.list.items + body_start,
+                                 call->as.list.len - body_start, &own, &all);
+        if (all.n > 0) {
+            Form **ri = (Form **)arena_alloc(e->arena,
+                                             call->as.list.len * sizeof(Form *));
+            for (uint32_t k = 0; k < call->as.list.len; k++)
+                ri[k] = k < body_start ? call->as.list.items[k]
+                      : type_renames_apply(e, &all, call->as.list.items[k]);
+            mitems = ri;
+        }
+        if (own.n > 0) {
+            for (uint32_t k = 0; k < mod->n_exports; k++) {
+                const Symbol *q = type_renames_find(&own, mod->exports[k]);
+                if (q) ((const Symbol **)mod->exports)[k] = q;
+            }
+            mod->rename_from = (const Symbol **)arena_alloc(e->arena, own.n * sizeof(Symbol *));
+            mod->rename_to   = (const Symbol **)arena_alloc(e->arena, own.n * sizeof(Symbol *));
+            memcpy((void *)mod->rename_from, own.from, own.n * sizeof(Symbol *));
+            memcpy((void *)mod->rename_to, own.to, own.n * sizeof(Symbol *));
+            mod->n_renames = own.n;
+        }
+        type_renames_free(&own);
+        type_renames_free(&all);
+    }
+
     /* Pass 1: forward-declare all defn bodies (for mutual recursion) */
-    elab_forward_declare_defns(e, call->as.list.items, body_start,
-                               call->as.list.len);
+    elab_forward_declare_defns(e, mitems, body_start, call->as.list.len);
 
     /* Pass 2: elaborate body forms.
      *
@@ -2024,8 +2381,8 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
      * generic defn of this body not elaborated yet waits for it, as at top
      * level (fwd_gen_order_init in elab_toplevel.c). */
     FwdGenOrder fgo;
-    fwd_gen_order_init(&fgo, e, call->as.list.items + body_start, n_slots);
-    Form *const *md_forms = call->as.list.items + body_start;
+    fwd_gen_order_init(&fgo, e, mitems + body_start, n_slots);
+    Form *const *md_forms = mitems + body_start;
 
     const Form *saved_tl_stmt = e->toplevel_stmt;
     MdRetryCtx md_ctx = { e, mod, md_forms, n_slots, saved_tl_stmt, slot,

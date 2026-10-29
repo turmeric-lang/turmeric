@@ -1,0 +1,14 @@
+;; A ^borrow class method cannot read an array a spending method already
+;; took: TUR-E0150 (class-method-borrow-param).
+(load "stdlib/numvec.tur")
+(defclass NA [v]
+  (na-len [^borrow a : v] : int)
+  (na-take [a : v] : int))
+(definstance NA [F64Vec]
+  (na-len [a] (f64vec-len a))
+  (na-take [a] (let [n (f64vec-len a)] (f64vec-free a) n)))
+(defn main [] : int
+  (let [a (f64vec-new 3 1.25)]
+    (println (na-take a))
+    (println (na-len a))
+    0))

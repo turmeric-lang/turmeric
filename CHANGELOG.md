@@ -2,28 +2,161 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.72.0] -- 2026-10-29
+
+### Added
+
+- **Try Turmeric gains a Compile engine.** Run can compile the buffer to C and
+  execute it on MIR's interpreter in the page, so inline C works in the browser;
+  the language menu's Engine section picks Interpret (default) or Compile. Under
+  Compile, a prompt turn's inline-C defn compiles on its first call and runs
+  natively thereafter.
+- **Refined function types, behind `--enable=refined-fn-types`.** A `(fn ...)`
+  type may carry `#refine{...}` predicates on its parameters and result;
+  refinements are erased for type identity, and call sites check them. The
+  experiment is a prototype introduced in 0.72.0.
+- **`read-string-at` maps forms read from a string literal to their source.** A
+  procedural macro reading code out of a string literal -- the `${...}` holes of
+  `#html{...}` and `#xml{...}` -- now reports errors in a hole at the hole's
+  place in the user's file, not `<read-string>`.
+
+### Added
+
+- **`NumCast`: conversions for generic numeric code** (`stdlib/typeclass.tur`,
+  beside `Num`): `to-float`, `to-int`, `from-int`, `from-float`, with
+  instances for every numeric type `Num` covers. Under a `(NumCast A)`
+  constraint, `(as float x)` on an `x : A` now reads as `(to-float x)` (and a
+  narrower target casts that), resolved per instantiation the way `{x + y}`
+  reads as `add`; a constant of type `A` is `(from-int 0)`, since a literal is
+  not an `A`. Without the constraint, `as` on a type variable is refused with
+  a note naming it.
+- **Typed numeric arrays: `F64Vec`, `F32Vec`, `I64Vec`, `I32Vec`, `U8Vec`**
+  (`(load "stdlib/numvec.tur")`; phase N0 of
+  `docs/upcoming/simd-and-vectorization-plan.md`). Fixed-length, unboxed,
+  32-byte-aligned arrays of one real element width -- a `U8Vec` is a byte a
+  slot, not a word -- in the manner of Racket's `flvector`. Each has
+  `P-new`, `P-of`, `P-len`, `P-ref`, `P-set!`, `P-copy`, `P->vec`, `vec->P`
+  and `P-show` (`P` is `f64vec`, `f32vec`, `i64vec`, `i32vec`, `u8vec`).
+  An array is `^affine` with a `Drop` instance: a let-bound one is freed at
+  scope exit, and the accessors borrow it. An out-of-range index panics at the
+  caller's line on every engine, and the interpreter has native twins of every
+  body.
+- **Bulk kernels and loops over the typed numeric arrays** (phases N1 and N2
+  of the SIMD plan). `P-fill!`, `P-copy!`, `P-scale!`, `P-add!`, `P-axpy!`,
+  `P-sum`, `P-dot`, `P-min`, `P-max` and `P-sum-ordered` are single C loops,
+  each spelled by measurement to run as fast in a default build as at
+  `--release`, under gcc and clang alike: `f64vec-dot` runs 12x faster than
+  the same dot product over `(Vec float)`. A float reduction uses a fixed eight-lane
+  order, so it vectorizes without `-ffast-math` and gives the same bits on
+  every engine; integer arithmetic wraps. `P-for`, `P-for-index`, `P-fold`
+  and `P-build` loop over an array without exposing an index, so their reads
+  are unchecked and a read-only loop a program writes itself vectorizes too.
+  `tests/check-numvec-vectorized.py` fails if any of these loops stops
+  vectorizing.
 
 ### Changed
 
-- **A bin-name collision no longer fails `tur install`.** When another
-  installed spice already provides `tur-foo`, the new spice installs with a
-  warning: its `tur-foo` is built but not linked, and its modules are
-  importable as usual. `tur <spice>/<bin>` (and `tur x <spice>/<bin>`) runs a
-  given spice's binary whichever spice holds the bare name, and
-  `tur install --link <spice>/<bin>` moves the bare name without rebuilding.
-  `tur uninstall` of the holder leaves the name unlinked rather than promoting
-  another provider. `state.tur` records each bin's `:linked` flag; an older
-  registry reads as all-linked. `tur list` marks a shadowed bin, and
-  `tur list --json` adds a `"bins"` list with the flags.
+- **TUR-W0037 (narrow parameter reaches an inline-C body) no longer fires on
+  stdlib code.** It is advice to a body's author, and printed on every program
+  that loaded such a module, where nobody could act on it.
+- **BREAKING -- type-declaration flags go before the name as `^attrs`.**
+  `defopaque`, `defstruct`, `defdata` and `defgadt` take `^copy`, `^move`,
+  `^linear`, `^affine`, `^heap`, `^sealed`, `^non-null` and `^no-auto-ctor`
+  before the name, and `defeffect`'s `^extends`/`^capability` and `defn`'s
+  `^no-unwind`/`^used`/`^export-as` move too. The old keyword spellings are hard
+  errors `TUR-E0717`/`TUR-E0718`; `tur fmt` migrates them.
+- **A bin-name collision no longer fails `tur install`.** When another installed
+  spice already provides `tur-foo`, the new spice installs with a warning: its
+  `tur-foo` is built but not linked, and its modules are importable as usual.
+  `tur <spice>/<bin>` (and `tur x <spice>/<bin>`) runs a given spice's binary
+  whichever spice holds the bare name, and `tur install --link <spice>/<bin>`
+  moves the bare name without rebuilding. `tur uninstall` of the holder leaves
+  the name unlinked rather than promoting another provider. `state.tur` records
+  each bin's `:linked` flag; an older registry reads as all-linked. `tur list`
+  marks a shadowed bin, and `tur list --json` adds a `"bins"` list with the
+  flags.
 
 ### Fixed
 
+- **A return-dispatched method at another class's associated type picks the
+  right instance.** `(from-float 2.75)` at `(Elem V)` came back as 2 compiled
+  at a float element (the int instance), and under turi a value built with
+  `from-int` in a generic called from a generic carried the int instance's
+  runtime type.
+- **Operators work on a constrained type variable.** Inside `[A] [(Num A)]`,
+  `{x + y}` was "operator lookup failed ... first arg type tyvar" though
+  `(add x y)` compiled; the same for `<`/`>`/`<=`/`>=` under `Ord`, and for an
+  associated type under `(Num (Elem V))`, whose constraint was recorded with
+  no variable at all. They dispatch through the class now; without the
+  constraint the error says which one to add.
+- **A literal can no longer stand for a generic's type variable or associated
+  type.** `(defn f [V] [(C V)] [a : V] : (E V) 1.5)` compiled, and an
+  `int32` instance truncated it to 1; so did `(c-put a 1.5)` at an
+  associated-type parameter. `(second x 1.5)` inside an `[A]` generic, with
+  `second [A]` spelled alike, read 1.5's bits back as an int on cc and printed
+  1.5 under turi. All three are type errors now (TUR-E0709 / TUR-E0001).
+- **`(unsafe ...)` no longer sends its function, and every caller, onto the
+  CPS backend.** The may-capture coloring took the `unsafe` marker (a handle
+  discharging the `Unsafe` capability, never performed at run time) for a
+  control operator, so a function reading an array through
+  `i32vec-ref-unchecked` was colored, and so was anything that called it:
+  a loop over a class method whose instance did that ran 5x slower than the
+  same loop written inline. `unsafe` is transparent to the coloring now; a
+  control operator inside it still colors.
+- **A float associated-type value held inside a generic keeps its value.**
+  In a constrained generic, `(let [t (c-get a)] (c-put a t))` with
+  `(type E = float)` printed `1.25` as `4.94066e-324`: the projection
+  `(E V)` was bound for a spec only when the generic's own signature named it,
+  so a body-only one stayed the integer carrier and the float was converted on
+  the way in. The same happened through a `^mut` binder, an `if`, an
+  annotated `let`, and a generic calling a generic that returns `(E V)`
+  (typed `int` outright). The emitter now reduces such a projection through
+  its instance once the spec fixes its argument.
+- **A class method's `^borrow` parameter borrows.** The caret was skipped
+  when the class was parsed, so `(na-len a)` on a move-only value spent it and
+  a second call was TUR-E0150, as was `(na-dot a a)`. The class now records
+  the mask, the instance's parameter inherits it, and the call leaves the
+  argument unspent, exactly as an ordinary `^borrow` function does.
+- **A class method returning its associated type works in a generic over
+  applied-opaque instances.** With instances keyed on `(NumVec float)` and
+  `(NumVec float32)`, a method with an untyped parameter, called on the
+  constraint's type variable, was `no instance '<Class> tyvar'`; bare opaque
+  heads worked. Each instantiation now gets its own instance.
+- **A closure no longer frees a `^borrow` parameter it captures.** For a
+  move-only type with a `Drop` instance (a numeric array, httpd's `Handler`),
+  the closure's drop glue released every such capture, so a closure over a
+  borrowed value freed the caller's value each time it died.
+- **A move-only `Drop` value bound through a block is dropped.**
+  `(let [a (let [t (mk)] t)] ...)` and `(let [a (do ... (mk))] ...)` never
+  dropped `a`; only a bare call initialiser was recognised.
+- **A temporary passed straight to a `^borrow` parameter is freed.**
+  `(f64vec-len (f64vec-new 4 0.0))` leaked the array. It is now released after
+  the call when the call returns a scalar and no earlier argument has a side
+  effect; otherwise it is left as before.
 - **A tool's `:bin` entry file is no longer importable.** Outside a project,
   `(import main)` silently resolved to the first installed tool's
   `src/main.tur`; inside a project, to a `:spices` dependency's. An entry file
   is a program, so it now reports `module 'main' not found`, matching the
   install-time module conflict check that already skipped it.
+- **`tur fmt` keeps user reader macros and `#[attr]` attributes.** Formatting
+  printed a reader macro's expansion in place of the invocation and dropped
+  `#use-reader-macros` lines, and wrote `#[used]` back as the unparseable
+  `#used`; directory walks also choked on `*.html.tur` markup files. All are
+  handled, and a `defn` headed by attributes lays out normally.
+- **`defmacro*` compiles again beside `^used` modules, and reader macros can be
+  re-registered identically.** A `^used` defn on the search path no longer makes
+  every `defmacro*` fail with `module ... not found`, and reaching one define
+  form twice -- `#use-reader-macros` followed by the import -- is a no-op
+  instead of a collision error.
+- **An undecided instance-vs-class variance pair warns as `TUR-W0372`.** The
+  solver could previously stay silent when it could neither prove nor refute the
+  pair, so a generic caller could hit the instance's entry check with no
+  compile-time signal; `--strict-refine` and `--dump-refine=json` now see it
+  too.
+- **64-bit values survive effects and handlers on the browser's Compile
+  engine.** Floats through an effect, handler or CPS entry no longer lose their
+  upper half, and setjmp-based programs no longer force a fallback, so the
+  engine runs the whole corpus family.
 
 ## [0.71.2] -- 2026-10-27
 

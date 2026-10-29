@@ -13,7 +13,7 @@
 >
 > The follow-ups not yet built -- A (markup literals, `#html{...}` /
 > `#xml{...}`), C (CSS selectors and node paths) and D (hiccup) -- moved to
-> [xml-html-followups-plan](../upcoming/spices/xml-html-followups-plan.md)
+> [xml-html-followups-plan](xml-html-followups-plan.md)
 > on 2026-10-25, with their decided open questions.
 
 ## Outcome (2026-10-10)
@@ -99,7 +99,7 @@ DOM is built on SAX, so the SAX layer is the foundation and ships first.
 | Write the parsers in Turmeric? | No -- bind a C library | Same call `json` made with yyjson. A conforming HTML5 tree builder is thousands of lines of edge cases. |
 | XML backend | **expat** (MIT, small, streaming SAX, ubiquitous) | Smallest dependency that is a true push parser. libxml2 is far larger and drags in a lot we do not need. |
 | HTML backend | **lexbor** (Apache-2.0, C, WHATWG-conformant, ships its own DOM) | Gumbo is archived; lexbor is maintained and builds cleanly under CMake like yyjson does. |
-| CSS selectors / XPath | Out of scope for the first cut; a follow-up plan | Walkers and `find-all` by tag/attribute cover most use. Selectors are a big surface; do not couple them to the parser release. *(2026-10-11: CSS selectors are follow-up C, now in [xml-html-followups-plan](../upcoming/spices/xml-html-followups-plan.md). XPath stays out.)* |
+| CSS selectors / XPath | Out of scope for the first cut; a follow-up plan | Walkers and `find-all` by tag/attribute cover most use. Selectors are a big surface; do not couple them to the parser release. *(2026-10-11: CSS selectors are follow-up C, now in [xml-html-followups-plan](xml-html-followups-plan.md). XPath stays out.)* |
 | Namespaces | XML: supported (expat namespace mode, `{uri}local` split). HTML: only the three built-in foreign-content namespaces (HTML, SVG, MathML). | Matches what each format actually needs. |
 
 ## Public API sketch
@@ -271,7 +271,7 @@ has to hold before the next phase builds on it.
 ## Non-goals
 
 - XPath, XSLT, XQuery, XML Schema / DTD validation.
-- CSS selectors *(now follow-up C, in [xml-html-followups-plan](../upcoming/spices/xml-html-followups-plan.md))*.
+- CSS selectors *(now follow-up C, in [xml-html-followups-plan](xml-html-followups-plan.md))*.
 - HTML sanitization (follow-up plan; see Security).
 - Incremental or streaming *serialization* beyond `dom-serialize`
   *(B4 lifts this for SAX events only)*.
@@ -284,7 +284,7 @@ has to hold before the next phase builds on it.
 Four follow-ups were planned on top of the shipped spices (2026-10-11; D
 added 2026-10-16). B, the editable tree, is done and recorded below. A
 (markup literals), C (CSS selectors and node paths) and D (hiccup) are not
-started and live in [xml-html-followups-plan](../upcoming/spices/xml-html-followups-plan.md).
+started and live in [xml-html-followups-plan](xml-html-followups-plan.md).
 
 ## Follow-up B: an editable tree
 
@@ -421,7 +421,7 @@ structure.
 | **In-place mutation of the arena tree** | O(1) link/unlink; O(attrs) for set-attr; O(len) to copy a new string into the arena | Same handles, same serializer, same selectors; arena keeps every old borrow valid | **Chosen.** |
 | Persistent tree with path copying (zipper, structural sharing) | O(depth) node copies per edit, plus a refcount or GC for shared subtrees | The arena frees in one pass and has no per-node lifetime, so sharing across versions means either never freeing or adding refcounts to every node; `Node` stops being a plain pointer | Rejected. The cheapness is illusory once lifetime is accounted for. |
 | Rebuild from a transformed SAX stream | O(n) per pass, O(depth) memory | Excellent for "rename/drop/insert as it streams by" on big documents; useless for "change one attribute in a tree I already hold" | **Also ship**, as the streaming counterpart (B4). |
-| Rebuild the whole DOM from a Turmeric-side value (hiccup tree) per edit | O(n) per edit | That is a builder, not an update mechanic | Covered by D (hiccup), in [xml-html-followups-plan](../upcoming/spices/xml-html-followups-plan.md). |
+| Rebuild the whole DOM from a Turmeric-side value (hiccup tree) per edit | O(n) per edit | That is a builder, not an update mechanic | Covered by D (hiccup), in [xml-html-followups-plan](xml-html-followups-plan.md). |
 
 ### Ownership after mutation -- the arena makes it simple
 

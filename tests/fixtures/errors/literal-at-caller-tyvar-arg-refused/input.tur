@@ -1,0 +1,9 @@
+;; literal-at-associated-type-unchecked: a literal passed where a generic
+;; callee's variable is bound to the CALLER's own variable.  When the two were
+;; spelled the same (both `A`) it was accepted, and the int instantiation
+;; read 1.5's bits back as an int (4609434218613702656; turi printed 1.5).
+(defn second [A] [x : A y : A] : A y)
+(defn plain [A] [x : A] : A (second x 1.5))
+(defn main [] : int
+  (println (plain 7))
+  0)

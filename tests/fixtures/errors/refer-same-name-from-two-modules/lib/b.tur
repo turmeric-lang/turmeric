@@ -1,0 +1,3 @@
+(defmodule lib/b
+  (export f)
+  (defn f [] : int 2))

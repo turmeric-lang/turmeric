@@ -159,7 +159,7 @@ Turmeric, evaluated at expansion time by the in-process interpreter
 (the macro-time env).  Each parameter arrives as a **Syntax** value
 wrapping the raw call-site form; the body computes with the full
 language -- arithmetic, strings, recursion, local functions -- plus the
-syntax vocabulary (`read-string`, `syntax-first/rest/nth/len/tag`,
+syntax vocabulary (`read-string`, `read-string-at`, `syntax-first/rest/nth/len/tag`,
 `syntax->int` / `int->syntax` and friends, `syntax-list/vec/cons`,
 `syntax-gensym`, `syntax=?`, `syntax-error`), and returns the expansion
 as a Syntax.
@@ -175,6 +175,15 @@ as a Syntax.
 
 (twice (f))        ; expands to (+ (f) (f))
 ```
+
+A macro that reads code out of a string -- a template literal's
+`${...}` holes, say -- wants `read-string-at` rather than `read-string`:
+`(read-string-at text lit k)` reads `text`, which starts at byte `k` of the
+string literal `lit`'s value (a `"..."` literal, or the body of a raw
+reader macro like `#html{...}`), and gives every form the position of its
+own text in the user's file. A type error inside it is then reported at
+that line and column, escapes in the literal included, not at
+`<read-string>`.
 
 Quasiquote inside a `defmacro*` body is sugar for the syntax
 constructors -- `~expr` splices a Syntax-valued expression (any

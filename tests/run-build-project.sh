@@ -888,6 +888,35 @@ else
     fi
 fi
 
+# macro-env-force-loads-driver-used-modules: the same -I search path, with an
+# entry file that defines and uses a defmacro*.  The force-load list above is
+# the driver's; the macro-time interpreter elaborates its stdlib preload and
+# every expansion while that compile is running, and used to apply the list
+# there too -- where app/a is not on the search path, so every defmacro* failed
+# with "module 'app/a' not found".  (Seen in turmeric-spices, whose `frame`
+# spice has ^used defns: no defmacro* compiled anywhere in that workspace.)
+MACROWP="$WORK/macro-with-used-sibling"
+mkdir -p "$MACROWP"
+cat > "$MACROWP/main.tur" <<'EOF'
+(defmodule macro-with-used-sibling
+  (defmacro* slen [s] (int->syntax (cstr-len (syntax->str s))))
+  (defn main [] : int (+ 37 (slen "hello"))))
+EOF
+mwp_out=$(cd "$WORK" && "$TUR" build "$MACROWP/main.tur" \
+            -I "$USEDPROJ/src" -o "$WORK/macrowpbin" 2>&1)
+mwp_rc=$?
+if [ $mwp_rc -ne 0 ]; then
+    fail "build-file-macro-env-ignores-used-force-loads" "tur build exit=$mwp_rc: $mwp_out"
+else
+    "$WORK/macrowpbin"
+    mwp_run_rc=$?
+    if [ "$mwp_run_rc" -eq 42 ]; then
+        pass "build-file-macro-env-ignores-used-force-loads"
+    else
+        fail "build-file-macro-env-ignores-used-force-loads" "exit=$mwp_run_rc (expected 42)"
+    fi
+fi
+
 # exports-map-syntax-tighten-plan: a manifest that uses `:exports #fx{...}`
 # (an effect-row literal) instead of a map must be rejected at parse time with
 # TUR-E0620, not silently accepted with an empty exports list.  Before the fix

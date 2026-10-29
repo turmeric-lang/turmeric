@@ -1,0 +1,11 @@
+;; exported-name-collision-ignores-refer: lib/a and lib/b both export `f`.
+;; This module refers lib/a's, and lib/b is imported after it; the referred
+;; one is the one a bare `(f)` calls, not the last one loaded.  The other is
+;; reachable qualified.
+(defmodule main
+  (import lib/a :refer [f])
+  (import lib/b)
+  (defn main [] : int
+    (println (f))
+    (println (lib/b/f))
+    0))

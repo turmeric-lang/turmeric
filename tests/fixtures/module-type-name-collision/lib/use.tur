@@ -1,0 +1,7 @@
+;; lib/use -- imports lib/b alone and spells its types bare: lib/b is the one
+;; import providing them, so they mean lib/b's.
+(defmodule lib/use
+  (export use-b)
+  (import lib/b)
+  (defn twice [a : Attr] : int (* 2 (.k a)))
+  (defn use-b [] : int (+ (twice (Attr "u" 4)) (lib/b/area-b (Circle 1 2)))))

@@ -1,0 +1,85 @@
+;; numcast-as-fallback: `as` and literals in generic code, through NumCast
+;; (stdlib/typeclass.tur).  `as` is decided where a generic is written, where
+;; an operand of type `A` -- or `(Elem V)` -- has no numeric type to cast
+;; from; under a `(NumCast A)` constraint `(as float x)` reads as
+;; `(to-float x)` (and `(as int32 x)` as `(as int32 (to-int x))`), resolved
+;; per instantiation like `{x + y}` reads as Num's `add`.  A constant of type
+;; `A` is `(from-int 0)` / `(from-float 2.75)`.
+;;
+;; Also pinned, both found with it: `(from-float 2.75)` at `(Elem V)` came back
+;; as 2 compiled at the float instance (the int representative -- the
+;; projection was mapped to `V`, whose NumCast instance does not exist), and
+;; under turi a value built with `from-int` inside a generic called from a
+;; generic carried the int instance's tag (to-float printed 6.75 as -4.6e18).
+;; Every line matches `tur --interpret`.
+(load "stdlib/numvec.tur")
+(load "stdlib/math.tur")
+
+;; the instances, concretely
+(defn instances [] : nil
+  (println (to-float (:: 7 int8)))
+  (println (to-float (:: 7 uint64)))
+  (println (to-float (:: 7.5 float32)))
+  (println (to-int 7.75))
+  (println (to-int (:: 200 uint8)))
+  (println (as int (:: (from-float 7.75) int8)))
+  (println (as float (:: (from-int 3) float32))))
+
+(defclass NA [v]
+  (type Elem : Type)
+  (na-len [^borrow a : v] : int)
+  (na-ref [^borrow a : v i : int] : Elem))
+(definstance NA [F64Vec] (type Elem = float)
+  (na-len [a] (f64vec-len a))
+  (na-ref [a i] (f64vec-ref a i)))
+(definstance NA [I32Vec] (type Elem = int32)
+  (na-len [a] (i32vec-len a))
+  (na-ref [a i] (i32vec-ref a i)))
+
+;; `as` at a projection, every target width
+(defn as-float [V] [(NA V) (NumCast (Elem V))] [^borrow a : V] : float
+  (as float (na-ref a 1)))
+(defn as-int [V] [(NA V) (NumCast (Elem V))] [^borrow a : V] : int
+  (as int (na-ref a 1)))
+(defn as-f32 [V] [(NA V) (NumCast (Elem V))] [^borrow a : V] : float32
+  (as float32 (na-ref a 1)))
+(defn as-u8 [V] [(NA V) (NumCast (Elem V))] [^borrow a : V] : uint8
+  (as uint8 (na-ref a 1)))
+;; constants of the element type
+(defn zero [V] [(NA V) (NumCast (Elem V))] [^borrow a : V] : (Elem V)
+  (from-int 0))
+(defn two-and-three-quarters [V] [(NA V) (NumCast (Elem V))] [^borrow a : V] : (Elem V)
+  (from-float 2.75))
+;; a sum from a constant, and the mean through `as`
+(defn total [V] [(NA V) (Num (Elem V)) (NumCast (Elem V))] [^borrow a : V] : (Elem V)
+  (let [^mut s : (Elem V) (from-int 0)
+        ^mut i 0]
+    (while (< i (na-len a))
+      (set! s {s + (na-ref a i)})
+      (set! i {i + 1}))
+    s))
+(defn mean [V] [(NA V) (Num (Elem V)) (NumCast (Elem V))] [^borrow a : V] : float
+  {(as float (total a)) / (as float (na-len a))})
+;; the generic's own variable
+(defn midpoint [A] [(Num A) (NumCast A)] [x : A y : A] : float
+  {(as float {x + y}) / 2.0})
+
+(defn main [] : int
+  (instances)
+  (let [a (f64vec-build 3 [i] {(int->float i) + 1.75})
+        b (i32vec-build 3 [i] (as int32 {i + 7}))]
+    (println (as-float a))
+    (println (as-float b))
+    (println (as-int a))
+    (println (as-int b))
+    (println (as float (as-f32 a)))
+    (println (as int (as-u8 b)))
+    (println (zero a))
+    (println (as int (zero b)))
+    (println (two-and-three-quarters a))
+    (println (as int (two-and-three-quarters b)))
+    (println (mean a))
+    (println (mean b))
+    (println (midpoint 3 4))
+    (println (midpoint 1.25 2.5))
+    0))

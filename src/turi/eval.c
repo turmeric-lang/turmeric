@@ -1742,6 +1742,33 @@ static TuriValue eval_lookup(TuriEnv *env, EvalFrame *frame, const char *name) {
     return turi_env_get(env, name);
 }
 
+/* exported-name-collision-ignores-refer: eval_lookup for a reference the
+ * elaborator resolved to binding `b`.  A module's top-level defn is also
+ * registered under "<module>/<name>" (exported ones too, see EX_FN_DEF), so a
+ * global of a module is found under its own module's key: two modules
+ * exporting `f` each keep theirs, and a `:refer`'d `f` is the one referred,
+ * not whichever module defined `f` last.  Frames still come first, exactly
+ * as in eval_lookup. */
+static TuriValue eval_lookup_b(TuriEnv *env, EvalFrame *frame, const Binding *b) {
+    const char *name = b->name->name;
+    const Symbol *m = b->defining_module_name;
+    if (b->is_global && m && !(m->len >= 4 && memcmp(m->name, "tur/", 4) == 0)) {
+        for (EvalFrame *f = frame; f; f = f->parent)
+            for (EvalBinding *eb = f->bindings; eb; eb = eb->next)
+                if (frame_name_eq(eb->name, name)) return eb->value;
+        char keybuf[256];
+        size_t nl = strlen(name);
+        if ((size_t)m->len + 1 + nl < sizeof keybuf) {
+            memcpy(keybuf, m->name, m->len);
+            keybuf[m->len] = '/';
+            memcpy(keybuf + m->len + 1, name, nl + 1);
+            EnvBinding *qb = turi_env_find_binding(env, keybuf);
+            if (qb && qb->value.tag != TURI_ERROR) return qb->value;
+        }
+    }
+    return eval_lookup(env, frame, name);
+}
+
 /* Reword an unbound call-head error into the compiler's "unknown function or
  * operator" diagnostic (plus the stdlib load-hint).  In interpret mode the
  * elaborator defers an unknown call head to runtime dispatch (elab_call.c
@@ -5262,8 +5289,8 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
                     result = turi_error("eval: capturing context too deep");
                     done = true; bad = true; break;
                 }
-                TuriValue fn = eval_lookup(env, cur_frame,
-                                           tail->as.call_.fn_binding->name->name);
+                TuriValue fn = eval_lookup_b(env, cur_frame,
+                                           tail->as.call_.fn_binding);
                 if (turi_is_error(fn) || fn.tag != TURI_CLOSURE) {
                     result = turi_errorf("eval: capturing do tail: '%s' is not a function",
                                          tail->as.call_.fn_binding->name->name);
@@ -5306,7 +5333,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
                 result = ts_not_capturable(serial, cur->span);   /* call: not exactly one hole */
                 done = true; break;
             }
-            TuriValue fn = eval_lookup(env, cur_frame, cur->as.call_.fn_binding->name->name);
+            TuriValue fn = eval_lookup_b(env, cur_frame, cur->as.call_.fn_binding);
             if (turi_is_error(fn) || fn.tag != TURI_CLOSURE) {
                 result = turi_is_error(fn) ? fn
                        : turi_errorf("eval: capturing call frame: '%s' is not a function",
@@ -8248,6 +8275,40 @@ static void frame_bind_one_dict(TuriEnv *env, TypeClassEnv *tc_env,
     callee->dicts = db;
 }
 
+/* numcast-from-float-at-projection-picks-representative: the element type an
+ * associated-type projection NAME stands for in this frame.  A constraint on a
+ * projection, `(NumCast (Elem V))`, is recorded under the projection's printed
+ * name; the frame pins `V` (copied from the caller at apply time) but pins the
+ * projection only when the caller's call spelled it concretely -- a generic
+ * calling a generic leaves it bound to itself.  So reduce it the way the
+ * compiler does: `V`'s pin, then the instance that binds `Elem` at it. */
+static bool frame_reduce_projection(EvalFrame *f, TypeClassEnv *tc_env,
+                                    const char *name, Type *out) {
+    if (!f || !tc_env || !name || name[0] != '(') return false;
+    const char *sp = strchr(name, ' ');
+    size_t nl = strlen(name);
+    if (!sp || nl < 5 || name[nl - 1] != ')') return false;
+    char assoc[96], arg[96];
+    size_t al = (size_t)(sp - name - 1), gl = nl - (size_t)(sp - name) - 2;
+    if (al == 0 || gl == 0 || al >= sizeof assoc || gl >= sizeof arg) return false;
+    memcpy(assoc, name + 1, al); assoc[al] = '\0';
+    memcpy(arg, sp + 1, gl);     arg[gl] = '\0';
+    if (strchr(arg, ' ') || strchr(arg, '(')) return false;
+    Type concrete;
+    if (!frame_lookup_tyvar(f, arg, &concrete) || concrete.kind == TY_TYVAR) return false;
+    for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
+        const TypeClass *tc = inst->typeclass;
+        if (!tc || inst->n_type_args != 1 || !type_eq(inst->type_args[0], concrete)) continue;
+        for (uint8_t k = 0; k < tc->n_assoc_types && k < inst->n_assoc_types; k++) {
+            if (tc->assoc_type_names[k] && strcmp(tc->assoc_type_names[k]->name, assoc) == 0) {
+                *out = inst->assoc_types[k];
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static void frame_bind_constraint_dicts(TuriEnv *env, EvalFrame *callee,
                                         const TypeConstraint *constraints,
                                         uint8_t n_constraints) {
@@ -8262,8 +8323,9 @@ static void frame_bind_constraint_dicts(TuriEnv *env, EvalFrame *callee,
             tvname = c->type_arg.as.tyvar_.name;
         if (!tvname) continue;
         Type concrete;
-        if (!frame_lookup_tyvar(callee, tvname, &concrete) ||
-            concrete.kind == TY_TYVAR)
+        if ((!frame_lookup_tyvar(callee, tvname, &concrete) ||
+             concrete.kind == TY_TYVAR) &&
+            !frame_reduce_projection(callee, tc_env, tvname, &concrete))
             continue;
         frame_bind_one_dict(env, tc_env, callee, c->typeclass, tvname, concrete);
         /* class-superclasses SC3, the interpreter half of entailment: a
@@ -9471,7 +9533,7 @@ static bool poly_wrap_dict_clone_value(TuriEnv *env, EvalFrame *frame,
         return false;
     const Binding *cb = e->as.poly_wrap_.dict_clone_binding;
     if (!cb->name || !cb->name->name) return false;
-    TuriValue v = eval_lookup(env, frame, cb->name->name);
+    TuriValue v = eval_lookup_b(env, frame, cb);
     if (v.tag != TURI_CLOSURE) return false;
     *out = v;
     return true;
@@ -10084,7 +10146,7 @@ static bool ws_defer_body_ok(TuriEnv *env, EvalFrame *frame, const Expr *e, int 
         for (uint32_t i = 0; i < e->as.call_.n_args; i++)
             if (ws_has_perform(e->as.call_.args[i])) return false;
         if (!e->as.call_.fn_binding) return false;
-        TuriValue fv = eval_lookup(env, frame, e->as.call_.fn_binding->name->name);
+        TuriValue fv = eval_lookup_b(env, frame, e->as.call_.fn_binding);
         if (fv.tag != TURI_CLOSURE || !fv.as_closure) return false;
         if (fv.as_closure->native) return true;   /* a native performs nothing itself */
         FnDef *fn = (FnDef *)fv.as_closure->fn;
@@ -10197,7 +10259,7 @@ static bool ws_capturable_rec(TuriEnv *env, EvalFrame *frame, const Expr *e, int
         /* A direct, foldable turi callee runs its body on the work-stack
          * (DK_CALL_RET), so its performs are capturable -- recurse into it. */
         if (e->as.call_.fn_binding) {
-            TuriValue fv = eval_lookup(env, frame, e->as.call_.fn_binding->name->name);
+            TuriValue fv = eval_lookup_b(env, frame, e->as.call_.fn_binding);
             if (fv.tag == TURI_CLOSURE && fv.as_closure && !fv.as_closure->native &&
                 fv.as_closure->fn && ((FnDef *)fv.as_closure->fn)->body) {
                 FnDef *fn = (FnDef *)fv.as_closure->fn;
@@ -10831,10 +10893,20 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         /* A result that is an associated-type projection,
                          * `(Inner A)`, dispatches on its argument `A`
                          * (associated-type-unusable-nullary-and-generic). */
+                        /* ...when the dispatched class DECLARES that
+                         * associated type; `NumCast` at `(Elem V)` is keyed on
+                         * the element itself, whose dictionary the frame binds
+                         * under the projection's name (frame_reduce_projection). */
                         if (!recv_is_tyvar && h->as.tyvar_.assoc_of &&
                             h->as.tyvar_.assoc_arg &&
-                            h->as.tyvar_.assoc_arg->kind == TY_TYVAR)
-                            h = h->as.tyvar_.assoc_arg;
+                            h->as.tyvar_.assoc_arg->kind == TY_TYVAR) {
+                            bool owns = false;
+                            for (uint8_t k = 0; k < mtc->n_assoc_types && !owns; k++)
+                                owns = mtc->assoc_type_names[k] &&
+                                       strcmp(mtc->assoc_type_names[k]->name,
+                                              h->as.tyvar_.assoc_of->name) == 0;
+                            if (owns) h = h->as.tyvar_.assoc_arg;
+                        }
                         const char *disp_tv =
                             recv_is_tyvar
                                 ? control->as.call_.args[0]->type.as.tyvar_.name
@@ -10998,8 +11070,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * (gde_reresolve_return_directed) is retired -- see the
                  * measurement note at its former definition. */
                 if (!gde_resolved && control->as.call_.fn_binding) {
-                    fn_val = eval_lookup(env, cf,
-                                 control->as.call_.fn_binding->name->name);
+                    fn_val = eval_lookup_b(env, cf,
+                                 control->as.call_.fn_binding);
                 } else if (!gde_resolved && control->as.call_.fn_expr) {
                     fn_val = eval_expr(env, cf, control->as.call_.fn_expr);
                     fn_val = reword_unbound_call_head(fn_val, control->as.call_.fn_expr);
@@ -13770,7 +13842,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Variable -------------------------------------------------------- */
     case EX_VAR: {
-        TuriValue _v = eval_lookup(env, frame, e->as.var.binding->name->name);
+        TuriValue _v = eval_lookup_b(env, frame, e->as.var.binding);
         /* r7rs-lang-plan R10: a LIFTED lambda (`__fn_N`) is a top-level
          * closure with no captured frame, because the elaborator found no
          * captures in it.  But a name it calls may still live in a frame --
@@ -13941,6 +14013,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * owning module either way, so its body can resolve sibling privates. */
         const DefModule *dm = (const DefModule *)env->defining_mod;
         const char *modname = (dm && dm->name) ? dm->name->name : NULL;
+        const char *exported_qkey = NULL;
         bool exported = false;
         if (dm) {
             for (uint32_t i = 0; i < dm->n_exports; i++) {
@@ -13951,6 +14024,18 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
         const char *qkey = NULL;
         bool is_private = (modname && !exported);
+        /* exported-name-collision-ignores-refer: an exported defn is published
+         * under "<module>/<name>" as well as the bare name, so eval_lookup_b
+         * finds this module's `f` after another module's `f` took the bare
+         * name. */
+        if (modname && exported) {
+            size_t need = strlen(modname) + 1 + strlen(fname) + 1;
+            char *xk = (char *)arena_alloc(&env->sym_arena, need);
+            if (xk) {
+                snprintf(xk, need, "%s/%s", modname, fname);
+                exported_qkey = xk;
+            }
+        }
         if (is_private) {
             /* The env keeps this key for the binding's lifetime. Allocate it from
              * the env's sym_arena (which every EnvBinding->name is expected to
@@ -14049,6 +14134,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 turi_env_set(env, fname, v);
         } else {
             turi_env_set(env, fname, v);
+            if (exported_qkey) turi_env_set(env, exported_qkey, v);
         }
         return v;
     }
@@ -17945,6 +18031,8 @@ static bool elab_session_replay(TuriEnv *env, Arena *arena, Form **forms,
          * above mutes the warnings a capture frame lets through. */
         diag_push_capture();
         scheme_lower_set_session_prior(forms, from);   /* the turns before it */
+        const UsedModulesCtx *used_saved = used_modules_ctx_active();
+        used_modules_ctx_set(NULL);   /* see turi_eval_impl */
         Expr *p = elaborate_program_session(arena, &env->st, forms + from,
                                             to - from, /*stdlib_prefix=*/0,
                                             mbase,
@@ -17954,6 +18042,7 @@ static bool elab_session_replay(TuriEnv *env, Arena *arena, Form **forms,
                                             env->include_dirs,
                                             env->n_include_dirs,
                                             &n_fsd, env->reader_macros, sess);
+        used_modules_ctx_set(used_saved);
         scheme_lower_set_session_prior(NULL, 0);
         if (!p || diag_had_error()) ok = false;
         if (diag_pop_capture() > 0) ok = false;
@@ -18553,6 +18642,17 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * the macros they defined.  (The whole-program path has them in the
      * stream already.) */
     scheme_lower_set_session_prior(forms, elab_from);
+    /* macro-env-force-loads-driver-used-modules: the driver publishes its
+     * `^used` force-load list (used-attr-whole-program) for the duration of
+     * the compile it is running, and a defmacro* expansion, a `:for-macros`
+     * import or the macro env's stdlib preload runs THIS elaboration in the
+     * middle of that compile.  The list names modules on the driver's search
+     * path, not this env's, so applying it here fails every macro-time
+     * elaboration with "module ... not found" -- in any workspace with a
+     * sibling spice that has a `^used` defn.  The list is the outer
+     * compile's alone: hide it while this one runs. */
+    const UsedModulesCtx *used_saved = used_modules_ctx_active();
+    used_modules_ctx_set(NULL);
     Expr *prog = elaborate_program_session(eval_arena, &env->st,
                                    forms + elab_from, nforms - elab_from,
                                    /*stdlib_prefix=*/prior - elab_from,
@@ -18568,6 +18668,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                     * see the same macros the entry did. */
                                    env->reader_macros,
                                    env->elab_session);
+    used_modules_ctx_set(used_saved);
     scheme_lower_set_session_prior(NULL, 0);
     if (!prog || diag_had_error()) {
         env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */

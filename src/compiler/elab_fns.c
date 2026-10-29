@@ -10523,6 +10523,24 @@ Expr *elab_defn(Elab *e, const Form *call) {
             if (cf->as.list.len >= 2 && cf->as.list.items[1]->tag == F_SYM) {
                 tyvar_sym = cf->as.list.items[1]->as.sym;
             }
+            /* operator-on-constrained-tyvar-refused: a constraint on an
+             * associated-type projection, `(Num (Elem V))`, quantifies over
+             * the projection.  Record it under the projection's own name --
+             * `(Elem V)`, the name elab_assoc_projection gives that type -- so
+             * a lookup by the operand's type finds it; it was recorded with no
+             * variable at all.  Only a two-symbol projection spells one. */
+            else if (cf->as.list.len == 2 && cf->as.list.items[1]->tag == F_LIST &&
+                     cf->as.list.items[1]->as.list.len == 2 &&
+                     cf->as.list.items[1]->as.list.items[0]->tag == F_SYM &&
+                     cf->as.list.items[1]->as.list.items[1]->tag == F_SYM) {
+                const Form *pf = cf->as.list.items[1];
+                char nb[128];
+                int nl = snprintf(nb, sizeof nb, "(%s %s)",
+                                  pf->as.list.items[0]->as.sym->name,
+                                  pf->as.list.items[1]->as.sym->name);
+                if (nl > 0 && (size_t)nl < sizeof nb)
+                    tyvar_sym = symtab_intern(e->st, strslice(nb, (uint32_t)nl));
+            }
             new_list[ci].typeclass = tc;
             new_list[ci].type_arg = TYPE_UNKNOWN;
             new_list[ci].param_idx = -1;
@@ -14508,8 +14526,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase C: warn (or error under --Werror=inline-c-narrow-params) when a
      * narrow-width parameter reaches an inline-C body.  The C code sees the
      * parameter at its narrow C type (e.g. int16_t), not int64_t, which
-     * surprises callers that wrote the body expecting the carrier width. */
-    if (body && body->kind == EX_INLINE_C) {
+     * surprises callers that wrote the body expecting the carrier width.
+     * A stdlib body is exempt: the warning is advice to the body's author,
+     * and it would print on every program that loads the module, where the
+     * reader cannot act on it (stdlib/numvec.tur stores float32 / int32 /
+     * uint8 elements through narrow parameters on purpose). */
+    if (body && body->kind == EX_INLINE_C && !diag_file_is_stdlib(body->span.file_id)) {
         for (uint32_t _ci = 0; _ci < n_params; _ci++) {
             TypeKind k = param_kinds[_ci];
             bool is_narrow = (k == TY_INT8  || k == TY_INT16  || k == TY_INT32 ||
@@ -15933,6 +15955,12 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
                  * nothing releases).  Moving makes the closure the SOLE owner -- the
                  * drop-glue releases it exactly once via the Drop instance, and a
                  * second capture is a compile-time use-after-move. */
+                /* A `^borrow` parameter is not this scope's to give away: the
+                 * caller owns it and drops it.  Capturing it is a borrow too, so
+                 * the env neither moves it in nor drops it -- dropping it freed
+                 * the caller's value under it, once per closure (fixture
+                 * closure-borrowed-drop-capture-not-dropped). */
+                if (cap->is_borrow) continue;
                 struct TypeClassInstance *di = drop_tc
                     ? typeclass_env_lookup_instance(&e->typeclass_env, drop_tc, &cap->type, 1)
                     : NULL;

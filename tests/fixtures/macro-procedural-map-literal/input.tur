@@ -1,0 +1,24 @@
+;; A defmacro* walks a `#map{...}` literal's items with syntax-len / -nth /
+;; -first / -rest, as it walks a list or a vector: the brace data literals
+;; carry a list payload, and the syntax natives read it (they used to report
+;; a length of 0, so a macro could not see a map argument's entries).
+;; tur-html's hiccup macro reads its attribute map this way.
+(defmacro* count-keys [m]
+  (int->syntax (/ (syntax-len m) 2)))
+
+(defmacro* first-value [m]
+  (syntax-nth m 1))
+
+(defmacro* set-size [s]
+  (int->syntax (syntax-len s)))
+
+(defmacro* rest-len [m]
+  (int->syntax (syntax-len (syntax-rest m))))
+
+(defn main [] : int
+  (println (count-keys #map{:a 1 :b 2 :c 3}))   ; 3
+  (println (first-value #map{:a 40 :b 2}))      ; 40
+  (println (set-size #set{1 2 3 4}))            ; 4
+  (println (rest-len #map{:a 1 :b 2}))          ; 3
+  (println (count-keys #map{}))                 ; 0
+  0)

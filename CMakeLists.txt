@@ -890,6 +890,27 @@ add_test(
   COMMAND python3 tests/check-annotation-spacing.py --selftest
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# stdlib/numvec.tur is generated (five element types over one template); a hand
+# edit to it, or to the template without a regenerate, would drift the two.
+add_test(
+  NAME tur_numvec_generated
+  COMMAND python3 tools/gen-numvec.py --check
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# The generator lays the module out with `tur fmt`, so it needs this build's tur.
+set_tests_properties(tur_numvec_generated PROPERTIES
+  ENVIRONMENT "TUR=$<TARGET_FILE:tur>")
+# The numvec loops that should vectorize at -O3 do (simd-and-vectorization-
+# plan N1/N2): the N1 kernels and loops written with the N2 macros.  Neither
+# shows in any output, so a change that put control flow back in a loop would
+# pass every fixture.  x86-64 with gcc only; it skips elsewhere.
+add_test(
+  NAME tur_numvec_vectorized
+  COMMAND python3 tests/check-numvec-vectorized.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_numvec_vectorized PROPERTIES
+  ENVIRONMENT "TUR=$<TARGET_FILE:tur>")
 # src/driver/driver.h and commands.h are sectioned by defining file; each
 # section may declare only what its file defines (main-c-split-plan).  The
 # section grouping in emit_internal.h drifted until most of its prototypes sat

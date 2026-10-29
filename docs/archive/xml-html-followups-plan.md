@@ -1,7 +1,17 @@
 # Plan: XML/HTML spice follow-ups -- markup literals, CSS selectors, hiccup
 
-> Status: not started. Planned 2026-10-11 (A, C) and 2026-10-16 (D) as
-> follow-ups to [xml-html-parsers-plan](../../archive/xml-html-parsers-plan.md), which shipped
+> Status: done and merged (2026-10-29), archived. C1-C4 (`dom/select`) is
+> turmeric-spices #121. A1-A6 (`dom/holes`, `dom/markupc`, tur-html
+> `html/markup`, tur-xml `xml/markup`, `html->dom`, `#html-live{...}` and
+> `tpl-update!`, holes in JavaScript, CSS and srcdoc), D1-D3 (tur-html
+> `html/hiccup`: the macro, result-position rewriting, `hiccup->dom` /
+> `hiccup->xml-string` / `hiccup->xml-dom`, `node->hiccup`), D2's
+> `RenderHtml` and tourist's `html-response` (A-3) are turmeric-spices #122.
+> The compiler side, including A5's `read-string-at`, is turmeric #1419.
+> What changed against the plan while building it is under "Implementation
+> notes (2026-10-28)" at the end.
+> Planned 2026-10-11 (A, C) and 2026-10-16 (D) as
+> follow-ups to [xml-html-parsers-plan](xml-html-parsers-plan.md), which shipped
 > `tur-xml`, `tur-html` and `tur-dom-core` and is archived with its follow-up
 > B (the editable tree, turmeric-spices #106). Split out 2026-10-25; the
 > letters A, C and D are kept so the spices' comments and the filed reports
@@ -18,7 +28,7 @@
 Three additions on top of the shipped spices. Each is its own
 `turmeric-spices` PR, branched from `main`. PRs are never stacked (see
 CLAUDE.md). "B" below is the archived plan's
-[follow-up B](../../archive/xml-html-parsers-plan.md#follow-up-b-an-editable-tree): the
+[follow-up B](xml-html-parsers-plan.md#follow-up-b-an-editable-tree): the
 `dom/edit` mutators (`node-clone`, `node-import`, the `EditError` checks),
 now merged.
 
@@ -199,7 +209,7 @@ type error at the call site.
 resulting nodes are spliced in. So it can never unbalance the surrounding
 template. It is still not sanitized: a `<script>` in it survives, and the
 docstring says so in the words the archived plan's
-[Security](../../archive/xml-html-parsers-plan.md#security-not-optional) section uses.
+[Security](xml-html-parsers-plan.md#security-not-optional) section uses.
 
 **URL attributes are scheme-checked** (decided under A-1). Escaping alone
 would leave `href=${x}` with `x = "javascript:..."` a correctly escaped
@@ -527,7 +537,7 @@ string or a tree with A's escaping guarantees:
 A writes markup and splices values into it. D goes the other way: the tree
 *is* a Turmeric value (`Html`) that ordinary functions build, map, filter
 and `match` on before it is rendered. That is what A cannot give, and why
-B's [options table](../../archive/xml-html-parsers-plan.md#options-weighed) sends "rebuild from a
+B's [options table](xml-html-parsers-plan.md#options-weighed) sends "rebuild from a
 Turmeric-side value" here.
 
 ### What the reader hands a macro (checked 2026-10-16)
@@ -658,7 +668,7 @@ and raw-text bodies, so the conversion uses the trusted constructors.
 |---|---|---|
 | D1 | `dom/hiccup`: `Html`, `Tag`, `AttrName`, `Attr`, `RawBody` and their checking constructors; the `hiccup` macro (keyword and string names, `#id.class` shorthand, `#map{}` attributes, `:attrs*`, holes through `ToChild` / `ToAttr` / `ToUrlAttr`); `hiccup->string` | A compile-error table: an invalid literal name, a computed tag, children under a void element, a dynamic value under `on*` / `style` / `srcdoc`, a dynamic `<script>` / `<style>` body, a second `id`, a bare `{...}` attribute map, and each D-2 nesting case. The checking constructors refuse bad names, the code-bearing names and the raw-text tags. A2's escaping and URL tables, applied to hiccup. Once A2 exists, `hiccup` and `#html{}` render byte-identical output for a shared corpus |
 | D1b | Result-position rewriting (D-1): markup vectors in the result positions of `if`, `when`, `unless`, `cond`, `do`, `let`, `match`, `for`, and an inline one-parameter `fn` passed to `list-map`, become `Html`; missing `else` branches become an empty `Html`; an inline `list-map` becomes a `list-foldl` straight into `Html`; a vector headed by a known element name outside a result position is a compile error saying to wrap it in `(hiccup ...)`. Best after `macro-time-forward-reference-typed-int` is fixed, so the walker can be ordinary mutually recursive functions; otherwise it ships as the single self-recursive walker the prototype used | One fixture per form in the result-position table, with markup in every branch and a missing `else` where the form allows one. Keyword-headed vectors that are type syntax or option lists (`(fn [:int] :int)`, `:only [:encode]`) inside a hiccup argument are neither rewritten nor reported. A vector in a `let` binding's value or an unknown call's argument gives the "wrap in `(hiccup ...)`" error. A type error inside a rewritten branch points at the user's line |
-| D2 | `hiccup->dom` (needs B1-B2), `hiccup->xml-string`, `ToChild Html` and `HFragment`, `RenderHtml` for `html-response` | For parser-stable trees (D-2), `html-parse-fragment` with context `template` of `hiccup->string h` is `dom-equal?` to `hiccup->dom h`; the same through expat for the XML flavour |
+| D2 | `hiccup->dom` (needs B1-B2), `hiccup->xml-string`, `ToChild Html` and `HFragment`, `RenderHtml` for `html-response` (done: dom/holes' `RenderHtml`, tourist/markup's `html-response`) | For parser-stable trees (D-2), `html-parse-fragment` with context `template` of `hiccup->string h` is `dom-equal?` to `hiccup->dom h`; the same through expat for the XML flavour |
 | D3 | `node->hiccup` | `hiccup->dom (node->hiccup n)` is `dom-equal?` to `n` for every element of both corpora; the guide shows a transform (add `rel="noopener"` to every external `<a>`) |
 
 ### Open questions
@@ -745,7 +755,7 @@ cannot do that (they go through `read-string`).
 
 - **Mutual recursion at macro time.** A call to a function defined later
   is typed `int`, both in a `letrec` and across a `:for-macros` module's
-  `defn`s ([macro-time-forward-reference-typed-int](../../archive/macro-time-forward-reference-typed-int.md),
+  `defn`s ([macro-time-forward-reference-typed-int](macro-time-forward-reference-typed-int.md),
   resolved 2026-10-17).
   The walker is therefore one self-recursive function that dispatches on a
   mode argument. It works, but it reads worse than three functions would.
@@ -760,10 +770,192 @@ cannot do that (they go through `read-string`).
   `syntax-list->vec`.
 - **`Html` must be `:heap`.** A by-value `defdata` as a `(List A)`
   element segfaults in `list-map` and fails in cc in `list-of`
-  ([typed-list-byvalue-adt-element-unboxed](../../archive/typed-list-byvalue-adt-element-unboxed.md),
+  ([typed-list-byvalue-adt-element-unboxed](typed-list-byvalue-adt-element-unboxed.md),
   resolved 2026-10-17). With
   `:heap`, both `(list-map rows item)` through a `ToChild (List Html)`
   instance and the fold rewrite work. The cost is the one noted in the
-  archived plan's [Outcome](../../archive/xml-html-parsers-plan.md#outcome-2026-10-10): every `:heap`
+  archived plan's [Outcome](xml-html-parsers-plan.md#outcome-2026-10-10): every `:heap`
   constructor call allocates a node nothing frees, so rendering an `Html` tree per request needs a `with-region`
   bracket around it, or a string mode that does not materialize the tree.
+
+## Implementation notes (2026-10-28)
+
+What building C, A1-A2 and D1 changed against the text above.
+
+**C (selectors).**
+
+- `select` is a reserved form (channel `select`), so the query is
+  `select-all`; the rest of the API is as sketched. `query` and `query-one`
+  are as planned.
+- `:has()` shipped with C1-C3 rather than as a later phase: its budget is a
+  million candidate tests per query. Past it the `:has()` answers false,
+  `selector-gave-up?` reports it, and `query` / `query-one` return an Err
+  rather than a short answer.
+- The selector source follows CSS Syntax at end of input: an unclosed
+  string, attribute selector or function is closed there (`[a="b` is valid),
+  as browsers do.
+- Conformance: the WPT `dom/nodes/selectors.js` table (BSD-3, vendored with
+  its commit) runs in the document, detached-element and in-document-element
+  contexts over WPT's HTML and XHTML documents; the rows that use a rejected
+  pseudo-class (`:link`, `:target`, the UI states, `:lang`, pseudo-elements)
+  must be compile errors. The differential fuzz builds random selector ASTs,
+  renders them for the engine and evaluates them with a naive Turmeric
+  matcher over random `dom/edit` trees. css-select / nwsapi tables were not
+  needed.
+
+**A (markup literals).**
+
+- String mode builds no tree: the macro emits one template string (static
+  markup with an inline marker per hole) and the hole values; rendering is
+  concatenation. The first render of each literal parses it once with the
+  real parser and checks every hole landed in the slot the macro predicted
+  (cached per literal, keyed by the template's address).
+- `Fragment` holds its rendered markup (malloc'd); `fragment-free` releases
+  it. `html->string` borrows it.
+- Two holes the plan's list missed are compile errors too: a hole right
+  after a `<` (`<${x}>` -- the static `<` and the escaped value would still
+  print a tag), and a hole inside `<textarea>` / `<title>` / `<noscript>`
+  (raw text in the tokenizer's terms).
+- A `raw-html` value that the serializer cannot write back as parsed (a
+  `<plaintext>`, a comment or raw text that would end early) panics rather
+  than unbalance the literal; dom/edit's `turdom_check_subtree` decides.
+- The literal syntax is only available in a file read after `html/markup`
+  is loaded; a file can use it itself through
+  `#use-reader-macros "<path>/html/markup.tur"`, or call `html*` directly.
+- A macro-time-only module (`dom/markupc`, `html/hiccupc`) cannot be
+  `tur check`ed on its own -- it calls the `syntax-*` natives -- so it
+  carries a `;; tur-check: macro-time` header line and the spices CI's check
+  stage skips it; it is compiled through every module that imports it.
+- Four compiler problems had to be fixed first (turmeric branch
+  `claude/ecstatic-cori-ikodwq`):
+  [macro-env-force-loads-driver-used-modules](macro-env-force-loads-driver-used-modules.md)
+  (no `defmacro*` compiled in turmeric-spices at all); re-registering an
+  identical reader macro (`#use-reader-macros` plus the import) was an
+  error; `tur fmt` printed a user reader macro's expansion instead of the
+  invocation and deleted `#use-reader-macros` lines -- which, with spices CI
+  running `tur fmt --check`, would have rewritten every literal; and
+  `syntax-len` / `syntax-nth` saw no items in a `#map{...}` literal, which
+  hiccup's attribute maps need.
+
+- **Tree mode is split from string mode (decided 2026-10-28).** A
+  `Fragment` is its rendered markup, so it cannot be cloned-and-patched the
+  way step 3 above describes. A3's `html->dom` parses the markup instead (in
+  the same `template` context the literal was checked in), and its gate is
+  restated: the tree serializes to `html->string`'s markup except where the
+  HTML parser normalizes (a table's `<tbody>`, `checked=""`). A4 is a
+  separate literal, `#html-live{...}` / `html-live*`: each evaluation is a
+  `LiveHtml` snapshot of the hole values; `live-mount` builds the tree once,
+  replacing each content hole's marker with an empty text anchor and
+  grouping attribute holes by element and attribute; `tpl-update!` patches
+  only the holes whose values changed and returns the number of patches.
+  Only code that asks for a live literal pays for a tree.
+- An expansion may only name helpers in the macro's own module (`mk-*` in
+  `html/markup`, `xml/markup`, `html/hiccup`): a module-qualified name
+  resolves only for a module the using file imports itself.
+
+**D (hiccup).**
+
+- D1 lives in tur-html (`html/hiccup`, macro-time `html/hiccupc`), not
+  `dom/hiccup`: rendering a `raw-html` hole needs lexbor, and so does
+  `ToChild Html`. The expansion calls wrapper functions (`mk-elem`, ...)
+  rather than the qualified constructors, which mistype as arguments
+  ([qualified-adt-constructor-mistyped-as-argument](../reported/qualified-adt-constructor-mistyped-as-argument.md)).
+- `ToChild` gained one constrained instance for `(Cons T)` (and `Child` a
+  `ChildList` case) in place of per-type list instances: an instance for
+  `(Cons Html)` in `html/hiccup` would be an orphan. D2's `hiccup->xml-string` will need the types moved down
+  to dom-core with the renderer taking the raw fixer as an argument (as
+  `render-template` already does for A).
+- `HText` holds a `cstr`, not a `String`.
+- Literal attribute values are written as given (not scheme-checked),
+  matching `#html{...}`'s static text; values in holes go through
+  `to-attr` / `to-url-attr` and `srcset-check`.
+- **D1b-D3 (2026-10-28).** The opaque types are `HTag`, `HAttr`,
+  `HAttrName`, `HRawBody` (and D2's `HCommentBody`, `HCdataBody`,
+  `HPiBody`): a type name is global, and tur-dom-core's SAX `Attr` and ecs's
+  `Tag` were taken
+  ([module-type-names-collide-across-modules](module-type-names-collide-across-modules.md)).
+  Since that was fixed (2026-10-29) they are `Tag`, `Attr`, `AttrName`,
+  `RawBody`, `CommentBody`, `CdataBody` and `PiBody`.
+- Content holes go through a new `ToHtml` class rather than `ToChild`, so a
+  nested `Html` stays a tree (through `ToChild` it would be flattened to
+  markup); `ToHtml` has `ToChild`'s instances plus `Html`, `Node` and
+  `Child`, so any `ToChild` type goes in as `(to-child x)`.
+- The D1b walker is ordinary mutually recursive functions (the forward
+  reference fix holds). `for` is expanded by the walker into nested
+  `match`es over `Option`, not through the `for` macro: its `.pure` looks
+  for an instance on the body's type when that is concrete, and takes the
+  monad only from a `defn`'s return type
+  ([for-comprehension-pure-picks-the-payload-type](../reported/for-comprehension-pure-picks-the-payload-type.md)).
+  An inline `fn` given to `list-map` needs a typed parameter. The test
+  supplied its own `list-foldl` until 2026-10-29, when tur-html could load
+  `stdlib/list-typed.tur` beside dom/ownstr's `String` for the first time.
+- `HComment`, `HCdata` and `HPi` were added so `node->hiccup` loses
+  nothing; HTML has no CDATA or PIs, so `hiccup->string` writes CDATA as
+  text and leaves a PI out. `hiccup->xml-string` writes a `raw-html` child
+  or a spliced `#html{...}` by parsing it with lexbor in its parent and
+  converting with `node->hiccup` -- no expat needed in tur-html.
+- `hiccup->dom` follows the HTML tree builder's namespace rules (`svg`,
+  `math`, the integration points, foreign attributes such as `xlink:href`).
+  `node->hiccup` pins each element to the namespace it was in (a marker in
+  the tag; an XML element carries its URI, an attribute its namespace), so
+  an element converted on its own rebuilds in place. `hiccup->xml-dom`
+  otherwise resolves prefixes through the tree's `xmlns` attributes and puts
+  declarations first, as expat does.
+- `RenderHtml` lives in dom-core's `dom/holes` (its method gives owned
+  markup), with instances for `Fragment` there and for `Html` and `LiveHtml`
+  in tur-html, so tourist needs only tur-dom-core for the class.
+  `tourist/markup`'s `html-response` sits behind optional tur-dom-core and
+  tur-html dependencies, as `tourist/template` does behind tur-template. Its
+  test reads the Response directly. It did so first because tourist's HTTP
+  client loads `json/ownstr`, whose `String` collided with `dom/ownstr`'s;
+  with that fixed, serving the pages turned up
+  [monomorph-emitted-before-its-type-argument](../reported/monomorph-emitted-before-its-type-argument.md),
+  [unused-module-global-heap-init-reported-as-leak](../reported/unused-module-global-heap-init-reported-as-leak.md)
+  and a live literal that leaked each content hole's markup (fixed in
+  turlive.c), and the test stayed direct.
+- **A5.** `read-string-at` (a macro-time native beside `read-string`):
+  `(read-string-at text lit k)` reads text that starts at byte `k` of the
+  string literal `lit`'s value and moves every form's span to that text's
+  place in the user's file, replaying the literal's escapes (a raw reader
+  macro's `\x`, a `"..."` literal's simple escapes); where it cannot (the
+  source is not registered, a `\x..` escape comes first), every form takes
+  the literal's span. `dom/markupc` reads holes with it, so a type error in
+  a hole of `#html{...}`, `#xml{...}` or a direct `html*` / `xml*` call
+  points at the hole. Pinned by `tests/fixtures/errors/read-string-at-hole-position`
+  and the spices' error tables.
+- **A6 (2026-10-29).** Built as planned, HTML only (`#xml{...}` keeps code
+  holes compile errors: XML has no raw text, so a `<script>` body there
+  is entity-decoded before the JavaScript parser sees it). Two template
+  markers carry code holes -- `k` (in attribute NAME) and `r` (in the raw
+  text of TAG) -- and the first-render check confirms the attribute or the
+  element; the value is escaped for its language at the hole, so the
+  runtime adds only the outer layer (attribute escaping, or a check that a
+  trusted value cannot end its `<script>` / `<style>`). The classes are
+  `ToJs`, `ToCodeText` (inside a JavaScript or CSS string, shared),
+  `ToCss`, `ToSrcdoc`, plus `ToUrlAttr` reused for CSS `url(...)`. The
+  attribute decoder reads `&quot;` `&apos;` `&amp;` `&lt;` `&gt;` and
+  numeric ASCII references and refuses any other, rather than modelling
+  the HTML spec's legacy rules. A CSS hole in a declaration that a later
+  `{` turns into a nested rule is caught by a second pass over the whole
+  region. Live literals take code holes: a `<script>` / `<style>` text is
+  a patch group like an attribute's value.
+- A6's tests: an escaping table per context, the structure gate (37
+  hostile values in 14 code contexts parse like `x`), and the browser
+  check (`fixtures/browser.sh`: one page per hostile value, every handler
+  clicked, a sentinel that must stay unset, and every JavaScript, JSON and
+  CSS string hole and the srcdoc text read back as the value). The Go
+  `html/template` oracle was not built: the browser read-back checks the
+  same thing against the real parsers. Hiccup did not gain code holes; its
+  dynamic `on*` / `style` / `srcdoc` values and `<script>` bodies remain
+  compile errors.
+- A `#html{...}` written inside another literal's hole does not read (the
+  macro-time reader has no `#html` reader macro); bind the inner fragment
+  in a `let` first.
+- D3's gate holds for every element of the 54 html5lib files except those
+  holding what dom/edit refuses to rebuild (a `<plaintext>`, raw text
+  holding its end tag or `<!--`, a comment holding `<!--` or `-->`):
+  about 470 of 8300, ancestors included. `hiccup->dom` panics on those.
+  The XML corpus is ten documents in the test (namespaces, redeclared
+  prefixes, `xml:` attributes, entities, CDATA, PIs); tur-html takes
+  tur-xml as an optional, test-only dependency for it and for D2's expat
+  gate.

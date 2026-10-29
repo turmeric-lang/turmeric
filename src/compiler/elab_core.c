@@ -636,6 +636,27 @@ bool binding_private_elsewhere(const Elab *e, const Binding *b) {
     return true;
 }
 
+/* exported-name-collision-ignores-refer: does module code being elaborated
+ * name global binding `b` on purpose -- defined by this module, or brought in
+ * by one of its imports' `:refer` lists? */
+static bool binding_chosen_by_module(const Elab *e, const Binding *b) {
+    const DefModule *mod = e->current_module;
+    if (!mod) return false;
+    if (b->defining_module_name == e->current_module_name) return true;
+    for (uint32_t i = 0; i < mod->n_imports; i++) {
+        const ImportSpec *imp = &mod->imports[i];
+        bool refers = false;
+        for (uint32_t k = 0; k < imp->n_refer && !refers; k++)
+            refers = imp->refer_syms[k] == b->name;
+        if (!refers) continue;
+        const ElabModule *lm = elab_find_loaded_module((Elab *)e, imp->module_name);
+        if (!lm) continue;
+        for (uint32_t k = 0; k < lm->n_exports; k++)
+            if (lm->exports[k] == b) return true;
+    }
+    return false;
+}
+
 /* The newest binding of `name` that the module being elaborated can see.
  * Every module's top-level defns share the global scope, private ones
  * included, so two modules with a private helper of the same name stack two
@@ -645,24 +666,51 @@ bool binding_private_elsewhere(const Elab *e, const Binding *b) {
  * binding for its own forward declaration and rewrote its signature).  This
  * skips bindings private to another module; when nothing visible remains it
  * falls back to the newest binding of any kind, so the caller can still
- * report a private one.  NULL when `name` is unbound. */
+ * report a private one.  NULL when `name` is unbound.
+ *
+ * exported-name-collision-ignores-refer: two modules EXPORTING the same name
+ * stack the same way, and the newest still answered -- so a module that
+ * wrote `(:refer [f])` from one got the other's `f` whenever the other was
+ * imported after it.  When more than one global binding is visible, the one
+ * the module defines or refers wins; otherwise the newest still does. */
 Binding *scope_lookup_visible(const Elab *e, Scope *s, const Symbol *name) {
     Binding *first = NULL;
     for (Scope *cur = s; cur; cur = cur->parent) {
+        bool global = cur == &e->global;
+        Binding *visible = NULL;
+        bool contested = false;
         if (cur->idx) {
             for (uint32_t i = scope_idx_newest(cur, name); i; i = cur->prev[i - 1]) {
                 Binding *b = cur->bindings[i - 1];
                 if (!first) first = b;
-                if (!binding_private_elsewhere(e, b)) return b;
+                if (binding_private_elsewhere(e, b)) continue;
+                if (!global || !e->current_module) return b;
+                if (!visible) { visible = b; continue; }
+                if (b == visible) continue;
+                if (!contested) {
+                    contested = true;
+                    if (binding_chosen_by_module(e, visible)) return visible;
+                }
+                if (binding_chosen_by_module(e, b)) return b;
             }
+            if (visible) return visible;
             continue;
         }
         for (uint32_t i = cur->n; i > 0; i--) {
             Binding *b = cur->bindings[i - 1];
             if (b->name != name) continue;
             if (!first) first = b;
-            if (!binding_private_elsewhere(e, b)) return b;
+            if (binding_private_elsewhere(e, b)) continue;
+            if (!global || !e->current_module) return b;
+            if (!visible) { visible = b; continue; }
+            if (b == visible) continue;
+            if (!contested) {
+                contested = true;
+                if (binding_chosen_by_module(e, visible)) return visible;
+            }
+            if (binding_chosen_by_module(e, b)) return b;
         }
+        if (visible) return visible;
     }
     return first;
 }
@@ -3452,10 +3500,26 @@ bool return_type_applied_scalar_conflict(const Type *declared_app,
  * apart and marked open by the call (generic-call-result-leaks-callee-tyvar-
  * names), so an open slot or an unreduced associated-type projection is never
  * rigid either. */
+static bool rt_mentions_rigid(const char *const *rigid, uint8_t n_rigid, const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_APP)
+        return rt_mentions_rigid(rigid, n_rigid, t->as.app.fn) ||
+               rt_mentions_rigid(rigid, n_rigid, t->as.app.arg);
+    if (t->kind != TY_TYVAR || !t->as.tyvar_.name || t->as.tyvar_.open_slot) return false;
+    for (uint8_t k = 0; rigid && k < n_rigid; k++)
+        if (rigid[k] && strcmp(rigid[k], t->as.tyvar_.name) == 0)
+            return true;
+    return false;
+}
 static bool rt_is_rigid(const char *const *rigid, uint8_t n_rigid, const Type *t) {
-    if (!t || t->kind != TY_TYVAR || !t->as.tyvar_.name ||
-        t->as.tyvar_.open_slot || t->as.tyvar_.assoc_of)
+    if (!t || t->kind != TY_TYVAR || !t->as.tyvar_.name || t->as.tyvar_.open_slot)
         return false;
+    /* literal-at-associated-type-unchecked: a projection over the defn's own
+     * variables, `(Elem V)`, is as rigid as `V` -- it is whatever V's instance
+     * binds, not something the body may pick.  A generic declared `: (Elem V)`
+     * returned `1.5`, and the int32 instance's emitted C truncated it. */
+    if (t->as.tyvar_.assoc_of)
+        return rt_mentions_rigid(rigid, n_rigid, t->as.tyvar_.assoc_arg);
     for (uint8_t k = 0; rigid && k < n_rigid; k++)
         if (rigid[k] && strcmp(rigid[k], t->as.tyvar_.name) == 0)
             return true;

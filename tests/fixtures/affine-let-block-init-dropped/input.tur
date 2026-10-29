@@ -1,0 +1,49 @@
+;; affine-let-block-init-dropped: a let-bound move-only Drop opaque is dropped
+;; at scope exit when its initialiser is a block (`let` / `do`) that yields a
+;; fresh value -- a call's result, or a local of the block's own scope bound to
+;; one -- and not only when the initialiser is a bare call.  `(let [a (let [t
+;; (mk)] t)] ...)` used to leave `a` undropped: the shape a macro that fills a
+;; value before returning it expands to (stdlib/numvec.tur's `-of`).  The
+;; counters prove every shape balances (live 0 after each, 8 made, 8 freed)
+;; without depending on LeakSanitizer, and a double drop would show as a
+;; negative live count.
+;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
+(defn ctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (ctr 0) (:: 1 Widget))
+(defn rel [w : Widget] : void (ctr 1) (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn peek [^borrow w : Widget] : int 1)
+(defn give [w : Widget] : Widget w)
+
+(defn s1 [] : int (let [a (let [t (mk)] t)] (peek a)))
+(defn s2 [] : int (let [a (let [t (mk)] (do (peek t) t))] (peek a)))
+(defn s3 [] : int (let [a (let [t (mk) u (mk)] (do (peek u) t))] (peek a)))
+(defn s4 [] : int (let [a (do (peek-nothing) (mk))] (peek a)))
+(defn peek-nothing [] : int 0)
+(defn s5 [] : int (let [a (let [t (let [v (mk)] v)] t)] (peek a)))
+(defn s6 [] : Widget (let [a (let [t (mk)] t)] a))
+(defn s7 [] : int (let [a (s6)] (peek a)))
+(defn s8 [] : int (let [a (let [t (mk)] t)] (rel a) 0))
+
+(defn print-live [tag : int] : nil
+  (println (- (ctr 2) (ctr 3))))
+
+(defn main [] : int
+  (s1) (print-live 1)
+  (s2) (print-live 2)
+  (s3) (print-live 3)
+  (s4) (print-live 4)
+  (s5) (print-live 5)
+  (s7) (print-live 7)
+  (s8) (print-live 8)
+  (println (ctr 2))
+  (println (ctr 3))
+  0)

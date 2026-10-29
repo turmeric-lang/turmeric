@@ -187,6 +187,19 @@ an early exit.
 | single-constructor by-value product with `rc` / `ref` fields | `(defer (rc/drop (.f o)))` / `(defer (drop! (.f o)))` per field |
 
 Each is skipped when the local is moved, moved during init, or consumed.
+A move-only Drop opaque is dropped only when its initialiser yields a fresh
+value (`init_yields_fresh_owner`): a call, or a `let` / `do` block whose value
+is a local of its own scope that was itself initialised fresh. A local bound to
+an outer variable is not fresh; its owner stays where it was.
+
+A fresh move-only Drop opaque passed straight to a `^borrow` parameter has no
+binding to hang that defer on, so `hoist_borrowed_closure_args`
+(`elab_call.c`) binds it to a `__borrowd_N` temp and appends the same drop glue
+after the call -- only when the call returns a scalar (the result cannot point
+into the temp) and every earlier argument is a variable or literal (hoisting
+reorders nothing). Otherwise it is left unowned: a leak, never a dangling
+borrow. A closure capturing a `^borrow` parameter borrows it as well; the env's
+drop glue skips it (`is_borrow`).
 
 **Emitter trailing frees.** `emit_expr.c:emit_let_value` collects, per
 binding, the frees that need the binding's *emitted* C type to decide, and

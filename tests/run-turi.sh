@@ -232,6 +232,11 @@ fixture_has_inline_c() {
             # interpreter natives (cstr-*, and tur_sb_* / tur_string_* through
             # stdlib/string-ffi.tur).
             stdlib/re.tur) continue ;;
+            # Every inline-C body of the typed numeric arrays has a native twin
+            # of the same name (NUMVEC_NATIVES in interpreter_natives.c):
+            # <p>-{new,free,copy,len,ref,set!}.  Add a body without a twin and
+            # this line is wrong.
+            stdlib/numvec.tur) continue ;;
         esac
         grep -q '```c' "$loaded" 2>/dev/null && return 0
     done < <(sed -n 's/.*(load "\([^"]*\)").*/\1/p' "$f" 2>/dev/null)
@@ -248,6 +253,7 @@ fixture_has_inline_c() {
 # entry belongs here only if it is verified to interpret correctly.
 TURI_INLINEC_RUN="
 inline-c-binop
+numvec-kernels
 map-multiword-struct-key
 set-multiword-struct-element
 clone-list
@@ -287,6 +293,7 @@ fixture_inline_c_runs() {
 # (closure-drop-affine-chain-autodrop, httpd-mw-fold-many), passes by luck.
 TURI_INLINEC_JIT_RUN="
 async-sleep
+numvec-loops
 backtrack-depth
 backtrack-depth-exceeded
 backtrack-interleave

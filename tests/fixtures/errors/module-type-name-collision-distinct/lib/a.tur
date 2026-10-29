@@ -1,0 +1,11 @@
+;; lib/a -- defines Attr and Shape; loaded first, so its names stay as written.
+(defmodule lib/a
+  (export Attr mk-a attr-n Shape Circle Square area-a)
+  (defstruct ^copy Attr [n : int])
+  (defn mk-a [n : int] : Attr (Attr n))
+  (defn attr-n [a : Attr] : int (.n a))
+  (defdata ^copy Shape (Circle int) (Square int))
+  (defn area-a [s : Shape] : int
+    (match s
+      (Circle r) (* 3 (* r r))
+      (Square w) (* w w))))

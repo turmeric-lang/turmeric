@@ -1,11 +1,15 @@
 # Plan: spell type-declaration flags as `^attr`, not `:keyword`
 
-> **Status:** P0-P4 IMPLEMENTED (2026-10-27, 2026-10-28). P4 is a separate commit and should merge only after the spices have migrated; see its "As implemented" section. The three open questions
-> are decided (see "Decisions"): attributes go before the name, `^move` stays,
-> and `^heap` moves with the rest. Both spellings are accepted today; the
-> keyword one is not yet warned about (P3). A spelling change only: every form
-> here means exactly what it means today, and the checker's rules for linear,
-> affine, copy and heap values do not move.
+> **Status:** DONE, archived 2026-10-29. P0-P4 implemented 2026-10-27/28 and
+> P5 after them; all of it is on `main`, with the spices migrated first
+> (turmeric-spices#120). The keyword spelling of a type-declaration flag is
+> the error TUR-E0717 (P4), and the old spellings of the defeffect and defn
+> attributes are TUR-E0718 (P5); `tur fmt` migrates both. The three open
+> questions were decided (see "Decisions"): attributes go before the name,
+> `^move` stays, and `^heap` moves with the rest. A spelling change only:
+> every form here means exactly what it meant before, and the checker's rules
+> for linear, affine, copy and heap values did not move. The sections below
+> are the plan as written, with each phase's "As implemented" notes.
 
 ## The problem
 

@@ -1,0 +1,31 @@
+;; unsafe-marker-colors-its-function: `(unsafe ...)` desugars to a handle
+;; that discharges the `Unsafe` capability, which nothing performs at run
+;; time.  The may-capture coloring treated it as a control seed, so every
+;; function with an `unsafe` in it -- and every caller of one -- was colored
+;; and lowered onto the DK backend (a generic loop over a numeric array ran 5x
+;; slower).  It is transparent now: only what is inside it counts.
+;;
+;;   peek            -- an unsafe read, nothing else         -> uncolored
+;;   calls-peek      -- only calls peek                      -> uncolored
+;;   shift-in-unsafe -- a reset/shift inside an unsafe body  -> COLORED
+;;   main            -- reaches no control op                -> uncolored
+
+(defn raw-word [x : int] #fx{Unsafe} : int
+  ```c
+  return x + 1;
+  ```)
+
+(defn peek [x : int] : int
+  (unsafe (raw-word x)))
+
+(defn calls-peek [x : int] : int
+  (+ 1 (peek x)))
+
+(defn shift-in-unsafe [x : int] : int
+  (unsafe
+    (reset
+      (shift (fn [v] (+ v (raw-word 0))) x))))
+
+(defn main [] : int
+  (println (calls-peek 7))
+  0)

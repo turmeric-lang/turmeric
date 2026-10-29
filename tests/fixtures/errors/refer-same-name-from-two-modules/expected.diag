@@ -1,0 +1,1 @@
+'f' is referred from both module 'lib/a' and module 'lib/b'
