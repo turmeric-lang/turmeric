@@ -90,6 +90,147 @@ bool tur_jit_set_quiet_warnings (bool quiet) {
 
 static bool g_jit_keep_contexts;   /* tur_jit_set_keep_contexts */
 
+/* A kept program's footprint (aot-compiled-repl-plan C2, point 5).
+ *
+ * A compiled REPL turn's program must outlive the turn: a slot may hold a
+ * pointer into it -- a function, a string literal, a static.  What such a
+ * pointer can reach is the program's machine code and the storage behind its
+ * data items, and nothing else: the MIR context around them (its IR, its
+ * symbol and string tables, the generator's state, the interpreter's tables)
+ * is only ever read while compiling and linking.  Keeping the whole context
+ * cost ~1.3 MB a turn, ~280 KB of it the fixed tables MIR_init builds.
+ *
+ * So a kept context is finished like any other, with its code and data
+ * carved out first:
+ *
+ *   - data: a section head's storage is freed by MIR_finish only while the
+ *     item's addr is set (remove_item), so each head's addr moves to
+ *     g_kept_data and is cleared before the finish;
+ *   - code: the context's code allocator is jit_keep_code_alloc, whose unmap
+ *     keeps the pages up to the highest one ever made writable (every byte of
+ *     code is written through a protect call) and releases only the untouched
+ *     rest of the reservation.
+ *
+ * Generation is eager under keep (see the knob in tur_jit_execute), so no
+ * function is left to generate from the IR that goes.  Where the program
+ * runs on MIR's interpreter (TUR_JIT_GEN=interp, wasm) the IR is the program,
+ * and the whole context stays; Windows keeps it too, for want of the
+ * allocator below.  What is kept lives for the process. */
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#define JIT_KEEP_CARVE 1
+#include <sys/mman.h>
+#include <unistd.h>
+
+/* mir-code-alloc-default.c's, which carries Apple silicon's JIT write
+ * protection; its map and unmap are static and are reproduced below. */
+extern int default_mem_protect (void *addr, size_t len, MIR_mem_protect_t prot, void *user_data);
+
+typedef struct { uint8_t *start, *hi; size_t len; } JitKeepMap;
+typedef struct { void *p; size_t len; } JitKeptCode;
+
+static JitKeepMap *g_keep_maps;   /* the live kept context's mappings */
+static size_t g_n_keep_maps, g_cap_keep_maps;
+static JitKeptCode *g_kept_code;  /* pages kept for the process */
+static size_t g_n_kept_code, g_cap_kept_code;
+static void **g_kept_data;
+static size_t g_n_kept_data, g_cap_kept_data;
+
+#define JIT_KEEP_PUSH(arr, n, cap, val)                                     \
+  do {                                                                      \
+    if ((n) == (cap)) {                                                     \
+      size_t nc_ = (cap) ? (cap) * 2 : 16;                                  \
+      void *np_ = realloc ((arr), nc_ * sizeof *(arr));                     \
+      if (np_ == NULL) abort ();                                            \
+      (arr) = np_;                                                          \
+      (cap) = nc_;                                                          \
+    }                                                                       \
+    (arr)[(n)++] = (val);                                                   \
+  } while (0)
+
+static void *jit_keep_mem_map (size_t len, void *ud) {
+  (void) ud;
+#if defined(__APPLE__) && defined(__aarch64__)
+  void *p = mmap (NULL, len, PROT_EXEC | PROT_WRITE | PROT_READ,
+                  MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT, -1, 0);
+#else
+  void *p = mmap (NULL, len, PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#endif
+  if (p != MAP_FAILED) {
+    JitKeepMap m = { (uint8_t *) p, (uint8_t *) p, len };
+    JIT_KEEP_PUSH (g_keep_maps, g_n_keep_maps, g_cap_keep_maps, m);
+  }
+  return p;
+}
+
+static JitKeepMap *jit_keep_find_map (void *addr) {
+  for (size_t i = 0; i < g_n_keep_maps; i++)
+    if ((uint8_t *) addr >= g_keep_maps[i].start
+        && (uint8_t *) addr < g_keep_maps[i].start + g_keep_maps[i].len)
+      return &g_keep_maps[i];
+  return NULL;
+}
+
+static int jit_keep_mem_protect (void *addr, size_t len, MIR_mem_protect_t prot, void *ud) {
+  JitKeepMap *m = jit_keep_find_map (addr);
+  if (m != NULL && (uint8_t *) addr + len > m->hi) m->hi = (uint8_t *) addr + len;
+  return default_mem_protect (addr, len, prot, ud);
+}
+
+static int jit_keep_mem_unmap (void *addr, size_t len, void *ud) {
+  (void) ud;
+  JitKeepMap *m = jit_keep_find_map (addr);
+  size_t keep = len;   /* a mapping we did not see: keep it whole */
+  if (m != NULL) {
+    size_t page = (size_t) sysconf (_SC_PAGESIZE);
+    keep = (size_t) (m->hi - m->start);
+    keep = (keep + page - 1) / page * page;
+    if (keep > len) keep = len;
+    *m = g_keep_maps[--g_n_keep_maps];
+  }
+  if (keep < len) munmap ((uint8_t *) addr + keep, len - keep);
+  if (keep > 0) {
+    JitKeptCode c = { addr, keep };
+    JIT_KEEP_PUSH (g_kept_code, g_n_kept_code, g_cap_kept_code, c);
+  }
+  return 0;
+}
+
+static struct MIR_code_alloc jit_keep_code_alloc = {
+  .mem_map = jit_keep_mem_map,
+  .mem_unmap = jit_keep_mem_unmap,
+  .mem_protect = jit_keep_mem_protect,
+  .user_data = NULL,
+};
+
+/* Finish a kept context, keeping its code and data (above). */
+static void jit_finish_kept_context (MIR_context_t ctx) {
+  if (g_jit_interp_mode) return;   /* the IR is the program: keep it all */
+  if (g_jit_gen_inited) MIR_gen_finish (ctx);
+  for (MIR_module_t m = DLIST_HEAD (MIR_module_t, *MIR_get_module_list (ctx)); m != NULL;
+       m = DLIST_NEXT (MIR_module_t, m))
+    for (MIR_item_t it = DLIST_HEAD (MIR_item_t, m->items); it != NULL;
+         it = DLIST_NEXT (MIR_item_t, it)) {
+      switch (it->item_type) {
+      case MIR_data_item:
+      case MIR_ref_data_item:
+      case MIR_lref_data_item:
+      case MIR_expr_data_item:
+      case MIR_bss_item:
+        if (it->addr != NULL && it->section_head_p) {
+          JIT_KEEP_PUSH (g_kept_data, g_n_kept_data, g_cap_kept_data, it->addr);
+          it->addr = NULL;
+        }
+        break;
+      default: break;
+      }
+    }
+  MIR_finish (ctx);
+}
+#else
+#define JIT_KEEP_CARVE 0
+static void jit_finish_kept_context (MIR_context_t ctx) { (void) ctx; }
+#endif
+
 bool tur_jit_set_keep_contexts (bool keep) {
   bool was = g_jit_keep_contexts;
   g_jit_keep_contexts = keep;
@@ -1230,7 +1371,11 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
     }
   }
 #endif
+#if JIT_KEEP_CARVE
+  MIR_context_t ctx = g_jit_keep_contexts ? MIR_init2 (NULL, &jit_keep_code_alloc) : MIR_init ();
+#else
   MIR_context_t ctx = MIR_init ();
+#endif
   MIR_set_error_func (ctx, jit_mir_error);
   g_jit_err_active = 1;
   if (setjmp (g_jit_err_jb) != 0) {
@@ -1521,9 +1666,10 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   prof_enter (PROF_JIT);   /* --timings: tearing the MIR context down is the engine's */
   jit_forget_lazy_ctx (ctx);
   if (g_jit_keep_contexts) {
-    /* Resident for the session (tur_jit_set_keep_contexts): only the C front
-     * end goes, as an image's does once it is initialized. */
+    /* Resident for the session (tur_jit_set_keep_contexts): the program's
+     * code and data stay, and the context around them goes. */
     c2mir_finish (ctx);
+    jit_finish_kept_context (ctx);
   } else if (__atomic_load_n (&g_jit_program_started_threads, __ATOMIC_SEQ_CST)) {
     g_jit_retired_ctx = ctx;   /* its threads may still be running in it */
   } else {

@@ -151,6 +151,24 @@ same "a node made in a bracket and kept in a def is read after it" \
      "$(printf '=> #<fn link-v>\n=> #<Link>\n=> 41\n=> #<Link>\n=> #<fn grab>\n=> 1\n=> 7')" \
      "$(results "$out" | grep -v 'adt-type')"
 
+# --- An early turn's code and data outlive its MIR context --------------------
+# Each turn's context is finished once the turn has run; its machine code and
+# its data sections are kept (jit_finish_kept_context).  A string literal, a
+# lambda and a static array made in turn 1 are read 100 turns later.
+{
+    echo '(def s "kept-from-turn-1")'
+    echo '(def g (fn [x : int] : int (* x 3)))'
+    echo '(defn tbl [i : int] : int ```c static const int64_t t[4] = {7, 11, 13, 17}; return t[i & 3]; ```)'
+    echo '(def h tbl)'
+    for i in $(seq 1 100); do echo "(+ $i 0)"; done
+    echo 's'
+    echo '(g 5)'
+    echo '(h 2)'
+} > "$WORK/t4"
+out="$(repl_out --enable=compiled-repl < "$WORK/t4")"
+same "a string, a lambda and a static table from turn 1, read 100 turns later" \
+     "$(printf '=> "kept-from-turn-1"\n=> 15\n=> 13')" "$(results "$out" | tail -3)"
+
 # --- The difference left: no Show printer yet -------------------------------------
 out="$(repl_out --enable=compiled-repl <<'EOF'
 [1 2 3]
