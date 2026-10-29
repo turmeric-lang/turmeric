@@ -1,0 +1,65 @@
+;; assoc-type-method-at-applied-opaque-instance-no-instance: a class method
+;; whose result is the class's associated type, called on the constraint's
+;; type variable inside a constrained generic, when every instance head is an
+;; APPLIED opaque -- `(NumVec float)`.  A method with an untyped parameter
+;; dispatches on its result there, and the representative-instance search
+;; looked only at bare opaque heads, so it was "no instance 'NumSum tyvar'".
+;; It looks through the application now; each spec still gets its own
+;; instance (7.1 and 3.25, not one of them twice).
+;;
+;; Also pinned: the typed-parameter spelling over three element types, with the
+;; associated type as a parameter and through a generic calling a generic, and
+;; an applied struct head.  Every line matches `tur --interpret`.
+
+(defopaque NumVec [t] :int)
+
+;; the reported shape: an untyped method parameter
+(defclass NumSum [v]
+  (type Elem : Type)
+  (nv-sum [v] : Elem))
+(definstance NumSum [(NumVec float)] (type Elem = float) (nv-sum [v] 7.1))
+(definstance NumSum [(NumVec float32)] (type Elem = float32) (nv-sum [v] (:: 3.25 float32)))
+(defn total [V] [(NumSum V)] [v : V] : (Elem V)
+  (nv-sum v))
+
+;; typed parameters: the associated type in and out
+(defclass NV [v]
+  (type Item : Type)
+  (nv-first [s : v] : Item)
+  (nv-twice [s : v x : Item] : Item))
+(definstance NV [(NumVec float)] (type Item = float)
+  (nv-first [s] 7.1)
+  (nv-twice [s x] {x * 2.0}))
+(definstance NV [(NumVec float32)] (type Item = float32)
+  (nv-first [s] (:: 3.25 float32))
+  (nv-twice [s x] {x + x}))
+(definstance NV [(NumVec int32)] (type Item = int32)
+  (nv-first [s] (:: 5 int32))
+  (nv-twice [s x] {x + x}))
+(defn twice-first [V] [(NV V)] [v : V] : (Item V)
+  (nv-twice v (nv-first v)))
+(defn outer [V] [(NV V)] [v : V] : (Item V)
+  (twice-first v))
+
+;; an applied struct head
+(defstruct Box [T] [v : T])
+(defclass Unbox [b]
+  (type Inner : Type)
+  (unbox [b] : Inner))
+(definstance Unbox [(Box float)] (type Inner = float) (unbox [b] (.v b)))
+(definstance Unbox [(Box int)] (type Inner = int) (unbox [b] (.v b)))
+(defn get [B] [(Unbox B)] [b : B] : (Inner B)
+  (unbox b))
+
+(defn main [] : int
+  (let [a : (NumVec float)   (:: 0 (NumVec float))
+        b : (NumVec float32) (:: 0 (NumVec float32))
+        c : (NumVec int32)   (:: 0 (NumVec int32))]
+    (println (total a))
+    (println (as float (total b)))
+    (println (outer a))
+    (println (as float (outer b)))
+    (println (as int (outer c)))
+    (println (get (make-struct Box 7.1)))
+    (println (get (make-struct Box 42)))
+    0))

@@ -280,7 +280,7 @@ on cc and `tur jit`.
    Type)` and `(nv-sum [v] : Elem)`, so `nv-sum` on a `(NumVec float32)` returns
    a `float32` -- fails inside a generic with `no instance 'NumSum tyvar'`,
    though it works with plain (non-applied) opaques. Filed as
-   [assoc-type-method-at-applied-opaque-instance-no-instance](../reported/assoc-type-method-at-applied-opaque-instance-no-instance.md).
+   [assoc-type-method-at-applied-opaque-instance-no-instance](../archive/assoc-type-method-at-applied-opaque-instance-no-instance.md).
    Until it is fixed, a generic `nv-sum` or `nv-ref` cannot return the honest
    element type, which most of the API needs.
 3. **No dispatch on the result type.** A constructor that takes only a length
@@ -671,7 +671,7 @@ Results identical in every cell.
 1. Five types, or one `(NumVec T)`? **Author leans generic.** Section 3.1:
    generic works today for fixed-result methods and is blocked for
    element-typed results by
-   [assoc-type-method-at-applied-opaque-instance-no-instance](../reported/assoc-type-method-at-applied-opaque-instance-no-instance.md).
+   [assoc-type-method-at-applied-opaque-instance-no-instance](../archive/assoc-type-method-at-applied-opaque-instance-no-instance.md).
 2. Names. **Author leans toward honest names: `F64Vec`, not `FlVec`.** With a
    generic type, those become `defalias`es of `(NumVec float)` etc., and the
    function family is `nv-*` (or `numvec-*`) rather than `f64vec-*`. Still

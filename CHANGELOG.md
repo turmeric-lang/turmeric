@@ -48,6 +48,11 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A class method returning its associated type works in a generic over
+  applied-opaque instances.** With instances keyed on `(NumVec float)` and
+  `(NumVec float32)`, a method with an untyped parameter, called on the
+  constraint's type variable, was `no instance '<Class> tyvar'`; bare opaque
+  heads worked. Each instantiation now gets its own instance.
 - **A closure no longer frees a `^borrow` parameter it captures.** For a
   move-only type with a `Drop` instance (a numeric array, httpd's `Handler`),
   the closure's drop glue released every such capture, so a closure over a

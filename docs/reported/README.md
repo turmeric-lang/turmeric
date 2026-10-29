@@ -139,7 +139,6 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [assoc-type-method-at-applied-opaque-instance-no-instance](assoc-type-method-at-applied-opaque-instance-no-instance.md) | medium-low | A method returning the class's associated type, called on the constraint tyvar in a generic, errors `no instance '<Class> tyvar'` when the instances are keyed on an applied opaque like `(NumVec float)`; plain opaques work. Likely the return-directed representative search accepts only `TY_INT` / bare opaque `TY_ADT` heads |
 
 ## Found asking whether `let` should become `let*` (filed 2026-10-24)
 

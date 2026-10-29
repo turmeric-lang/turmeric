@@ -6388,9 +6388,16 @@ static Expr *elab_try_return_dispatch_impl(Elab *e, const Form *call, const Symb
                 if (midx >= it->n_method_impls || !it->method_impls[midx]) continue;
                 if (it->n_type_args == 0) continue;
                 if (it->type_args[0].kind == TY_INT) { inst = it; break; }
+                /* assoc-type-method-at-applied-opaque-instance-no-instance: an
+                 * APPLIED opaque head, `(NumVec float)`, is a TY_APP spine over
+                 * the opaque -- the same int64 carrier as the bare opaque, and
+                 * specs split on it just the same (one per element type), so
+                 * look through the application to its head. */
+                const Type *head = &it->type_args[0];
+                while (head && head->kind == TY_APP) head = head->as.app.fn;
                 if (!carrier_opaque && tyvar_reaches_param &&
-                    it->type_args[0].kind == TY_ADT) {
-                    const AdtDef *ad = it->type_args[0].as.adt_.def;
+                    head && head->kind == TY_ADT) {
+                    const AdtDef *ad = head->as.adt_.def;
                     if (ad && ad->is_opaque && !ad->opaque_base_is_ptr)
                         carrier_opaque = it;
                 }
