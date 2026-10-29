@@ -507,6 +507,20 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.78.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_compiled_repl },
+    /* simd (simd-and-vectorization-plan S1): `(load "stdlib/simd.tur")`
+     * gives six 16-byte vector types (F64x2 F32x4 I64x2 I32x4 U16x8 U8x16) as
+     * `^copy` structs whose operations are one GNU-vector instruction each on
+     * cc, a lane loop under `tur jit` and natives under turi -- bit-identical.
+     * Prototype: the op set is S0's, masks / select / shuffle are not there
+     * yet, and a vector in generic code is boxed like any wide struct (the
+     * plan wants that refused). */
+    { "simd",
+      "16-byte vector types and lanewise operations (`(load \"stdlib/simd.tur\")`)",
+      "docs/upcoming/simd-and-vectorization-plan.md",
+      "0.73.0",                  /* introduced */
+      "0.77.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_simd },
     /* r7rs-segmented-stack GRADUATED 2026-10-25, in the 0.71 line (introduced
      * 0.70.0, beta 2026-10-24, advisory expires_at 0.71.0; graduation approved
      * by the plan's owner 2026-10-24).  Every compiled `#lang r7rs` procedure

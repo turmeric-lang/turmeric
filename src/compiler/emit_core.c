@@ -1954,8 +1954,17 @@ bool fn_def_panics_in_inline_c(const FnDef *fd) {
  * (`sizeof`, `if`, ...).  A function-like macro reads as a call too, which only
  * costs the check its skip.  Comments and literals are not read. */
 static bool ic_paren_word_ok(const char *w, size_t n) {
+    /* keywords, and compile-time-only builtins a vector body uses */
     static const char *ok[] = {"sizeof", "_Alignof", "alignof", "__alignof__",
-        "typeof", "__typeof__", "if", "while", "for", "switch", "return"};
+        "typeof", "__typeof__", "if", "while", "for", "switch", "return",
+        "defined", "__attribute__", "vector_size", "__builtin_shufflevector",
+        "__builtin_convertvector",
+        /* libm and its builtins: a NaN or errno, never a panic */
+        "sqrt", "sqrtf", "fabs", "fabsf", "__builtin_sqrt", "__builtin_sqrtf",
+        "__builtin_fabs", "__builtin_fabsf",
+        /* the byte copies a vector load or store is */
+        "memcpy", "memmove", "memset", "__builtin_memcpy", "__builtin_memmove",
+        "__builtin_memset"};
     for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++)
         if (strlen(ok[i]) == n && memcmp(ok[i], w, n) == 0) return true;
     return false;
@@ -1990,7 +1999,20 @@ bool fn_def_inline_c_cannot_panic(const FnDef *fd) {
             if (k < n && s[k] == '(' && !ic_paren_word_ok(s + i, j - i)) return false;
             i = j;
         } else if (c == '#') {
-            return false;   /* a directive could define or call anything */
+            /* A conditional (`#if !defined(__MIRC__)`, the two lowerings of a
+             * vector operation) only selects text, and its condition is
+             * scanned like the rest.  Any other directive could define or
+             * call anything. */
+            size_t j = i + 1;
+            while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
+            size_t k = j;
+            while (k < n && isalpha((unsigned char)s[k])) k++;
+            static const char *cond[] = {"if", "ifdef", "ifndef", "elif", "else", "endif"};
+            bool is_cond = false;
+            for (size_t ci = 0; ci < sizeof cond / sizeof cond[0] && !is_cond; ci++)
+                is_cond = strlen(cond[ci]) == k - j && memcmp(cond[ci], s + j, k - j) == 0;
+            if (!is_cond) return false;
+            i = k;
         } else {
             i++;
         }

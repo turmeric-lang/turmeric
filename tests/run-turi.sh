@@ -237,6 +237,7 @@ fixture_has_inline_c() {
             # <p>-{new,free,copy,len,ref,set!}.  Add a body without a twin and
             # this line is wrong.
             stdlib/numvec.tur) continue ;;
+            stdlib/simd.tur) continue ;;
         esac
         grep -q '```c' "$loaded" 2>/dev/null && return 0
     done < <(sed -n 's/.*(load "\([^"]*\)").*/\1/p' "$f" 2>/dev/null)
@@ -255,6 +256,7 @@ TURI_INLINEC_RUN="
 inline-c-binop
 numvec-kernels
 numvec-store-loops
+simd-ops
 map-multiword-struct-key
 set-multiword-struct-element
 clone-list
