@@ -34,6 +34,13 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found building the tur-simd spice, plan phase S0 (filed 2026-10-29)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [c2mir-paste-of-u8-prefixed-token](c2mir-paste-of-u8-prefixed-token.md) | low (jit compile error, cc fallback) | c2mir re-lexes a `##` result as if a leading `u8` were a string-literal prefix: `CAT(u8, x)` is "wrong number: 88x" and `CAT(s_, u8x)` an undeclared name. Matters for S1, whose `u8x16` is a planned type name. Belongs in the MIR fork |
+| [jit-ignores-spice-c-includes](jit-ignores-spice-c-includes.md) | low (cc fallback) | `tur jit` hands c2mir only the SDK include dirs, so a spice's `:c-includes` header is "error in opening file" and the program falls back to cc; `tur build` / `test` / `run` pass it |
+
 ## Found building the NumArray class (filed 2026-10-29)
 
 | Report | Severity | One line |

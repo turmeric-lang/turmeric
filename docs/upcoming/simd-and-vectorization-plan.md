@@ -5,8 +5,9 @@
 > question decided (no) 2026-10-29; the generic-type question (open question
 > 1) re-measured 2026-10-29 -- recommendation: a generated class over the five
 > types, not a `(NumVec T)` rewrite (section 3.1, "2026-10-29") -- **built
-> 2026-10-29** (3.1, "As built: NumArray"). N2 approaches D/E, S0 and S1 not
-> started.
+> 2026-10-29** (3.1, "As built: NumArray"). **S0 built 2026-10-29** as the
+> `tur-simd` spice (S0, "As built"; its findings reshape S1's type list). N2
+> approaches D/E and S1 not started.
 > **Open questions reviewed 2026-10-29** (section 6): the class is `NumArray`
 > with `na-` methods (Q2, decided); D and E deferred (Q3); wasm `-msimd128`
 > measured at 1.0-29x on the kernels, bit-identical results, and turned
@@ -690,10 +691,74 @@ The vector values in S0 cannot be first-class Turmeric values yet -- a
 16/32-byte value does not fit a carrier word -- so S0 exposes whole kernels
 or operates in place on N0 arrays. That limit is the motivation for S1.
 
+**As built (2026-10-29): `tur-simd`** (turmeric-spices `spices/simd`).
+`c/simd/tur_simd.h` is the proposed op set as one C function per operation
+(`simd_f64x2_add`, `simd_u8x16_widen_lo`, `simd_f64x4_hsum2`, ...) over
+`f64x2 f64x4 f32x4 i32x4 u8x16 u16x8`, with S1's two lowerings behind the
+same names: vector extensions under gcc/clang, a struct of lanes under
+c2mir. All four builds -- gcc, clang, gcc forced onto lanes, and c2mir itself
+(a small driver over `external/mir`) -- print the same bits for every
+operation. The kernels: `simd-dot-f64` / `-f32` (bit-identical to N1's
+`f64vec-dot` / `f32vec-dot` through the eight-lane tree), `simd-blend-u8!`,
+and `simd-biquad4-f32!` (four interleaved channels, a channel per lane --
+the only way a recurrence gets lanes). `tests/` holds each to its scalar
+result to the bit; `bench/` measured, ns per element on x86-64:
+
+| | gcc -O2 | clang -O2 | gcc -O2 -mavx2 |
+|---|---|---|---|
+| dot, f64x2 accumulators | 0.22 | 0.22 | 0.24 |
+| dot, f64x4 accumulators | 0.60 | 0.22 | 0.14 |
+| dot, N1 `f64vec-dot` | 0.22 | 0.22 | 0.13 |
+| blend, explicit u16 lanes | 0.29 | 0.15 | |
+| blend, scalar C (auto-vectorized) | 0.66 | 1.03 | |
+| biquad x4, explicit f32x4 | 0.88 | 0.92 | |
+| biquad x4, scalar C, channels side by side | 0.89 | 0.87 | |
+| biquad x4, four scalar Turmeric filters | 7.05 | 10.6 | |
+
+What it settles for S1:
+
+1. **The portable vector types are the 16-byte ones.** On gcc without
+   `-mavx`, an `f64x4` lives in memory -- the dot's accumulators are stored
+   and reloaded every iteration, 2.7x slower than N1 -- and crosses a call in
+   memory too (`-Wpsabi`). clang splits it into registers. `f64x2` matches N1
+   everywhere. S1 should ship `f64x2 f32x4 i32x4 i64x2 u8x16` (+ `u16x8`,
+   below) and treat `f64x4` / `f32x8` as AVX-only or leave them out.
+2. **Every operation must be emitted inline.** With each operation a real
+   call (`-DTUR_SIMD_OUTOFLINE`), every kernel ran 3-7x slower than inlined
+   and slower than the scalar Turmeric loop. The lowering section's "helper
+   calls on both engines" must be always-inlined helpers or C operators on
+   cc, never an out-of-line function or a Turmeric call.
+3. **The case for explicit types is lane width and lane layout, not speed
+   over the auto-vectorizer.** The dot gains nothing over N1. The blend
+   wins 2.3x (gcc) / 7x (clang) over the same scalar C because C promotes
+   `uint8_t` arithmetic to 32 bits -- explicit 16-bit lanes are something
+   only a vector type says. The biquad wins 8-12x over what a Turmeric
+   program writes today, but scalar C written four channels abreast matches
+   it: what Turmeric lacks is a way to hold four independent lanes, which is
+   what an `f32x4` value is.
+4. **Op set, as the kernels used it:** `load`, `store`, `splat`, `lane`,
+   lanewise `add`/`sub`/`mul`, a `u16` `shr`, widening (`u8x16` -> two
+   `u16x8`) and narrowing, and a fixed-order `hsum`. So **S1 needs `u16x8`
+   and the widen/narrow pair**, which the list below did not have. No kernel
+   needed `shuffle`, masks or `select`; keep them, but they are not on the
+   critical path.
+5. **The struct-of-lanes lowering is correct, and slow**: on gcc the dot ran
+   at 3.8 ns/elem (17x the vector form), the blend at scalar speed. Right for
+   `tur jit`'s run-edit-run loop, as planned.
+6. **Two toolchain issues to clear first:** c2mir mis-lexes a `##` operand
+   starting `u8` -- S1's JIT preamble would paste `u8x16`
+   ([c2mir-paste-of-u8-prefixed-token](../reported/c2mir-paste-of-u8-prefixed-token.md));
+   and `tur jit` does not pass a spice's `:c-includes` to c2mir, so an S0
+   kernel runs on the cc fallback under it
+   ([jit-ignores-spice-c-includes](../reported/jit-ignores-spice-c-includes.md)).
+
 ### S1 -- compiler-known vector types (`--enable=simd`)
 
 Types `f64x2`, `f64x4`, `f32x4`, `f32x8`, `i32x4`, `i64x2`, `u8x16`, plus
 mask types from comparisons (`m64x2`, ...; or one mask type per width).
+**Revised by S0 (2026-10-29):** the 16-byte types are the portable set, plus
+`u16x8` and widening/narrowing; `f64x4` / `f32x8` only with AVX, if at all
+(S0, "As built", items 1 and 4).
 
 **Lowering.**
 
