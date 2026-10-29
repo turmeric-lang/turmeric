@@ -1595,6 +1595,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_segmented_stack_seam PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
+# jit-prune-baggage: a JIT'd program carries only the stdlib it reaches -- the
+# constructor aliases, `__tur_any_drop_keep` and `__tur_fatbox_init` no longer
+# keep every stdlib constructor and function value.  SKIPs without the JIT.
+add_test(
+  NAME tur_jit_prune_baggage
+  COMMAND bash tests/check-jit-prune-baggage.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_jit_prune_baggage PROPERTIES TIMEOUT 720)
 # jit-stack-overflow-has-no-message: under `tur jit` a runaway recursion
 # prints the same line as the compiled r7rs path, in every dialect, and a wild
 # pointer does not.  SKIPs on a binary without the JIT engine.

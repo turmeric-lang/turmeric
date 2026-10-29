@@ -16,16 +16,18 @@
 > type drops the defs holding its values (C2, "Point 8 and type redefinition");
 > a panic ends only its turn, a continuation cannot outlive one, and Try
 > Turmeric has compiled turns behind a checkbox under Compile (C2, "The page").
-> **Next: split images (C5, decided 2026-10-29)** -- a definitions image
-> rebuilt when a definition changes, and a small image per expression turn --
-> which is what C2 needs to leave prototype. **Rewritten 2026-09-29.** The 2026-06-28 draft (in
+> Split images (C5) were chosen and then **deferred the same day**: most of a
+> turn's program is not the session's definitions but stdlib baggage every
+> program carried, and the JIT pruner now drops it (C2, "The stdlib baggage,
+> pruned"): a kept turn on the page went from ~394 KB to ~229 KB.
+> **Rewritten 2026-09-29.** The 2026-06-28 draft (in
 > git history) proposed compiling each prompt form with a `cc` subprocess into
 > a `.so` and `dlopen`ing it. It predates the in-process MIR JIT (graduated
 > 0.34.0). The JIT and the spice REPL now provide most of the machinery the
 > draft planned to build, and the draft had design flaws this version fixes
 > (see "Why not the 2026-06-28 draft"). The file name is historical: nothing
 > here is ahead-of-time compiled any more.
-> **Last Updated:** 2026-10-29 (split images chosen: C5)
+> **Last Updated:** 2026-10-29 (stdlib baggage pruned; C5 deferred)
 > **Track:** post-v1. C0 (a bug fix) and C1 (graduated) have landed.
 > **Type:** REPL / interpreter (`src/turi/`) / JIT (`src/jit_engine.c`) /
 > emitter (REPL-mode globals).
@@ -843,19 +845,57 @@ turns, through `tools/wasm-jit/run.js --compiled-turns`:
 - **The rest is the program itself.** Of the 37 functions a turn's program
   holds, 2 ran (`main`, the module's init); most of the others are the
   stdlib's constructors (`Tuple2`..`Tuple8`, `Grid`, `Slice`, `Pair`,
-  `Schema`), address-taken so the pruner keeps them, and identical in every
-  turn. Shrinking that is split images (C5), chosen over option (b),
-  freeing a turn's whole context when it left nothing behind (C5, "Why not
-  (b)").
+  `Schema`), kept by the JIT pruner, and identical in every turn -- and in
+  every `tur jit` program. That is pruned now (below).
 - **The 64 KB eval arena is not C2's.** `turi_eval_impl` gives each turn an
   arena it keeps for the session (the interpreter's provenance rule), and its
   first slab is 64 KB. An interpreted session pays it too; it is mostly
   untouched, so resident memory barely moves (`tur repl`, 1,000 interpreted
   turns: 21 MB).
 
-**Left before C2 can leave prototype:** split images (C5), for the remaining
-~0.3 MB a turn on the page and the ~130-230 ms every turn spends compiling
-the whole session.
+#### The stdlib baggage, pruned (2026-10-29)
+
+Every program the emitter writes carries the whole stdlib prelude, and
+`jit_prune` (`src/compiler/jit_prune.c`) drops what the program does not
+reach before c2mir sees it. Three kinds of root it never questioned kept the
+same ~23 functions in every program: `(println 1)` kept 32 function
+definitions.
+
+- **Constructor aliases.** The emitter writes `#define ctor_Tuple2
+  ctor_Tuple2_Tuple2` for every constructor, and a preprocessor line was a
+  root, so every stdlib constructor stayed. A `#define NAME` is now always
+  written but read only once something live names `NAME`.
+- **Keep-alives.** `static void (*__tur_any_drop_keep)(...) = __tur_any_drop;`
+  (there to quiet cc's unused warning) was a root, since the pruner did not
+  read a function-pointer object. It is removable like any static object.
+- **Function values.** `__tur_fatbox_init` fills every file-scope box with
+  `TUR_FATBOX_FILL(box, shim, fn)` -- `((void)0)` where a pointer fills a
+  slot, real stores on wasm32 -- and the box declarations
+  (`TUR_FATBOX_DECL`) were roots; with `#  undef min` in the prefix naming
+  `min`, they kept every stdlib function value, its shim, and `min`/`max`.
+  A fill of a box the TU defines now names nothing (the box's own
+  `TUR_FATBOX_DEF` names its shim and function) and is written only while
+  the box is live; a declaration goes with its definition; conditional,
+  `#undef`, `#include` and `#pragma` lines name nothing.
+
+`(println 1)` now keeps 9 function definitions: `main`, the static-init chain
+and three frame helpers in the runtime prefix (which is all roots by
+design). On the page a kept compiled turn goes from ~394 KB to **~229 KB**
+of heap (54 MB at turn 200, against 138 MB before mir#18 and this). Native
+turn time does not move (~140 ms; the front end and c2mir's parse of the
+runtime declarations dominate there). `tests/run-jit.sh` is unchanged
+(4,034 / 22 already-failing), so no pruned program needed the full-TU retry;
+the browser corpus shards run clean against the baseline, and one fixture
+(`await-in-generic-capturing-lambda-struct`) now passes on the page because
+the C c2mir rejected is no longer in its program.
+`tests/check-jit-prune-baggage.sh` (ctest `tur_jit_prune_baggage`) keeps it
+so.
+
+**Left before C2 can leave prototype:** the latency of a turn, ~140 ms
+natively and ~130 ms on the page, most of it re-elaborating the stdlib and
+the session (C4 item 1) and c2mir parsing the runtime's declarations. Split
+images (C5) are deferred until a measured large session shows its own
+definitions dominating.
 
 #### Investigation (2026-10-02)
 
@@ -1037,7 +1077,19 @@ Only needed if C2 misses its latency budget. Candidates, safest first:
    the whole-program-facts objection is answered by the multi-module build's
    own pass 1.
 
-### C5 -- split images (decided 2026-10-29)
+### C5 -- split images (chosen and deferred 2026-10-29)
+
+> **Deferred.** The premise below -- that most of a turn's program is the
+> session's definitions -- did not hold: `(println 1)` under `tur jit`
+> carried the same ~23 stdlib functions a turn did, and the pruner already
+> drops definitions a turn does not reach, so a turn image would have carried
+> the same baggage. Pruning that baggage (C2, "The stdlib baggage, pruned")
+> took the memory C5 was for. Probing the module boundary C5 would build on
+> also found two separate-compilation bugs, now reported:
+> [sepcomp-module-def-initializers-never-run](../reported/sepcomp-module-def-initializers-never-run.md)
+> and
+> [sepcomp-exported-global-header-name-mismatch](../reported/sepcomp-exported-global-header-name-mismatch.md).
+> The design stays here for a session whose definitions do dominate.
 
 C2 compiles the whole session every turn: the definition table, the stdlib
 it reaches, and the turn. That is why a turn costs ~130-230 ms and why each
@@ -1148,7 +1200,7 @@ never takes the split shows up.
 | C1 | `repl-jit-inline-c` (graduated; `TUR_REPL_JIT_INLINE_C=0` turns it off) | landed 2026-10-02; beta 2026-10-04; graduated 2026-10-17 | `tests/turi/repl-jit-inline-c.sh` (ctest `tur_repl_jit_inline_c`, `TUR_JIT` builds): the off switch, the old `--enable` as a no-op, loop and branch bodies, a hoisted `#include`, float/cstr/bool signatures, a cached second call, redefinition dropping the cache, refusal of a body that calls a Turmeric function and of a struct parameter, the value boundary, `--interpret`. It probes the binary for the JIT and PASS-skips without it. `tests/run-turi.sh` runs the 52 corpus fixtures that need it (`TURI_INLINEC_JIT_RUN`) |
 | C2 | `compiled-repl` | post-v1 | Transcript diff: run each transcript in a corpus through the interpreted and the compiled REPL and fail on any difference, as the engine triangle does. See the corpus list below. Latency: a new `benchmarks/repl-turn/` |
 | C3, C4 | as C2 | after C2 | as needed |
-| C5 | as C2 | next (decided 2026-10-29) | S1-S5 under C5: the C2 transcript corpus through the split, plus a later-turn generic at a new type and an ownership-changing call site |
+| C5 | as C2 | deferred (2026-10-29) | S1-S5 under C5: the C2 transcript corpus through the split, plus a later-turn generic at a new type and an ownership-changing call site |
 
 The C2 transcript corpus covers:
 

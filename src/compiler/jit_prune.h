@@ -12,12 +12,21 @@
  * produces: [hoisted prefix][committed decls region][program half]) in place:
  *
  *   1. In the program half, a `static` function definition or prototype, a
- *      `static` object, a TUR_FATBOX_DEF, or an `extern` declaration is kept
- *      only when something live names it.  Everything else -- the prefix,
- *      the decls region, and every program-half entity that is not one of
- *      those kinds (macros, typedefs, type and non-static definitions) -- is
- *      a root.
- *      Identifiers are read outside comments and literals.
+ *      `static` object (a function-pointer one included), a TUR_FATBOX_DEF
+ *      or TUR_FATBOX_DECL, or an `extern` declaration is kept only when
+ *      something live names it.  A `#define NAME` line is always written,
+ *      but its body names anything only once NAME is named.  Everything else
+ *      -- the prefix, the decls region, and every program-half entity that
+ *      is not one of those kinds (typedefs, type and non-static definitions,
+ *      other preprocessor lines) -- is a root.
+ *      Identifiers are read outside comments and literals, and not on a
+ *      conditional, `#undef`, `#include` or `#pragma` line, which name
+ *      macros rather than use anything.  A TUR_FATBOX_FILL of a box this
+ *      TU defines names nothing (the box's definition names its shim and
+ *      function), and is written only while the box is live.  So the
+ *      constructor aliases, `__tur_any_drop_keep` and `__tur_fatbox_init`
+ *      no longer keep every stdlib constructor and function value in every
+ *      program: `(println 1)` keeps 9 function definitions, not 32.
  *   2. A handful of heavy system includes in the decls region is dropped when
  *      no identifier they declare survives in the program's own text.  A
  *      dropped "hamt.h" leaves its own system includes behind, so the TU's
