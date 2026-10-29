@@ -1,0 +1,42 @@
+;; closure-borrowed-drop-capture-not-dropped: a closure that captures a
+;; `^borrow` parameter of a move-only Drop type (a `defopaque ^affine` with a
+;; Drop instance -- a numvec array, httpd's Handler) borrows it too.  The
+;; closure's drop glue used to release every Drop capture, so each call of
+;; `via-borrow` freed the caller's value: one object, three frees.  An OWNED
+;; capture is still moved in and released by the closure exactly once.
+;; Counters, not LeakSanitizer: live 0 after each part, 2 made, 2 freed.
+;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
+(defn ctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (ctr 0) (:: 1 Widget))
+(defn rel [w : Widget] : void (ctr 1) (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn peek [^borrow w : Widget] : int 1)
+(defn call0 [f : (fn [] int)] : int (f))
+(defn live [] : nil (println (- (ctr 2) (ctr 3))))
+
+;; borrowed capture: the caller keeps ownership
+(defn via-borrow [^borrow w : Widget] : int
+  (call0 (fn [] : int (peek w))))
+
+;; owned capture: the closure takes it over
+(defn owned [] : int
+  (let [a (mk)]
+    (call0 (fn [] : int (peek a)))))
+
+(defn main [] : int
+  (let [a (mk)]
+    (println (via-borrow a))
+    (println (via-borrow a))
+    (println (peek a)))
+  (live)
+  (println (owned)) (live)
+  (println (ctr 2)) (println (ctr 3))
+  0)

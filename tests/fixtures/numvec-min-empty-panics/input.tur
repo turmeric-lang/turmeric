@@ -1,0 +1,11 @@
+;; numvec-min-empty-panics: an empty array has no smallest element, so
+;; `-min` panics (at the caller's line) rather than inventing one.
+(load "stdlib/numvec.tur")
+
+(defn main [] : int
+  (let [a (i32vec-of (as int32 4) (as int32 -6))
+        e (i32vec-new 0 (as int32 0))]
+    (println (i32vec-min a))
+    (println (i32vec-min e))
+    (println "unreachable")
+    0))

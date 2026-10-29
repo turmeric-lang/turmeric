@@ -33,7 +33,7 @@ implemented in `tools/genguides.py` (the docs) and `web/editor-language.js` (Mon
     see the table below), so these names need nothing of them beyond the
     fixes below; once a pack splits modifiers from kinds, the new names belong
     on the modifier side. See
-    [caret-type-attributes-plan](../upcoming/caret-type-attributes-plan.md).
+    [caret-type-attributes-plan](../archive/caret-type-attributes-plan.md).
 - **A type is one token, generic arguments included** (`type`, the same violet
   as `kind`): `:int`, `:ptr<void>`, `:option<ptr<int>>`, a bare `ptr<void>` as in
   `(fn [ptr<void>] nil)`, and the spaced `name : cstr` / `] : void`. Not `ptr`

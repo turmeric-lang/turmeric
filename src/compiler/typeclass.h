@@ -55,6 +55,11 @@ struct TypeClassMethod {
      * first dynamic dispatch that needs it, and never built when no parameter
      * carries a refinement. */
     struct Binding *refine_class_binding;
+    /* Bit j: the class signature writes the j-th parameter `^borrow`, so a
+     * call reads that argument without spending it (elab_method_call; the
+     * instance's own parameter inherits the flag).  Parameters past 31 never
+     * borrow. */
+    uint32_t borrow_param_mask;
     uint8_t n_params;
     Type return_type;             /* Return type (contract PEELED to its base) */
     /* RT1: the refinement the CLASS signature declares on the method's RESULT,

@@ -164,8 +164,8 @@ jobs:
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit 0
 
-      # The trend rows for the FULL arm64 runs, published to the ci-metrics
-      # branch by the `publish-timings` job below.  No --shard and no
+      # The trend rows for the FULL arm64 runs, reported to /ci by the
+      # `publish-timings` job below.  No --shard and no
       # --suite-shard, so these rows are null/null -- the unsharded series,
       # directly comparable to every row written before sharding existed, and
       # disjoint from the PR leg's macOS rows for the same suites (those carry
@@ -272,13 +272,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # Append the nightly's rows to the ci-metrics branch, the same way ci.yml's
+  # Report the nightly's rows to /ci, the same way ci.yml's
   # `publish-timings` job does for a main push.  ci.yml's publisher only sees
   # its own run's artifacts, so without this the full-matrix arm64 durations
   # were retrievable per run and plotted nowhere
   # (docs/archive/nightly-arm64-timings-not-on-ci-metrics.md).
   #
-  # A separate ubuntu job rather than a step in `suites`: the write token stays
+  # A separate ubuntu job rather than a step in `suites`: the report token stays
   # off the macOS job, and this needs no build.  always(): a red nightly's
   # timings are the interesting ones.  main only: a workflow_dispatch from a
   # branch measures that branch, and the trend is main's.
@@ -287,20 +287,14 @@ jobs:
     needs: [suites, bench]
     if: always() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     # Concurrency groups are repository-wide, so this shares ci.yml's
-    # publisher lock and the two never race for the branch tip (the script
-    # also re-fetches and retries on a rejected push).
+    # publisher lock, which keeps the store's ingest ids in run order.
     concurrency:
       group: ci-metrics
       cancel-in-progress: false
     steps:
-      # Full history: the publish script pushes a branch, and a shallow clone
-      # can have a push rejected with "shallow update not allowed".
+      # Only for tools/ci/report-metrics.py; nothing here reads history.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
 
       # continue-on-error: a `suites` job that died before its upload leaves
       # no artifact, and the step below then says so as a warning.
@@ -316,9 +310,9 @@ jobs:
           name: nightly-bench-${{ github.run_id }}
           path: bench-artifact
 
-      # One commit for both: publish-timings.sh takes the bench rows with
-      # --bench, and publishes them even on a night the suites left no rows.
-      - name: Publish
+      # One report for both: the bench rows go in even on a night the suites
+      # left no rows. This step only says which half is missing.
+      - name: Check what there is to report
         run: |
           set -euo pipefail
           t=nightly-artifact/timings.jsonl
@@ -338,13 +332,3 @@ jobs:
         env:
           CI_METRICS_TOKEN: ${{ secrets.CI_METRICS_TOKEN }}
         run: python3 tools/ci/report-metrics.py nightly-artifact/timings.jsonl --bench bench-artifact/bench.jsonl
-
-      # Kept until the plan's retirement phase; independent of the step above.
-      - name: Append to the ci-metrics branch
-        if: always()
-        run: |
-          set -euo pipefail
-          t=nightly-artifact/timings.jsonl
-          b=bench-artifact/bench.jsonl
-          if [ ! -s "$t" ] && [ ! -s "$b" ]; then exit 0; fi
-          bash tools/ci/publish-timings.sh "$t" --bench "$b"

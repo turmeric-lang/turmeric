@@ -324,8 +324,8 @@ too flaky to gate on. But collapsing *consecutive* failures gives only 10
 episodes, two of them 21 and 7 commits long: standing bugs, which fail every
 run until fixed and then stop. Isolated single-commit failures, the actual
 flake signal, were 6 of 266 (2.3%). Before arguing a suite is too flaky to
-gate, separate the two -- the query is one pass over
-`suite-timings-<year>.jsonl` on the `ci-metrics` branch. Residual flake at that
+gate, separate the two -- the query is one pass over the suite's rows in
+`suite_run`, the D1 table behind `/ci` (`web/ci-api.js`). Residual flake at that
 level is then damped by `retries` in `web/playwright.config.js` (2 on CI, 0
 locally so a freshly written flaky test fails in front of its author).
 

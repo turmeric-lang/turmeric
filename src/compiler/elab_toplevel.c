@@ -46,10 +46,46 @@ Expr *elab_as_cast(Elab *e, const Form *call) {
     Expr *inner = elab_form(e, expr_form);
     if (!inner) return NULL;
 
+    /* numcast-as-fallback: `as` is decided here, where a generic's operand of
+     * type `A` (or `(Elem V)`) has no numeric type to cast from.  Under a
+     * `(NumCast A)` constraint it reads as the class's conversion instead,
+     * resolved per instantiation the way `{x + y}` reads as `Num`'s `add`:
+     * `float` -> `(to-float x)`, `int` -> `(to-int x)`, and a narrower target
+     * casts that result as usual.  The operand form is elaborated again inside
+     * the method call, as the operator fallback's is -- harmless for the
+     * numeric values a `NumCast` type holds. */
+    if (inner->type.kind == TY_TYVAR && inner->type.as.tyvar_.name) {
+        TypeClass *nc = typeclass_env_lookup_typeclass(
+            &e->typeclass_env, symtab_intern(e->st, strslice("NumCast", 7)));
+        if (nc && elab_tyvar_constrained_by(e, nc, &inner->type)) {
+            bool to_float = target_kind == TY_FLOAT || target_kind == TY_FLOAT64 ||
+                            target_kind == TY_FLOAT32;
+            const char *m = to_float ? ".to-float" : ".to-int";
+            Form **mi = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+            mi[0] = form_sym(e->arena, call->as.list.items[0]->span,
+                             symtab_intern(e->st, strslice(m, (uint32_t)strlen(m))));
+            mi[1] = expr_form;
+            Form *conv = form_list(e->arena, call->span, mi, 2);
+            if (target_kind == TY_FLOAT || target_kind == TY_FLOAT64 ||
+                target_kind == TY_INT || target_kind == TY_INT64)
+                return elab_form(e, conv);
+            Form **ci = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+            ci[0] = call->as.list.items[0];
+            ci[1] = type_form;
+            ci[2] = conv;
+            return elab_form(e, form_list(e->arena, call->span, ci, 3));
+        }
+    }
+
     if (!typekind_is_numeric(inner->type.kind)) {
         diag_emit(DIAG_ERROR, expr_form->span,
                   "cannot cast non-numeric type '%s' with 'as'",
                   type_name(inner->type));
+        if (inner->type.kind == TY_TYVAR && inner->type.as.tyvar_.name)
+            diag_emit(DIAG_NOTE, expr_form->span,
+                      "on a type variable, 'as' needs a (NumCast %s) constraint "
+                      "on the generic (stdlib/typeclass.tur)",
+                      inner->type.as.tyvar_.name);
         return NULL;
     }
 

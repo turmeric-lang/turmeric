@@ -1116,6 +1116,12 @@ void emit_region_shutdown_atexit(Buf *out, int indent);
 void emit_region_note_lvalue(Buf *body, int indent, const char *ctype, const char *lv);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
+/* generic-let-of-assoc-float-truncated: does `t` still mention a named type
+ * variable; and the associated type `assoc` the program's instance at the
+ * ground type `arg` binds (false when `arg` is not ground or none binds it). */
+bool emit_type_mentions_named_tyvar(const Type *t);
+bool emit_assoc_projection_reduce(const Expr *program, const Symbol *assoc,
+                                  const Type *arg, Type *out);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);
 /* fn-typed-return: typedef name for a concrete thin function-value return type,
  * or NULL when the return is not such a fn / is a dict-dispatched method impl

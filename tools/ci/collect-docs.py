@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Count open plans and reports, split by status, as one JSON row.
 
-Published to the `ci-metrics` orphan branch alongside the suite timings and
-line counts (see tools/ci/publish-timings.sh) and charted by /ci.  One row per
+Reported to the /ci store alongside the suite timings and line counts (see
+tools/ci/report-metrics.py) and charted by /ci.  One row per
 push to `main`, NOT one per matrix leg: a doc count is a property of the
 commit, so like collect-loc.py it has no (os, cc, nproc) dimension.
 

@@ -4044,6 +4044,10 @@ static void *emit_abi_type_scratch(Arena *arena, size_t size) {
     return p;
 }
 
+/* The program being emitted, for emit_abi_instantiate_type's projection
+ * reduction (its 48 callers carry no EmitCtx).  Set with ctx.program_root. */
+static const Expr *s_abi_program_root;
+
 static Type emit_abi_instantiate_type(const Type *t,
                                       const AbiTypeBinding *bindings, uint8_t n_bindings,
                                       Arena *arena) {
@@ -4054,6 +4058,17 @@ static Type emit_abi_instantiate_type(const Type *t,
             if (t->as.tyvar_.name &&
                 emit_abi_find_type_binding(bindings, n_bindings, t->as.tyvar_.name, &idx)) {
                 return bindings[idx].type;
+            }
+            /* generic-let-of-assoc-float-truncated: an unbound projection
+             * whose argument these bindings ground is the instance's answer
+             * (emit_assoc_projection_reduce). */
+            if (t->as.tyvar_.assoc_of && t->as.tyvar_.assoc_arg) {
+                Type a = emit_abi_instantiate_type(t->as.tyvar_.assoc_arg,
+                                                   bindings, n_bindings, arena);
+                Type reduced;
+                if (emit_assoc_projection_reduce(s_abi_program_root,
+                                                 t->as.tyvar_.assoc_of, &a, &reduced))
+                    return reduced;
             }
             return *t;
         }
@@ -21229,6 +21244,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     ctx.file = &file;
     ctx.main_ = &body;
     ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
+    s_abi_program_root = program;
     ctx.thunk_typedefs = &thunk_typedefs;
     ctx.fatbox_init = &fatbox_init;
     ctx.fatbox_defs = &fatbox_defs;
@@ -24262,6 +24278,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     ctx.file = &file;
     ctx.main_ = &body;
     ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
+    s_abi_program_root = program;
     ctx.thunk_typedefs = &thunk_typedefs2;
     ctx.fatbox_init = &fatbox_init2;
     ctx.fatbox_defs = &fatbox_defs2;

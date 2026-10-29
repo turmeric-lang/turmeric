@@ -1,9 +1,12 @@
 # `spices/lmdb`: LMDB bindings, an embedded key-value store
 
-> **Status:** L0-L4 implemented 2026-10-25 on branch `lmdb-spice` in both
-> repos (section 11 records what landed and where it departs from the
-> draft). **Open: section 7's Windows assessment**, which needs a Windows box
-> and is the one thing between this plan and the archive.
+> **Status:** DONE, archived 2026-10-29. L0-L4 implemented 2026-10-25 and
+> merged in both repos (turmeric #1376, turmeric-spices #117); section 11
+> records what landed and where it departs from the draft. Section 7's
+> Windows assessment, which needs a Windows box, has not been run; it is
+> tracked in
+> [windows-remaining-plan](../upcoming/windows-remaining-plan.md#lmdb-spice----windows-assessment)
+> and still uses the probe and results table in section 7 here.
 > **Track:** post-v1 -- nothing on the v1 line depends on it.
 > **Type:** spice (in `../turmeric-spices/`). The draft expected no compiler
 > change; building it found six compiler defects, fixed on turmeric's

@@ -17,8 +17,8 @@ front end), build_ms (`tur build`, the front end plus cc) and binary_bytes.
 Times are the best of the run's reps; `cv` is check_reproducibility.py's
 coefficient of variation over those reps, and `noisy` marks a row above 10%.
 
-Tripwires, not gates: with --history (earlier rows, e.g. the ci-metrics
-branch's bench-<year>.jsonl), a row more than 1.5x the trailing median of its
+Tripwires, not gates: with --history (earlier rows, e.g. the nightly's
+`/api/ci/bench?format=ndjson&days=60`), a row more than 1.5x the trailing median of its
 own last nights on the same runner shape prints a `::warning::` -- unless the
 row is noisy, which prints a `::notice::` instead. Fewer than three earlier
 nights: no bound yet. The exit status is always 0.

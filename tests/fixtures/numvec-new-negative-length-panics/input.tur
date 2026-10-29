@@ -1,0 +1,14 @@
+;; numvec-new-negative-length-panics: a negative length is refused with a
+;; panic rather than wrapping into a huge allocation under a recorded length
+;; (the bug class security-audit WP5 closed for sized-buf-new).  `f64vec-new`
+;; is an inline-C body itself, not a wrapper over one, so the panic names the
+;; caller's line on every engine.
+(load "stdlib/numvec.tur")
+
+(defn main [] : int
+  (let [ok (i32vec-new 0 (as int32 5))]
+    (println (i32vec-len ok)))
+  (let [a (f64vec-new -3 7.1)]
+    (println "unreachable")
+    (println (f64vec-len a))
+    0))

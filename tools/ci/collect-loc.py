@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Count tracked lines of code, split product / test / generated, as one JSON row.
 
-Published to the `ci-metrics` orphan branch alongside the suite timings (see
-tools/ci/publish-timings.sh) and charted by /ci.  One row per push to `main`,
+Reported to the /ci store alongside the suite timings (see
+tools/ci/report-metrics.py) and charted by /ci.  One row per push to `main`,
 NOT one per matrix leg: a line count is a property of the commit, so unlike a
 suite duration it has no (os, cc, nproc) dimension and must not be published
 once per runner.

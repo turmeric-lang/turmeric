@@ -2,11 +2,10 @@
 //
 // Same shape as csp.js: one source, several places it is applied. Everything
 // on the web side that names the repo derives from GH_REPO -- site.js's nav
-// and link-title entries, the /ci dashboard's commit permalinks, and both the
-// installer's REPO and the ci-metrics raw base in worker.js. A repo transfer
-// (personal account -> org) is then a one-line change here instead of a sweep
-// across four files, two of which are template strings where a missed `$`
-// escape fails silently.
+// and link-title entries, the /ci dashboard's commit permalinks, and the
+// installer's REPO in worker.js. A repo transfer (personal account -> org) is
+// then a one-line change here instead of a sweep across several files, one of
+// them a template string where a missed `$` escape fails silently.
 //
 // Deliberately a literal rather than an env var: these strings are baked into
 // a static build and served to browsers, so a mistyped or unset variable would

@@ -1,0 +1,2 @@
+cannot cast non-numeric type 'tyvar' with 'as'
+needs a (NumCast A) constraint

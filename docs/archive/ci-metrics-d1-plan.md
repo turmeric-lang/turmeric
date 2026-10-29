@@ -1,17 +1,18 @@
 # CI Metrics in D1 -- CI reports to the Worker, /ci reads chart-ready data
 
-> **Status: PHASES 1-3 IMPLEMENTED (2026-10-23), in one PR (#1355) at the
-> owner's request; live once that PR is merged and the site deployed. Phase 4
-> (retirement) is open.** Replaces the `ci-metrics` orphan branch as the store
-> behind /ci. The prerequisites are done: database `ci-metrics`
-> (`b25ff4cf-0e0c-4233-b79a-b15147fa4a6e`) exists with the schema applied, and
-> `CI_METRICS_TOKEN` is set as a Worker secret and a repository secret. The
-> history through 2026-10-23 22:25 UTC is already in it (see "Backfill"). The
-> owner has signed off on everything this gives up (git history of the data,
-> the year files, raw-row access via GitHub): none of it is kept or replaced.
-> The account is on the Workers Paid plan (confirmed 2026-10-23), so responses
-> are computed on a cache miss. What implementation changed from this draft is
-> in "As built", at the end.
+> **Status: DONE, archived 2026-10-29.** Phases 1-3 shipped 2026-10-23 in
+> #1355; phase 4 (retirement) on 2026-10-29, after the store had run in
+> production since its deploy (0.70.4, 2026-10-24), with every main push and
+> nightly reporting to it (ingest 70 by then). D1 is now the only store behind /ci: nothing writes the
+> `ci-metrics` orphan branch any more, and the Worker no longer proxies it.
+> One step is left to the owner, since sessions cannot delete remote
+> branches: delete the `ci-metrics` branch (after the optional last backfill
+> top-up under "Retirement as built"). Database `ci-metrics`
+> (`b25ff4cf-0e0c-4233-b79a-b15147fa4a6e`); `CI_METRICS_TOKEN` is a Worker
+> secret and a repository secret. The owner signed off on everything this
+> gives up (git history of the data, the year files, raw-row access via
+> GitHub): none of it is kept or replaced. What implementation changed from
+> this draft is in "As built" and "Retirement as built", at the end.
 
 ## Why
 
@@ -439,3 +440,44 @@ What implementation measured or changed relative to the draft above.
   "rows with the environment's newest `ts`". Each CI job stamps its own `ts`,
   so that is often one job's handful of suites, not the whole run. It was
   already so, and it is unchanged here.
+
+## Retirement as built (2026-10-29)
+
+- **Checked first.** Both writers had reported cleanly since the deploy: the
+  main push of 2026-10-29 01:36 UTC logged `ingest 70: 233 suite, 1 loc,
+  1 docs, 0 bench row(s)`, and the nightly arm64 run of 2026-10-28 passed its
+  "Report to the /ci store" step.
+- **The writers.** `tools/ci/publish-timings.sh` is deleted, and so are the
+  "Append to the ci-metrics branch" steps in `ci.yml` and `nightly-arm64.yml`.
+  Neither publish job asks for `contents: write` any more, so no job in
+  either workflow has more than a read token. The nightly's publish job
+  checks out shallow. **ci.yml's keeps `fetch-depth: 0`**, contrary to the
+  CI-changes list above: `collect-docs.py` walks main's first parents for
+  `reports_filed` / `reports_archived`, which are null in a shallow clone.
+  Both jobs keep `group: ci-metrics`, which orders the ingest ids.
+- **The Worker.** `TIMINGS_BASE`, `proxyMetricsNDJSON`, `proxyMetricsFile`
+  and the `/api/ci-timings`, `/api/ci-loc`, `/api/ci-docs` and
+  `/api/ci-bench` routes are deleted. Nothing on the page called them since
+  phase 3.
+- **Tests.** The four "worker proxies ..." tests in `web/tests/ci.spec.js`
+  are deleted rather than rewritten: the D1 round trips they were to become
+  already exist in `web/tests/ci-api.spec.js` (timings, loc, docs and bench,
+  idempotency, auth, versioning). They also asserted on live production rows
+  (line counts over 10k, plan buckets summing to `open_plans`); that check of
+  the collectors' output against the real tree goes with them.
+- **Docs.** The branch is no longer named as a live store in the collectors'
+  docstrings, `bench-rows.py`, `benchmarks/audit/tracked.txt`, `web/repo.js`,
+  `web/csp.js`, `web/ci/index.html`, the two Playwright files, the
+  `ci.yml` / `nightly-arm64.yml` comments, `web/README.md`, the
+  test-suite-portability guide and the performance guide. Historical mentions
+  (CHANGELOG entries, archived and open reports quoting measurements taken off
+  the branch) are left as written.
+- **Kept:** `report-metrics.py --backfill`. Pushes that landed between the
+  first backfill (2026-10-23 22:25 UTC) and the deploy reached only the
+  branch, and "As built" asks for one idempotent top-up from a fresh checkout
+  of it after deploying. If that was not run, run it once before deleting the
+  branch:
+  `git clone --branch ci-metrics --single-branch --depth 1
+  https://github.com/turmeric-lang/turmeric /tmp/cim`, then
+  `CI_METRICS_TOKEN=... python3 tools/ci/report-metrics.py --backfill /tmp/cim`.
+- **Left to the owner:** delete the `ci-metrics` branch.

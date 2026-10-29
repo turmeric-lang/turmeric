@@ -1919,8 +1919,27 @@ static bool ng_ground_nullary_arg(Elab *e, Expr *arg, const Type *expected_full,
     return true;
 }
 
+/* A ground scalar: a number, a bool or a string -- a value no type variable
+ * of the enclosing signature may silently stand for. */
+static bool call_type_is_ground_scalar(Type t) {
+    return typekind_is_numeric(t.kind) || t.kind == TY_BOOL || t.kind == TY_CSTR;
+}
+
+/* Nesting depth of call_collect_type_bindings: 1 while matching an argument's
+ * own type against its parameter's, more inside an application or a function
+ * type.  The caller-rigid scalar check below is an argument-level one. */
+static int g_collect_depth;
+static bool call_collect_type_bindings_inner(const Type *expected, Type actual,
+                                             CallTypeBinding *bindings, uint8_t *n_bindings);
 static bool call_collect_type_bindings(const Type *expected, Type actual,
                                        CallTypeBinding *bindings, uint8_t *n_bindings) {
+    g_collect_depth++;
+    bool ok = call_collect_type_bindings_inner(expected, actual, bindings, n_bindings);
+    g_collect_depth--;
+    return ok;
+}
+static bool call_collect_type_bindings_inner(const Type *expected, Type actual,
+                                             CallTypeBinding *bindings, uint8_t *n_bindings) {
     if (!expected) return true;
     switch (expected->kind) {
         case TY_REF_IMMUT: case TY_REF_MUT: {
@@ -2040,9 +2059,23 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                  * the gap-1 lambda-after-typed-args shape without the
                  * hamt-delete-regressing binding loss that the reverted
                  * skip-and-upgrade attempt caused. */
+                /* literal-at-associated-type-unchecked: not when the binding is
+                 * the ENCLOSING signature's own variable and the actual is a
+                 * ground scalar.  The names coincide only by accident --
+                 * `(second x 1.5)` with `second [A]` called from inside another
+                 * `[A]` -- and with any other spelling of the callee's variable
+                 * it is "expected A, got float".  Accepting it handed 1.5's bits
+                 * back as the int instantiation's A (4609434218613702656 on cc,
+                 * 1.5 on turi). */
+                bool caller_rigid_vs_scalar =
+                    g_collect_depth == 1 && bindings[idx].type.kind == TY_TYVAR &&
+                    g_call_cb_elab && bindings[idx].type.as.tyvar_.name &&
+                    !bindings[idx].type.as.tyvar_.open_slot &&
+                    ng_tyvar_in_sig(g_call_cb_elab, bindings[idx].type.as.tyvar_.name) &&
+                    call_type_is_ground_scalar(actual);
                 if (bindings[idx].type.kind == TY_TYVAR &&
                     bindings[idx].type.as.tyvar_.name == expected->as.tyvar_.name &&
-                    actual.kind != TY_TYVAR) {
+                    actual.kind != TY_TYVAR && !caller_rigid_vs_scalar) {
                     return true;
                 }
                 /* generic-map-assoc-rejects-sig-tyvar-value: the same
@@ -3012,6 +3045,64 @@ static Binding *hoist_fresh_closure(Elab *e, Expr **slot, Span span, HoistList *
     return cb;
 }
 
+/* A scalar result cannot point into a borrowed argument, so the argument may
+ * die as soon as the call returns. */
+static bool type_kind_is_plain_scalar(TypeKind k) {
+    switch (k) {
+    case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT:
+    case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+    case TY_FLOAT32: case TY_FLOAT64:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* Evaluating it has no effect, so a later argument may be hoisted past it. */
+static bool arg_is_effect_free(const Expr *a) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    if (!a) return true;
+    switch (a->kind) {
+    case EX_VAR: case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* borrowed-temporary-never-dropped: a fresh move-only Drop value (a
+ * `defopaque ^affine` with a Drop instance -- stdlib/numvec.tur's arrays,
+ * httpd's Handler) passed straight to a `^borrow` parameter has no owner: the
+ * callee only borrows it and no binding holds it, so `(f64vec-len (f64vec-new
+ * 4 0.0))` leaked the array.  Bind it to a `__borrowd` temp and release it
+ * after the call -- but only where that is plainly safe: the call's result is
+ * a scalar (so it cannot point into the temp), and every argument before it is
+ * effect-free (so hoisting it does not reorder evaluation).  Anything else
+ * keeps the old behaviour, a leak rather than a dangling borrow. */
+static Binding *hoist_borrowed_drop_temp(Elab *e, Expr **slot, Span span,
+                                         HoistList *hl) {
+    Expr *a = *slot;
+    char nm[48];
+    snprintf(nm, sizeof nm, "__borrowd_%u", elab_fresh_id(e));
+    const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+    Binding *tb = binding_new(e, sym, a->type, false, false, span);
+    if (hl->n == hl->cap) {
+        uint32_t nc = hl->cap ? hl->cap * 2 : 4;
+        LetBinding *nv = (LetBinding *)arena_alloc(e->arena, nc * sizeof(LetBinding));
+        if (hl->n) memcpy(nv, hl->v, hl->n * sizeof(LetBinding));
+        hl->v = nv; hl->cap = nc;
+    }
+    hl->v[hl->n].binding = tb;
+    hl->v[hl->n].init = a;
+    hl->n++;
+    Expr *v = expr_new(e->arena, EX_VAR, a->type, span);
+    v->as.var.binding = tb;
+    *slot = v;
+    return tb;
+}
+
 static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     if (!call || call->kind != EX_CALL) return call;
     const Binding *fb = call->as.call_.fn_binding;
@@ -3019,18 +3110,47 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     Expr **args = call->as.call_.args;
     uint32_t n_args = call->as.call_.n_args;
     HoistList hl = { NULL, 0, 0 };
+    /* the borrowed Drop temps and their instances, released after the call */
+    Binding *drop_tmp[8];
+    struct TypeClassInstance *drop_inst[8];
+    uint32_t n_drop = 0;
+    bool prefix_effect_free = true;
+    bool scalar_result = type_kind_is_plain_scalar(call->type.kind);
     for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
         Expr **slot = &args[i];
         HOIST_PEEL_SLOT(slot);
-        if (!arg_is_freeable_closure_source(fb, i, *slot))
-            continue;
-        (void)hoist_fresh_closure(e, slot, span, &hl);
+        if (arg_is_freeable_closure_source(fb, i, *slot)) {
+            (void)hoist_fresh_closure(e, slot, span, &hl);
+        } else if (scalar_result && prefix_effect_free && n_drop < 8 &&
+                   FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW)) {
+            struct TypeClassInstance *di =
+                elab_fresh_sole_owner_drop_inst(e, &(*slot)->type, *slot);
+            if (di) {
+                drop_tmp[n_drop] = hoist_borrowed_drop_temp(e, slot, span, &hl);
+                drop_inst[n_drop++] = di;
+            }
+        }
+        if (!arg_is_effect_free(args[i])) prefix_effect_free = false;
     }
     if (hl.n == 0) return call;
+    Expr *body = call;
+    if (n_drop > 0) {
+        /* The drop glue trails the call, as elab_let places it: the block's
+         * value is the call's, and the defers fire as it closes. */
+        body = expr_new(e->arena, EX_DO, call->type, span);
+        body->as.do_.n = 1 + n_drop;
+        body->as.do_.items = (Expr **)arena_alloc(e->arena,
+                                                  (1 + n_drop) * sizeof(Expr *));
+        body->as.do_.items[0] = call;
+        for (uint32_t k = 0; k < n_drop; k++)
+            body->as.do_.items[1 + k] =
+                elab_drop_glue_defer(e, drop_tmp[k], drop_inst[k], span);
+        body->as.do_.tail_drop_hoist = false;
+    }
     Expr *let = expr_new(e->arena, EX_LET, call->type, span);
     let->as.let_.bindings = hl.v;
     let->as.let_.n = hl.n;
-    let->as.let_.body = call;
+    let->as.let_.body = body;
     return let;
 }
 #undef HOIST_PEEL_SLOT
@@ -4302,18 +4422,62 @@ static bool elab_num_instance_matches(Elab *e, const TypeClass *num,
  * Returns NULL (having consumed nothing) when the call is not arithmetic, no
  * `Num` class is in scope, or no instance dispatches on the receiver -- the
  * caller then proceeds to its usual operator-lookup-failed diagnostic. */
+/* operator-on-constrained-tyvar-refused: does the enclosing generic constrain
+ * the abstract type `t` -- its own variable `A`, or a projection over one,
+ * `(Elem V)` -- by `cls` (or a class that entails it)?  Matched by the
+ * constraint's variable name, which for a projection is its printed form. */
+bool elab_tyvar_constrained_by(Elab *e, const TypeClass *cls, const Type *t) {
+    if (!cls || !t || t->kind != TY_TYVAR || !t->as.tyvar_.name) return false;
+    for (uint8_t ci = 0; ci < e->cur_fn_n_constraints; ci++) {
+        const TypeConstraint *con = &e->cur_fn_constraints[ci];
+        if (!con->typeclass || !typeclass_entails(&e->typeclass_env, con->typeclass, cls))
+            continue;
+        if (con->tyvar && con->tyvar->name &&
+            strcmp(con->tyvar->name, t->as.tyvar_.name) == 0)
+            return true;
+        if (con->param_idx < 0 && type_eq(con->type_arg, *t)) return true;
+    }
+    return false;
+}
+
+/* operator-on-constrained-tyvar-refused: map a comparison operator onto the
+ * `Ord` method that implements it, or NULL. */
+static const char *ord_method_for_operator(const Symbol *name, uint32_t n_args) {
+    if (!name || n_args != 2) return NULL;
+    if (name->len == 1 && name->name[0] == '<') return "lt?";
+    if (name->len == 1 && name->name[0] == '>') return "gt?";
+    if (name->len == 2 && memcmp(name->name, "<=", 2) == 0) return "lte?";
+    if (name->len == 2 && memcmp(name->name, ">=", 2) == 0) return "gte?";
+    return NULL;
+}
+
 static Expr *elab_try_num_operator_dispatch(Elab *e, const Form *call,
                                             const Form *head,
                                             const Symbol *name,
                                             const Type *first_t,
                                             uint32_t n_args) {
     const char *method = num_method_for_operator(name, n_args);
-    if (!method) return NULL;
+    const char *cls_name = "Num";
+    if (!method) {
+        /* A comparison reaches here only for an abstract operand: an
+         * instance-matched concrete type has its own rows or `Ord` already. */
+        method = ord_method_for_operator(name, n_args);
+        cls_name = "Ord";
+        if (!method || first_t->kind != TY_TYVAR) return NULL;
+    }
 
     TypeClass *num = typeclass_env_lookup_typeclass(
-        &e->typeclass_env, symtab_intern(e->st, strslice("Num", 3)));
+        &e->typeclass_env, symtab_intern(e->st, strslice(cls_name, (uint32_t)strlen(cls_name))));
     if (!num) return NULL;
-    if (!elab_num_instance_matches(e, num, first_t)) return NULL;
+    /* operator-on-constrained-tyvar-refused: an abstract operand -- the
+     * generic's own variable or a projection over it -- dispatches through
+     * the class when the generic is constrained by it: `{x + y}` under
+     * `(Num (Elem V))`, `(< x y)` under `(Ord A)`.  It used to be refused
+     * ("operator lookup failed ... first arg type tyvar") though `(add x y)`
+     * was accepted. */
+    if (!elab_num_instance_matches(e, num, first_t) &&
+        !elab_tyvar_constrained_by(e, num, first_t))
+        return NULL;
 
     char dotbuf[8];
     int dotlen = snprintf(dotbuf, sizeof(dotbuf), ".%s", method);
@@ -6625,6 +6789,17 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                                 "operator lookup failed for '%s': got %u arg(s), first arg type %s",
                                 name->name, n_args,
                                 n_args > 0 ? type_name(first_t) : "<none>");
+            /* operator-on-constrained-tyvar-refused: on an abstract operand
+             * the operator dispatches through the class once the generic is
+             * constrained by it -- say which. */
+            if (n_args > 0 && first_t.kind == TY_TYVAR && first_t.as.tyvar_.name) {
+                const char *cls = num_method_for_operator(name, n_args) ? "Num"
+                                : ord_method_for_operator(name, n_args) ? "Ord" : NULL;
+                if (cls)
+                    diag_emit(DIAG_NOTE, call->span,
+                              "on a type variable, '%s' needs a (%s %s) constraint "
+                              "on the generic", name->name, cls, first_t.as.tyvar_.name);
+            }
 
             const BuiltinSpec *overloads[32];
             uint32_t n_overloads = builtin_collect_with_name(name, overloads, 32);
@@ -7832,7 +8007,15 @@ static bool call_bind_assoc_projections(Elab *e, const Form *call,
             }
             want = *r;
         } else if (type_eq(a, *P->as.tyvar_.assoc_arg)) {
-            continue;   /* the variable stands for itself (a recursive call) */
+            /* The variable stands for itself -- a recursive call, or a generic
+             * relaying to one whose variable is spelled the same.  Bind the
+             * projection to itself: left unbound, the result's `(Inner A)`
+             * read as a callee variable clashing with the caller's (the
+             * caller's signature names `(Inner A)` too) and was renamed apart
+             * to an open slot, losing the projection -- so the relay's body
+             * typed `int`, not `(Inner A)` (literal-at-associated-type-
+             * unchecked, where the return check now sees that). */
+            want = *P;
         } else if (!elab_assoc_projection(e, P->as.tyvar_.assoc_of, &a, 1, &want)) {
             continue;
         }
@@ -12233,9 +12416,22 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         asc->as.ascribe_.inner = out;
         return asc;
     }
+    /* generic-let-of-assoc-float-truncated: an associated-type projection over
+     * the enclosing signature's variables -- `(Elem U)`, from a generic whose
+     * result is `(Elem V)` called at `V := U` -- is the caller's type exactly
+     * as `U` is, though its own name is not in the signature. */
+    bool result_is_sig_projection = false;
+    if (wrap_generic_result && result_type.kind == TY_TYVAR &&
+        result_type.as.tyvar_.assoc_of && result_type.as.tyvar_.assoc_arg) {
+        const char *pn[16];
+        uint8_t n_pn = 0;
+        call_collect_tyvar_names(result_type.as.tyvar_.assoc_arg, pn, &n_pn, 16);
+        for (uint8_t pi = 0; pi < n_pn && !result_is_sig_projection; pi++)
+            result_is_sig_projection = ng_tyvar_in_sig(e, pn[pi]);
+    }
     if (wrap_generic_result && result_type.kind == TY_TYVAR &&
         result_type.as.tyvar_.name &&
-        ng_tyvar_in_sig(e, result_type.as.tyvar_.name)) {
+        (ng_tyvar_in_sig(e, result_type.as.tyvar_.name) || result_is_sig_projection)) {
         /* generic-call-result-in-generic-collapses-to-int: the result is the
          * ENCLOSING signature's own type variable -- `(vec-get v 0)` inside
          * `(defn first-of [A] [v : (Vec A)] : A ...)`.  The size-keyed wrap
@@ -14287,3 +14483,4 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
     }
     return out;
 }
+

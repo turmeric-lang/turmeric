@@ -1,0 +1,13 @@
+;; numvec-set-out-of-bounds-panics: a narrow-typed setter is an inline-C body
+;; with a `uint8` parameter (TUR-W0037 exempts the stdlib), so its panic names
+;; the caller's line like the others.  A negative index is out of bounds like
+;; a too-large one.
+(load "stdlib/numvec.tur")
+
+(defn main [] : int
+  (let [a (u8vec-new 4 (as uint8 1))]
+    (u8vec-set! a 3 (as uint8 9))
+    (println (u8vec-ref a 3))
+    (u8vec-set! a -1 (as uint8 9))
+    (println "unreachable")
+    0))

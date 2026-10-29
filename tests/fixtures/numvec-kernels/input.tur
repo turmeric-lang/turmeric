@@ -1,0 +1,112 @@
+;; numvec-kernels: the N1 bulk kernels of stdlib/numvec.tur on every element
+;; type.  A float reduction is printed as its value AND its bit pattern, so a
+;; last-bit difference between engines (the eight-lane sum order, an FMA a
+;; compiler fused) fails the fixture instead of hiding behind %g.  The arrays
+;; are 37 long: four full eight-lane passes and a five-element tail, so both
+;; halves of every kernel run.  Floats probe with fractional values.
+(load "stdlib/numvec.tur")
+(load "stdlib/bits.tur")
+(load "stdlib/math.tur")
+
+(defn pf [x : float] : nil
+  (println x)
+  (println (float->bits x)))
+
+(defn f64-part [] : nil
+  (let [a (f64vec-build 37 [i] {(int->float i) * 7.1})
+        b (f64vec-build 37 [i] {3.25 - (int->float i)})]
+    (pf (f64vec-sum a))
+    (pf (f64vec-sum-ordered a))
+    (pf (f64vec-dot a b))
+    (pf (f64vec-min b))
+    (pf (f64vec-max a))
+    (f64vec-axpy! b 0.5 a)
+    (pf (f64vec-sum b))
+    (f64vec-scale! b 1.25)
+    (f64vec-add! b a)
+    (pf (f64vec-sum b))
+    (f64vec-copy! b a)
+    (pf (f64vec-ref b 36))
+    (f64vec-fill! b 7.1)
+    (pf (f64vec-sum b))))
+
+;; NaN propagates through min/max, and the result is the FIRST NaN by index:
+;; two NaNs with different bit patterns, the second in an earlier lane and in
+;; the eight-wide main loop, the first in the tail.  Both infinities and no
+;; NaN: the kernel's NaN detector (a running sum, inf + -inf) fires anyway,
+;; finds no NaN, and the lanes answer.  An empty sum is zero.
+(defn f64-edges [] : nil
+  (let [nan-a (bits->float 9221120237041090561)
+        nan-b (bits->float 9221120237041090562)
+        a     (f64vec-build 13 [i] {7.1 + (int->float i)})
+        e     (f64vec-new 0 0.0)]
+    (f64vec-set! a 3 nan-a)
+    (f64vec-set! a 10 nan-b)
+    (println (float->bits (f64vec-min a)))
+    (println (float->bits (f64vec-max a)))
+    (f64vec-set! a 3 3.25)
+    (println (float->bits (f64vec-min a)))
+    (f64vec-set! a 10 (bits->float 9218868437227405312))
+    (f64vec-set! a 5 (bits->float -4503599627370496))
+    (println (float->bits (f64vec-min a)))
+    (println (float->bits (f64vec-max a)))
+    (pf (f64vec-sum e))))
+
+(defn f32-part [] : nil
+  (let [a (f32vec-build 37 [i] (as float32 {(int->float i) * 7.1}))
+        b (f32vec-build 37 [i] (as float32 {3.25 - (int->float i)}))]
+    (pf (as float (f32vec-sum a)))
+    (pf (as float (f32vec-sum-ordered a)))
+    (pf (as float (f32vec-dot a b)))
+    (pf (as float (f32vec-min b)))
+    (f32vec-axpy! b (:: 0.5 float32) a)
+    (pf (as float (f32vec-max b)))))
+
+(defn i64-part [] : nil
+  (let [a (i64vec-build 37 [i] {i * 1000003})
+        b (i64vec-build 37 [i] {7 - i})]
+    (println (i64vec-sum a))
+    (println (i64vec-dot a b))
+    (println (i64vec-min b))
+    (println (i64vec-max a))
+    (i64vec-axpy! b 3 a)
+    (i64vec-scale! b 2)
+    (println (i64vec-sum b))
+    ;; wraps rather than overflowing into UB
+    (let [w (i64vec-of 9223372036854775807 1)]
+      (println (i64vec-sum w)))))
+
+(defn i32-part [] : nil
+  (let [a (i32vec-build 37 [i] (as int32 {i * 50000000}))
+        b (i32vec-build 37 [i] (as int32 {7 - i}))]
+    ;; every element fits int32 (at most 1.8e9); their sum, 3.33e10, does
+    ;; not, so the sum widens to int
+    (println (i32vec-sum a))
+    (println (i32vec-dot a b))
+    (println (i32vec-min b))
+    (println (i32vec-max a))
+    (i32vec-add! b b)
+    (println (i32vec-sum b))))
+
+(defn u8-part [] : nil
+  (let [a (u8vec-build 37 [i] (as uint8 {i * 7}))]
+    (println (u8vec-sum a))
+    (println (u8vec-min a))
+    (println (u8vec-max a))
+    (u8vec-add! a a)
+    (println (u8vec-sum a))
+    (u8vec-fill! a (as uint8 255))
+    (println (u8vec-sum a)))
+  ;; past 2^24 elements the sum's 32-bit lanes are flushed into the 64-bit
+  ;; total: 255 * 16777300 = 4278211500, more than a uint32 holds
+  (let [big (u8vec-new 16777300 (as uint8 255))]
+    (println (u8vec-sum big))))
+
+(defn main [] : int
+  (f64-part)
+  (f64-edges)
+  (f32-part)
+  (i64-part)
+  (i32-part)
+  (u8-part)
+  0)
