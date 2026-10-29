@@ -9,9 +9,9 @@
 > `curr_c = wide_type` -- so EVERY identifier starting `u8` lexed as `88...`.
 > Ordinary uses agreed with each other, which hid it; stringification, a
 > pasted operand, `-E` output and external symbol names did not (turmeric's
-> own `u8vec_*` functions were `88vec_*` under the JIT).  A regression test,
-> `c-tests/new/u8-prefixed-identifier.c`, is on the fork branch
-> `c2mir-u8-identifier-prefix`.
+> own `u8vec_*` functions were `88vec_*` under the JIT).  Its regression
+> test, `c-tests/new/u8-prefixed-identifier.c`, came in turmeric-lang/mir#20
+> (synced here as d00e8c1), with a fix for narrow and u8 string encoding.
 
 **Severity:** low (a compile error under `tur jit`, which then falls back to
 cc). MIR's C front end (`external/mir/c2mir/c2mir.c`) re-lexes the result of a
