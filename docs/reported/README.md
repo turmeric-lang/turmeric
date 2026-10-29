@@ -39,7 +39,7 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [compiled-repl-inline-c-defn-errors-deferred-to-first-call](compiled-repl-inline-c-defn-errors-deferred-to-first-call.md) | low (REPL diagnostics) | Under `--enable=compiled-repl` the JIT pruner drops a defn no turn has called yet, so its inline C is first compiled -- and rejected -- at its first call, not in the turn that defines it; a one-letter name is kept by an identifier collision, which is the only reason `repl-compiled.sh`'s rejection check sees the error at definition |
-| [repl-show-uses-wrong-instance-for-vec-elements](repl-show-uses-wrong-instance-for-vec-elements.md) | medium-low (REPL display) | At the interpreter prompt a `Vec` of structs with no `Show` shows through another struct's instance (`[P! P!]` for `[(Q 1) (Q 2)]`) or as an address, and a `(def w [1 2 3])` turn prints an address: `Show [Vec]`'s `[(Show A)]` is never checked, and a def turn's display gets the unit-typed def node. `--enable=compiled-repl` prints them right |
+| [vec-literal-option-none-after-some-mistyped](vec-literal-option-none-after-some-mistyped.md) | low (refusal) | `[(some 3) (none)]` is TUR-E0001 (`vec-push!` arg 2: expected `(Option int)`, got `(Option A)`) on every engine; `[(none) (some 3)]` compiles. The later element is not elaborated against the type the earlier one fixed |
 
 ## Found landing simd-and-vectorization-plan N0 (filed 2026-10-28)
 

@@ -1375,6 +1375,16 @@ static TuriValue native_vec_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     int64_t *data = (int64_t *)(intptr_t)v[0];
     return vec_retag_cell(v, (size_t)i, data[i]);
 }
+size_t turi_vec_len(TuriValue vec) {
+    int64_t *v = vec.tag == TURI_INT ? (int64_t *)(intptr_t)vec.as_int : NULL;
+    return v && v[1] > 0 ? (size_t)v[1] : 0;
+}
+TuriValue turi_vec_elem(TuriValue vec, size_t i) {
+    int64_t *v = vec.tag == TURI_INT ? (int64_t *)(intptr_t)vec.as_int : NULL;
+    if (!v || i >= turi_vec_len(vec)) return turi_nil();
+    int64_t *data = (int64_t *)(intptr_t)v[0];
+    return vec_retag_cell(v, i, data[i]);
+}
 static TuriValue native_vec_push(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2) return turi_nil();

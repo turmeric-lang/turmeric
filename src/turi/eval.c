@@ -77,6 +77,7 @@
  * CMake adds src/ to the include path so these resolve correctly. */
 #include "arena.h"
 #include "buf.h"
+#include "collections_native.h"   /* turi_vec_len / turi_vec_elem: the REPL's Vec display */
 #include "builtins.h"
 #include "runtime/hamt.h"   /* tur_hamt_hash_str -- struct-key content hash */
 #include "runtime/tur_string.h"  /* tur_string_cstr/release -- Show returns owned String */
@@ -18856,12 +18857,20 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
             if (last_expr) {
                 env->last_result_is_def = last_expr->kind == EX_DEF ||
                                           last_expr->kind == EX_FN_DEF;
+                /* repl-show-uses-wrong-instance-for-vec-elements: a `def`
+                 * turn shows the def's value, whose type is its initializer's
+                 * -- the def node itself is unit-typed, so `(def w [1 2 3])`
+                 * printed the Vec's carrier.  (The compiled turn takes the
+                 * same type, `last_type` above.) */
+                const Type *rt = &last_expr->type;
+                if (last_expr->kind == EX_DEF && last_expr->as.def_.init)
+                    rt = &last_expr->as.def_.init->type;
                 if (out_type_tag && tag_cap > 0)
-                    extract_type_tag(last_expr->type, out_type_tag, tag_cap);
+                    extract_type_tag(*rt, out_type_tag, tag_cap);
                 /* Retain the FULL type alongside the head-only tag.  Lives in
                  * the same arena as last_tc_env (set just above), so it stays
                  * valid for the display pass that follows this eval. */
-                env->last_result_type = (void *)&last_expr->type;
+                env->last_result_type = (void *)rt;
             }
         }
     } else {
@@ -19974,8 +19983,19 @@ void turi_debug_disable(TuriEnv *env) {
  * turi_try_show_by_tag (TURI_INT heap pointer, name from the elaborated type
  * tag).  Returns a strdup'd string, or NULL when no matching instance exists
  * or the method does not return a cstr. */
+/* The arguments of a type application, outermost-first: `(Map K V)` is
+ * `[K V]`.  The instance-constraint check below takes them in that order. */
+static uint8_t show_app_args(const Type *t, Type *out, uint8_t cap) {
+    if (!t || t->kind != TY_APP || !t->as.app.fn || !t->as.app.arg) return 0;
+    uint8_t n = show_app_args(t->as.app.fn, out, cap);
+    if (n < cap) out[n++] = *t->as.app.arg;
+    return n;
+}
+
 static const char *turi_call_show_named(TuriEnv *env, const char *type_name,
-                                        TuriValue val, const Type *recv_ty) {
+                                        TuriValue val, const Type *recv_ty,
+                                        bool *constraint_unmet) {
+    if (constraint_unmet) *constraint_unmet = false;
     if (!env || !env->last_tc_env || !type_name) return NULL;
     TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
 
@@ -20006,6 +20026,7 @@ static const char *turi_call_show_named(TuriEnv *env, const char *type_name,
      * parameterised head (TY_APP) and reads a TY_ADT/TY_REC name, so Vec, Set,
      * Map and user structs/GADTs all match by their surface constructor name. */
     FnDef *show_impl = NULL;
+    TypeClassInstance *show_inst = NULL;
     for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
         if (inst->typeclass != show_tc) continue;
         if (inst->n_type_args < 1) continue;
@@ -20013,9 +20034,26 @@ static const char *turi_call_show_named(TuriEnv *env, const char *type_name,
         if (!inst_name || strcmp(inst_name, type_name) != 0) continue;
         if (show_mi < inst->n_method_impls && inst->method_impls[show_mi])
             show_impl = inst->method_impls[show_mi];
+        show_inst = inst;
         break;
     }
     if (!show_impl) return NULL;
+    /* repl-show-uses-wrong-instance-for-vec-elements: an instance found by its
+     * head name still has constraints on the element types -- `Show [Vec]`
+     * needs `(Show A)` -- and nothing at a call this synthesises checks them.
+     * For a `(Vec Q)` with no `Show [Q]` the instance body's
+     * `(show (:: (vec-get v i) A))` landed on another struct's instance, or
+     * on the carrier.  With the receiver's type at hand, check them; the
+     * caller then shows the value another way. */
+    if (recv_ty && show_inst->n_type_param_constraints) {
+        Type args[8];
+        uint8_t na = show_app_args(recv_ty, args, 8);
+        if (na && !typeclass_instance_constraints_satisfied(show_inst, NULL, 0, args, na,
+                                                            tc_env)) {
+            if (constraint_unmet) *constraint_unmet = true;
+            return NULL;
+        }
+    }
 
     /* Create a temporary closure wrapping the Show method and call it. */
     TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
@@ -20073,7 +20111,7 @@ const char *turi_try_show(TuriEnv *env, TuriValue val) {
         return NULL;
     /* A TURI_STRUCT receiver names its own type and carries its fields as real
      * values, so it needs no element-type seeding. */
-    return turi_call_show_named(env, val.as_struct->name, val, NULL);
+    return turi_call_show_named(env, val.as_struct->name, val, NULL, NULL);
 }
 
 /* Tags that must NOT route through a Show-instance lookup: primitives (their
@@ -20092,6 +20130,55 @@ static bool show_tag_is_skipped(const char *tag) {
     return false;
 }
 
+static bool show_type_is_vec(const Type *t) {
+    const char *hn = t ? gde_type_head_name(t) : NULL;
+    return hn && strcmp(hn, "Vec") == 0 && t->kind == TY_APP;
+}
+
+/* Does showing a `(Vec elem_ty)` need show_vec_render rather than the Show
+ * [Vec] instance: elements that are Vecs themselves, or of a type whose Show
+ * the instance's `(Show A)` constraint does not find. */
+static bool show_vec_walk_needed(TuriEnv *env, const Type *elem_ty) {
+    if (show_type_is_vec(elem_ty)) return true;
+    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
+    TypeClass *show_tc = NULL;
+    for (TypeClass *tc = tc_env ? tc_env->typeclasses : NULL; tc; tc = tc->next)
+        if (tc->name && strcmp(tc->name->name, "Show") == 0) { show_tc = tc; break; }
+    if (!show_tc || elem_ty->kind == TY_TYVAR) return false;
+    return typeclass_env_lookup_instance(tc_env, show_tc, (Type *)elem_ty, 1) == NULL;
+}
+
+/* `[e1 e2 ...]`, each element shown as its own type shows it: a nested Vec
+ * by this walk, a value with a Show instance through it, anything else in
+ * its default repr -- what the compiled REPL prints (emit_repr). */
+static void show_vec_render(TuriEnv *env, TuriValue vec, const Type *elem_ty, Buf *out) {
+    Type inner[1];
+    bool nested = show_type_is_vec(elem_ty) && show_app_args(elem_ty, inner, 1) == 1;
+    const char *head = gde_type_head_name(elem_ty);
+    buf_putc(out, '[');
+    size_t n = turi_vec_len(vec);
+    for (size_t i = 0; i < n; i++) {
+        TuriValue el = turi_vec_elem(vec, i);
+        if (i) buf_putc(out, ' ');
+        if (nested) {
+            show_vec_render(env, el, &inner[0], out);
+            continue;
+        }
+        const char *es = turi_try_show(env, el);
+        if (!es && head && !show_tag_is_skipped(head) && el.tag == TURI_INT)
+            es = turi_call_show_named(env, head, el, elem_ty, NULL);
+        if (es) {
+            buf_puts(out, es);
+            free((char *)es);
+        } else {
+            char repr[512];
+            turi_value_repr(repr, sizeof repr, el);
+            buf_puts(out, repr);
+        }
+    }
+    buf_putc(out, ']');
+}
+
 const char *turi_try_show_by_tag(TuriEnv *env, TuriValue val,
                                  const char *type_tag) {
     if (!env || val.tag != TURI_INT || !type_tag || !type_tag[0]) return NULL;
@@ -20107,7 +20194,20 @@ const char *turi_try_show_by_tag(TuriEnv *env, TuriValue val,
         const char *hn = gde_type_head_name(recv_ty);
         if (!hn || strcmp(hn, type_tag) != 0) recv_ty = NULL;
     }
-    return turi_call_show_named(env, type_tag, val, recv_ty);
+    /* repl-show-uses-wrong-instance-for-vec-elements: a Vec whose elements
+     * Show [Vec]'s loop cannot show right -- a type with no Show of its own,
+     * or a Vec, whose inner loop reads the outer element type for its `A`
+     * (`[[1 2] [3]]` called vec-len on 1) -- is walked here instead. */
+    Type ea[1];
+    if (recv_ty && strcmp(type_tag, "Vec") == 0 && show_app_args(recv_ty, ea, 1) == 1 &&
+        show_vec_walk_needed(env, &ea[0])) {
+        Buf b;
+        buf_init(&b);
+        show_vec_render(env, val, &ea[0], &b);
+        buf_putc(&b, '\0');
+        return b.data;
+    }
+    return turi_call_show_named(env, type_tag, val, recv_ty, NULL);
 }
 
 /* -------------------------------------------------------------------------

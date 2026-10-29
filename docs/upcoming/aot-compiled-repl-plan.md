@@ -725,9 +725,9 @@ Two fixes fell out of matching the transcripts. A positional field, `(Some
 A)`'s, printed as `(null) = 3` in the interpreter; both now print `Some { 3 }`.
 And a `#map{...}` / `#set{...}` literal's form span started at its `{`, so
 the definition table copied `{:a 1}`, a curly-infix call; the reader now
-spans the whole lexeme. The interpreter's display has two bugs of its own
-the compiled printer does not share:
-[repl-show-uses-wrong-instance-for-vec-elements](../reported/repl-show-uses-wrong-instance-for-vec-elements.md).
+spans the whole lexeme. The interpreter's display had two bugs of its own
+the compiled printer did not share, since fixed:
+[repl-show-uses-wrong-instance-for-vec-elements](../archive/repl-show-uses-wrong-instance-for-vec-elements.md).
 
 **Redefining a type.** The table re-elaborates every definition's source
 against the latest types, and that can change what a `def` means: once `S`
