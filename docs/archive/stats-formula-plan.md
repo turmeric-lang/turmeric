@@ -1,9 +1,9 @@
 # Plan: Wilkinson-Style Formula DSL for tur-stats
 
-> **Status:** Implemented 2026-10-29: SF0-SF8 done and SF9's docs done, in
-> turmeric-spices `spices/stats-formula` (branch `claude/stats-formula`).
-> Left: merge, then the `stats-formula-v0.1.0` tag, then archive this plan.
-> What changed from the design below is in "Outcome", at the end.
+> **Status:** Done 2026-10-29. Shipped as turmeric-spices
+> `spices/stats-formula` (turmeric-spices#127, merged as 0062b19), released as
+> `stats-formula-v0.1.0`. What changed from the design below is in "Outcome",
+> at the end.
 > **Last Updated:** 2026-10-29
 > **Type:** Spice Design
 > **Spice Location:** `turmeric-spices/spices/stats-formula`
@@ -583,7 +583,7 @@ While `tur-stats-formula` is independent, we should coordinate with the
 | `turmeric-spices/spices/stats-formula/tests/formula/*` | New - test suite |
 | `turmeric-spices/README.md` | Add spice entry |
 | `turmeric-spices/docs/guides/formula-guide.md` | New - user guide (spice guides live in the spices repo; see spices-guide-coverage-plan) |
-| `docs/upcoming/spices/stats-formula-plan.md` | This document (status updates) |
+| `docs/archive/stats-formula-plan.md` | This document (status updates; archived when done) |
 
 ---
 
@@ -600,7 +600,7 @@ While `tur-stats-formula` is independent, we should coordinate with the
 | SF6 | Top-level interface | Done |
 | SF7 | Interaction terms | Done |
 | SF8 | Tests and validation | Done |
-| SF9 | Documentation and release | Docs done; tag after merge |
+| SF9 | Documentation and release | Done |
 
 ---
 
@@ -649,10 +649,10 @@ Not done: `y ~ .` (a syntax error that says so), and everything in the
 
 Turmeric bugs found on the way, each worked around in the spice and filed
 (the spice README says where):
-[closure-with-adt-param-rejected-by-generic-fn-param](../../reported/closure-with-adt-param-rejected-by-generic-fn-param.md),
-[stdlib-cstr-import-breaks-spice-library-build](../../reported/stdlib-cstr-import-breaks-spice-library-build.md),
-[list-typed-load-collides-with-frame-ownstr-string](../../reported/list-typed-load-collides-with-frame-ownstr-string.md),
+[closure-with-adt-param-rejected-by-generic-fn-param](../reported/closure-with-adt-param-rejected-by-generic-fn-param.md),
+[stdlib-cstr-import-breaks-spice-library-build](../reported/stdlib-cstr-import-breaks-spice-library-build.md),
+[list-typed-load-collides-with-frame-ownstr-string](../reported/list-typed-load-collides-with-frame-ownstr-string.md),
 and a one-module repro added to
-[monomorph-emitted-before-its-type-argument](../../reported/monomorph-emitted-before-its-type-argument.md).
+[monomorph-emitted-before-its-type-argument](../reported/monomorph-emitted-before-its-type-argument.md).
 Fitting through tur-stats also showed its p-values are computed wrongly:
-[stats-ols-pvalues-wrong-continued-fraction](../../reported/stats-ols-pvalues-wrong-continued-fraction.md).
+[stats-ols-pvalues-wrong-continued-fraction](../reported/stats-ols-pvalues-wrong-continued-fraction.md).
