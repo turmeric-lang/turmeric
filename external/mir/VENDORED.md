@@ -357,4 +357,18 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     function.  They start at 64 per context and 8/4/8 per function: a kept
     one-defn turn in the browser module goes from ~654 KB to ~394 KB of
     heap.  No behaviour change; run-jit.sh is the same before and after.
+
+  07b8207, 7419791 (merged as a43e5b2, turmeric-lang/mir#19) -- `c2m -E
+    -fdump-defines` (`c2mir_options.prepro_defines_p`, `C2MIR_PREPRO_DEFINES`)
+    ends the preprocessed text with the #pragma pack state and every macro
+    still defined, so `[a.c's output][b.c]` compiles as `[a.c][b.c]` does.
+    The JIT's preamble cache (aot-compiled-repl-plan C2, "The preamble,
+    preprocessed once") is built on it: a compiled REPL turn's c2mir phase
+    goes from ~86 to ~28 ms.  Making -E output faithful fixed #pragma pack
+    never being written, adjacent tokens gluing (`- -1` as `--1`), and an
+    identifier starting with u8 lexing as `88...`; and c2mir now declares
+    __func__ only in a TU whose parser receives the token, not whenever a
+    header mentions it (Darwin's <assert.h>, in skipped #if parts).  The last
+    drops an unused `__func__` array from every function of such programs;
+    nothing else changes.  c-tests/prepro-split.sh covers it.
 ```

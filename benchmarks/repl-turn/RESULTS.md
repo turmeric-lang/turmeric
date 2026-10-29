@@ -4,9 +4,9 @@
 
 `python3 benchmarks/repl-turn/run.py --tur build-pc/tur` (30 expression
 turns), a Release build against the MIR fork's `c2mir-macro-dump` branch
-(`-DTUR_MIR_SOURCE_DIR`, which carries `-fdump-defines` before the vendored
-copy does), with `TUR_JIT_PREAMBLE_CACHE=0` and then the default (on in a
-compiled REPL session):
+(`-DTUR_MIR_SOURCE_DIR`; merged as turmeric-lang/mir#19 and vendored since),
+with `TUR_JIT_PREAMBLE_CACHE=0` and then the default (on in a compiled REPL
+session):
 
 | preamble cache | defs | median turn | p90 | front | prep | jit | run | peak RSS |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |

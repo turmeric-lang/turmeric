@@ -940,11 +940,11 @@ third fixture under `TUR_JIT_TIMING=1` shows 974 of 1,071 compiled from the
 cache and none fell back to the original (the other 97 are not split TUs:
 nothing to cache).
 
-**Live once the vendored MIR carries the fork change.** The engine compiles
-the cache in only against a c2mir with `prepro_defines_p`
-(`C2MIR_PREPRO_DEFINES`); until `external/mir/` is synced past the fork
-change it is absent, and `repl-compiled.sh` skips its cache checks. The page
-has not been measured with it yet.
+**Live since the sync of turmeric-lang/mir#19** (`external/mir/` at
+`a43e5b2`). The engine compiles the cache in only against a c2mir with
+`prepro_defines_p` (`C2MIR_PREPRO_DEFINES`); built against an older one it is
+absent, and `repl-compiled.sh` skips its cache checks. The page has not been
+measured with it yet.
 `tests/turi/repl-compiled.sh` checks that a session fills the cache once,
 that header macros reach a turn's inline C through it, and that a failing
 turn's diagnostics are the same with it and without.
