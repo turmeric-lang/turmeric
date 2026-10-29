@@ -155,6 +155,33 @@ static TuriValue native_syntax_struct_fields(TuriEnv *e, TuriValue *a,
                                      items, ctor->n_fields));
 }
 
+/* syntax-gensym-not-fresh-against-program-names: the interpreter's
+ * `syntax-gensym` skips only the names the macro-time env has interned, which
+ * has not seen the program being expanded -- so it handed out `tmp_0` while
+ * the call site bound `tmp_0`, and the expansion captured it.  Inside an
+ * expansion, draw from the elaborator's own counter and skip a name either
+ * table holds: the contract the template `(gensym)`'s gensym_fresh keeps.
+ * The winner is interned in both, so later gensyms of either kind skip it. */
+static TuriValue native_macro_syntax_gensym(TuriEnv *e, TuriValue *a,
+                                            uint32_t n, void *ud) {
+    (void)ud;
+    const char *prefix = "g";
+    if (n >= 1 && a[0].tag == TURI_CSTR && a[0].as_cstr) prefix = a[0].as_cstr;
+    Elab *ce = g_reflect_elab;
+    static uint32_t counter = 0;
+    char name_buf[128];
+    for (;;) {
+        snprintf(name_buf, sizeof(name_buf), "%s_%u", prefix,
+                 ce ? ce->next_gensym_id++ : counter++);
+        StrSlice sl = { name_buf, (uint32_t)strlen(name_buf) };
+        if (symtab_contains(&e->st, sl)) continue;
+        if (ce && ce->st && symtab_contains(ce->st, sl)) continue;
+        if (ce && ce->st) symtab_intern(ce->st, sl);
+        const Symbol *sym = symtab_intern(&e->st, sl);
+        return turi_syntax_val(form_sym(&e->sym_arena, SPAN_UNKNOWN, sym));
+    }
+}
+
 struct TuriEnv *elab_macro_env_get(ElabSession *session) {
     Elab *e = (Elab *)session;
     if (!e) return NULL;
@@ -218,6 +245,9 @@ struct TuriEnv *elab_macro_env_get(ElabSession *session) {
          * reflection window call_proc opens around each expansion. */
         turi_env_register_native_typed(env, "syntax-struct-fields",
                                        native_syntax_struct_fields, NULL,
+                                       TUR_NRT_SYNTAX);
+        turi_env_register_native_typed(env, "syntax-gensym",
+                                       native_macro_syntax_gensym, NULL,
                                        TUR_NRT_SYNTAX);
 
         /* Macro expansion must be deterministic and effect-free: deny every

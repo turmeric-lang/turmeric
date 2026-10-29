@@ -888,6 +888,24 @@ static Expr *elab_form_impl(Elab *e, Form *f) {
              * shared heap cell is read through the cell. */
             if (b->cell_hidden_sym)
                 return elab_form(e, elab_mut_cell_read_form(e, b, f->span));
+            /* bare-nullary-ctor-as-value-emits-undeclared-c: a nullary
+             * constructor named as a value -- `(let [c Red] ...)`, `[Red Green]`
+             * -- is its application `(Red)`.  Its global binding is TY_ADT (it
+             * IS a value), but no C declaration introduces that binding's name:
+             * the compiled program referenced an undeclared `Red_4` and the
+             * interpreter matched no arm. */
+            if (b->is_global && b->type.kind == TY_ADT && b->type.as.adt_.def) {
+                const AdtDef *adt = b->type.as.adt_.def;
+                for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+                    const CtorDef *c = adt->ctors[ci];
+                    if (c && c->name && c->n_fields == 0 &&
+                        strcmp(c->name, b->name->name) == 0) {
+                        Form **items = (Form **)arena_alloc(e->arena, sizeof(Form *));
+                        items[0] = f;
+                        return elab_form(e, form_list(e->arena, f->span, items, 1));
+                    }
+                }
+            }
             /* UT1: Check for use-after-consume of a unique binding (more specific than generic move) */
             if (b->is_unique && b->is_moved) {
                 diag_emit_with_code(DIAG_ERROR, f->span,

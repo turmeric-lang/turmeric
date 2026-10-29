@@ -1,0 +1,5 @@
+;; call-through-fn-param-skips-argument-checks: `(f 7)` at `(fn [float] float)`
+;; printed 1.97626e-323 compiled; a direct call refuses it, and so does this.
+(defn halfp [x : float] : float (* x 0.5))
+(defn via-flt [f : (fn [float] float)] : float (f 7))
+(defn main [] : int (println (via-flt halfp)) 0)

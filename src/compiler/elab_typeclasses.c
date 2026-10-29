@@ -2066,6 +2066,30 @@ static bool tc_type_mentions_tyvar(const Type *t) {
     return false;
 }
 
+/* `t` with every type variable renamed `__for_<name>`: a continuation's
+ * payload variable, kept distinct from any of the enclosing defn's. */
+static Type lam_fresh_payload_tyvars(Elab *e, Type t) {
+    if (t.kind == TY_TYVAR && t.as.tyvar_.name) {
+        size_t n = strlen(t.as.tyvar_.name) + 7;
+        char *nm = (char *)arena_alloc(e->arena, n);
+        snprintf(nm, n, "__for_%s", t.as.tyvar_.name);
+        return type_tyvar_named(nm);
+    }
+    if (t.kind == TY_APP) {
+        if (t.as.app.fn) {
+            Type *fn = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *fn = lam_fresh_payload_tyvars(e, *t.as.app.fn);
+            t.as.app.fn = fn;
+        }
+        if (t.as.app.arg) {
+            Type *arg = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *arg = lam_fresh_payload_tyvars(e, *t.as.app.arg);
+            t.as.app.arg = arg;
+        }
+    }
+    return t;
+}
+
 /* ECS E2d-P6 (Issue 2 secondary): substitute a class method's parameter type --
  * which may reference the class's type parameters as named TY_TYVARs (e.g.
  * `val : E` parses to TY_TYVAR("E")) -- with the concrete instance type args, so
@@ -6045,6 +6069,50 @@ static Type method_callable_result_type(const Binding *binding, Type fallback) {
     return fallback;
 }
 
+/* A return-directed method reached through the dot form, dispatched on its
+ * expected type -- or, with none, on the head of the continuation it sits in
+ * (Elab.cont_head_hint).  NULL when it is not return-directed or does not
+ * resolve; the caller then reports what it would have. */
+static Expr *elab_dot_return_dispatch(Elab *e, const Form *call,
+                                      const char *method_name, uint32_t len) {
+    const Symbol *m_sym = symtab_intern(e->st, strslice(method_name, len));
+    if (!m_sym || !elab_symbol_is_return_dispatch_method(e, m_sym)) return NULL;
+    Type *saved = e->expected_type;
+    if (!saved) e->expected_type = (Type *)e->cont_head_hint;
+    bool rt_handled = false;
+    Expr *rt = elab_try_return_dispatch(e, call, m_sym, &rt_handled);
+    e->expected_type = saved;
+    /* Dispatched on the hint, the call is typed from the hint, whose payload
+     * is open: type it from the class method's signature instead, its
+     * variables bound by the arguments first and by the hint's head after --
+     * `pure [x : a] : (f a)` on an `int` under `(Option __for_b)` is
+     * `(Option int)`. */
+    if (rt && !saved && rt->kind == EX_CALL && e->cont_head_hint) {
+        const TypeClassMethod *cm = NULL;
+        for (TypeClass *c = e->typeclass_env.typeclasses; c && !cm; c = c->next)
+            for (uint8_t mi = 0; mi < c->n_methods && !cm; mi++)
+                if (c->methods[mi].name == m_sym) cm = &c->methods[mi];
+        if (cm) {
+            const Symbol *bn[16];
+            Type bt[16];
+            uint8_t nb = 0;
+            for (uint32_t i = 0; i < rt->as.call_.n_args && i < cm->n_params; i++)
+                if (rt->as.call_.args[i])
+                    m7_collect_tyvar_bindings_x(e, cm->param_types[i],
+                                                rt->as.call_.args[i]->type,
+                                                bn, bt, &nb, 16, false);
+            m7_collect_tyvar_bindings_x(e, cm->return_type, *e->cont_head_hint,
+                                        bn, bt, &nb, 16, false);
+            Type r = elab_subst_class_tyvars(e->arena, cm->return_type,
+                                             bn, nb, bt, nb);
+            if (r.kind == TY_APP && !tc_type_mentions_tyvar(&r) &&
+                type_adt_app_def(&r))
+                rt->type = r;
+        }
+    }
+    return rt;
+}
+
 /* Predicate mirroring the method-finding phase of elab_try_return_dispatch:
  * true when `name` resolves to a return-only-dispatch typeclass method (a class
  * type param appears in the method's return type but in none of its parameter
@@ -9065,6 +9133,17 @@ found_method:;
                 hk == TY_CSTR || hk == TY_FLOAT || hk == TY_FLOAT32 ||
                 hk == TY_FLOAT64 || hk == TY_BOOL || hk == TY_NIL;
         }
+        /* for-comprehension-pure-picks-the-payload-type: a return-directed
+         * method's argument is its PAYLOAD, never the class type, so a
+         * concrete payload with no instance of the class is no reason to
+         * refuse: `(for [x (some 3)] (P x))` desugars to `(.pure (P x))`, and
+         * asked "Applicative [Pt]?".  With an expected type, the return
+         * decides, as it does for an erased payload below. */
+        if (!exact_match_found && (e->expected_type || e->cont_head_hint) &&
+            (concrete_distinct_receiver || int_recv_foreign_head)) {
+            Expr *rt = elab_dot_return_dispatch(e, call, method_name, method_name_len);
+            if (rt) return rt;
+        }
         if (!exact_match_found && fallback_count >= 1 &&
             (concrete_distinct_receiver || int_recv_foreign_head)) {
             const char *cn = best_inst ? best_inst->typeclass->name->name : "?";
@@ -9496,14 +9575,9 @@ found_method:;
          * "cannot infer type for return-directed method", which would be a
          * worse message for the same program.
          * See docs/archive/for-comprehension-pure-ambiguous-against-stdlib.md. */
-        if (e->expected_type) {
-            const Symbol *m_sym =
-                symtab_intern(e->st, strslice(method_name, method_name_len));
-            if (m_sym && elab_symbol_is_return_dispatch_method(e, m_sym)) {
-                bool rt_handled = false;
-                Expr *rt = elab_try_return_dispatch(e, call, m_sym, &rt_handled);
-                if (rt) return rt;
-            }
+        if (e->expected_type || e->cont_head_hint) {
+            Expr *rt = elab_dot_return_dispatch(e, call, method_name, method_name_len);
+            if (rt) return rt;
         }
         if (unsat_inst && obj && obj->type.kind == TY_APP) {
             const char *cls = unsat_inst->typeclass && unsat_inst->typeclass->name
@@ -9600,6 +9674,7 @@ resolved_user_fallback:;
     for (uint32_t i = 0; i < n_args; i++) {
         Form *af = call->as.list.items[2 + i];
         Type *lam_push = NULL;
+        Type *lam_head_hint = NULL;
         if (lam_cm && lam_nb > 0 && 1 + i < lam_cm->n_params &&
             lam_cm->param_types[1 + i].kind == TY_FN &&
             lam_cm->param_types[1 + i].as.fn.arg_full_types &&
@@ -9647,17 +9722,38 @@ resolved_user_fallback:;
                            type_eq(lam_cm->return_type, *pt->as.fn.result_full_type)) {
                     rinst = e->expected_type;
                 }
+                /* for-comprehension-pure-picks-the-payload-type: the receiver
+                 * fixes the continuation's monad -- `bind` over `(some 3)`
+                 * continues into `(Option b)` -- even when nothing says what
+                 * the call itself must produce (a `for` that is an argument).
+                 * That head is all a return-directed `pure` / `empty` in the
+                 * body needs, so hand it on as a hint they consult only when
+                 * they have no expected type at all.  Not on the expected-type
+                 * channel: every generic call in the body would read the open
+                 * payload as a binding. */
+                if (!rinst && r.kind == TY_APP &&
+                    type_eq(lam_cm->return_type, *pt->as.fn.result_full_type)) {
+                    const Type *rh = &r;
+                    while (rh && rh->kind == TY_APP) rh = rh->as.app.fn;
+                    if (rh && rh->kind == TY_ADT && rh->as.adt_.def) {
+                        lam_head_hint = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *lam_head_hint = lam_fresh_payload_tyvars(e, r);
+                    }
+                }
             }
             lam_push->as.fn.result_full_type = rinst;
         }
         Type *lam_saved = e->expected_type;
+        const Type *hint_saved = e->cont_head_hint;
         Type assoc_exp;
         if (lam_push) e->expected_type = lam_push;
         else if (lam_cm && best_inst &&
                  method_arg_assoc_expected(e, obj, lam_cm, best_inst, 1 + i, &assoc_exp))
             e->expected_type = &assoc_exp;
+        if (lam_head_hint) e->cont_head_hint = lam_head_hint;
         args[i] = elab_form(e, af);
         e->expected_type = lam_saved;
+        e->cont_head_hint = hint_saved;
         if (!args[i]) return NULL;
         method_arg_release_if_borrowed(e, call, 1 + i, args[i]);
         if (lam_cm && best_inst &&
@@ -10551,6 +10647,19 @@ resolved_user_fallback:;
                     result_type = hr;
             }
         }
+    }
+    /* for-comprehension-pure-picks-the-payload-type: a continuation that is
+     * the only place the result's payload is learnt -- `bind`'s `(f b)`, with
+     * `b` from the lambda's `(Option int)` -- and no expected type to supply
+     * it (a `for` that is an argument) left the def-less `(? ?)`.  The
+     * bindings collected from every argument above ground it. */
+    if (lam_cm && lam_nb > 0 && result_type.kind == TY_APP &&
+        !type_adt_app_def(&result_type)) {
+        Type rr = elab_subst_class_tyvars(e->arena, lam_cm->return_type,
+                                          lam_bn, lam_nb, lam_bt, lam_nb);
+        if (rr.kind == TY_APP && !tc_type_mentions_tyvar(&rr) &&
+            type_adt_app_def(&rr))
+            result_type = rr;
     }
     Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
     /* Phase H §1: receiver type is statically known here (best_inst was resolved

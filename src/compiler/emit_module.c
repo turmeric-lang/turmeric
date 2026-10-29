@@ -4181,6 +4181,61 @@ static Type emit_abi_instantiate_type(const Type *t,
     }
 }
 
+/* generic-callee-tyvar-captured-by-caller: are `bindings` the call's real
+ * answer rather than carrier collapse?  They are when the call's elaborated
+ * result type is ground and is what the callee's declared result becomes
+ * under them -- `(tnil)` returning `(Cons int)` with `A := int`.  An `int`
+ * binding then IS `int`, and must not be "rehydrated" by name from an
+ * enclosing spec whose own, unrelated variable happens to be spelled `A`. */
+static bool emit_abi_bindings_pin_call_result(const Expr *call,
+                                              const AbiTypeBinding *bindings,
+                                              uint8_t n_bindings, Arena *arena) {
+    const Binding *cb = call->as.call_.fn_binding;
+    if (!cb || cb->type.kind != TY_FN || !cb->type.as.fn.result_full_type ||
+        n_bindings == 0)
+        return false;
+    if (call->type.kind != TY_APP || emit_abi_type_has_any_tyvar(&call->type))
+        return false;
+    Type inst = emit_abi_instantiate_type(cb->type.as.fn.result_full_type,
+                                          bindings, n_bindings, arena);
+    return !emit_abi_type_has_any_tyvar(&inst) && type_eq(inst, call->type);
+}
+
+/* Does type `t` mention the type variable `name`? */
+static bool emit_abi_type_mentions_tyvar(const Type *t, const char *name) {
+    if (!t || !name) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
+        case TY_APP:
+            return emit_abi_type_mentions_tyvar(t->as.app.fn, name) ||
+                   emit_abi_type_mentions_tyvar(t->as.app.arg, name);
+        case TY_FN:
+            if (emit_abi_type_mentions_tyvar(t->as.fn.result_full_type, name)) return true;
+            if (t->as.fn.arg_full_types)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                    if (emit_abi_type_mentions_tyvar(t->as.fn.arg_full_types[i], name))
+                        return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
+/* Is `name` a variable of callee `cb` that no parameter carries -- bound, if
+ * at all, from the call's result, never from an argument an erasing
+ * ascription could have collapsed to the carrier? */
+static bool emit_abi_tyvar_is_result_only(const Binding *cb, const char *name) {
+    if (!cb || cb->type.kind != TY_FN || !name) return false;
+    const Type *ft = &cb->type;
+    if (!ft->as.fn.arg_full_types) return ft->as.fn.arity == 0;
+    for (uint32_t i = 0; i < ft->as.fn.arity; i++) {
+        if (!ft->as.fn.arg_full_types[i]) return false;
+        if (emit_abi_type_mentions_tyvar(ft->as.fn.arg_full_types[i], name)) return false;
+    }
+    return true;
+}
+
 /* nested-construct-byvalue: structurally unify a generic pattern (carrying named
  * tyvars, e.g. `(Result A B)`) against a concrete type (`Result__Option__cstr__cstr`,
  * a monomorphized struct, or `(Result (Option cstr) cstr)`) and collect the
@@ -6908,6 +6963,15 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         } else if (n_bindings <= ABI_TYPE_BINDINGS_MAX) {
             /* (2) re-hydrate carrier-collapsed bindings by name. */
             bool any = false;
+            /* generic-callee-tyvar-captured-by-caller: a binding of a
+             * variable no parameter carries came from the call's result, and
+             * when that result is ground and is the callee's under these
+             * bindings, an `int` there IS int -- `(tnil)` at `(Cons int)`
+             * inside `lens [A]` -- not a carrier-collapsed `A` to take from
+             * the enclosing spec.  A variable a parameter carries may still be
+             * a collapse (`(tcons (:: x :int) ...)` in `list-cons [A]`). */
+            bool result_pins = emit_abi_bindings_pin_call_result(
+                call, bindings, n_bindings, ctx->type_arena);
             /* instance-method-call-inside-an-instance-body-takes-the-enclosing-
              * result-type: the rehydration below matches by NAME, and a class's
              * type parameter carries ONE name across every instance of that
@@ -6993,6 +7057,10 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                             break;
                         }
                 }
+                if (result_pins &&
+                    emit_abi_tyvar_is_result_only(call->as.call_.fn_binding,
+                                                  bindings[i].name))
+                    continue;
                 if (bindings[i].name && !value_is_spec_tyvar &&
                     bindings[i].type.kind != TY_APP &&
                     strcmp(type_c_name(bindings[i].type), "int64_t") == 0) {
@@ -10764,7 +10832,7 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
         } else if (spec->fn->param_types[i].kind == TY_FN) {
             pc = "int64_t";
         } else {
-            pc = type_c_name(spec->arg_types[i]);
+            pc = emit_param_c_spell(type_c_name(spec->arg_types[i]));
         }
         buf_puts(out, pc);
         /* gcc14-int-conversion (carrier-representation-tracking): record this ABI
@@ -11603,7 +11671,7 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 if (!fd->closure && !_fwd_inline_c && type_struct_pass_by_ptr(_fwd_pty)) {
                     buf_printf(out, "const %s *", type_c_name(_fwd_pty));
                 } else {
-                    buf_puts(out, type_c_name(_fwd_pty));
+                    buf_puts(out, emit_param_c_spell(type_c_name(_fwd_pty)));
                 }
             }
             /* Record the just-emitted param type substring (ground truth). */
@@ -20998,6 +21066,10 @@ static const char *split_def_storage(const Binding *b) {
     return emit_split_defines(b) ? "" : "extern ";
 }
 
+static bool def_in_repl_slot(const Binding *b);
+static void emit_repl_slot_decl(Buf *file, const char *bn, const char *pre,
+                                const char *post, bool *proto_done);
+
 static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
                                           const Expr **items, uint32_t n_items) {
     const Binding **need = NULL; uint32_t n_need = 0, cap_need = 0;
@@ -21063,11 +21135,22 @@ static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
     buf_puts(out, "/* Forward declarations for globals read by an earlier-emitted item\n"
                   " * (a lifted lambda is prepended to the item list, so it can read a\n"
                   " * `def` whose storage is declared far below it). */\n");
+    bool slot_proto = false;
     for (uint32_t i = 0; i < n_need; i++) {
         char *bn = name_for_binding(ctx, (Binding *)need[i]);
         const char *fr = NULL; char *fa = NULL;
+        /* aot-compiled-repl-plan C2 step 2: a slot's forward declaration is the
+         * slot's, so an earlier-emitted reader reaches it through the macro. */
+        const bool slot = def_in_repl_slot(need[i]);
         if (emit_global_def_thin_fnptr(need[i], &fr, &fa)) {
-            buf_printf(out, "%s%s (*%s)(%s);\n", split_def_storage(need[i]), fr, bn, fa);
+            if (slot) {
+                char pre[512], post[1024];
+                snprintf(pre, sizeof pre, "%s (**", fr);
+                snprintf(post, sizeof post, ")(%s)", fa);
+                emit_repl_slot_decl(out, bn, pre, post, &slot_proto);
+            } else {
+                buf_printf(out, "%s%s (*%s)(%s);\n", split_def_storage(need[i]), fr, bn, fa);
+            }
             /* jit-fallback (global-fn-value-def): a call through this pointer
              * hoists into a temp whose C type the hoist looks up BY CALLEE
              * NAME in the signature table; a global has no forward-declared
@@ -21076,6 +21159,10 @@ static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
              * engine.  Record the pointer's result type under its name. */
             emit_sig_record_ret_ctype(bn, need[i]->type.as.fn.arity, fr);
             free(fa);
+        } else if (slot) {
+            char pre[512];
+            snprintf(pre, sizeof pre, "%s *", type_c_name(need[i]->type));
+            emit_repl_slot_decl(out, bn, pre, "", &slot_proto);
         } else {
             buf_printf(out, "%s%s %s;\n", split_def_storage(need[i]),
                        type_c_name(need[i]->type), bn);
@@ -21092,6 +21179,59 @@ static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
 bool g_emit_ffi_export_shims = false;
 static void emit_ffi_export_shims(const EmitCtx *ctx, Buf *out,
                                   const Expr *program);
+
+bool g_emit_repl_slots = false;
+
+/* aot-compiled-repl-plan C2 step 2: a def of the program's own (not the
+ * stdlib's, not an imported library's) whose storage is a host slot. */
+static bool def_in_repl_slot(const Binding *b) {
+    return g_emit_repl_slots && !b->is_from_stdlib && !b->is_from_implib &&
+           !b->is_thread_local;
+}
+
+/* Declare `bn` as the slot: a pointer the initializer binds, and a macro, so
+ * every read, `set!` and address-of of the global reaches the slot as
+ * written.  The pointer's declarator is `pre` NAME `post`. */
+static void emit_repl_slot_decl(Buf *file, const char *bn, const char *pre,
+                                const char *post, bool *proto_done) {
+    if (!*proto_done) {
+        buf_puts(file, "extern void *tur_repl_slot(const char *, const char *, size_t, int *);\n");
+        *proto_done = true;
+    }
+    buf_printf(file, "static %s__tur_slot_%s%s;\n#define %s (*__tur_slot_%s)\n",
+               pre, bn, post, bn, bn);
+}
+
+/* Open the initializer: bind the slot, and enter the block that initializes
+ * it only when it is fresh.  The caller emits the initializer, then closes
+ * with emit_repl_slot_init_close. */
+static void emit_repl_slot_init_open(Buf *sink, uint32_t indent, const Binding *b,
+                                     const char *bn, const char *ptr_cast) {
+    Buf ts;
+    buf_init(&ts);
+    type_print(&ts, b->type);
+    buf_putc(&ts, '\0');
+    indent_buf(sink, indent);
+    buf_printf(sink, "{ int __tur_fresh = 0; __tur_slot_%s = (%s)tur_repl_slot(\"", bn, ptr_cast);
+    for (const char *p = b->name->name; *p; p++)
+        buf_printf(sink, (*p == '"' || *p == '\\') ? "\\%c" : "%c", *p);
+    buf_puts(sink, "\", \"");
+    for (const char *p = ts.data; *p; p++)
+        buf_printf(sink, (*p == '"' || *p == '\\') ? "\\%c" : "%c", *p);
+    buf_printf(sink, "\", sizeof *__tur_slot_%s, &__tur_fresh);\n", bn);
+    indent_buf(sink, indent);
+    buf_puts(sink, "if (__tur_fresh) {\n");
+    buf_free(&ts);
+}
+
+/* Close it: the store is an escape store (a slot outlives every region
+ * bracket), as `set!` on a global already notes. */
+static void emit_repl_slot_init_close(Buf *sink, uint32_t indent, const char *bn) {
+    indent_buf(sink, indent);
+    buf_printf(sink, "TUR_REGION_NOTE_WORDS(&%s, sizeof %s);\n", bn, bn);
+    indent_buf(sink, indent);
+    buf_puts(sink, "} }\n");
+}
 
 /* stale-comments-emitter item 2: the declaration bands of a program unit,
  * declared in the order emit_program_assemble_decls writes them -- so the
@@ -21202,6 +21342,12 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * under user_has_main. Filed under
      * docs/archive/history/top-level-def-init-dropped.md. */
     Buf def_init_body; buf_init(&def_init_body);
+    /* warn-no-entry-point-near-miss: the bytes of `body` that are def /
+     * defdynamic initializers.  Since those became statements of the
+     * synthesized main at their source position, every program's `body` holds
+     * the stdlib's, so `!body.len` no longer meant "no top-level statements"
+     * and TUR-W0624 never fired. */
+    size_t body_def_init_len = 0;
     /* Phase 19: separate buffers for ordered final assembly:
      *   early_file   - pass 0: struct typedefs + drop glue
      *   fwd_decls    - pass 1: function forward declarations
@@ -21969,6 +22115,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     }
 
     /* Pass 2: collect all top-level defs and fn_defs. */
+    bool repl_slot_proto = false;   /* tur_repl_slot declared (C2 step 2) */
     tcg_collect_fn_exprs(&ctx, items, n_items);
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
@@ -22036,28 +22183,71 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             {
                 const char *fp_ret = NULL; char *fp_args = NULL;
                 if (emit_global_def_thin_fnptr(e->as.def_.binding, &fp_ret, &fp_args)) {
-                    buf_printf(&file, "%s%s (*%s)(%s);\n",
-                               split_def_storage(e->as.def_.binding), fp_ret, bn, fp_args);
+                    const bool slot = def_in_repl_slot(e->as.def_.binding);
+                    char slot_cast[1024];
+                    snprintf(slot_cast, sizeof slot_cast, "%s (**)(%s)", fp_ret, fp_args);
+                    if (slot) {
+                        char pre[512], post[1024];
+                        snprintf(pre, sizeof pre, "%s (**", fp_ret);
+                        snprintf(post, sizeof post, ")(%s)", fp_args);
+                        emit_repl_slot_decl(&file, bn, pre, post, &repl_slot_proto);
+                    } else {
+                        buf_printf(&file, "%s%s (*%s)(%s);\n",
+                                   split_def_storage(e->as.def_.binding), fp_ret, bn, fp_args);
+                    }
                     /* jit-fallback: see the forward-declaration pass above --
                      * the hoist temp of a call through this pointer needs the
                      * result type on record under the global's name. */
                     emit_sig_record_ret_ctype(bn, e->as.def_.binding->type.as.fn.arity,
                                               fp_ret);
-                    if (e->as.def_.init && !def_declare_only) {
+                    if (slot && !def_declare_only) {
                         Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
+                        size_t _b0 = body.len;
+                        emit_repl_slot_init_open(init_sink, ctx.indent, e->as.def_.binding,
+                                                 bn, slot_cast);
+                        if (e->as.def_.init) {
+                            char *iv = emit_value(&ctx, init_sink, e->as.def_.init);
+                            indent_buf(init_sink, ctx.indent);
+                            buf_printf(init_sink, "%s = (%s (*)(%s))(intptr_t)(%s);\n",
+                                       bn, fp_ret, fp_args, iv);
+                            free(iv);
+                        }
+                        emit_repl_slot_init_close(init_sink, ctx.indent, bn);
+                        body_def_init_len += body.len - _b0;
+                    } else if (e->as.def_.init && !def_declare_only) {
+                        Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
+                        size_t _b0 = body.len;
                         char *iv = emit_value(&ctx, init_sink, e->as.def_.init);
                         indent_buf(init_sink, ctx.indent);
                         buf_printf(init_sink, "%s = (%s (*)(%s))(intptr_t)(%s);\n",
                                    bn, fp_ret, fp_args, iv);
                         free(iv);
+                        body_def_init_len += body.len - _b0;
                     }
                     free(fp_args);
                     free(bn);
                     continue;
                 }
             }
-            buf_printf(&file, "%s%s %s;\n", split_def_storage(e->as.def_.binding),
-                       type_c_name(e->as.def_.binding->type), bn);
+            const bool slot = def_in_repl_slot(e->as.def_.binding);
+            const char *def_ctype = type_c_name(e->as.def_.binding->type);
+            char slot_cast[512];
+            snprintf(slot_cast, sizeof slot_cast, "%s *", def_ctype);
+            if (slot) {
+                emit_repl_slot_decl(&file, bn, slot_cast, "", &repl_slot_proto);
+                if (!e->as.def_.init && !def_declare_only) {
+                    /* No initializer: the slot is bound all the same. */
+                    Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
+                    size_t _b0 = body.len;
+                    emit_repl_slot_init_open(init_sink, ctx.indent, e->as.def_.binding,
+                                             bn, slot_cast);
+                    emit_repl_slot_init_close(init_sink, ctx.indent, bn);
+                    body_def_init_len += body.len - _b0;
+                }
+            } else {
+                buf_printf(&file, "%s%s %s;\n", split_def_storage(e->as.def_.binding),
+                           def_ctype, bn);
+            }
             if (e->as.def_.init && !def_declare_only) {
                 /* Gap F: route to def_init_body so user-has-main programs
                  * still execute the initializer via __constructor__.
@@ -22069,6 +22259,10 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                  * run in the order they are written -- what the interpreter
                  * does, and what R7RS 5.1 requires of a Scheme program. */
                 Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
+                size_t _b0 = body.len;
+                if (slot)
+                    emit_repl_slot_init_open(init_sink, ctx.indent, e->as.def_.binding,
+                                             bn, slot_cast);
                 char *iv = emit_value(&ctx, init_sink, e->as.def_.init);
                 /* global-def-store-misses-int-ptr-bridge: same bridge the
                  * `let` binder applies -- the def's declared carrier and the
@@ -22077,8 +22271,10 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                     type_c_name(e->as.def_.binding->type), iv, e->as.def_.init);
                 indent_buf(init_sink, ctx.indent);
                 buf_printf(init_sink, "%s = %s;\n", bn, biv ? biv : iv);
+                if (slot) emit_repl_slot_init_close(init_sink, ctx.indent, bn);
                 free(biv);
                 free(iv);
+                body_def_init_len += body.len - _b0;
             }
             free(bn);
         } else if (e->kind == EX_FN_DEF) {
@@ -22169,9 +22365,11 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             DynVarEntry *entry = e->as.defdynamic_.entry;
             char *mname = mangle_dynvar_name(entry->name->name);
             Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
+            size_t _b0 = body.len;
             char *rv = emit_value(&ctx, init_sink, e->as.defdynamic_.root_expr);
             indent_buf(init_sink, ctx.indent);
             buf_printf(init_sink, "_dynvar_root_%s = %s;\n", mname, rv);
+            body_def_init_len += body.len - _b0;
             free(rv);
             free(mname);
         } else if (e->kind == EX_INLINE_C) {
@@ -22978,7 +23176,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
          * `examples/minikanren` and `examples/snake` silently did for weeks
          * with a `-main` nobody called.  A near-miss name is the signal an
          * entry point was intended; say so at its definition. */
-        if (!body.len && near_miss_main) {
+        if (body.len == body_def_init_len && near_miss_main) {
             diag_emit_with_code(DIAG_WARNING, near_miss_main->binding->span,
                                 TUR_W0624_NO_ENTRY_POINT_NEAR_MISS,
                                 "no `main` and no top-level statements: the "

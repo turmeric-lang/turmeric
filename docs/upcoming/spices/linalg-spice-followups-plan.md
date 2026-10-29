@@ -1,12 +1,16 @@
 # Follow-up Plan: tur-linalg v0.2, tur-linalg-sparse, and BLAS backend
 
-> **Status:** On hold, not started. The plan sat in `docs/upcoming/hold/`
-> until the 2026-10-16 flatten. Its prerequisite, `tur-linalg` v0.1.0, has
-> shipped. Checked 2026-10-18 against turmeric-spices `main`: `tur-linalg` is
-> still 0.1.0, with Cholesky, LU and QR in `linalg/decomp` and none of the
-> v0.2 items (SVD, eigendecomposition, iterative solvers, tiled multiply, BLAS
-> backend); there is no `linalg-sparse` or `stats-multivariate` spice.
-> **Last Updated:** 2026-05-27
+> **Status:** Implemented, awaiting merge. Every phase is built and tested on
+> turmeric-spices branch `claude/linalg-followups` (2026-10-29): `tur-linalg`
+> 0.2.0 (SVD, symmetric eigen, SVD solvers, mat2/mat3, `linalg/iter`, tiled
+> `mat-mul`, the BLAS/LAPACK backend), the new `tur-linalg-sparse` and
+> `tur-stats-multivariate` spices, and the guides. What is left is the tags,
+> which follow the merge: `linalg-v0.2.0`, `linalg-sparse-v0.1.0`,
+> `stats-multivariate-v0.1.0`. `linalg-blas-v0.1.0` is not needed -- the
+> backend ships inside linalg 0.2.0. Archive this plan once they are pushed.
+> Where the build differs from the text below, see
+> [Implementation notes](#implementation-notes-2026-10-29).
+> **Last Updated:** 2026-10-29
 > **Type:** Spice Follow-up
 > **Depends on:** [linalg-spice-plan.md](../../archive/linalg-spice-plan.md) (v0.1.0 complete, tagged `linalg-v0.1.0`)
 
@@ -146,33 +150,33 @@ benefit immediately from the faster implementation.
 
 ## Part A phases
 
-- [ ] **LB0** -- `svd-factor` and `eigen-factor` struct definitions in
+- [x] **LB0** -- `svd-factor` and `eigen-factor` struct definitions in
   `linalg/decomp`; `svd` via Golub-Reinsch bidiagonalization + QR sweeps;
   `svd-free`. Intermediate tests: verify `U S V' ~= A` and `U' U ~= I` and
   `V' V ~= I` on a 4x3 matrix.
 
-- [ ] **LB1** -- `svd-solve`, `svd-rank`, `svd-condition`, `svd-project` in
+- [x] **LB1** -- `svd-solve`, `svd-rank`, `svd-condition`, `svd-project` in
   `linalg/solve`. Tests: rank-deficient overdetermined system; condition number
   of a near-singular matrix; minimum-norm solution for under-determined system.
 
-- [ ] **LB2** -- `eigen-sym` via Jacobi iteration in `linalg/decomp`;
+- [x] **LB2** -- `eigen-sym` via Jacobi iteration in `linalg/decomp`;
   `eigen-free`. Tests: 3x3 and 5x5 known SPD matrices; verify `Q D Q' ~= A`;
   verify eigenvalues match known closed-form solutions to 10 significant figures.
 
-- [ ] **LB3** -- `mat2` / `mat3` additions to `linalg/small`; `mat3-normal-mat`.
+- [x] **LB3** -- `mat2` / `mat3` additions to `linalg/small`; `mat3-normal-mat`.
   Tests: round-trip inverse, normal matrix construction.
 
-- [ ] **LB4** -- New module `linalg/iter`: `IterOpts`, `iter-result`, `cg`,
+- [x] **LB4** -- New module `linalg/iter`: `IterOpts`, `iter-result`, `cg`,
   `bicgstab`, `jacobi-precond`. Tests: 50x50 SPD system via `cg`; 20x20
   non-symmetric diagonally-dominant system via `bicgstab`; verify convergence
   within `max-iters`.
 
-- [ ] **LB5** -- Tiled `mat-mul` in `linalg/mat`: replace the naive triple loop
+- [x] **LB5** -- Tiled `mat-mul` in `linalg/mat`: replace the naive triple loop
   with a cache-blocked implementation (block size 64 x 64). Existing
   `mat_test.tur` must pass unchanged; add a timing smoke test that multiplies
   two 512x512 matrices and records wall time for CI comparison.
 
-- [ ] **LB6** -- Tests pass on all CI targets; update `turmeric-spices` README
+- [ ] **LB6** *(docs and README rows done; tag pending the merge)* -- Tests pass on all CI targets; update `turmeric-spices` README
   row for `tur-linalg`; update `docs/guides/linalg-guide.md` with sections on
   SVD, eigen, and iterative solvers; `linalg-v0.2.0` tag.
 
@@ -281,27 +285,27 @@ efficiently (column-oriented traversal).
 
 ### Part B phases
 
-- [ ] **LS0** -- `linalg-sparse/csr`: COO-to-CSR builder (sort by row, compute
+- [x] **LS0** -- `linalg-sparse/csr`: COO-to-CSR builder (sort by row, compute
   rowptr), `csr-free`, `csr-get`, `csr-spmv`. Tests: 5x5 tridiagonal system;
   verify SpMV against equivalent dense `mat-mul-vec`.
 
-- [ ] **LS1** -- `linalg-sparse/csc`: `csc-from-coo`, `csc-free`, `csc-spmv`,
+- [x] **LS1** -- `linalg-sparse/csc`: `csc-from-coo`, `csc-free`, `csc-spmv`,
   `csc-transpose`. Tests: same tridiagonal; compare `csc-spmv` to `csr-spmv`
   on transpose.
 
-- [ ] **LS2** -- `linalg-sparse/ops`: `csr-scale`, `csr-add`,
+- [x] **LS2** -- `linalg-sparse/ops`: `csr-scale`, `csr-add`,
   `csr-transpose`; `csr-from-dense`, `csc-from-dense`. Tests: round-trip
   dense -> sparse -> dense; add two same-pattern matrices.
 
-- [ ] **LS3** -- `linalg-sparse/solve`: `ilu0`, `sparse-cg`, `sparse-bicgstab`.
+- [x] **LS3** -- `linalg-sparse/solve`: `ilu0`, `sparse-cg`, `sparse-bicgstab`.
   Tests: 100x100 sparse SPD system generated from a 1D Laplacian stencil;
   verify convergence in under 200 iterations; residual < 1e-10.
 
-- [ ] **LS4** -- `linalg-sparse/fmt`: `csr-print` (prints non-zero entries as
+- [x] **LS4** -- `linalg-sparse/fmt`: `csr-print` (prints non-zero entries as
   row/col/val triples), `csr->str`. Tests: print a 3x3 sparse matrix and check
   output string.
 
-- [ ] **LS5** -- Tests pass on all CI targets; `turmeric-spices` README row for
+- [ ] **LS5** *(docs and README rows done; tag pending the merge)* -- Tests pass on all CI targets; `turmeric-spices` README row for
   `tur-linalg-sparse`; short usage guide appended to `docs/guides/linalg-guide.md`
   under a new "Sparse matrices" section; `linalg-sparse-v0.1.0` tag.
 
@@ -344,24 +348,24 @@ equivalent to within floating-point rounding.
 
 ### Part C phases
 
-- [ ] **LX0** -- CMake detection: add `FindCBLAS.cmake` and `FindLAPACKE.cmake`
+- [x] **LX0** -- CMake detection: add `FindCBLAS.cmake` and `FindLAPACKE.cmake`
   modules; wire `TUR_LINALG_BLAS` option; add CI job that builds with
   `TUR_LINALG_BLAS=ON` against OpenBLAS on Ubuntu.
 
-- [ ] **LX1** -- Inline-C glue for `mat-mul` and `mat-mul-vec` via `cblas_dgemm`
+- [x] **LX1** -- Inline-C glue for `mat-mul` and `mat-mul-vec` via `cblas_dgemm`
   / `cblas_dgemv`. Tests: run existing `mat_test.tur` unmodified under the BLAS
   build; add timing test showing >2x speedup on 512x512 multiply vs. tiled
   pure-Turmeric path.
 
-- [ ] **LX2** -- Inline-C glue for `chol`, `lu`, `qr` via LAPACKE. Tests: run
+- [x] **LX2** -- Inline-C glue for `chol`, `lu`, `qr` via LAPACKE. Tests: run
   existing `decomp_test.tur` and `solve_test.tur` unmodified; verify numerical
   results agree with pure-Turmeric path to 12 significant figures.
 
-- [ ] **LX3** -- Inline-C glue for `svd` and `eigen-sym` via `LAPACKE_dgesdd`
+- [x] **LX3** -- Inline-C glue for `svd` and `eigen-sym` via `LAPACKE_dgesdd`
   and `LAPACKE_dsyev`. Tests: same datasets as LB0 and LB2; numerical agreement
   to 12 significant figures.
 
-- [ ] **LX4** -- Documentation: note the `TUR_LINALG_BLAS` flag in
+- [ ] **LX4** *(docs and README rows done; tag pending the merge)* -- Documentation: note the `TUR_LINALG_BLAS` flag in
   `docs/guides/linalg-guide.md`; add installation instructions for OpenBLAS /
   MKL as optional deps; tag `linalg-blas-v0.1.0`.
 
@@ -634,14 +638,14 @@ It solves X B = Y in the least-squares sense via QR (from `linalg/decomp`).
 
 ### Part D phases
 
-- [ ] **SM0** -- `build.tur`; spice deps on `tur-linalg` (v0.1.0) and
+- [x] **SM0** -- `build.tur`; spice deps on `tur-linalg` (v0.1.0) and
   `tur-stats`; `multivariate/cov`: `cov-mat`, `cov-mat-pop`, `cor-mat`,
   `mahalanobis`, `mahalanobis-auto`. Tests: 4x3 toy dataset; verify
   `cov-mat` matches the `stats/cov` pairwise result; verify
   Mahalanobis distance from center equals zero.
   *Unblocked: can start once `linalg-v0.1.0` is tagged.*
 
-- [ ] **SM1** -- `multivariate/pca`: `PCAOpts`, `pca`, `pca-project`,
+- [x] **SM1** -- `multivariate/pca`: `PCAOpts`, `pca`, `pca-project`,
   `pca-reconstruct`, `pca-var-explained`, `pca-free`. Algorithm: center/scale
   X; thin SVD via `linalg/decomp svd`; loadings = V columns, scores = U * S.
   Tests: iris-style 4-column dataset; verify `loadings' * loadings ~= I`;
@@ -649,7 +653,7 @@ It solves X B = Y in the least-squares sense via QR (from `linalg/decomp`).
   all components recovers X to tolerance.
   *Blocked on LB0 (SVD).*
 
-- [ ] **SM2** -- `multivariate/factor`: `FAOpts`, `factor-analysis` via
+- [x] **SM2** -- `multivariate/factor`: `FAOpts`, `factor-analysis` via
   principal axis factoring (iterated principal components with communality
   updates); `fa-free`. Varimax rotation is out of scope for v0.1.
   Tests: 6-variable correlation matrix with known 2-factor structure; verify
@@ -657,7 +661,7 @@ It solves X B = Y in the least-squares sense via QR (from `linalg/decomp`).
   within tolerance.
   *Blocked on LB0 (SVD) and SM0.*
 
-- [ ] **SM3** -- `multivariate/regress`: `mv-ols`, `mv-predict`,
+- [x] **SM3** -- `multivariate/regress`: `mv-ols`, `mv-predict`,
   `mv-r-squared`, `mv-ols-free`. Solver: QR decomposition of X via
   `linalg/decomp qr`, then `qr-solve` applied column-wise to Y.
   Tests: 2-response system with known analytical solution; verify coefficient
@@ -665,7 +669,7 @@ It solves X B = Y in the least-squares sense via QR (from `linalg/decomp`).
   R² values.
   *Blocked on SM0.*
 
-- [ ] **SM4** -- `multivariate/test`: `hotelling-1samp`, `hotelling-2samp`,
+- [x] **SM4** -- `multivariate/test`: `hotelling-1samp`, `hotelling-2samp`,
   `manova-1way`, and their free functions. F and p-value computation delegate
   to `stats/dist` for the F-distribution CDF.
   Tests: one-sample T² against a known mean (verify p-value matches R's
@@ -673,7 +677,7 @@ It solves X B = Y in the least-squares sense via QR (from `linalg/decomp`).
   MANOVA on three groups.
   *Blocked on SM0.*
 
-- [ ] **SM5** -- `multivariate/lda`: `LDAOpts`, `lda-fit`, `lda-predict`,
+- [x] **SM5** -- `multivariate/lda`: `LDAOpts`, `lda-fit`, `lda-predict`,
   `lda-posterior`, `lda-transform`, `lda-free`. Algorithm: pooled within-class
   covariance via `multivariate/cov`; between-class scatter; generalized
   eigendecomposition via `eigen-sym` on S_w^{-1} S_b.
@@ -681,12 +685,12 @@ It solves X B = Y in the least-squares sense via QR (from `linalg/decomp`).
   classification accuracy > 95%; verify discriminant axis is orthogonal.
   *Blocked on SM0, SM3, and LB2 (eigen-sym).*
 
-- [ ] **SM6** -- `multivariate/fmt`: all print functions. Tests: verify
+- [x] **SM6** -- `multivariate/fmt`: all print functions. Tests: verify
   `pca-print` and `fa-print` produce non-empty output without crashing on
   minimal datasets; variance table rows sum to 1.0.
   *Blocked on SM1--SM5.*
 
-- [ ] **SM7** -- Tests pass on all CI targets; `turmeric-spices` README row
+- [ ] **SM7** *(docs and README rows done; tag pending the merge)* -- Tests pass on all CI targets; `turmeric-spices` README row
   for `tur-stats-multivariate`; `docs/guides/multivariate-guide.md` with
   sections on PCA, factor analysis, multivariate regression, Hotelling's T²,
   and LDA; `stats-multivariate-v0.1.0` tag.
@@ -705,6 +709,99 @@ It solves X B = Y in the least-squares sense via QR (from `linalg/decomp`).
 | `v0.3` | Structural Equation Modeling (SEM) basics |
 
 ---
+
+## Implementation notes (2026-10-29)
+
+Built on turmeric-spices branch `claude/linalg-followups`. Where the build
+departs from the sketch above, and why:
+
+**Types are real types, not `:int`.** The sketches predate linalg's v0.21.0
+struct model. Factor and result structs own typed `mat` / `lavec` /
+`(Vec int)` fields, and struct names are hyphen-free as linalg's existing
+`cholfac` / `lufac` / `qrfac` are: `svdfac`, `eigenfac`, `IterOpts`,
+`IterResult`, `coomat` / `csrmat` / `cscmat` / `ilufac`, `PCAOpts`,
+`PcaResult`, `FAOpts`, `FaResult`, `MvOlsResult`, `HotellingResult`,
+`ManovaResult`, `LDAOpts`, `LdaResult`. Fallible entry points return
+`(Result T cstr)`: `eigen-sym` (not square, or not symmetric), `ilu0`,
+`factor-analysis`, `manova-1way`, `lda-fit`.
+
+**Part A.**
+- `svd` uses one-sided (Hestenes) Jacobi, not Golub-Reinsch (open question
+  1): simpler to get right, accurate to high relative precision, and the
+  LAPACK backend covers large matrices. It returns the full U (m x m) and Vt
+  (n x n) for tall and wide A; the columns of U past rank are completed to an
+  orthonormal basis.
+- `svd-rank` takes `tol <= 0` to mean the LAPACK/numpy cutoff
+  `max(m, n) * eps * s[0]`; `svd-solve` and `svd-project` use it.
+- `mat-mul`'s tile size is a C macro, `TUR_LINALG_BLOCK` (default 64), set
+  through `:build-opts :c-flags`. `mat-mul-vec` moved to C as well. The
+  512x512 timing is printed by `tests/mul.tur` as a TAP comment, not asserted.
+- `linalg/iter` adds `iter-opts`, `iter-opts-default`, `iter-result` (for
+  solvers in other spices) and `iter-result-free` beside `cg-free` /
+  `bicgstab-free`.
+- While cross-checking multivariate OLS, linalg 0.1's `qr-solve` turned out to
+  be wrong for every m > n (it back-substituted over an m x m block of the
+  m x n R and returned inf/nan); its only test was 2x2. Fixed, with a 4x2
+  least-squares test.
+
+**Part B.**
+- A `coomat` builder (`coo-new`, `coo-push!`) replaces the cons list of
+  `coo-entry`; duplicate coordinates are summed on compression.
+- `csr-add` accepts different sparsity patterns (it stores the union), which
+  includes the same-pattern case the plan asked for.
+- `csc-spmv` computes A' v, as specified; `csc-from-csr` / `csr-from-csc`
+  re-store the same matrix, and `csr->dense` / `csc->dense` were added for the
+  round trips.
+- `ilu-apply` applies the ILU(0) preconditioner; `sparse-cg` /
+  `sparse-bicgstab` report through `linalg/iter`'s `IterResult`.
+
+**Part C.** Spices are built by `tur`, not CMake, so there is no CMake
+option and no `FindCBLAS.cmake` / `FindLAPACKE.cmake`:
+- A consuming project turns the backend on in its own `build.tur`:
+  `:build-opts #map{:c-flags ["-DTUR_LINALG_BLAS=1"] :link-libs ["openblas"]}`
+  (Linux) or `:link-flags ["-framework Accelerate"]` (macOS). Without the
+  flag no BLAS symbol is referenced, which is the "non-BLAS builds do not link
+  it" property the separate glue object was for.
+- The kernels call the Fortran LAPACK entry points (`dpotrf_`, `dgetrf_`,
+  `dgeqrf_` + `dorgqr_`, `dgesdd_`, `dsyev_`) and `cblas_dgemm` /
+  `cblas_dgemv`, with prototypes declared inline. No `cblas.h` or `lapacke.h`
+  is included, which settles open question 3: there is no header path to
+  detect, and OpenBLAS, reference BLAS/LAPACK, MKL and Accelerate all export
+  those symbols. LAPACKE is not used.
+- `linalg-blas?` reports the backend; `TUR_LINALG_NO_BLAS` switches it off at
+  run time, so one test binary compares both paths.
+- `spices/linalg/fixtures/run.sh` (the shard's fixtures stage) builds the
+  linalg suite against the backend unmodified, checks mat-mul, mat-mul-vec,
+  chol, lu, qr, the three solves, svd and eigen-sym against the pure kernels
+  to 12 significant figures, and requires a >= 2x speedup on the 512x512
+  multiply (measured ~7-18x). CI's Linux leg installs `libopenblas-dev`; under
+  CI a missing BLAS fails the stage rather than skipping. Windows is not
+  covered (no Windows spice leg).
+
+**Part D.**
+- `manova-1way` and `lda-fit` take one data matrix plus a `(Vec int)` label
+  per row instead of a cons list of per-group matrices; `lda-predict` returns
+  a `(Vec int)`.
+- `HotellingResult` / `ManovaResult` are plain `^copy` values, so there is no
+  `hotelling-free` / `manova-free`.
+- `FAOpts` has no `scores` flag (factor scores need X, not R); `fa-scores f x`
+  computes regression scores instead. It gains `max-iters` / `tol`, and
+  `FaResult` reports `iters` / `converged`.
+- `PcaResult.scale` is ones when unscaled, not nil.
+- `LDAOpts.prior` is a `lavec` (empty = class frequencies); `tol` triggers the
+  ridge on a near-singular S_w (open question 6). The generalized problem is
+  solved by whitening with S_w = Q D Q', not `mat-inv`, so the axes come out
+  S_w-orthonormal.
+- `mahalanobis` returns the distance, not its square (R returns the square);
+  `mahalanobis-auto` uses the SVD pseudo-inverse (`mv-pinv`).
+- `stats/dist`'s `pf-dist` was checked against three tabulated F critical
+  values before the p-values used it (open question 5); every statistic is
+  tested against numpy / scipy, and `cov-mat` / `mv-ols` are cross-checked
+  against tur-stats' `cov` / `ols-frame`.
+
+---
+
+## Open questions
 
 1. **SVD algorithm choice.** Golub-Reinsch (one-sided bidiagonalization +
    iterative QR sweeps) is the standard textbook choice. For very rectangular

@@ -734,7 +734,7 @@ from `../turmeric-spices/` and how it composes with the others.
   - Feeding frame columns into a model
   - Aligning column names with formula terms
   - Reading back fitted results
-- *See also: `stats-guide.md`, `upcoming/stats-formula-plan.md`*
+- *See also: `stats-guide.md`, `archive/stats-formula-plan.md`*
 
 ### Chapter 23c -- Plotting with `tur-plot`
 
@@ -1278,7 +1278,7 @@ cross-referenced from the applied chapters in Part III.5.
   - Descriptive statistics
   - OLS regression
   - Hypothesis tests
-- `tur-stats-formula` -- Wilkinson-style formula DSL *(planned)*
+- `tur-stats-formula` -- Wilkinson-style formula DSL *(shipped: stats-formula-v0.1.0)*
   - The `~` formula syntax
   - Term expansion to model matrices
   - Pairing with frames

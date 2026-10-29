@@ -43,6 +43,40 @@ static size_t skip_noncode(const char *s, size_t n, size_t i) {
     return i;
 }
 
+/* If s[i] is the `#` of a preprocessor line whose identifiers name nothing a
+ * program uses -- a conditional (`#if`, `#ifdef`, `#elif`, ...), `#undef`,
+ * `#include`, `#pragma`, `#error` -- the index past the line and its
+ * continuations; else 0.  `#  undef min` in the prefix named the stdlib's
+ * `min`, and so kept it (and `max` beside it) in every program.  A `#define`
+ * is read: its body names what an expansion will use. */
+static size_t pp_names_nothing(const char *s, size_t n, size_t i) {
+    if (s[i] != '#') return 0;
+    size_t b = i;
+    while (b > 0 && (s[b - 1] == ' ' || s[b - 1] == '\t')) b--;
+    if (b > 0 && s[b - 1] != '\n') return 0;          /* not first on its line */
+    size_t j = i + 1;
+    while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
+    size_t k = j;
+    while (k < n && is_id_char((unsigned char)s[k])) k++;
+    static const char *const skip[] = { "if", "ifdef", "ifndef", "elif", "else", "endif",
+                                        "undef", "include", "pragma", "error", "warning",
+                                        "line", NULL };
+    int hit = 0;
+    for (int q = 0; skip[q] && !hit; q++)
+        hit = strlen(skip[q]) == k - j && memcmp(s + j, skip[q], k - j) == 0;
+    if (!hit) return 0;
+    while (k < n) {
+        if (s[k] == '\n') {
+            size_t e = k;
+            while (e > i && (s[e - 1] == ' ' || s[e - 1] == '\t' || s[e - 1] == '\r')) e--;
+            if (e > i && s[e - 1] == '\\') { k++; continue; }
+            return k;
+        }
+        k++;
+    }
+    return n;
+}
+
 /* Call `fn` for every identifier of s[0..n) that is in code. */
 typedef void (*id_fn)(const char *id, size_t len, void *ud);
 static void for_each_ident(const char *s, size_t n, id_fn fn, void *ud) {
@@ -50,6 +84,8 @@ static void for_each_ident(const char *s, size_t n, id_fn fn, void *ud) {
     while (i < n) {
         size_t j = skip_noncode(s, n, i);
         if (j != i) { i = j; continue; }
+        size_t pp = pp_names_nothing(s, n, i);
+        if (pp) { i = pp; continue; }
         if (is_id_start((unsigned char)s[i]) &&
             (i == 0 || !is_id_char((unsigned char)s[i - 1]))) {
             size_t k = i;
@@ -149,6 +185,7 @@ typedef struct Chunk {
     NameEnt *defines;          /* NULL: a root */
     int      live;
     int      is_pp;
+    int      is_macro;         /* a `#define NAME`: kept, read only when NAME is */
 } Chunk;
 
 typedef struct ChunkVec { Chunk *v; size_t n, cap; } ChunkVec;
@@ -368,6 +405,14 @@ static Tok chunk_defines(const char *s, size_t n) {
             tok_is(&t[q], "asm") || tok_is(&t[q], "__asm__"))
             return none;
     }
+    /* A box's forward declaration goes with its definition: as a root it
+     * named every box, and so every function value's shim and function. */
+    if (tok_is(&t[0], "TUR_FATBOX_DECL")) {
+        if (k >= 4 && tok_is(&t[1], "(") && tok_is_ident(&t[2]) && tok_is(&t[3], ")") &&
+            rest_is_blank(s, n, match_close(s, n, (size_t)(t[1].p - s))))
+            return t[2];
+        return none;
+    }
     if (tok_is(&t[0], "TUR_FATBOX_DEF")) {
         if (k >= 3 && tok_is(&t[1], "(") && tok_is_ident(&t[2]) &&
             rest_is_blank(s, n, match_close(s, n, (size_t)(t[1].p - s))))
@@ -424,6 +469,14 @@ static Tok chunk_defines(const char *s, size_t n) {
     }
     if (!rest_is_blank(s, n, end)) return none;
     if (lp && (!eq || lp < eq) && (!lb || lp < lb)) {
+        /* A function-pointer object, `static R (*name)(params) [attrs]
+         * [= init];`: removable like any static object.  The emitter writes
+         * one to keep a function cc would warn is unused
+         * (`__tur_any_drop_keep = __tur_any_drop`); as a root it kept that
+         * function, and what it calls, in every program. */
+        if (!is_extern && lp + 4 < k && tok_is(&t[lp + 1], "*") && tok_is_ident(&t[lp + 2]) &&
+            tok_is(&t[lp + 3], ")") && tok_is(&t[lp + 4], "(") && tok_is(&t[term], ";"))
+            return t[lp + 2];
         /* a function: `name (` where name is an identifier, and not a
          * pointer declarator `(*name)` */
         if (lp < 1 || !tok_is_ident(&t[lp - 1])) return none;
@@ -451,6 +504,66 @@ static Tok chunk_defines(const char *s, size_t n) {
     if (tok_is(&t[term], "{") && !(eq && eq < term)) return none;  /* static struct X { */
     if (stop < 1 || !tok_is_ident(&t[stop - 1])) return none;
     return t[stop - 1];
+}
+
+/* The name a `#define NAME ...` chunk defines, or len 0 for any other
+ * preprocessor line.  A define is not a root: its body names something only
+ * once NAME itself is named.  The emitter aliases every ADT constructor
+ * (`#define ctor_Tuple2 ctor_Tuple2_Tuple2`), and as roots those aliases kept
+ * every stdlib constructor in every program -- `Tuple2`..`Tuple8`, `Grid`,
+ * `Schema`, `Slice`, `Pair`, `Option`, `Result` in `(println 1)`.  The line
+ * itself is always written out: an unused macro costs nothing, and a dropped
+ * one could only fail. */
+static Tok pp_define_name(const char *s, size_t n) {
+    Tok none = { NULL, 0 };
+    size_t i = 0;
+    if (i >= n || s[i] != '#') return none;
+    i++;
+    while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+    if (n - i < 6 || memcmp(s + i, "define", 6) != 0) return none;
+    i += 6;
+    if (i >= n || (s[i] != ' ' && s[i] != '\t')) return none;
+    while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+    if (i >= n || !is_id_start((unsigned char)s[i])) return none;
+    size_t k = i;
+    while (k < n && is_id_char((unsigned char)s[k])) k++;
+    Tok t = { s + i, k - i };
+    return t;
+}
+
+/* `TUR_FATBOX_FILL(box, shim, fn)` fills a file-scope box at startup where a
+ * pointer is narrower than its slots (wasm32); elsewhere it is `((void)0)`.
+ * `__tur_fatbox_init` holds one per box, and as a live chunk it named every
+ * box's shim and function, so no function value was ever dropped.  The box's
+ * own TUR_FATBOX_DEF already names both, so a fill of a box this TU defines
+ * names nothing (mark_chunk), and is written out only while that box is live
+ * (write_chunk).  A box the map does not know -- one declared inside a
+ * function -- is read as before. */
+static int is_fill_at(const char *s, size_t n, size_t i) {
+    return n - i >= 15 && memcmp(s + i, "TUR_FATBOX_FILL", 15) == 0 &&
+           (i + 15 >= n || !is_id_char((unsigned char)s[i + 15])) &&
+           (i == 0 || !is_id_char((unsigned char)s[i - 1]));
+}
+
+/* For a fill at s[i]: its box's name, and the end of the statement (past the
+ * `;` after the closing paren).  Returns 0 when it is not a well-formed fill. */
+static int fill_parse(const char *s, size_t n, size_t i, Tok *box, size_t *end) {
+    size_t j = i + 15;
+    while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
+    if (j >= n || s[j] != '(') return 0;
+    size_t close = match_close(s, n, j);
+    size_t b = j + 1;
+    while (b < close && (s[b] == ' ' || s[b] == '\t')) b++;
+    if (b >= close || !is_id_start((unsigned char)s[b])) return 0;
+    size_t e = b;
+    while (e < close && is_id_char((unsigned char)s[e])) e++;
+    box->p = s + b;
+    box->len = e - b;
+    size_t k = close;
+    while (k < n && (s[k] == ' ' || s[k] == '\t')) k++;
+    if (k < n && s[k] == ';') k++;
+    *end = k;
+    return 1;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -605,6 +718,51 @@ static int prune_disabled(void) {
     return off && *off && strcmp(off, "0") != 0;
 }
 
+/* Is `box` a file-scope fat box this TU defines (a TUR_FATBOX_DEF node)? */
+static NameEnt *fill_box_known(NameMap *map, Tok box) {
+    NameEnt *e = nm_find(map, box.p, box.len, 0);
+    return (e && e->n_chunks) ? e : NULL;
+}
+
+/* mark_ident over a chunk, reading a fill of a known box as naming nothing. */
+static void mark_chunk(const char *s, size_t n, MarkCtx *m) {
+    size_t i = 0, from = 0;
+    while (i < n) {
+        size_t j = skip_noncode(s, n, i);
+        if (j != i) { i = j; continue; }
+        Tok box;
+        size_t end;
+        if (is_fill_at(s, n, i) && fill_parse(s, n, i, &box, &end) &&
+            fill_box_known(m->map, box)) {
+            for_each_ident(s + from, i - from, mark_ident, m);
+            i = from = end;
+            continue;
+        }
+        i++;
+    }
+    for_each_ident(s + from, n - from, mark_ident, m);
+}
+
+/* Write a live chunk, leaving out the fills of boxes that were dropped. */
+static void write_chunk(Buf *out, const char *s, size_t n, NameMap *map) {
+    size_t i = 0, from = 0;
+    while (i < n) {
+        size_t j = skip_noncode(s, n, i);
+        if (j != i) { i = j; continue; }
+        Tok box;
+        size_t end;
+        NameEnt *e;
+        if (is_fill_at(s, n, i) && fill_parse(s, n, i, &box, &end) &&
+            (e = fill_box_known(map, box)) != NULL && !e->live) {
+            buf_write(out, s + from, i - from);
+            i = from = end;
+            continue;
+        }
+        i++;
+    }
+    buf_write(out, s + from, n - from);
+}
+
 /* Prune the program half s[pstart..n).  s[0..pstart) is all roots; the heavy
  * includes of s[dpos..pstart) (the committed decls region, empty for a full
  * TU) are dropped when unused. */
@@ -618,7 +776,16 @@ static void prune_program_half(Buf *src, size_t dpos, size_t pstart,
     NameMap map = {0};
     unsigned n_nodes = 0;
     for (size_t c = 0; c < cv.n; c++) {
-        if (cv.v[c].is_pp) continue;
+        if (cv.v[c].is_pp) {
+            Tok mn = pp_define_name(s + cv.v[c].start, cv.v[c].end - cv.v[c].start);
+            if (mn.len) {
+                NameEnt *e = nm_find(&map, mn.p, mn.len, 1);
+                ent_add_chunk(e, (unsigned)c);
+                cv.v[c].defines = e;
+                cv.v[c].is_macro = 1;
+            }
+            continue;
+        }
         Tok nm = chunk_defines(s + cv.v[c].start, cv.v[c].end - cv.v[c].start);
         if (!nm.len) continue;
         NameEnt *e = nm_find(&map, nm.p, nm.len, 1);
@@ -639,7 +806,7 @@ static void prune_program_half(Buf *src, size_t dpos, size_t pstart,
         if (cv.v[c].live) continue;
         cv.v[c].live = 1;
         m.self = cv.v[c].defines;
-        for_each_ident(s + cv.v[c].start, cv.v[c].end - cv.v[c].start, mark_ident, &m);
+        mark_chunk(s + cv.v[c].start, cv.v[c].end - cv.v[c].start, &m);
         m.self = NULL;
     }
 
@@ -658,11 +825,11 @@ static void prune_program_half(Buf *src, size_t dpos, size_t pstart,
     inc_dropped += copy_without_includes(&out, s, dpos, pstart, &use);
     unsigned dropped = 0;
     for (size_t c = 0; c < cv.n; c++) {
-        if (!cv.v[c].live) { dropped++; continue; }
+        if (!cv.v[c].live && !cv.v[c].is_macro) { dropped++; continue; }
         if (cv.v[c].is_pp)
             inc_dropped += copy_without_includes(&out, s, cv.v[c].start, cv.v[c].end, &use);
         else
-            buf_write(&out, s + cv.v[c].start, cv.v[c].end - cv.v[c].start);
+            write_chunk(&out, s + cv.v[c].start, cv.v[c].end - cv.v[c].start, &map);
     }
 
     if (stats) {

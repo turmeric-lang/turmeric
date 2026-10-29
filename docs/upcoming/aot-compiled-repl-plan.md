@@ -6,14 +6,28 @@
 > C1, and **graduated 2026-10-17** (0.65 line, past its advisory `expires_at`
 > of 0.65.0): on by default on every `TUR_JIT` build, with
 > `TUR_REPL_JIT_INLINE_C=0` as the off switch. C2 was investigated 2026-10-02 and
-> again 2026-10-04 (findings under C2) and is not started. **Rewritten 2026-09-29.** The 2026-06-28 draft (in
+> again 2026-10-04 (findings under C2); **its steps 1 and 2 landed 2026-10-28/29**
+> behind `--enable=compiled-repl` (prototype): every turn compiles the
+> session's definition table plus the turn, and its globals live in host
+> slots (C2, "Step 1, as built" and "Step 2, as built"). Point 5's
+> image-memory decision went to option (a) on 2026-10-29: a turn keeps only its
+> program's code and data, not its MIR context (C2, "Point 5, option (a), as
+> built"); results print through Show or their constructors, and redefining a
+> type drops the defs holding its values (C2, "Point 8 and type redefinition");
+> a panic ends only its turn, a continuation cannot outlive one, and Try
+> Turmeric has compiled turns behind a checkbox under Compile (C2, "The page").
+> Split images (C5) were chosen and then **deferred the same day**: most of a
+> turn's program is not the session's definitions but stdlib baggage every
+> program carried, and the JIT pruner now drops it (C2, "The stdlib baggage,
+> pruned"): a kept turn on the page went from ~394 KB to ~229 KB.
+> **Rewritten 2026-09-29.** The 2026-06-28 draft (in
 > git history) proposed compiling each prompt form with a `cc` subprocess into
 > a `.so` and `dlopen`ing it. It predates the in-process MIR JIT (graduated
 > 0.34.0). The JIT and the spice REPL now provide most of the machinery the
 > draft planned to build, and the draft had design flaws this version fixes
 > (see "Why not the 2026-06-28 draft"). The file name is historical: nothing
 > here is ahead-of-time compiled any more.
-> **Last Updated:** 2026-10-17 (C1's `cstr` arguments are copied)
+> **Last Updated:** 2026-10-29 (preamble preprocessed once a session; C5 deferred)
 > **Track:** post-v1. C0 (a bug fix) and C1 (graduated) have landed.
 > **Type:** REPL / interpreter (`src/turi/`) / JIT (`src/jit_engine.c`) /
 > emitter (REPL-mode globals).
@@ -524,6 +538,441 @@ of the globals rather than the slots, and the two states would drift apart. A
 
 A loaded spice (RP3) is out of scope for C2; see C3.
 
+#### Step 1, as built (2026-10-28)
+
+Behind `--enable=compiled-repl` (prototype, introduced 0.72.0). The
+recommendation's first item: the step-7 branch and the definition table, with
+per-program globals.
+
+- **Where.** `src/turi/compiled_turn.{h,c}` (engine-free, `tur_core`) owns the
+  definition table and builds the program; the compile-and-run is a host hook,
+  `g_repl_compiled_turn_hook` (`src/driver/jit.c`), installed by `tur`'s
+  `main.c` on a `TUR_HAVE_JIT` build. `repl_fresh_env` turns the session's
+  `compiled_repl` on after the preload, so the stdlib stays the
+  interpreter's; `#lang`s other than `turmeric`, and the sweet/neoteric
+  readers, stay interpreted.
+- **The turn.** Step 7 of `turi_eval_impl` calls `turi_compiled_turn_run`
+  instead of `eval_toplevel_guarded`; its result feeds step 8 unchanged, so the
+  session commits a turn only when its program compiled and exited 0.
+- **The table.** Each new form is a definition (keyed `defn f`, `def x`,
+  `defstruct Pt`..., `definstance Show Pt`; `define` is `def`), an import
+  (`import`/`load`/`require`/`use`, kept in order, deduplicated by text), or
+  an expression. A definition replaces its entry in place. The table changes
+  only when the turn ran.
+- **The program.** The imports, five inline-C printers, the table, and
+  `(defn main [] : int <turn> 0)`. `main` runs the turn's expressions and
+  prints the last as the REPL would: `%lld`, `%g`, a quoted string,
+  `true`/`false`, `nil` for a unit result, `#<fn>` for a function value, a
+  defn as `#<fn f>`, a def as its value. A type definition prints nothing and
+  the REPL shows its `#<struct-type Pt>` sentinel itself. The host runs it as
+  `tur jit` runs a file (split, prune, `tur_jit_execute`, the full-preamble
+  retry) and keeps nothing resident.
+- **Tests.** `tests/turi/repl-compiled.sh` (ctest `tur_repl_compiled`): a
+  transcript of scalars, definitions and a redefinition prints the same
+  `=>` lines compiled and interpreted; inline-C defns compile with the turn;
+  a turn that fails to elaborate, or to compile, leaves the table as it was;
+  step 1's differences are pinned; without the flag nothing changes.
+
+**Differences from the interpreter, step 1:**
+
+- Every initializer re-runs each turn, so a mutation of a global lasts one
+  turn: `(def ^mut n 5)`, then `(bump)` twice prints `6`, `6` (interpreted:
+  `6`, `7`). Step 2's slots fix it (below), and a `def` whose initializer has
+  an effect repeats that effect every turn until then.
+- A value with no scalar printer prints `#<Type>` -- `#<Pt>`, `#<(Vec int)>`
+  -- where the interpreter uses its `Show` instance or its struct repr (the
+  plan's turn-entry printer, point 8).
+- A name only the interpreter's natives answer (it warns `unknown name ...;
+  will runtime-dispatch` and finds a native) is an error in the compiled
+  program, as it would be under `tur run`. The turn fails and the session
+  carries on.
+- A panic or a non-zero exit fails the turn (`the turn's program exited
+  non-zero`).
+
+**Cost.** Release, x86-64 Linux, 4 cores: a session of N one-line defns, then
+ten expression turns calling the last one, every turn compiled.
+
+| N | turns | compiled, total | per turn | interpreted, total |
+| --- | --- | --- | --- | --- |
+| 1 | 11 | 1.5 s | ~136 ms | 0.02 s |
+| 50 | 60 | 8.0 s | ~134 ms | 0.03 s |
+| 200 | 210 | 27.1 s | ~129 ms | 0.03 s |
+
+Flat in the session's size, as the 2026-10-04 look predicted: the prune keeps
+only what `main` reaches, so the fixed c2mir floor is the cost. That is
+inside the 200 ms budget here; on arm64 macOS the floor alone was ~245 ms, so
+C4 item 2 still decides that platform. Nothing stays resident, so step 1 has
+no image-memory question; step 2's slots bring it back.
+
+#### Step 2, as built (2026-10-29)
+
+The recommendation's second item: globals in host slots. With it, a compiled
+session's globals behave as the interpreter's: the transcript of a mutable
+global bumped across turns, then redefined, then read by a closure from an
+earlier turn, prints the same `=>` lines both ways (`tests/turi/repl-compiled.sh`).
+
+- **The emitter** (`g_emit_repl_slots`, set only by the compiled turn's
+  compile; ordinary emission is byte-identical, every snapshot regenerated
+  unchanged): a top-level `def` of the program's own -- not the stdlib's, not
+  an imported library's, not a `^thread-local` -- is
+  `static T *__tur_slot_x_N; #define x_N (*__tur_slot_x_N)` in place of its
+  storage, point 6's shape, and so is its forward declaration (a lifted
+  lambda is emitted before the def and must reach the slot too). Its
+  initializer binds the pointer with `tur_repl_slot("x", "<type>", size,
+  &fresh)` and runs only when the slot is fresh; the store notes its word
+  (`TUR_REGION_NOTE_WORDS`), since a slot outlives every region bracket.
+- **The slots** (`tur_repl_slot`, `turi/compiled_turn.c`, resolved through
+  the engine's `JIT_SHIMS` so the wasm module finds it too): keyed by the
+  Turmeric name. Fresh when the name is new, when its type or size changed
+  (new storage; the old stays for earlier turns' code), or when the turn
+  redefines it (the same storage, initialized again -- so a closure from an
+  earlier turn sees the new value, as interpreted). `:reset` drops the table.
+- **Programs stay resident** (`tur_jit_set_keep_contexts`): a slot can hold a
+  pointer into the program that made it -- a string literal, a function. Only
+  the C front end is released after a turn, as for an image. Code is
+  generated eagerly, since a function of an earlier program may be called by
+  a later one after lazy generation moved to another context.
+- **The region case** the corpus list asks for: a `^heap` node made inside a
+  `with-region` and kept in a `def` (by the initializer, and by `set!` from a
+  function), read in a later turn, prints its field.
+
+**Cost, step 2.** The same Release build and sessions as step 1:
+
+| session | turns | total | per turn | peak RSS |
+| --- | --- | --- | --- | --- |
+| 1 defn + 10 calls | 11 | 1.7 s | ~155 ms | 67 MB |
+| 50 defns + 10 calls | 60 | 11.1 s | ~185 ms | 135 MB |
+| 200 defns + 10 calls | 210 | 48.7 s | ~232 ms | 312 MB |
+| 1 defn + 999 calls | 1,000 | 345 s | ~345 ms | 1,221 MB |
+
+Resident memory after 1,000 turns -- the success criterion's number -- is
+**1.2 GB, ~1.2 MB per turn**. And the per-turn time now grows with the
+session (turns 1-50 ~188 ms, 251-300 ~302 ms): stack samples late in a long
+session are all in c2mir's parse and in malloc/free, nothing linear in the
+slot or definition tables, so it is the allocator working through the
+resident heap. Both say the same thing: point 5's image-memory decision, (a)
+or (b), is what C2 needs before it can soak, and it is now measured rather
+than estimated.
+
+#### Point 5, option (a), as built (2026-10-29)
+
+Decided: (a) first, (b) later if it is needed. Measured before building, a
+kept context was ~1.3 MB a turn, and it broke down as: ~280 KB of fixed
+tables `MIR_init` builds for every context (the symbol and string tables, the
+scanner, the interpreter's thunk and interface tables, which a generated
+program never uses); ~220 KB of generator state; ~140 KB of MIR instructions;
+and the program's items. Releasing the generator and the instructions alone
+saved a third. The fixed tables cannot be trimmed from outside MIR, and they
+are the cost of one context per turn.
+
+So nothing of the context is kept: only what a pointer from a slot can reach,
+which is the program's machine code and its data sections
+(`jit_finish_kept_context`, `src/jit_engine.c`).
+
+- **Data:** `MIR_finish` frees a section head's storage only while its item's
+  `addr` is set, so each head's `addr` is moved to a kept list and cleared
+  first.
+- **Code:** a kept context is created with its own code allocator
+  (`jit_keep_code_alloc`). Its unmap keeps the pages up to the highest one
+  ever made writable (every byte of code is written through a protect call)
+  and releases the untouched rest of the 128 MB reservation.
+- **Everything else** goes with `MIR_finish`, as for a context that is not
+  kept. Generation is already eager under keep, so no function is left to
+  generate from the IR that goes.
+
+No MIR change. The kept pieces live for the process; `:reset` drops the
+slots but does not unmap old code, since the runtime's own tables may still
+hold a function pointer into it. Where the program runs on MIR's interpreter
+(`TUR_JIT_GEN=interp`, and the wasm module, where the IR *is* the program)
+the whole context stays, and Windows keeps it too, for want of the allocator.
+`tests/turi/repl-compiled.sh` reads a string literal, a lambda and a static
+table made in turn 1 a hundred turns later, under the ASan Debug build.
+
+**Cost, after (a).** The same Release build and sessions as step 2:
+
+| session | turns | before: total, peak RSS | after: total, peak RSS |
+| --- | --- | --- | --- |
+| 1 defn + 299 calls | 300 | 71.5 s, 409 MB | 39.8 s, 88 MB |
+| 1 defn + 999 calls | 1,000 | 345 s, 1,221 MB | 143 s, 156 MB |
+
+A turn now keeps ~0.1 MB (its code pages and data sections, plus the
+session's own growth), down from ~1.2 MB, and the per-turn time no longer
+grows with the session: turns 1-50 ~131 ms, 251-300 ~136 ms (step 2: ~188 ms
+rising to ~302 ms). The slowdown was the allocator working through the kept
+contexts' heap; finishing them is also why every turn got faster.
+
+#### Point 8 and type redefinition, as built (2026-10-29)
+
+**The printer.** A result prints as the interpreter's display prints it,
+chosen from its static type when the turn's program is built (`emit_repr`,
+`src/turi/compiled_turn.c`):
+
+- scalars as before;
+- **Show** when the session has an instance for the type's head and for each
+  argument it is applied to (`Vec`, `Map`, `Set`, `Sym`, a user's own), through
+  `(show v)`. The program then loads `stdlib/typeclass-show.tur`, which the
+  interpreter preloads and a compiled program does not; so does a program
+  whose own text uses `show`;
+- a **struct or ADT** without an instance as `Name { field = value, ... }`, a
+  constructor with no fields as `#<struct Name>`, four levels deep, by a
+  generated `match`. A generic ADT's fields are typed by the arguments it is
+  applied to;
+- a **Vec** whose elements have no Show as `[a b]`, each element as the REPL
+  would print it alone, by a generated loop; another container in that case,
+  and anything else, as `#<Type>`.
+
+Two fixes fell out of matching the transcripts. A positional field, `(Some
+A)`'s, printed as `(null) = 3` in the interpreter; both now print `Some { 3 }`.
+And a `#map{...}` / `#set{...}` literal's form span started at its `{`, so
+the definition table copied `{:a 1}`, a curly-infix call; the reader now
+spans the whole lexeme. The interpreter's display has two bugs of its own
+the compiled printer does not share:
+[repl-show-uses-wrong-instance-for-vec-elements](../reported/repl-show-uses-wrong-instance-for-vec-elements.md).
+
+**Redefining a type.** The table re-elaborates every definition's source
+against the latest types, and that can change what a `def` means: once `S`
+grows a field, `(def s (S 1))` is a partial application, and the session --
+which still says `s : S` -- printed the closure as a struct
+(`S { a = 139737849398160, b = 1 }`). Changing a field's type was worse:
+the stale def stopped compiling, so every later turn failed until `:reset`.
+So each table entry for a `def` records its value's type as elaborated when
+it was made, and a turn that redefines a type drops every `def` whose type
+names it, saying so: `note: S changed, so the defs holding its old values are
+dropped; define them again to use them: s`. Reading a dropped def is then a
+compile error, not a misread value. (The interpreter keeps the old value in
+its old shape; compiled code has one layout per name, the new one.) A `defn`
+that no longer compiles against the new type still fails the turn that
+redefines it; redefine both in one turn.
+
+#### Continuations, fibers and panics across turns, as built (2026-10-29)
+
+**A continuation stays in its turn.** A handler case's `(set! saved k)`
+copies the chain (`dk_copy_range`) and registers it with the reaper, which
+frees it when the program's entry returns -- for a REPL turn, at the end of
+the turn. So a continuation stored in a top-level `def` is refused at compile
+time: `a continuation stored in the top-level saved would outlive this REPL
+turn ...`. Resuming one within the turn that captured it works. Probing this
+found an emitter bug outside the REPL: that store, into any top-level `^mut`
+global, was emitted as `*saved = ...` (a promoted local's cell spelling), so
+the program did not compile at all. A global is now written in place
+(`tests/fixtures/effect-stored-k-in-global`). Resuming a mutable that still
+holds its initial `0` panics (`resume: not a continuation (0)`) instead of
+storing through NULL. The interpreter has a bug of its own here:
+[turi-repl-continuation-resumed-in-later-turn-reads-freed-frames](../reported/turi-repl-continuation-resumed-in-later-turn-reads-freed-frames.md).
+
+**A region's retired generations live for the session.** A turn's program
+registered `atexit(tur_region_shutdown)` like any program, and a turn drains
+its atexit list when it ends, so the shutdown freed the retired generation a
+`def` of a `with-region` node pointed into: the next turn read freed memory.
+Only the Release build showed it (`tests/turi/repl-compiled.sh` with
+`TUR=./build-release/tur`; the Debug build read the right value); the
+emitter now leaves the shutdown out of a compiled turn.
+
+**A fiber crosses turns.** Its stack is heap memory and its code is kept
+(point 5), so a fiber made in one turn and stored in a `def` resumes from the
+next, under ASan.
+
+**A panic, `exit` or `abort` ends the turn, not the REPL** (Open question 3,
+in part). The turn's program runs in the REPL's process, on an entry thread
+(`jit_run_entry`); for a kept context that thread runs `main` under a
+`sigsetjmp` landing. The program's `exit`, `_exit` and `abort` resolve to
+shims that unwind to it, and the host's `abort()` -- where a runtime `panic`
+ends -- arrives as SIGABRT on that thread and does the same. The turn fails
+with the status a shell would see (`exited with status 3`, `134`), and the
+next turn runs; the runtime's panic flag is reset so a second panic is not a
+"double panic". This is the browser engine's 5.7 landing, natively and only
+for REPL turns: `tur jit` keeps libc's. A segfault in compiled code still
+ends the session.
+
+#### The page, as built (2026-10-29)
+
+Try Turmeric's Compile engine has C2 behind a checkbox under Compile in the
+language menu, "Compile prompt turns too" (experimental, kept in
+localStorage like the engine). With it ticked, the worker turns compiled turns
+on for the JIT module's session (`turi_wasm_set_compiled_repl`), and every
+prompt turn runs as a compiled program there. Switching it starts that session
+afresh, since a compiled session's definitions are its own table.
+
+- **The hook** is the driver's, again: `wasm_compiled_turn_run`
+  (`src/web/wasm_jit_glue.c`) installs beside C1's, and compiles with the
+  globals in slots, the split and the prune, then `tur_jit_execute` with the
+  program kept. No full-preamble retry, as for a Compile Run.
+- **The result's text** is now the host's, on both: the printers render into
+  `tur_repl_result_piece`, the turn leaves it in `env->last_turn_text`, and
+  `tur repl` prints it as its `=> ` line while `turi_wasm_eval` returns it as
+  the prompt's result. Before, a compiled turn printed `=> ...` to stdout,
+  which the page would have shown as program output.
+- **A panic** ends the turn there too. The module's `abort()` throws out
+  through JavaScript and would lose the worker, so under keep a program's
+  `tur_panic_root_exit` and `tur_panic` resolve to shims that report as the
+  runtime does, clear the thread's panic state (every turn runs on the one
+  thread) and unwind to the landing a Compile Run already has (5.7). `exit`
+  and `abort` called by the program took that landing already.
+- **Tests:** `tools/wasm-jit/run.js --compiled-turns` drives the module from
+  Node, and `web/tests/jit-engine.spec.js` ticks the box in the page: a
+  global bumped across turns, `[1 2 3]` and a struct printed, a panic
+  survived.
+
+Measured under Node, a one-defn session costs about 130 ms a turn, and the
+module grows about 0.45 MB a turn (347 MB at 20 turns, 429 MB at 200). That
+is point 5 on this target: the program runs on MIR's interpreter, which reads
+its IR, so the whole context stays; there is no generator state to drop, which
+is why it is smaller than the native 1.3 MB was.
+
+#### Point 5 on the page, measured (2026-10-29)
+
+Heap in use (`mallinfo`, wasm32) per turn of a one-defn session of `(f i)`
+turns, through `tools/wasm-jit/run.js --compiled-turns`:
+
+| where | per turn |
+| --- | --- |
+| a kept MIR context | ~567 KB |
+| -- of which `MIR_init`'s tables | ~190 KB |
+| -- of which the functions' register tables | ~185 KB (37 functions x ~5 KB) |
+| -- of which IR (1,034 insns, 2,247 operands) and the rest | ~190 KB |
+| the REPL's per-turn eval arena (its first 64 KB slab) | ~64 KB |
+| everything else | ~12 KB |
+| **total** | **~654 KB** (138 MB at turn 200) |
+
+- **Most of it was table floors.** Every context made its string, alias,
+  item, value, thunk and interface tables at 512-1,000 entries, and every
+  function three register tables at 100/10/100 plus 50 descriptors. MIR's
+  tables double when full, so the floor only wastes memory for a small
+  program, which is what every turn is. turmeric-lang/mir#18 (synced
+  2026-10-29) starts them at 64 per context and 8/4/8 per function: a turn
+  then keeps **~394 KB** (87 MB at turn 200), and the program is the same. Natively it is the same saving on
+  every `tur jit` context.
+- **The rest is the program itself.** Of the 37 functions a turn's program
+  holds, 2 ran (`main`, the module's init); most of the others are the
+  stdlib's constructors (`Tuple2`..`Tuple8`, `Grid`, `Slice`, `Pair`,
+  `Schema`), kept by the JIT pruner, and identical in every turn -- and in
+  every `tur jit` program. That is pruned now (below).
+- **The 64 KB eval arena is not C2's.** `turi_eval_impl` gives each turn an
+  arena it keeps for the session (the interpreter's provenance rule), and its
+  first slab is 64 KB. An interpreted session pays it too; it is mostly
+  untouched, so resident memory barely moves (`tur repl`, 1,000 interpreted
+  turns: 21 MB).
+
+#### The stdlib baggage, pruned (2026-10-29)
+
+Every program the emitter writes carries the whole stdlib prelude, and
+`jit_prune` (`src/compiler/jit_prune.c`) drops what the program does not
+reach before c2mir sees it. Three kinds of root it never questioned kept the
+same ~23 functions in every program: `(println 1)` kept 32 function
+definitions.
+
+- **Constructor aliases.** The emitter writes `#define ctor_Tuple2
+  ctor_Tuple2_Tuple2` for every constructor, and a preprocessor line was a
+  root, so every stdlib constructor stayed. A `#define NAME` is now always
+  written but read only once something live names `NAME`.
+- **Keep-alives.** `static void (*__tur_any_drop_keep)(...) = __tur_any_drop;`
+  (there to quiet cc's unused warning) was a root, since the pruner did not
+  read a function-pointer object. It is removable like any static object.
+- **Function values.** `__tur_fatbox_init` fills every file-scope box with
+  `TUR_FATBOX_FILL(box, shim, fn)` -- `((void)0)` where a pointer fills a
+  slot, real stores on wasm32 -- and the box declarations
+  (`TUR_FATBOX_DECL`) were roots; with `#  undef min` in the prefix naming
+  `min`, they kept every stdlib function value, its shim, and `min`/`max`.
+  A fill of a box the TU defines now names nothing (the box's own
+  `TUR_FATBOX_DEF` names its shim and function) and is written only while
+  the box is live; a declaration goes with its definition; conditional,
+  `#undef`, `#include` and `#pragma` lines name nothing.
+
+`(println 1)` now keeps 9 function definitions: `main`, the static-init chain
+and three frame helpers in the runtime prefix (which is all roots by
+design). On the page a kept compiled turn goes from ~394 KB to **~229 KB**
+of heap (54 MB at turn 200, against 138 MB before mir#18 and this). Native
+turn time does not move (~140 ms; the front end and c2mir's parse of the
+runtime declarations dominate there). `tests/run-jit.sh` is unchanged
+(4,034 / 22 already-failing), so no pruned program needed the full-TU retry;
+the browser corpus shards run clean against the baseline, and one fixture
+(`await-in-generic-capturing-lambda-struct`) now passes on the page because
+the C c2mir rejected is no longer in its program.
+`tests/check-jit-prune-baggage.sh` (ctest `tur_jit_prune_baggage`) keeps it
+so.
+
+#### The preamble, preprocessed once (2026-10-29)
+
+`benchmarks/repl-turn/` put the time where the guess above did not: the
+front end is ~17-21 ms of a ~120-140 ms turn, and c2mir ~80 ms, two thirds of
+it preprocessing the same system headers in every turn (MIR's `c2m` on a
+dumped turn: 69 ms to read it, 18 ms for the same text already
+preprocessed). So the engine now preprocesses that part once.
+
+- **The MIR fork** (`c2m -E -fdump-defines`, `c2mir_options.prepro_defines_p`)
+  ends c2mir's preprocessed output with the state the preprocessor ended in:
+  the `#pragma pack` stack and every macro still defined, as directives. The
+  output then reads back as its input did even with more code after it --
+  `[a.c's output][b.c]` compiles as `[a.c][b.c]` does. Making `-E` output
+  faithful took three fixes in the fork: `#pragma pack` was consumed and never
+  written, adjacent tokens could glue (`-` `-1` as `--1`), and an identifier
+  starting with `u8` was lexed as `88...`. Over the fork's `c-tests`, 1047 of
+  1047 compiling files read back to the same MIR.
+- **The engine** (`jit_pre_cache_*` in `src/jit_engine.c`) takes the first
+  part of a split TU -- `JIT_PRELUDE`, the hoisted prefix, and the committed
+  declarations region, up to its closing marker -- preprocesses it once, and
+  compiles a later TU whose first part is the same text from
+  `[that output][#line][the rest]`. The `#line` keeps the program half's line
+  numbers, so a `<tur-jit>:LINE` diagnostic reads as before. One entry, keyed
+  by the text and the include dirs: every turn of a session shares it. A
+  compile from the cached form that fails is done again from the original,
+  silently first, so a program's own error is reported once and as before;
+  if the original compiles, the cache turns itself off for the process.
+- **On for compiled REPL turns only** (`tur_jit_set_preamble_cache`, set
+  beside `tur_jit_set_keep_contexts`, natively and on the page). A one-shot
+  `tur jit` would pay the extra preprocessing pass and never reuse it.
+  `TUR_JIT_PREAMBLE_CACHE=1`/`0` forces it either way. Not on Windows (it
+  needs `open_memstream`).
+
+| defs | median turn, before | after | jit phase, before | after | peak RSS, before | after |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 134 ms | 60 ms | 86 | 28 | 55 MB | 44 MB |
+| 50 | 167 ms | 65 ms | 112 | 30 | 61 MB | 49 MB |
+| 200 | 165 ms | 86 ms | 104 | 39 | 82 MB | 65 MB |
+
+(Release, x86-64 Linux, one binary with `TUR_JIT_PREAMBLE_CACHE=0`/default;
+`benchmarks/repl-turn/RESULTS.md`.) A turn is now about half front end.
+Checked for correctness with the cache forced on for every program
+(`TUR_JIT_PREAMBLE_CACHE=1`, so each one-shot `tur jit` fills it and compiles
+from it): `tests/run-jit.sh` gives 4,034 passed and the same 22
+already-failing fixtures as with it off, and no TUR-W0071. A sweep of every
+third fixture under `TUR_JIT_TIMING=1` shows 974 of 1,071 compiled from the
+cache and none fell back to the original (the other 97 are not split TUs:
+nothing to cache).
+
+**Live since the sync of turmeric-lang/mir#19** (`external/mir/` at
+`a43e5b2`). The engine compiles the cache in only against a c2mir with
+`prepro_defines_p` (`C2MIR_PREPRO_DEFINES`); built against an older one it is
+absent, and `repl-compiled.sh` skips its cache checks.
+
+**On the page** (the browser JIT module through `turi_wasm_eval`, as the
+prompt calls it; `node tools/wasm-jit/run.js --compiled-turns --time`, same
+sessions as the native benchmark, the module's c2mir and MIR interpreter in
+wasm under node):
+
+| defs | median turn, off | on | p90, off | on | first turn, off | on |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 104 ms | 82 ms | 148 ms | 109 ms | 263 ms | 441 ms |
+| 50 | 122 ms | 77 ms | 153 ms | 96 ms | 246 ms | 413 ms |
+| 200 | 142 ms | 84 ms | 182 ms | 86 ms | 233 ms | 468 ms |
+
+c2mir goes from ~75 to ~36 ms a turn (`TUR_JIT_TIMING`, 50 definitions); the
+rest of a page turn is the front end in wasm, ~40 ms. The first turn of a
+session pays for the fill, ~190 ms once. The same `open_memstream` path works
+in the module, so nothing is specific to the page.
+
+`tests/turi/repl-compiled.sh` checks that a session fills the cache once,
+that header macros reach a turn's inline C through it, and that a failing
+turn's diagnostics are the same with it and without.
+
+**Left before C2 can leave prototype:** nothing on latency -- the gate is
+200 ms and a 200-definition session's turn is ~86 ms natively and ~84 ms on
+the page. What remains of a turn is the front end re-elaborating the stdlib
+and the session (~20 ms natively, ~40 on the page; C4 item 1) and c2mir
+parsing the expanded declarations (~25 ms natively, ~36 on the page). Split images
+(C5) stay deferred until a measured large session shows its own definitions
+dominating.
+
 #### Investigation (2026-10-02)
 
 Read against `main` after C1 landed, with C1's measurements. Nothing here is
@@ -700,12 +1149,127 @@ Only needed if C2 misses its latency budget. Candidates, safest first:
    a program never reaches (`jit_prune`, which `tur jit` already did and the
    image path did not) took a one-defn image from ~235 ms to ~130 ms. What is
    left is mostly the split runtime's declarations and the system headers.
-3. **Split each turn into two images:** a definitions image rebuilt only when
-   a definition changes, and a small turn image for expression-only turns.
-   This is correct only if an expression cannot change the whole-program facts
-   the definitions image was compiled under, and it can: one new call site can
-   make a parameter unowned. The emitter would have to fingerprint those facts
-   and rebuild when they change. This is a research item.
+   **Done for the headers (2026-10-29):** the preamble cache (C2, "The
+   preamble, preprocessed once") preprocesses them once a session; a turn's
+   c2mir phase went from ~85 ms to ~30 ms.
+3. **Split each turn into two images.** Promoted to C5 (2026-10-29), where
+   the whole-program-facts objection is answered by the multi-module build's
+   own pass 1.
+
+### C5 -- split images (chosen and deferred 2026-10-29)
+
+> **Deferred.** The premise below -- that most of a turn's program is the
+> session's definitions -- did not hold: `(println 1)` under `tur jit`
+> carried the same ~23 stdlib functions a turn did, and the pruner already
+> drops definitions a turn does not reach, so a turn image would have carried
+> the same baggage. Pruning that baggage (C2, "The stdlib baggage, pruned")
+> took the memory C5 was for. Probing the module boundary C5 would build on
+> also found two separate-compilation bugs, now reported:
+> [sepcomp-module-def-initializers-never-run](../reported/sepcomp-module-def-initializers-never-run.md)
+> and
+> [sepcomp-exported-global-header-name-mismatch](../reported/sepcomp-exported-global-header-name-mismatch.md).
+> The design stays here for a session whose definitions do dominate.
+
+C2 compiles the whole session every turn: the definition table, the stdlib
+it reaches, and the turn. That is why a turn costs ~130-230 ms and why each
+kept turn holds ~0.3 MB on the page (C2, "Point 5 on the page, measured"):
+of the 37 functions in a one-defn session's program, 2 run. Most turns at a
+prompt are expressions, and an expression changes no definition. So split
+the program in two:
+
+- **The definitions image (D):** the definition table, compiled as a module
+  of its own (its imports, its definitions, their initializers). Rebuilt
+  only when a definition changes. One kept image per rebuild, not per turn.
+- **The turn image (T):** a `main` that runs the turn's expressions and
+  prints the result, compiled as a second module that imports D. Its C is a
+  few functions; it costs a small context, and it is all that an
+  expression turn compiles.
+
+```mermaid
+flowchart TD
+  T["Turn typed"] --> K{"Changes a definition?"}
+  K -->|"yes"| D["Rebuild D: the table as a module; run its init"]
+  K -->|"no"| P1
+  D --> P1["Pass 1 over D and T: borrow specs, forced specializations"]
+  P1 --> Q{"Does D already have what T needs?"}
+  Q -->|"yes"| TI["Compile T alone against D's interface"]
+  Q -->|"no"| D2["Rebuild D with the new specs"] --> TI
+  TI --> R["Link T's imports to D's symbols; run T"]
+```
+
+**Why this is sound.** The objection C4 item 3 recorded is that a turn can
+change whole-program facts D was compiled under: one new call site can make a
+parameter unowned, and a generic used at a new type needs a specialization D
+does not have. The multi-module build already meets exactly that between
+modules. `tur build` is two-pass (`src/driver/project.c`): pass 1 collects
+every module's borrow specs and the specializations other modules force on
+it (`forced_for`), pass 2 emits each module with them, and the ABI cache
+records the result. C5 runs pass 1 over D and T each turn. When T forces
+nothing D lacks, T compiles alone. When it does, D is rebuilt with the new
+specs first. A turn is never compiled against facts that are not D's.
+
+**Linking.** D is compiled the way C1 compiles an inline-C defn and the
+spice REPL compiles a spice: an image (`tur_jit_compile_image`, J2) with its
+functions exported and its static init run once per rebuild. T's imports
+resolve through `jit_import_resolver` to D's symbols (`tur_jit_image_sym`),
+the program's other imports to the resident runtime as now. On the page,
+T's interpreter calls into D's through D's thunks, which is a call into
+another context, as C1's natives already are.
+
+**Globals.** Unchanged: every `def` lives in a host slot (C2 step 2). D binds
+and initializes them; T binds the ones it reads by name and never
+initializes one (`tur_repl_slot` answers "not fresh"). The emitter's
+`def_in_repl_slot` reaches D's globals from T, which it does not do for an
+imported library today.
+
+**Lifetime.** D images are kept, as every image is now: a slot or a closure
+may point into one, and there is one per definition change, which grows with
+what the user writes rather than with how many turns they type. A T image is
+kept too, and is small; point 5's carve (native) and the small tables
+(mir#18) apply to it.
+
+**Fallback.** If T does not compile against D's interface -- a construct the
+module boundary does not carry yet -- the turn compiles as one whole program,
+as C2 does today, and says nothing. That path stays correct by construction,
+so C5 can land a shape at a time.
+
+**Why not (b).** Option (b) frees a turn's whole context when nothing
+outside it points in. Stores are observable (the region-escape hooks), but a
+program's static init also registers drop functions and dictionaries with
+the runtime, and on wasm a freed context's function-table slots are reused:
+a missed registration calls the wrong function, silently. Its safety rests
+on an audit staying complete as the runtime grows; C5's failure mode is a
+rebuild, which is slow and visible. C5 also cuts latency, which (b) does not.
+
+**Phases.**
+
+| Phase | What | Gate |
+| --- | --- | --- |
+| S0 | Baseline, measured: native ~155-230 ms a turn; page ~130 ms and ~394 KB a kept turn | done (C2) |
+| S1 | D as a module and T against it, natively, for expression turns; a definition turn stays a whole program and also rebuilds D | transcript corpus identical to C2's; expression turns compile only T |
+| S2 | Pass 1 over D and T each turn; rebuild D when T forces a spec D lacks | a generic defn used at a new type in a later turn; an ownership-changing call site |
+| S3 | Definition turns through the split too: rebuild D, then T | redefinition, `defstruct` redefinition (C2's drop rule), inline-C defns |
+| S4 | The page: the same hook in `wasm_jit_glue.c` | `run.js --compiled-turns` and the Playwright case |
+| S5 | Measure against S0 | the success criteria below |
+
+**Success criteria.** An expression turn in a 200-defn session compiles in a
+fraction of today's whole-program time (target under 50 ms natively), and a
+kept expression turn on the page holds under 50 KB. Every C2 transcript
+prints the same through the split as through the whole program, and the
+whole-program fallback is counted in a `--timings` line so a shape that
+never takes the split shows up.
+
+**Open questions.**
+
+- How much of T's front-end time is re-elaborating D's source: an import
+  elaborates the imported module. C4 item 1 (keep the compiling front end
+  resident) is the complement, and may be needed for the latency target.
+- Whether D's static init, run once per rebuild, re-registers anything the
+  runtime keys by name (types, dictionaries), and whether a T compiled
+  against an older D can still be called after a rebuild (a closure from an
+  earlier turn): today every turn's code is kept, and that rule carries over.
+- Whether a turn's own `defn`, typed alongside its expression, makes it a
+  definition turn (simplest) or travels in T.
 
 ## Phases and tests
 
@@ -715,6 +1279,7 @@ Only needed if C2 misses its latency budget. Candidates, safest first:
 | C1 | `repl-jit-inline-c` (graduated; `TUR_REPL_JIT_INLINE_C=0` turns it off) | landed 2026-10-02; beta 2026-10-04; graduated 2026-10-17 | `tests/turi/repl-jit-inline-c.sh` (ctest `tur_repl_jit_inline_c`, `TUR_JIT` builds): the off switch, the old `--enable` as a no-op, loop and branch bodies, a hoisted `#include`, float/cstr/bool signatures, a cached second call, redefinition dropping the cache, refusal of a body that calls a Turmeric function and of a struct parameter, the value boundary, `--interpret`. It probes the binary for the JIT and PASS-skips without it. `tests/run-turi.sh` runs the 52 corpus fixtures that need it (`TURI_INLINEC_JIT_RUN`) |
 | C2 | `compiled-repl` | post-v1 | Transcript diff: run each transcript in a corpus through the interpreted and the compiled REPL and fail on any difference, as the engine triangle does. See the corpus list below. Latency: a new `benchmarks/repl-turn/` |
 | C3, C4 | as C2 | after C2 | as needed |
+| C5 | as C2 | deferred (2026-10-29) | S1-S5 under C5: the C2 transcript corpus through the split, plus a later-turn generic at a new type and an ownership-changing call site |
 
 The C2 transcript corpus covers:
 
@@ -757,6 +1322,9 @@ The C2 transcript corpus covers:
    or extend `--engine`, which today only chooses how a spice is built.
 3. **Crash isolation.** Either accept that a crashing turn ends the session,
    or run turns in a child process. A child process cannot cheaply share the
-   host's slots.
-4. **Continuations and fibers across turns** (see "Differences from the
-   interpreter").
+   host's slots. *Since 2026-10-29* a panic, `exit` or `abort` ends only the
+   turn (C2, "Continuations, fibers and panics across turns"); a fault in
+   compiled code still ends the session.
+4. ~~**Continuations and fibers across turns**~~ **Decided 2026-10-29:** a
+   continuation stored in a top-level def is refused at compile time; a fiber
+   carries across (C2, "Continuations, fibers and panics across turns").

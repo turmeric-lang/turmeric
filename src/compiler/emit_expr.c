@@ -16638,6 +16638,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_free(&pb);
                     }
                 }
+                /* ok-nil-lowercase-miscompiles: a `nil` argument emits as the
+                 * void expression `((void)0)`, which no parameter can take; a
+                 * nil parameter is declared as the int64 word
+                 * (emit_param_c_spell).  Pass 0, keeping the argument's own
+                 * evaluation for its side effects -- the ctor path's twin. */
+                if (raw && arg_expr && fn_name &&
+                    emit_resolve_type(ctx, arg_expr->type).kind == TY_NIL) {
+                    const char *sp = emit_sig_lookup_param_ctype(fn_name, i);
+                    if (sp && strcmp(sp, "int64_t") == 0) {
+                        Buf nb; buf_init(&nb);
+                        buf_printf(&nb, "((void)(%s), INT64_C(0))", raw);
+                        buf_putc(&nb, '\0');
+                        free(raw);
+                        raw = strdup(nb.data);
+                        buf_free(&nb);
+                    }
+                }
                 arg_strs[i] = raw;
             }
             Buf out; buf_init(&out);

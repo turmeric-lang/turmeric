@@ -169,6 +169,7 @@ struct c2m_ctx {
   int (*c_getc) (void *); /* c2mir interface get function */
   void *c_getc_data;
   unsigned n_errors, n_warnings;
+  int func_name_used_p; /* the parser got a __func__ token */
   VARR (char) * symbol_text, *temp_string;
   VARR (token_t) * recorded_tokens, *buffered_tokens;
   node_t top_scope;
@@ -1760,12 +1761,15 @@ static token_t get_next_pptoken_1 (c2m_ctx_t c2m_ctx, int header_p) {
             VARR_PUSH (char, symbol_text, wide_type);
             goto literal;
           } else if (wide_type == 'u' && curr_c == '8') {
-            wide_type = '8';
             if ((curr_c = cs_get (c2m_ctx)) == '\"') {
+              wide_type = '8';
               VARR_PUSH (char, symbol_text, 'u');
               VARR_PUSH (char, symbol_text, '8');
               goto literal;
             }
+            /* An identifier starting with u8: it starts with u, not 8.  (It
+               read as `88...`, which compiled -- every use read the same --
+               but -E wrote a number.) */
             cs_unget (c2m_ctx, curr_c);
             curr_c = '8';
           }
@@ -2057,6 +2061,8 @@ struct pre_ctx {
   unsigned long pptokens_num;
   int curr_pack;              /* #pragma pack value in effect (0 = none) */
   VARR (int) * pack_stack;    /* #pragma pack(push/pop) stack */
+  int text_pack;              /* -E: the packing the text output last said, -1 at the start */
+  int text_last_ch;           /* -E: the last character written, 0 at the start */
   void (*pre_out_token_func) (c2m_ctx_t c2m_ctx, token_t);
 };
 
@@ -2080,6 +2086,8 @@ struct pre_ctx {
 #define pptokens_num pre_ctx->pptokens_num
 #define curr_pack pre_ctx->curr_pack
 #define pack_stack pre_ctx->pack_stack
+#define text_pack pre_ctx->text_pack
+#define text_last_ch pre_ctx->text_last_ch
 #define pre_out_token_func pre_ctx->pre_out_token_func
 
 static int pre_skip_if_part_p (c2m_ctx_t c2m_ctx) {
@@ -3952,18 +3960,52 @@ static void processing (c2m_ctx_t c2m_ctx, int ignore_directive_p) {
   }
 }
 
+static void pre_text_pack_line (FILE *f, int pack) {
+  if (pack == 0)
+    fprintf (f, "#pragma pack()\n");
+  else
+    fprintf (f, "#pragma pack(%d)\n", pack);
+}
+
+/* Two tokens written with nothing between them must not read back as one:
+   `-` `-x` from a macro is `- -x`, not `--x`. */
+static int pre_text_glue_p (int prev, int next) {
+  int prev_word = isalnum (prev) || prev == '_', next_word = isalnum (next) || next == '_';
+
+  if (prev == 0 || prev == ' ' || prev == '\n' || next == 0) return FALSE;
+  if (prev_word) return next_word || next == '\'' || next == '"' || next == '.';
+  if (prev == '.' && isdigit (next)) return TRUE;
+  if (next == '=') return strchr ("+-*/%<>=!&|^", prev) != NULL;
+  if (prev == next) return strchr ("+-<>&|#.", prev) != NULL;
+  return (prev == '-' && next == '>') || (prev == '/' && (next == '*' || next == '/'))
+         || (prev == '<' && (next == ':' || next == '%')) || (prev == ':' && next == '>')
+         || (prev == '%' && (next == '>' || next == ':'));
+}
+
 static void pre_text_out (c2m_ctx_t c2m_ctx, token_t t) { /* NULL means end of output */
   pre_ctx_t pre_ctx = c2m_ctx->pre_ctx;
   int i;
   FILE *f = c2m_options->prepro_output_file;
 
-  if (t == NULL && pre_last_token != NULL && pre_last_token->code == '\n') {
-    fprintf (f, "\n");
+  if (t == NULL) {
+    if (pre_last_token != NULL && pre_last_token->code == '\n') fprintf (f, "\n");
     return;
   }
   if (t->code == '\n') {
     pre_last_token = t;
     return;
+  }
+  /* #pragma pack is consumed by the preprocessor and recorded on the tokens it
+     governs, so the text says it again wherever that changes; without it, a
+     packed struct read back from -E output gets natural alignment. */
+  if (t->code != ' ' && t->pack != text_pack) {
+    if (text_pack != -1 || t->pack != 0) {
+      if (text_last_ch != 0 && text_last_ch != '\n') fprintf (f, "\n");
+      pre_text_pack_line (f, t->pack);
+      text_last_ch = '\n';
+      actual_pre_pos.fname = NULL; /* the next token says where it is */
+    }
+    text_pack = t->pack;
   }
   if (actual_pre_pos.fname != t->pos.fname || actual_pre_pos.lno != t->pos.lno) {
     if (actual_pre_pos.fname == t->pos.fname && actual_pre_pos.lno < t->pos.lno
@@ -3980,10 +4022,82 @@ static void pre_text_out (c2m_ctx_t c2m_ctx, token_t t) { /* NULL means end of o
       fprintf (f, "\n");
     }
     for (i = 0; i < t->pos.ln_pos - 1; i++) fprintf (f, " ");
+    text_last_ch = t->pos.ln_pos > 1 ? ' ' : '\n'; /* both ways end at a line start */
     actual_pre_pos = t->pos;
   }
-  fprintf (f, "%s", t->code == ' ' ? " " : t->repr);
+  if (t->code == ' ') {
+    fprintf (f, " ");
+    text_last_ch = ' ';
+  } else if (t->repr[0] != '\0') {
+    if (pre_text_glue_p (text_last_ch, (unsigned char) t->repr[0])) fprintf (f, " ");
+    fprintf (f, "%s", t->repr);
+    text_last_ch = (unsigned char) t->repr[strlen (t->repr) - 1];
+  }
   pre_last_token = t;
+}
+
+static int pre_cmd_or_env_macro_p (macro_t m) {
+  const char *fname = m->id->pos.fname;
+
+  return fname != NULL
+         && (strcmp (fname, "<environment>") == 0 || strcmp (fname, COMMAND_LINE_SOURCE_NAME) == 0);
+}
+
+/* -E with prepro_defines_p: after the text, the state the preprocessor ended
+   in -- the #pragma pack stack and every macro still defined, as directives.
+   Text plus this reads back as the original did: a TU split into a header
+   part and a rest compiles the same from [header -E output][defines][rest],
+   and the header part is preprocessed once.  The defines come last so that
+   nothing in the text is expanded a second time. */
+static void pre_text_defines (c2m_ctx_t c2m_ctx) {
+  pre_ctx_t pre_ctx = c2m_ctx->pre_ctx;
+  FILE *f = c2m_options->prepro_output_file;
+  size_t i, j, n = VARR_LENGTH (macro_t, macros);
+  struct macro macro_struct;
+  macro_t m, live;
+  token_t t;
+
+  if (text_last_ch != 0 && text_last_ch != '\n') fprintf (f, "\n");
+  if (VARR_LENGTH (int, pack_stack) == 0) {
+    if (curr_pack != (text_pack < 0 ? 0 : text_pack)) pre_text_pack_line (f, curr_pack);
+  } else {
+    pre_text_pack_line (f, VARR_GET (int, pack_stack, 0));
+    for (i = 1; i <= VARR_LENGTH (int, pack_stack); i++) {
+      fprintf (f, "#pragma pack(push)\n");
+      pre_text_pack_line (f, i < VARR_LENGTH (int, pack_stack) ? VARR_GET (int, pack_stack, i)
+                                                               : curr_pack);
+    }
+  }
+  /* The environment's and the command line's macros are defined again before
+     the text is read back; one the text undefined or redefined goes first. */
+  for (i = 0; i < n; i++) {
+    m = VARR_GET (macro_t, macros, i);
+    macro_struct.id = m->id;
+    if (m->replacement != NULL && pre_cmd_or_env_macro_p (m)
+        && (!HTAB_DO (macro_t, macro_tab, &macro_struct, HTAB_FIND, live) || live != m))
+      fprintf (f, "#undef %s\n", m->id->repr);
+  }
+  for (i = 0; i < n; i++) {
+    m = VARR_GET (macro_t, macros, i);
+    macro_struct.id = m->id;
+    if (m->replacement == NULL || !HTAB_DO (macro_t, macro_tab, &macro_struct, HTAB_FIND, live)
+        || live != m)
+      continue;
+    if (pre_cmd_or_env_macro_p (m)) fprintf (f, "#undef %s\n", m->id->repr);
+    fprintf (f, "#define %s", m->id->repr);
+    if (m->params != NULL) {
+      fprintf (f, "(");
+      for (j = 0; j < VARR_LENGTH (token_t, m->params); j++)
+        fprintf (f, "%s%s", j == 0 ? "" : ",", VARR_GET (token_t, m->params, j)->repr);
+      fprintf (f, ")");
+    }
+    for (j = 0; j < VARR_LENGTH (token_t, m->replacement); j++) {
+      t = VARR_GET (token_t, m->replacement, j);
+      if (j == 0) fprintf (f, " ");
+      fprintf (f, "%s", t->code == ' ' || t->code == '\n' ? " " : t->repr);
+    }
+    fprintf (f, "\n");
+  }
 }
 
 static void pre_out (c2m_ctx_t c2m_ctx, token_t t) {
@@ -3996,6 +4110,8 @@ static void pre_out (c2m_ctx_t c2m_ctx, token_t t) {
     assert (t->code != T_EOU && t->code != EOF);
     pre_last_token = t;
     if ((t = pptoken2token (c2m_ctx, t, TRUE)) == NULL) return;
+    if (t->code == T_ID && t->repr[0] == '_' && strcmp (t->repr, "__func__") == 0)
+      c2m_ctx->func_name_used_p = TRUE;
   }
   if (t->code == T_STR && VARR_LENGTH (token_t, recorded_tokens) != 0
       && VARR_LAST (token_t, recorded_tokens)->code == T_STR) { /* concat strings */
@@ -4062,6 +4178,8 @@ static void pre (c2m_ctx_t c2m_ctx) {
   actual_pre_pos.ln_pos = 0;
   pre_out_token_func = common_pre_out;
   pptokens_num = 0;
+  text_pack = -1;
+  text_last_ch = 0;
   VARR_TRUNC (char_ptr_t, once_include_files, 0);
   if (!c2m_options->no_prepro_p) {
     processing (c2m_ctx, FALSE);
@@ -4074,6 +4192,7 @@ static void pre (c2m_ctx_t c2m_ctx) {
     }
   }
   pre_out_token_func (c2m_ctx, NULL);
+  if (c2m_options->prepro_only_p && c2m_options->prepro_defines_p) pre_text_defines (c2m_ctx);
   if (c2m_options->verbose_p && c2m_options->message_file != NULL)
     fprintf (c2m_options->message_file, "    preprocessor tokens -- %lu, parse tokens -- %lu\n",
              pptokens_num, (unsigned long) VARR_LENGTH (token_t, recorded_tokens));
@@ -8883,7 +9002,13 @@ static void add__func__def (c2m_ctx_t c2m_ctx, node_t func_block, str_t func_nam
   node_t list, declarator, decl, decl_specs;
   tab_str_t str;
 
-  if (!str_exists_p (c2m_ctx, fdecl_name, strlen (fdecl_name) + 1, &str)) return;
+  /* Only when the program says __func__: the spelling is in the string table
+     also when a header merely mentions it, in a #define or a skipped #if
+     part, and a function then got an unused __func__ -- which -E output,
+     having neither, did not. */
+  if (!c2m_ctx->func_name_used_p
+      || !str_exists_p (c2m_ctx, fdecl_name, strlen (fdecl_name) + 1, &str))
+    return;
   decl_specs = new_pos_node (c2m_ctx, N_LIST, pos);
   NL_APPEND (decl_specs->u.ops, new_pos_node (c2m_ctx, N_STATIC, pos));
   NL_APPEND (decl_specs->u.ops, new_pos_node (c2m_ctx, N_CONST, pos));
@@ -16031,6 +16156,7 @@ static void compile_init (c2m_ctx_t c2m_ctx, struct c2mir_options *ops, int (*ge
   MIR_alloc_t alloc = c2m_alloc (c2m_ctx);
   c2m_options = ops;
   n_errors = n_warnings = 0;
+  c2m_ctx->func_name_used_p = FALSE;
   c_getc = getc_func;
   c_getc_data = getc_data;
   VARR_CREATE (char, symbol_text, alloc, 128);

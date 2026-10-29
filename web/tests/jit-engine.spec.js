@@ -119,6 +119,47 @@ test.describe('The Compile engine', () => {
         await expect(consoleEl(page).locator('.console-result').last()).toHaveText('128');
     });
 
+    test('compiled prompt turns keep globals, print structures, survive a panic (C2)', async ({ page }) => {
+        // aot-compiled-repl-plan C2 on the page: with "Compile prompt turns
+        // too" ticked, every prompt turn runs as a compiled program -- the
+        // session's definitions plus the turn -- in the JIT module.
+        await gotoTry(page);
+        await pickEngine(page, 'compile');
+        await page.click('#lang-btn');
+        await expect(page.locator('#engine-turns-row')).toBeVisible();
+        await page.locator('#engine-turns').check();
+        await page.keyboard.press('Escape');
+        await clearConsole(page);
+
+        const last = () => consoleEl(page).locator('.console-result').last();
+        await submitAtPrompt(page, '(def ^mut n 5)');
+        await expect(last()).toHaveText('5', { timeout: 60_000 });
+        await submitAtPrompt(page, '(defn bump [] : int (do (set! n (+ n 1)) n))');
+        await expect(last()).toHaveText('#<fn bump>', { timeout: 60_000 });
+        await submitAtPrompt(page, '(bump)');
+        await expect(last()).toHaveText('6', { timeout: 60_000 });
+        // A slot keeps the global across turns: the next bump sees 6.
+        await submitAtPrompt(page, '(bump)');
+        await expect(last()).toHaveText('7', { timeout: 60_000 });
+        // Results print through Show, or their constructors.
+        await submitAtPrompt(page, '[1 2 3]');
+        await expect(last()).toHaveText('[1 2 3]', { timeout: 60_000 });
+        await submitAtPrompt(page, '(defstruct Pt [x : int y : int])');
+        await submitAtPrompt(page, '(Pt 1 2)');
+        await expect(last()).toHaveText('Pt { x = 1, y = 2 }', { timeout: 60_000 });
+        // A panic ends the turn, not the session.
+        await submitAtPrompt(page, '(panic "boom")');
+        await expect(consoleEl(page)).toContainText('boom', { timeout: 60_000 });
+        await submitAtPrompt(page, 'n');
+        await expect(last()).toHaveText('7', { timeout: 60_000 });
+
+        // Unticking starts the prompt's session afresh.
+        await page.click('#lang-btn');
+        await page.locator('#engine-turns').uncheck();
+        await page.keyboard.press('Escape');
+        await expect(consoleEl(page)).toContainText('starts afresh');
+    });
+
     test('Stop ends a runaway compiled program and keeps the session', async ({ page }) => {
         await gotoTry(page);
         await pickEngine(page, 'interpret');

@@ -157,6 +157,9 @@ set(TURI_EVAL_SOURCES
     # cannot run, through a host hook (the driver registers it on a JIT build).
     # MIR-free, like jit_ffi_hook.c.
     turi/inline_c_jit.c
+    # aot-compiled-repl-plan C2 (--enable=compiled-repl): a REPL turn runs as
+    # a compiled program, through a host hook.  Engine-free, like C1.
+    turi/compiled_turn.c
 )
 
 # ---------------------------------------------------------------------------

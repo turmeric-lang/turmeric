@@ -1616,6 +1616,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_segmented_stack_seam PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
+# jit-prune-baggage: a JIT'd program carries only the stdlib it reaches -- the
+# constructor aliases, `__tur_any_drop_keep` and `__tur_fatbox_init` no longer
+# keep every stdlib constructor and function value.  SKIPs without the JIT.
+add_test(
+  NAME tur_jit_prune_baggage
+  COMMAND bash tests/check-jit-prune-baggage.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_jit_prune_baggage PROPERTIES TIMEOUT 720)
 # jit-stack-overflow-has-no-message: under `tur jit` a runaway recursion
 # prints the same line as the compiled r7rs path, in every dialect, and a wild
 # pointer does not.  SKIPs on a binary without the JIT engine.
@@ -1783,6 +1792,16 @@ if(TUR_JIT)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
   set_tests_properties(tur_repl_jit_inline_c PROPERTIES TIMEOUT 300)
+  # aot-compiled-repl-plan C2, step 1 (--enable=compiled-repl): REPL turns run
+  # as compiled programs; the script diffs a transcript against the
+  # interpreter's and pins step 1's documented differences.
+  add_test(
+    NAME tur_repl_compiled
+    COMMAND ${CMAKE_COMMAND} -E env TUR=$<TARGET_FILE:tur>
+            bash tests/turi/repl-compiled.sh
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  set_tests_properties(tur_repl_compiled PROPERTIES TIMEOUT 300)
   # J3 (jit-engine-plan section 5): the full fixture corpus through
   # `tur jit`.  RUN_SERIAL like the other whole-corpus
   # harnesses -- it fans out across nproc internally.  TUR is pinned to

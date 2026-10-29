@@ -1306,6 +1306,49 @@ static bool check_closures_visit(const Expr *c, void *ud) {
     return false;
 }
 
+/* effect-row-check-skips-let-bound-fn-values: the initializer of each
+ * immutable `let` binding the ER4 walk has passed, so an argument that names
+ * one -- `(let [h noisy] (pure-hof h 1))` -- is checked against the row of
+ * what it was bound to, a named function or a lambda.  Its type carries no
+ * row of its own (an annotated `(fn [int] int)` has none either), so the
+ * check used to read "no row" as "no effects" and admit it. */
+typedef struct { const Binding *b; Expr *init; } LetFnInit;
+static LetFnInit *g_let_fn_inits;
+static uint32_t g_n_let_fn_inits, g_cap_let_fn_inits;
+
+static Expr *peel_fn_value_shims(Expr *x) {
+    while (x && (x->kind == EX_ASCRIBE || x->kind == EX_FN_TO_FAT))
+        x = (x->kind == EX_ASCRIBE) ? x->as.ascribe_.inner
+                                    : x->as.fn_to_fat_.inner;
+    return x;
+}
+static void let_fn_init_note(const Binding *b, Expr *init) {
+    init = peel_fn_value_shims(init);
+    if (!b || b->is_mut || !init ||
+        (init->kind != EX_VAR && init->kind != EX_CLOSURE)) return;
+    if (g_n_let_fn_inits == g_cap_let_fn_inits) {
+        g_cap_let_fn_inits = g_cap_let_fn_inits ? g_cap_let_fn_inits * 2 : 32;
+        g_let_fn_inits = (LetFnInit *)realloc(g_let_fn_inits,
+                             g_cap_let_fn_inits * sizeof *g_let_fn_inits);
+    }
+    g_let_fn_inits[g_n_let_fn_inits++] = (LetFnInit){ b, init };
+}
+/* Follow a variable through the let initializers noted above, to the named
+ * function or lambda it stands for (bounded: an alias chain is short). */
+static Expr *let_fn_init_resolve(Expr *x) {
+    for (int hop = 0; hop < 16 && x && x->kind == EX_VAR && x->as.var.binding; hop++) {
+        Expr *next = NULL;
+        for (uint32_t i = g_n_let_fn_inits; i > 0; i--)
+            if (g_let_fn_inits[i - 1].b == x->as.var.binding) {
+                next = g_let_fn_inits[i - 1].init;
+                break;
+            }
+        if (!next) break;
+        x = next;
+    }
+    return x;
+}
+
 /* ER4: Walk an expression tree and check function-argument effect-row subtyping.
  * At each EX_CALL, for each function-typed parameter with a concrete declared
  * row, verify that the actual argument's inferred row is a subset.  Emits
@@ -1341,12 +1384,7 @@ static int check_call_site_rows_in_expr(Arena *a, Expr *e,
                  * matching the wrapper here is how the five errors/effect-*
                  * negatives silently stopped diagnosing when the effect-row
                  * exclusion was probe-lifted (2026-08-16 re-measurement). */
-                while (actual &&
-                       (actual->kind == EX_ASCRIBE ||
-                        actual->kind == EX_FN_TO_FAT))
-                    actual = (actual->kind == EX_ASCRIBE)
-                                 ? actual->as.ascribe_.inner
-                                 : actual->as.fn_to_fat_.inner;
+                actual = let_fn_init_resolve(peel_fn_value_shims(actual));
                 EffectRow *actual_row = NULL;
                 if (actual && actual->kind == EX_CLOSURE) {
                     EffectRowSubst *arg_subst = effect_row_subst_new(a);
@@ -1406,8 +1444,10 @@ static int check_call_site_rows_in_expr(Arena *a, Expr *e,
     }
 
     case EX_LET:
-        for (uint32_t i = 0; i < e->as.let_.n; i++)
+        for (uint32_t i = 0; i < e->as.let_.n; i++) {
             rc |= check_call_site_rows_in_expr(a, e->as.let_.bindings[i].init, idx, env);
+            let_fn_init_note(e->as.let_.bindings[i].binding, e->as.let_.bindings[i].init);
+        }
         return rc | check_call_site_rows_in_expr(a, e->as.let_.body, idx, env);
 
     case EX_DO:
@@ -2262,6 +2302,7 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
             rc = 1;
     }
 
+    g_n_let_fn_inits = 0;
     /* --- Step 3b: ER4 -- Call-site effect-row subtype checking.
      * For each top-level function, walk its body and verify that any function
      * value passed to a concrete-row parameter has a compatible (subset) row. */
