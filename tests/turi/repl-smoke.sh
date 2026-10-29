@@ -229,6 +229,25 @@ IMP_AS_OUT="$(cd "$IMP_DIR" && printf '%s\n' '(import mods/sq :as m)' '(m/sq 6)'
 check_last "top-level import :as, called on a later turn" '=> 36' "$IMP_AS_OUT"
 rm -rf "$IMP_DIR"
 
+# --- A continuation stored in one turn, resumed in a later one ---------------
+# turi-repl-continuation-resumed-in-later-turn-reads-freed-frames: the turn
+# boundary rewound the scratch arena under a suspended fiber continuation, so
+# the resume walked poisoned frames (an ASan abort on the Debug build, before
+# any `=>`; Release happened to print 6).
+K_DEF_OUT="$(repl_out '(defeffect Ask [] : int)' \
+                      '(defn w4 [] : int (+ 1 (perform (Ask))))' \
+                      '(def saved (handle (w4) (Ask [] k) k))' \
+                      '(resume saved 5)')"
+check_last "a continuation def'd in one turn resumes in the next" '=> 6' "$K_DEF_OUT"
+K_SET_OUT="$(repl_out '(defeffect Ask [] : int)' \
+                      '(defn w4 [] : int (+ 1 (perform (Ask))))' \
+                      '(def ^mut saved 0)' \
+                      '(handle (w4) (Ask [] k) (do (set! saved k) 0))' \
+                      '(resume saved 5)' \
+                      '(+ 1 2)')"
+check "a continuation set! in one turn resumes in the next" '=> 6' "$K_SET_OUT"
+check_last "and the session goes on" '=> 3' "$K_SET_OUT"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

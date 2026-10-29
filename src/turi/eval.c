@@ -16740,7 +16740,14 @@ static bool promo_check(TuriEnv *env, TuriValue v, PromoMap *seen) {
          * escaped fiber cont pass without blocking the rewind. */
         TuriEffectCont *c = v.as_cont;
         if (!c) return true;
-        if (!c->ws) return !PROMO_SCRATCH(env, c);   /* fiber cont: unchanged */
+        /* turi-repl-continuation-resumed-in-later-turn-reads-freed-frames: a
+         * fiber continuation is calloc'd off-pool, so it passes the scratch
+         * test -- but while it is suspended (not done), its body's C frames
+         * on the fiber stack hold scratch EvalFrames, which the rewind then
+         * poisons.  `(def saved (handle (w) (Ask [] k) k))` at the prompt and
+         * `(resume saved 5)` a turn later walked them.  Like a suspended
+         * generator below, a suspended fiber keeps its turn's scratch. */
+        if (!c->ws) return c->done && !PROMO_SCRATCH(env, c);   /* fiber cont */
         if (!PROMO_SCRATCH(env, c)) return true;     /* already relocated whole */
         if (promo_map_get(seen, c)) return true;
         promo_map_put(seen, c, c);
