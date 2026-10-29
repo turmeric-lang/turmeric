@@ -1,0 +1,12 @@
+;; defopaque-sym-return-keeps-const -- docs/archive/defopaque-over-sym-implicit-
+;; return-drops-const.md.  A `defopaque` over `:Sym` c-names to `void *`; a body
+;; returning the underlying `Sym` with no ascription emitted `return s;` from a
+;; `const struct __tur_sym *`, which cc warns discards `const`.
+;; unexpected.stderr pins the warning's absence (gcc: "discards 'const'
+;; qualifier", clang: "discards qualifiers").
+(defopaque Rid :Sym)
+(defn rid [s : Sym] : Rid s)
+(defn rid-sym [r : Rid] : Sym (:: r Sym))
+(defn main [] : int
+  (do (println (sym->str (rid-sym (rid (quote alice)))))
+      0))

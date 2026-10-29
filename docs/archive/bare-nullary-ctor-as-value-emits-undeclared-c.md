@@ -33,3 +33,16 @@ function or a constant initializer, not a variable).
 - Elaborate a bare reference to a nullary constructor as its application,
   `(Red)` -- what a reader means, and what Haskell / OCaml do.
 - Or reject it with a diagnostic pointing at `(Red)`.
+
+## Resolution (2026-10-29)
+
+Fixed the first way the report suggested. In `elab_form`'s `F_SYM` arm
+(`src/compiler/elab_toplevel.c`), a symbol whose global binding is a nullary
+constructor elaborates as its application `(Red)`. The interpreter had its own
+face of the same bug: `(let [c Red] (match c ...))` panicked `match: no arm
+matched` under `--interpret`. Both engines now agree. A local that shadows
+the name is not global, so it is left alone.
+
+Pinned by `tests/fixtures/bare-nullary-ctor-value`: `let`, a vector literal
+mixing bare and applied constructors, a direct argument, a non-`^copy` ADT,
+and a parametric ADT's nullary constructor at a pinned type.

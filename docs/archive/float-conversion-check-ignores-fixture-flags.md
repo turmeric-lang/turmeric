@@ -33,3 +33,19 @@ as `[tur, "emit-c", path]`, and `corpus_inputs` never reads `flags`. A failed
   fixture silently dropping out is what this report is.
 - After the fix, run `--corpus` once: the refined-fn-types fixtures emit
   call-site checks over `float` arguments that have never been linted.
+
+## Resolution (2026-10-29)
+
+Both fix directions landed in `tests/check-emitted-float-conversions.py`:
+
+- `fixture_flags` reads a fixture's `flags` file and splits it the way
+  `tests/run.sh` does, and `lint_tur` passes the flags ahead of `emit-c`. Only
+  inputs under `tests/fixtures/` read a `flags` file.
+- `lint_tur` now tells a failed `emit-c` apart from output that is not a
+  program, and `--corpus` prints how many fixtures failed to emit and names
+  them, so a fixture that drops out shows up in the output.
+
+Checked 2026-10-29: the 134 fixtures that carry `flags` (those `--corpus`
+enumerates) all emit now, the experiment-gated ones included, and report 0
+findings. The refined-fn-types call-site checks over `float` arguments are
+clean.

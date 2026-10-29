@@ -27,6 +27,15 @@ void emit_write_inline_c_fns(Buf *out) {
 #include "tailcall_reasons.h"
 #include "cps.h"         /* cps_visit_children -- the loop-owned box scan */
 
+/* defopaque-over-sym-implicit-return-drops-const: true when the tail value's
+ * own C spelling is a const-qualified pointer (`const struct __tur_sym *`,
+ * `const char *`). */
+static bool fn_tail_ctype_is_const_ptr(EmitCtx *ctx, const Expr *tail_e) {
+    const char *tc = emit_type_c_name(ctx, emit_resolve_type(ctx, tail_e->type));
+    size_t n = tc ? strlen(tc) : 0;
+    return n > 7 && strncmp(tc, "const ", 6) == 0 && tc[n - 1] == '*';
+}
+
 /* carrier-return-concrete-tail: an `int64_t` (carrier) return fed a value whose
  * emitted C is concrete -- a by-value aggregate or a float kind.  The mixed
  * clone the ABI scan mints for a sole-instance method called from a carrier
@@ -5229,6 +5238,15 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
         buf_putc(&rs, '\0');
         buf_puts(out, rs.data);
         buf_free(&rs);
+    } else if (ret_ctype && strcmp(ret_ctype, "void *") == 0 && tail_e &&
+               tail_e->type.kind != TY_NEVER &&
+               fn_tail_ctype_is_const_ptr(ctx, tail_e)) {
+        /* defopaque-over-sym-implicit-return-drops-const: a `defopaque` over
+         * `:Sym` (or `:cstr`) c-names to `void *`, and a body returning the
+         * underlying `const struct __tur_sym *` with no ascription was an
+         * implicit conversion that discards `const` (-Wdiscarded-qualifiers).
+         * Spell the cast the explicit `(:: s Rid)` ascription already emits. */
+        buf_printf(out, "return (void *)(%s);\n", ret_val);
     } else {
         buf_printf(out, "return %s;\n", ret_val);
     }
@@ -6638,7 +6656,8 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
              * unchanged. */
             buf_puts(file, "int64_t");
         } else if (use_abi_spec) {
-            const char *pc = emit_type_c_name(ctx, ctx->current_abi_specialization->arg_types[i]);
+            const char *pc = emit_param_c_spell(
+                emit_type_c_name(ctx, ctx->current_abi_specialization->arg_types[i]));
             buf_puts(file, pc);
             /* KB-021: a concrete carrier-ABI spec param is passed by value.
              * CONV-S1: a by-value parametric record-ADT monomorph param
@@ -6670,7 +6689,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
             if (!fd->closure && !body_is_inline_c && type_struct_pass_by_ptr(param_ty)) {
                 buf_printf(file, "const %s *", emit_type_c_name(ctx, param_ty));
             } else {
-                const char *pc = emit_type_c_name(ctx, param_ty);
+                const char *pc = emit_param_c_spell(emit_type_c_name(ctx, param_ty));
                 buf_puts(file, pc);
                 /* KB-021: a by-value concrete carrier-ABI parameter must be
                  * bridged to the carrier when used at a dispatch callsite. */

@@ -66,7 +66,7 @@ directory is worse for triage than no index.
 | [fn-param-not-forwardable-to-effect-rowed-param](fn-param-not-forwardable-to-effect-rowed-param.md) | medium-low | A plain `(fn [int] int)` parameter cannot be passed to a parameter typed with any effect row, `#fx{e}` included: `expected (fn [int] : int), got ptr<void>`. The carrier and nominal representations are never bridged in that direction |
 | [turi-contract-check-is-a-full-native-call](turi-contract-check-is-a-full-native-call.md) | low (performance) | Under `tur --interpret` every contract check is a full native call (+0.29 us, about three times an `if` + `panic`), which roughly doubles a tight loop with a check in it |
 | ~~[cps-fn-unreached-rescans-all-inline-c](../archive/cps-fn-unreached-rescans-all-inline-c.md)~~ | low (compile time) | **RESOLVED 2026-10-29** (archived): the inline-C name test is one hash probe into a set of identifier suffixes built once per program; the emitted C is byte-identical |
-| [float-conversion-check-ignores-fixture-flags](float-conversion-check-ignores-fixture-flags.md) | low (test coverage) | `check-emitted-float-conversions.py` ignores `flags`: 15 experiment-gated fixtures are silently never checked (all four refined-fn-types ones among them), and the rest are linted under flags they do not run with |
+| ~~[float-conversion-check-ignores-fixture-flags](../archive/float-conversion-check-ignores-fixture-flags.md)~~ | low (test coverage) | **RESOLVED 2026-10-29** (archived): the checker passes each fixture's `flags`, and `--corpus` names the fixtures whose `emit-c` failed |
 
 ## Found landing refined-function-types-plan F1 (filed 2026-10-28)
 
@@ -85,7 +85,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [positive-fixture-expected-diag-ignored](positive-fixture-expected-diag-ignored.md) | low-medium (test rot) | `run.sh` reads `expected.diag` only for `errors/` fixtures, so five happy-path fixtures pin nothing. Two pins have drifted: `gadt-struct-namespace-prefer`'s warning was reworded, and `warn-no-entry-point-near-miss`'s `TUR-W0624` no longer fires at all |
+| ~~[positive-fixture-expected-diag-ignored](../archive/positive-fixture-expected-diag-ignored.md)~~ | low-medium (test rot) | **RESOLVED 2026-10-29** (archived): the five pins are `expected.stderr` now and all pass; TUR-W0624 fires again; `run.sh` FAILs a happy-path `.diag` file |
 
 ## Found extending the highlighting in Try Turmeric and the docs (filed 2026-10-26)
 
@@ -100,8 +100,8 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [borrow-param-consumed-in-own-body](borrow-param-consumed-in-own-body.md) | medium | `^borrow` is enforced only at call sites: inside the borrowing function (or a `(fn [^borrow h : H] ...)` lambda) the parameter can be passed to a consuming slot, so a double close compiles clean |
-| [ok-nil-lowercase-miscompiles](ok-nil-lowercase-miscompiles.md) | low-medium | `(ok nil)` for a `(Result nil E)` monomorphises `ok` with a `void` parameter -- two C errors; `(Ok nil)` works |
-| [bare-nullary-ctor-as-value-emits-undeclared-c](bare-nullary-ctor-as-value-emits-undeclared-c.md) | low | `(let [c Red] ...)` / `[Red Green]` -- a bare nullary constructor as a value -- emits an undeclared C identifier; `(Red)` works |
+| ~~[ok-nil-lowercase-miscompiles](../archive/ok-nil-lowercase-miscompiles.md)~~ | low-medium | **RESOLVED 2026-10-29** (archived): a `nil` parameter is spelled `int64_t` and a nil argument passes 0, so `(ok nil)`, `(some nil)` and a declared `[x : nil]` compile. Pinned by `ok-nil-lowercase` |
+| ~~[bare-nullary-ctor-as-value-emits-undeclared-c](../archive/bare-nullary-ctor-as-value-emits-undeclared-c.md)~~ | low | **RESOLVED 2026-10-29** (archived): a bare nullary constructor elaborates as its application, on both engines (the interpreter matched no arm). Pinned by `bare-nullary-ctor-value` |
 
 ## Found re-checking the ADT/GADT unification's representation change (filed 2026-10-25)
 
@@ -113,7 +113,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [defopaque-over-sym-implicit-return-drops-const](defopaque-over-sym-implicit-return-drops-const.md) | low (C warning) | A `Sym` returned as a `defopaque` over `:Sym` with no ascription emits `return s;` from `const struct __tur_sym *` into `void *`, which gcc and clang warn about; `(:: s T)` emits the cast and is the workaround |
+| ~~[defopaque-over-sym-implicit-return-drops-const](../archive/defopaque-over-sym-implicit-return-drops-const.md)~~ | low (C warning) | **RESOLVED 2026-10-29** (archived): the implicit return now emits the `(void *)` cast the ascription does. Pinned by `defopaque-sym-return-keeps-const` |
 
 ## Found documenting `^multishot` in the effects guides (filed 2026-10-25)
 
@@ -3476,6 +3476,20 @@ the `__int128` work only surfaced them.  Both resolved the same day.
 | [for-comprehension-pure-picks-the-payload-type](for-comprehension-pure-picks-the-payload-type.md) | low-medium | `(for [x (some 3)] (P x))` in a `(Option Pt)` defn looks for `Applicative [Pt]`: `.pure` dispatches on a concrete payload type. And a `for` outside a defn's return position (an argument, an annotated `let`) is ambiguous |
 | [monomorph-emitted-before-its-type-argument](monomorph-emitted-before-its-type-argument.md) | medium | With `tourist/app` imported before the markup spices, the C for `ctor_Cons_Cons__Hole` (which takes a `Hole` by value) precedes `struct tur_adt_Hole`, and cc rejects the incomplete type; the other import order compiles |
 | [unused-module-global-heap-init-reported-as-leak](unused-module-global-heap-init-reported-as-leak.md) | low | A module `def` holding a heap constructor box that nothing reads is a `static` global the C compiler drops with its store, so LeakSanitizer reports the box (dom/core's `__syntax-node` and friends) |
+
+## Found executing stats-formula-plan (filed 2026-10-29)
+
+The spice is turmeric-spices `spices/stats-formula`; each report says what it
+does to work around the bug. The plan also added a one-module repro to
+[monomorph-emitted-before-its-type-argument](monomorph-emitted-before-its-type-argument.md):
+any struct with an `Option` field triggers it.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [closure-with-adt-param-rejected-by-generic-fn-param](closure-with-adt-param-rejected-by-generic-fn-param.md) | low-medium | A capturing lambda `(fn [a : int b : Box] ...)`, `Box` a `defdata`, passed to a generic `(fn [B A] B)` parameter is refused with `got (fn [int <adt>] : int)`; a non-capturing lambda, a named defn or a `defstruct` is accepted |
+| [stdlib-cstr-import-breaks-spice-library-build](stdlib-cstr-import-breaks-spice-library-build.md) | medium | A spice module that imports stdlib `cstr` checks, runs and tests, but `tur build <spice-dir>` fails on `#include "cstr.h"`, a header the project build never writes |
+| [list-typed-load-collides-with-frame-ownstr-string](list-typed-load-collides-with-frame-ownstr-string.md) | low-medium | An imported module that loads `stdlib/list-typed.tur` and an import of `frame/print` cannot be compiled together: stdlib's `String` meets `frame/ownstr`'s (`defopaque: 'String' is already defined`) |
+| [stats-ols-pvalues-wrong-continued-fraction](stats-ols-pvalues-wrong-continued-fraction.md) | medium | tur-stats' `ols` / `ols-frame` compute p-values through an incomplete-beta continued fraction with the wrong terms: slightly off everywhere, and -0.8967 for t = 1.56 on 144 df (R: 0.1203); the coefficients are right |
 
 ## Filing conventions
 
