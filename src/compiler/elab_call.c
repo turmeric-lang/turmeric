@@ -4426,7 +4426,7 @@ static bool elab_num_instance_matches(Elab *e, const TypeClass *num,
  * the abstract type `t` -- its own variable `A`, or a projection over one,
  * `(Elem V)` -- by `cls` (or a class that entails it)?  Matched by the
  * constraint's variable name, which for a projection is its printed form. */
-static bool elab_tyvar_constrained_by(Elab *e, const TypeClass *cls, const Type *t) {
+bool elab_tyvar_constrained_by(Elab *e, const TypeClass *cls, const Type *t) {
     if (!cls || !t || t->kind != TY_TYVAR || !t->as.tyvar_.name) return false;
     for (uint8_t ci = 0; ci < e->cur_fn_n_constraints; ci++) {
         const TypeConstraint *con = &e->cur_fn_constraints[ci];

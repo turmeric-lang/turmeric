@@ -8247,6 +8247,40 @@ static void frame_bind_one_dict(TuriEnv *env, TypeClassEnv *tc_env,
     callee->dicts = db;
 }
 
+/* numcast-from-float-at-projection-picks-representative: the element type an
+ * associated-type projection NAME stands for in this frame.  A constraint on a
+ * projection, `(NumCast (Elem V))`, is recorded under the projection's printed
+ * name; the frame pins `V` (copied from the caller at apply time) but pins the
+ * projection only when the caller's call spelled it concretely -- a generic
+ * calling a generic leaves it bound to itself.  So reduce it the way the
+ * compiler does: `V`'s pin, then the instance that binds `Elem` at it. */
+static bool frame_reduce_projection(EvalFrame *f, TypeClassEnv *tc_env,
+                                    const char *name, Type *out) {
+    if (!f || !tc_env || !name || name[0] != '(') return false;
+    const char *sp = strchr(name, ' ');
+    size_t nl = strlen(name);
+    if (!sp || nl < 5 || name[nl - 1] != ')') return false;
+    char assoc[96], arg[96];
+    size_t al = (size_t)(sp - name - 1), gl = nl - (size_t)(sp - name) - 2;
+    if (al == 0 || gl == 0 || al >= sizeof assoc || gl >= sizeof arg) return false;
+    memcpy(assoc, name + 1, al); assoc[al] = '\0';
+    memcpy(arg, sp + 1, gl);     arg[gl] = '\0';
+    if (strchr(arg, ' ') || strchr(arg, '(')) return false;
+    Type concrete;
+    if (!frame_lookup_tyvar(f, arg, &concrete) || concrete.kind == TY_TYVAR) return false;
+    for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
+        const TypeClass *tc = inst->typeclass;
+        if (!tc || inst->n_type_args != 1 || !type_eq(inst->type_args[0], concrete)) continue;
+        for (uint8_t k = 0; k < tc->n_assoc_types && k < inst->n_assoc_types; k++) {
+            if (tc->assoc_type_names[k] && strcmp(tc->assoc_type_names[k]->name, assoc) == 0) {
+                *out = inst->assoc_types[k];
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static void frame_bind_constraint_dicts(TuriEnv *env, EvalFrame *callee,
                                         const TypeConstraint *constraints,
                                         uint8_t n_constraints) {
@@ -8261,8 +8295,9 @@ static void frame_bind_constraint_dicts(TuriEnv *env, EvalFrame *callee,
             tvname = c->type_arg.as.tyvar_.name;
         if (!tvname) continue;
         Type concrete;
-        if (!frame_lookup_tyvar(callee, tvname, &concrete) ||
-            concrete.kind == TY_TYVAR)
+        if ((!frame_lookup_tyvar(callee, tvname, &concrete) ||
+             concrete.kind == TY_TYVAR) &&
+            !frame_reduce_projection(callee, tc_env, tvname, &concrete))
             continue;
         frame_bind_one_dict(env, tc_env, callee, c->typeclass, tvname, concrete);
         /* class-superclasses SC3, the interpreter half of entailment: a
@@ -10830,10 +10865,20 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         /* A result that is an associated-type projection,
                          * `(Inner A)`, dispatches on its argument `A`
                          * (associated-type-unusable-nullary-and-generic). */
+                        /* ...when the dispatched class DECLARES that
+                         * associated type; `NumCast` at `(Elem V)` is keyed on
+                         * the element itself, whose dictionary the frame binds
+                         * under the projection's name (frame_reduce_projection). */
                         if (!recv_is_tyvar && h->as.tyvar_.assoc_of &&
                             h->as.tyvar_.assoc_arg &&
-                            h->as.tyvar_.assoc_arg->kind == TY_TYVAR)
-                            h = h->as.tyvar_.assoc_arg;
+                            h->as.tyvar_.assoc_arg->kind == TY_TYVAR) {
+                            bool owns = false;
+                            for (uint8_t k = 0; k < mtc->n_assoc_types && !owns; k++)
+                                owns = mtc->assoc_type_names[k] &&
+                                       strcmp(mtc->assoc_type_names[k]->name,
+                                              h->as.tyvar_.assoc_of->name) == 0;
+                            if (owns) h = h->as.tyvar_.assoc_arg;
+                        }
                         const char *disp_tv =
                             recv_is_tyvar
                                 ? control->as.call_.args[0]->type.as.tyvar_.name

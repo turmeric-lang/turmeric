@@ -1,0 +1,6 @@
+;; numcast-as-fallback: `as` on a type variable the generic does not constrain
+;; by NumCast is still refused, and the note names the constraint to add.
+(defn f [A] [x : A] : float (as float x))
+(defn main [] : int
+  (println (f 3))
+  0)

@@ -3961,10 +3961,28 @@ bool emit_dispatch_tyvar(const Expr *call, Type *out) {
          * method whose result is the associated type, called at the projection
          * `(Inner A)`, dispatches on `A` -- the projection's own spec binding
          * is the REDUCED type (`int`), which names no instance. */
+        /* ...but only when the class being dispatched DECLARES that
+         * associated type.  `(from-float 2.75)` at `(Elem V)` dispatches
+         * `NumCast`, whose instances are keyed on the element type itself:
+         * mapped to `V`, it found no `NumCast` instance for the array type and
+         * kept the int representative (2.75 came back as 2 in the float spec).
+         * Handed the projection, emit_resolve_type reduces it to the element
+         * type (numcast-from-float-at-projection-picks-representative). */
         if (call->type.as.tyvar_.assoc_of && call->type.as.tyvar_.assoc_arg &&
             call->as.call_.dict_arg) {
-            *out = *call->type.as.tyvar_.assoc_arg;
-            return true;
+            const Expr *d = call->as.call_.dict_arg;
+            const TypeClass *dtc = (d->kind == EX_DICT && d->as.dict_.instance)
+                ? d->as.dict_.instance->typeclass : NULL;
+            bool owns = false;
+            const Symbol *an = call->type.as.tyvar_.assoc_of;
+            for (uint8_t k = 0; dtc && k < dtc->n_assoc_types && !owns; k++)
+                owns = dtc->assoc_type_names[k] &&
+                       (dtc->assoc_type_names[k] == an ||
+                        strcmp(dtc->assoc_type_names[k]->name, an->name) == 0);
+            if (owns || !dtc) {
+                *out = *call->type.as.tyvar_.assoc_arg;
+                return true;
+            }
         }
         *out = call->type;
         return true;

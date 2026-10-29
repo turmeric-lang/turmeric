@@ -2657,6 +2657,10 @@ bool elab_typeclass_superclasses_finish(Elab *e);
  * instance registered since the last one, and always returns true. */
 bool elab_noinst_retry(Elab *e, bool final);
 Expr *elab_method_call(Elab *e, const Form *call);
+/* operator-on-constrained-tyvar-refused: does the enclosing generic constrain
+ * the abstract type `t` (its own variable, or a projection over one) by `cls`
+ * or a class entailing it? */
+bool elab_tyvar_constrained_by(Elab *e, const TypeClass *cls, const Type *t);
 /* Phase RT: if `name` is a typeclass method whose dispatch type variable
  * appears only in the return type (a return-only-dispatch method, e.g.
  * `default-of [] : a`), resolve the instance from the expected-type channel

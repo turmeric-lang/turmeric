@@ -130,6 +130,112 @@
   (mul [x y] (* x y))
   (div [x y] (/ x y))
   (neg [x] (- x)))
+;;; NumCast -- numeric types that convert to and from int and float.
+;;;
+;;; Parameters:
+;;;   a -- the numeric type
+;;;
+;;; Methods:
+;;;   to-float   -- `x` as a float (double)
+;;;   to-int     -- `x` as an int, truncating a fraction toward zero
+;;;   from-int   -- the `a` nearest the int `n`
+;;;   from-float -- the `a` nearest the float `f`, truncating toward zero for
+;;;     the integer instances
+;;;
+;;; What `as` and a literal cannot do in generic code.  Inside `[A] [(NumCast
+;;; A)]`, `(as float x)` on an `x : A` reads as `(to-float x)` -- `as` itself
+;;; is decided where the generic is written, where `A` has no numeric type --
+;;; and a constant of type `A` is `(from-int 0)` or `(from-float 0.5)`, since a
+;;; literal is not an `A`.  Each method converts exactly as `as` does between
+;;; the two concrete types.
+;;;
+;;; Laws:
+;;;   (to-int (from-int n)) = n, for an n the type can hold
+;;;   (to-float (from-float f)) = f, for the float instance
+;;;
+;;; Example:
+;;;   (to-float (:: 7 int32))            ; => 7
+;;;   (to-int 7.75)                      ; => 7
+;;;   (defn mean [A] [(Num A) (NumCast A)] [x : A y : A] : float
+;;;     {(as float {x + y}) / 2.0})
+;;;   (mean 3 4)                         ; => 3.5
+;;;
+;;; Since: simd-and-vectorization-plan (generic numeric arrays)
+(defclass NumCast [a]
+  (to-float [x : a] : float)
+  (to-int [x : a] : int)
+  (from-int [n : int] : a)
+  (from-float [f : float] : a))
+;;; NumCast [int] -- NumCast instance for int.
+
+(definstance NumCast [int]
+  (to-float [x] (as float x))
+  (to-int [x] (as int x))
+  (from-int [n] (as int n))
+  (from-float [f] (as int f)))
+;;; NumCast [int8] -- NumCast instance for int8.
+
+(definstance NumCast [int8]
+  (to-float [x] (as float x))
+  (to-int [x] (as int x))
+  (from-int [n] (as int8 n))
+  (from-float [f] (as int8 f)))
+;;; NumCast [int16] -- NumCast instance for int16.
+
+(definstance NumCast [int16]
+  (to-float [x] (as float x))
+  (to-int [x] (as int x))
+  (from-int [n] (as int16 n))
+  (from-float [f] (as int16 f)))
+;;; NumCast [int32] -- NumCast instance for int32.
+
+(definstance NumCast [int32]
+  (to-float [x] (as float x))
+  (to-int [x] (as int x))
+  (from-int [n] (as int32 n))
+  (from-float [f] (as int32 f)))
+;;; NumCast [uint8] -- NumCast instance for uint8.
+
+(definstance NumCast [uint8]
+  (to-float [x] (as float x))
+  (to-int [x] (as int x))
+  (from-int [n] (as uint8 n))
+  (from-float [f] (as uint8 f)))
+;;; NumCast [uint16] -- NumCast instance for uint16.
+
+(definstance NumCast [uint16]
+  (to-float [x] (as float x))
+  (to-int [x] (as int x))
+  (from-int [n] (as uint16 n))
+  (from-float [f] (as uint16 f)))
+;;; NumCast [uint32] -- NumCast instance for uint32.
+
+(definstance NumCast [uint32]
+  (to-float [x] (as float x))
+  (to-int [x] (as int x))
+  (from-int [n] (as uint32 n))
+  (from-float [f] (as uint32 f)))
+;;; NumCast [uint64] -- NumCast instance for uint64.
+
+(definstance NumCast [uint64]
+  (to-float [x] (as float x))
+  (to-int [x] (as int x))
+  (from-int [n] (as uint64 n))
+  (from-float [f] (as uint64 f)))
+;;; NumCast [float32] -- NumCast instance for float32.
+
+(definstance NumCast [float32]
+  (to-float [x] (as float x))
+  (to-int [x] (as int x))
+  (from-int [n] (as float32 n))
+  (from-float [f] (as float32 f)))
+;;; NumCast [float] -- NumCast instance for float.
+
+(definstance NumCast [float]
+  (to-float [x] (as float x))
+  (to-int [x] (as int x))
+  (from-int [n] (as float n))
+  (from-float [f] (as float f)))
 ;;; Clone -- values that can be copied into an independently owned value.
 ;;;
 ;;; Parameters:
