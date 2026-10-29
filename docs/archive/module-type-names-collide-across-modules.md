@@ -111,7 +111,12 @@ answered, so `(:refer [f])` from `lib/a` called `lib/b`'s `f` whenever
 `lib/b` was imported after it. `scope_lookup_visible` (src/compiler/elab_core.c)
 now prefers, among several visible global bindings, the one the module
 defines or refers, and referring one name from two modules is an error at
-the second import.
+the second import. The interpreter had the same collision at run time: it
+looked globals up by bare name, and only a module's PRIVATE defns had a
+`<module>/<name>` key, so `lib/a`'s own call to its exported `f` ran
+`lib/b`'s. An exported module defn is now registered under that key too, and
+a reference the elaborator resolved to a module's global is looked up under
+its module's key first (`eval_lookup_b`, src/turi/eval.c).
 
 Pinned by `tests/fixtures/module-type-name-collision` (structs, constructors,
 a stdlib `Pair`, an ABI-mirror `String` beside a stdlib `load`, a sole
