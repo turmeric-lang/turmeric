@@ -27,7 +27,7 @@
 > draft planned to build, and the draft had design flaws this version fixes
 > (see "Why not the 2026-06-28 draft"). The file name is historical: nothing
 > here is ahead-of-time compiled any more.
-> **Last Updated:** 2026-10-29 (stdlib baggage pruned; C5 deferred)
+> **Last Updated:** 2026-10-29 (preamble preprocessed once a session; C5 deferred)
 > **Track:** post-v1. C0 (a bug fix) and C1 (graduated) have landed.
 > **Type:** REPL / interpreter (`src/turi/`) / JIT (`src/jit_engine.c`) /
 > emitter (REPL-mode globals).
@@ -891,11 +891,70 @@ the C c2mir rejected is no longer in its program.
 `tests/check-jit-prune-baggage.sh` (ctest `tur_jit_prune_baggage`) keeps it
 so.
 
-**Left before C2 can leave prototype:** the latency of a turn, ~140 ms
-natively and ~130 ms on the page, most of it re-elaborating the stdlib and
-the session (C4 item 1) and c2mir parsing the runtime's declarations. Split
-images (C5) are deferred until a measured large session shows its own
-definitions dominating.
+#### The preamble, preprocessed once (2026-10-29)
+
+`benchmarks/repl-turn/` put the time where the guess above did not: the
+front end is ~17-21 ms of a ~120-140 ms turn, and c2mir ~80 ms, two thirds of
+it preprocessing the same system headers in every turn (MIR's `c2m` on a
+dumped turn: 69 ms to read it, 18 ms for the same text already
+preprocessed). So the engine now preprocesses that part once.
+
+- **The MIR fork** (`c2m -E -fdump-defines`, `c2mir_options.prepro_defines_p`)
+  ends c2mir's preprocessed output with the state the preprocessor ended in:
+  the `#pragma pack` stack and every macro still defined, as directives. The
+  output then reads back as its input did even with more code after it --
+  `[a.c's output][b.c]` compiles as `[a.c][b.c]` does. Making `-E` output
+  faithful took three fixes in the fork: `#pragma pack` was consumed and never
+  written, adjacent tokens could glue (`-` `-1` as `--1`), and an identifier
+  starting with `u8` was lexed as `88...`. Over the fork's `c-tests`, 1047 of
+  1047 compiling files read back to the same MIR.
+- **The engine** (`jit_pre_cache_*` in `src/jit_engine.c`) takes the first
+  part of a split TU -- `JIT_PRELUDE`, the hoisted prefix, and the committed
+  declarations region, up to its closing marker -- preprocesses it once, and
+  compiles a later TU whose first part is the same text from
+  `[that output][#line][the rest]`. The `#line` keeps the program half's line
+  numbers, so a `<tur-jit>:LINE` diagnostic reads as before. One entry, keyed
+  by the text and the include dirs: every turn of a session shares it. A
+  compile from the cached form that fails is done again from the original,
+  silently first, so a program's own error is reported once and as before;
+  if the original compiles, the cache turns itself off for the process.
+- **On for compiled REPL turns only** (`tur_jit_set_preamble_cache`, set
+  beside `tur_jit_set_keep_contexts`, natively and on the page). A one-shot
+  `tur jit` would pay the extra preprocessing pass and never reuse it.
+  `TUR_JIT_PREAMBLE_CACHE=1`/`0` forces it either way. Not on Windows (it
+  needs `open_memstream`).
+
+| defs | median turn, before | after | jit phase, before | after | peak RSS, before | after |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 134 ms | 60 ms | 86 | 28 | 55 MB | 44 MB |
+| 50 | 167 ms | 65 ms | 112 | 30 | 61 MB | 49 MB |
+| 200 | 165 ms | 86 ms | 104 | 39 | 82 MB | 65 MB |
+
+(Release, x86-64 Linux, one binary with `TUR_JIT_PREAMBLE_CACHE=0`/default;
+`benchmarks/repl-turn/RESULTS.md`.) A turn is now about half front end.
+Checked for correctness with the cache forced on for every program
+(`TUR_JIT_PREAMBLE_CACHE=1`, so each one-shot `tur jit` fills it and compiles
+from it): `tests/run-jit.sh` gives 4,034 passed and the same 22
+already-failing fixtures as with it off, and no TUR-W0071. A sweep of every
+third fixture under `TUR_JIT_TIMING=1` shows 974 of 1,071 compiled from the
+cache and none fell back to the original (the other 97 are not split TUs:
+nothing to cache).
+
+**Live once the vendored MIR carries the fork change.** The engine compiles
+the cache in only against a c2mir with `prepro_defines_p`
+(`C2MIR_PREPRO_DEFINES`); until `external/mir/` is synced past the fork
+change it is absent, and `repl-compiled.sh` skips its cache checks. The page
+has not been measured with it yet.
+`tests/turi/repl-compiled.sh` checks that a session fills the cache once,
+that header macros reach a turn's inline C through it, and that a failing
+turn's diagnostics are the same with it and without.
+
+**Left before C2 can leave prototype:** nothing on latency -- the gate is
+200 ms and a 200-definition session's turn is ~86 ms. What remains of a
+turn is the front end re-elaborating the stdlib and the session (~20 ms, C4
+item 1) and c2mir parsing the expanded declarations (~25 ms). Split images
+(C5) stay deferred until a measured large session shows its own definitions
+dominating.
 
 #### Investigation (2026-10-02)
 
@@ -1073,6 +1132,9 @@ Only needed if C2 misses its latency budget. Candidates, safest first:
    a program never reaches (`jit_prune`, which `tur jit` already did and the
    image path did not) took a one-defn image from ~235 ms to ~130 ms. What is
    left is mostly the split runtime's declarations and the system headers.
+   **Done for the headers (2026-10-29):** the preamble cache (C2, "The
+   preamble, preprocessed once") preprocesses them once a session; a turn's
+   c2mir phase went from ~85 ms to ~30 ms.
 3. **Split each turn into two images.** Promoted to C5 (2026-10-29), where
    the whole-program-facts objection is answered by the multi-module build's
    own pass 1.
