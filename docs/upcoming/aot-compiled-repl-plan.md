@@ -9,16 +9,17 @@
 > again 2026-10-04 (findings under C2); **its steps 1 and 2 landed 2026-10-28/29**
 > behind `--enable=compiled-repl` (prototype): every turn compiles the
 > session's definition table plus the turn, and its globals live in host
-> slots (C2, "Step 1, as built" and "Step 2, as built"). Resident memory after
-> 1,000 turns is 1.2 GB, which makes point 5's image-memory decision the
-> next step. **Rewritten 2026-09-29.** The 2026-06-28 draft (in
+> slots (C2, "Step 1, as built" and "Step 2, as built"). Point 5's
+> image-memory decision went to option (a) on 2026-10-29: a turn keeps only its
+> program's code and data, not its MIR context (C2, "Point 5, option (a), as
+> built"). **Rewritten 2026-09-29.** The 2026-06-28 draft (in
 > git history) proposed compiling each prompt form with a `cc` subprocess into
 > a `.so` and `dlopen`ing it. It predates the in-process MIR JIT (graduated
 > 0.34.0). The JIT and the spice REPL now provide most of the machinery the
 > draft planned to build, and the draft had design flaws this version fixes
 > (see "Why not the 2026-06-28 draft"). The file name is historical: nothing
 > here is ahead-of-time compiled any more.
-> **Last Updated:** 2026-10-17 (C1's `cstr` arguments are copied)
+> **Last Updated:** 2026-10-29 (C2: a kept turn keeps its code and data only)
 > **Track:** post-v1. C0 (a bug fix) and C1 (graduated) have landed.
 > **Type:** REPL / interpreter (`src/turi/`) / JIT (`src/jit_engine.c`) /
 > emitter (REPL-mode globals).
@@ -645,11 +646,60 @@ resident heap. Both say the same thing: point 5's image-memory decision, (a)
 or (b), is what C2 needs before it can soak, and it is now measured rather
 than estimated.
 
-**Left before C2 can leave prototype:** the image-memory decision (point 5);
-the turn-entry printer for non-scalars (point 8); continuations crossing
-turns; the transcript corpus's remaining cases (a string literal read 100
-turns later, a `defstruct` redefined with values in slots); the page (the
-browser JIT module installs the same hook, as for C1).
+#### Point 5, option (a), as built (2026-10-29)
+
+Decided: (a) first, (b) later if it is needed. Measured before building, a
+kept context was ~1.3 MB a turn, and it broke down as: ~280 KB of fixed
+tables `MIR_init` builds for every context (the symbol and string tables, the
+scanner, the interpreter's thunk and interface tables, which a generated
+program never uses); ~220 KB of generator state; ~140 KB of MIR instructions;
+and the program's items. Releasing the generator and the instructions alone
+saved a third. The fixed tables cannot be trimmed from outside MIR, and they
+are the cost of one context per turn.
+
+So nothing of the context is kept: only what a pointer from a slot can reach,
+which is the program's machine code and its data sections
+(`jit_finish_kept_context`, `src/jit_engine.c`).
+
+- **Data:** `MIR_finish` frees a section head's storage only while its item's
+  `addr` is set, so each head's `addr` is moved to a kept list and cleared
+  first.
+- **Code:** a kept context is created with its own code allocator
+  (`jit_keep_code_alloc`). Its unmap keeps the pages up to the highest one
+  ever made writable (every byte of code is written through a protect call)
+  and releases the untouched rest of the 128 MB reservation.
+- **Everything else** goes with `MIR_finish`, as for a context that is not
+  kept. Generation is already eager under keep, so no function is left to
+  generate from the IR that goes.
+
+No MIR change. The kept pieces live for the process; `:reset` drops the
+slots but does not unmap old code, since the runtime's own tables may still
+hold a function pointer into it. Where the program runs on MIR's interpreter
+(`TUR_JIT_GEN=interp`, and the wasm module, where the IR *is* the program)
+the whole context stays, and Windows keeps it too, for want of the allocator.
+`tests/turi/repl-compiled.sh` reads a string literal, a lambda and a static
+table made in turn 1 a hundred turns later, under the ASan Debug build.
+
+**Cost, after (a).** The same Release build and sessions as step 2:
+
+| session | turns | before: total, peak RSS | after: total, peak RSS |
+| --- | --- | --- | --- |
+| 1 defn + 299 calls | 300 | 71.5 s, 409 MB | 39.8 s, 88 MB |
+| 1 defn + 999 calls | 1,000 | 345 s, 1,221 MB | 143 s, 156 MB |
+
+A turn now keeps ~0.1 MB (its code pages and data sections, plus the
+session's own growth), down from ~1.2 MB, and the per-turn time no longer
+grows with the session: turns 1-50 ~131 ms, 251-300 ~136 ms (step 2: ~188 ms
+rising to ~302 ms). The slowdown was the allocator working through the kept
+contexts' heap; finishing them is also why every turn got faster.
+
+**Left before C2 can leave prototype:** the turn-entry printer for
+non-scalars (point 8); continuations crossing turns; the transcript corpus's
+remaining case (a `defstruct` redefined with values in slots); the page (the
+browser JIT module installs the same hook, as for C1, and there point 5 is
+still open: the interpreter needs the IR). Option (b) stays available if a
+session's own definitions, rather than its turn count, ever make the kept
+code too much.
 
 #### Investigation (2026-10-02)
 
