@@ -17,6 +17,8 @@
    arbitrary length and type.  That sidesteps the fact that a wasm
    call_indirect is strictly type-checked and would otherwise require one
    pre-generated C stub per signature (~4^nargs of them).
+   An embedder that knows the signatures its code calls registers C stubs
+   for them instead (MIR_wasm_register_ff_stub, "Exact-signature stubs").
 
    A MIR function's address is a wasm table entry as well (see "Function
    thunks"), so native code can call an interpreted function through a
@@ -74,6 +76,8 @@ static inline int target_locs_num (MIR_reg_t loc MIR_UNUSED, MIR_type_t type MIR
 typedef struct {
   int used;
   int vararg_p;
+  int direct_looked_up;     /* the registry was searched for this signature */
+  MIR_wasm_ff_stub_t direct; /* an exact-signature stub, or NULL */
   size_t nres;
   size_t nargs;   /* total, including the variadic tail */
   size_t nfixed;  /* number of declared (non-variadic) parameters */
@@ -442,6 +446,50 @@ static void wasm_thunk_set_interp_entry (wasm_thunk_t *t) {
                              (uint32_t) func->nres, (uint32_t) sizeof (MIR_val_t));
 }
 
+/* Exact-signature stubs.  A wasm call_indirect is type-checked, which is why
+   the general path goes through JS; but an embedder calls into a finite set
+   of signatures (its runtime's), and for those a C stub doing the exact
+   call_indirect is far cheaper than the JS round trip with its BigInt
+   conversions -- and leaves no JS frame on the stack, which Asyncify cannot
+   unwind through.  The embedder registers one per wasm signature
+   (MIR_wasm_register_ff_stub, mir.h); wasm_ff_dispatch uses it when the call
+   matches and the trampoline otherwise.  A signature looks the registry up
+   on its first call, and again after each registration. */
+#define WASM_FF_MAX_DIRECT 1024
+
+typedef struct {
+  char sig[WASM_FF_MAX_ARGS + 2];
+  MIR_wasm_ff_stub_t stub;
+} wasm_direct_t;
+
+static wasm_direct_t wasm_directs[WASM_FF_MAX_DIRECT];
+static size_t wasm_directs_num;
+
+int MIR_wasm_register_ff_stub (const char *sig, MIR_wasm_ff_stub_t stub) {
+  size_t len = strlen (sig);
+
+  if (len == 0 || len > WASM_FF_MAX_ARGS + 1 || stub == NULL) return 0;
+  /* Signatures already called look again: a stub registered late still
+     takes their calls from now on. */
+  for (int k = 0; k < wasm_ff_sigs_num; k++) wasm_ff_sigs[k].direct_looked_up = 0;
+  for (size_t i = 0; i < wasm_directs_num; i++)
+    if (strcmp (wasm_directs[i].sig, sig) == 0) {
+      wasm_directs[i].stub = stub;
+      return 1;
+    }
+  if (wasm_directs_num >= WASM_FF_MAX_DIRECT) return 0;
+  memcpy (wasm_directs[wasm_directs_num].sig, sig, len + 1);
+  wasm_directs[wasm_directs_num++].stub = stub;
+  return 1;
+}
+
+static MIR_wasm_ff_stub_t wasm_direct_find (char res_code, const char *codes) {
+  for (size_t i = 0; i < wasm_directs_num; i++)
+    if (wasm_directs[i].sig[0] == res_code && strcmp (wasm_directs[i].sig + 1, codes) == 0)
+      return wasm_directs[i].stub;
+  return NULL;
+}
+
 static void wasm_ff_dispatch (int sig_index, void *addr, void *res_and_args) {
   wasm_ff_sig_t *sig = &wasm_ff_sigs[sig_index];
   MIR_val_t *ras = (MIR_val_t *) res_and_args;
@@ -553,7 +601,14 @@ static void wasm_ff_dispatch (int sig_index, void *addr, void *res_and_args) {
   }
   codes[ncall] = '\0';
 
-  mir_wasm_js_call ((uint32_t) (uintptr_t) addr, codes, sig->res_code, slots, retbuf);
+  if (!sig->direct_looked_up) {
+    sig->direct = wasm_direct_find (sig->res_code, codes);
+    sig->direct_looked_up = 1;
+  }
+  if (sig->direct != NULL)
+    sig->direct (addr, slots, retbuf);
+  else
+    mir_wasm_js_call ((uint32_t) (uintptr_t) addr, codes, sig->res_code, slots, retbuf);
 
   if (sig->nres > 0) {
     switch (sig->res_code) {
@@ -649,6 +704,8 @@ void *_MIR_get_ff_call (MIR_context_t ctx, size_t nres, MIR_type_t *res_types, s
                               "wasm32: too many distinct foreign call signatures");
   sig = &wasm_ff_sigs[wasm_ff_sigs_num];
   sig->used = 1;
+  sig->direct_looked_up = 0;
+  sig->direct = NULL;
   sig->nres = nres;
   sig->nargs = nargs;
   sig->nfixed = arg_vars_num;

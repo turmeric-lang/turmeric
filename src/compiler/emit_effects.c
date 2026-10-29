@@ -240,12 +240,12 @@ static bool emit_dk_handler_case_fn(EmitCtx *ctx, Buf *hbuf, const char *dkfn_na
     bool v_is_nil = (vtype.kind == TY_NIL || vtype.kind == TY_NEVER);
     char *v_arg;
     if (v_is_nil) {
-        v_arg = strdup("(intptr_t)0");
+        v_arg = strdup("(tur_dkw)0");
     } else {
         char *vv = emit_value(&hc, &fn, r->value);
         char *sv = eff_slot_store(vtype, vv);
         Buf vb; buf_init(&vb);
-        buf_printf(&vb, "(intptr_t)(%s)", sv);
+        buf_printf(&vb, "(tur_dkw)(%s)", sv);
         buf_putc(&vb, '\0');
         v_arg = strdup(vb.data);
         buf_free(&vb); free(sv); free(vv);
@@ -256,8 +256,8 @@ static bool emit_dk_handler_case_fn(EmitCtx *ctx, Buf *hbuf, const char *dkfn_na
     ctx->tmp_n = hc.tmp_n;
     if (pend.len > 0) buf_write(hbuf, pend.data, pend.len);
     buf_free(&pend);
-    buf_printf(hbuf, "static intptr_t %s(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk);\n", dkfn_name);
-    buf_printf(hbuf, "static intptr_t %s(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk) {\n", dkfn_name);
+    buf_printf(hbuf, "static tur_dkw %s(tur_dkw __dkenv, tur_dkw __dkarg, struct DK *__dksubk);\n", dkfn_name);
+    buf_printf(hbuf, "static tur_dkw %s(tur_dkw __dkenv, tur_dkw __dkarg, struct DK *__dksubk) {\n", dkfn_name);
     buf_write(hbuf, fn.data, fn.len);
     buf_puts(hbuf, "}\n\n");
     buf_free(&fn);
@@ -539,7 +539,7 @@ char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
              * as slot_store_reap does on the CPS backend. */
             if (eff_type_boxed(vtype)) {
                 Buf rb; buf_init(&rb);
-                buf_printf(&rb, "(int64_t)__dk_reap_ptr((intptr_t)%s)", st);
+                buf_printf(&rb, "(int64_t)__dk_reap_ptr((tur_dkw)%s)", st);
                 buf_putc(&rb, '\0');
                 v_arg = strdup(rb.data);
                 buf_free(&rb);
@@ -551,7 +551,7 @@ char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
         /* __dk_resume_word (emit_dk_runtime.c) also takes the word a
          * `^multishot` / fn-payload case wraps its chain in. */
         Buf rcall; buf_init(&rcall);
-        buf_printf(&rcall, "__dk_resume_word((intptr_t)(%s), (intptr_t)(%s))", k_var, v_arg);
+        buf_printf(&rcall, "__dk_resume_word((tur_dkw)(%s), (tur_dkw)(%s))", k_var, v_arg);
         buf_putc(&rcall, '\0');
         char *tmp = fresh_tmp(ctx);
         indent_buf(body, ctx->indent);
@@ -607,7 +607,7 @@ char *emit_effects_discontinue(EmitCtx *ctx, Buf *body, const Expr *e) {
                 char *st = eff_slot_store(vtype, v_var);
                 if (eff_type_boxed(vtype)) {
                     Buf rb; buf_init(&rb);
-                    buf_printf(&rb, "(int64_t)__dk_reap_ptr((intptr_t)%s)", st);
+                    buf_printf(&rb, "(int64_t)__dk_reap_ptr((tur_dkw)%s)", st);
                     buf_putc(&rb, '\0');
                     v_arg = strdup(rb.data);
                     buf_free(&rb);
@@ -620,7 +620,7 @@ char *emit_effects_discontinue(EmitCtx *ctx, Buf *body, const Expr *e) {
             const char *base = path ? path : "";
             for (const char *q = base; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
             Buf rcall; buf_init(&rcall);
-            buf_printf(&rcall, "__dk_discontinue((DK *)(intptr_t)(%s), %d, (intptr_t)(%s), \"",
+            buf_printf(&rcall, "__dk_discontinue((DK *)(intptr_t)(%s), %d, (tur_dkw)(%s), \"",
                        k_var, (int)vtype.kind, v_arg);
             for (const char *q = base; *q; q++) {
                 if (*q == '\\' || *q == '"') buf_putc(&rcall, '\\');
@@ -1229,9 +1229,9 @@ char *emit_effects_cont_pred(EmitCtx *ctx, Buf *body, const Expr *e) {
                    tmp, inner);
     } else if (flavor == CONT_CLONEABLE || flavor == CONT_SERIAL) {
         /* A cloneable or serial k is multi-shot: it never becomes consumed. */
-        buf_printf(body, "bool %s = (intptr_t)(%s) != 0;\n", tmp, inner);
+        buf_printf(body, "bool %s = (tur_dkw)(%s) != 0;\n", tmp, inner);
     } else {
-        buf_printf(body, "bool %s = __dk_cont_live_word((intptr_t)(%s));\n", tmp, inner);
+        buf_printf(body, "bool %s = __dk_cont_live_word((tur_dkw)(%s));\n", tmp, inner);
     }
     free(inner);
     return tmp;

@@ -146,7 +146,7 @@ void emit_cps_cloneable_bridge_prelude(Buf *out) {
 " * env; resume = dk_invoke (multi-shot, copies internally), clone = chain\n"
 " * copy, drop = dk_free. Reuses the existing tur_cloneable_cont machinery. */\n"
 "static int64_t __dk_cont_fn(void *env, int64_t value) {\n"
-"    return (int64_t)dk_invoke((DK *)env, (intptr_t)value);\n"
+"    return (int64_t)dk_invoke((DK *)env, (tur_dkw)value);\n"
 "}\n"
 "static void *__dk_env_clone(const void *env) {\n"
 "    return (void *)dk_copy_range((const DK *)env, NULL);\n"
@@ -172,7 +172,7 @@ void emit_cps_cloneable_bridge_prelude(Buf *out) {
 void emit_dk_resume_word_prelude(Buf *out, bool bridged) {
     buf_puts(out,
 "__attribute__((unused, noinline))\n"
-"static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {\n"
+"static tur_dkw __dk_resume_word(tur_dkw k, tur_dkw w) {\n"
 /* resume-of-non-continuation-int-crashes: an `int` k may be any number, and
  * a small one was dereferenced as a DK.  No chain or wrapper lives in the
  * first page, so report it as the interpreter does instead of crashing. */
@@ -184,7 +184,7 @@ void emit_dk_resume_word_prelude(Buf *out, bool bridged) {
     if (bridged)
         buf_puts(out,
 "    if (*(int64_t (* const *)(void *, int64_t))k == __dk_cont_fn)\n"
-"        return (intptr_t)__dk_cont_fn(((tur_cloneable_cont *)k)->env, (int64_t)w);\n");
+"        return (tur_dkw)__dk_cont_fn(((tur_cloneable_cont *)k)->env, (int64_t)w);\n");
     buf_puts(out,
 "    ((DK *)k)->consumed = 1;   /* (cont? k), as emit_resume marks it */\n"
 "    return dk_invoke((DK *)k, w);\n"
@@ -197,7 +197,7 @@ void emit_dk_resume_word_prelude(Buf *out, bool bridged) {
      * `consumed` straight off a wrapper read past its 32 bytes. */
     buf_puts(out,
 "__attribute__((unused, noinline))\n"
-"static bool __dk_cont_live_word(intptr_t k) {\n"
+"static bool __dk_cont_live_word(tur_dkw k) {\n"
 "    if ((uintptr_t)k < 4096) return false;   /* nor is any small number */\n");
     if (bridged)
         buf_puts(out,
@@ -219,14 +219,14 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 " * `bytes` (int64 length prefix, then payload). */\n"
 "enum { SK_TAG_ADD = 1, SK_TAG_MUL = 2, SK_TAG_SUBR = 3, SK_TAG_SUBL = 4,\n"
 "       SK_TAG_DIVR = 5, SK_TAG_DIVL = 6 };\n"
-"static intptr_t __sk_add (intptr_t env, intptr_t v) { return env + v; }\n"
-"static intptr_t __sk_mul (intptr_t env, intptr_t v) { return env * v; }\n"
-"static intptr_t __sk_subr(intptr_t env, intptr_t v) { return env - v; } /* other - hole */\n"
-"static intptr_t __sk_subl(intptr_t env, intptr_t v) { return v - env; } /* hole - other */\n"
-"static intptr_t __sk_divr(intptr_t env, intptr_t v) {  /* other / hole */\n"
+"static tur_dkw __sk_add (tur_dkw env, tur_dkw v) { return env + v; }\n"
+"static tur_dkw __sk_mul (tur_dkw env, tur_dkw v) { return env * v; }\n"
+"static tur_dkw __sk_subr(tur_dkw env, tur_dkw v) { return env - v; } /* other - hole */\n"
+"static tur_dkw __sk_subl(tur_dkw env, tur_dkw v) { return v - env; } /* hole - other */\n"
+"static tur_dkw __sk_divr(tur_dkw env, tur_dkw v) {  /* other / hole */\n"
 "    return tur_idiv(env, v);\n"
 "}\n"
-"static intptr_t __sk_divl(intptr_t env, intptr_t v) {  /* hole / other */\n"
+"static tur_dkw __sk_divl(tur_dkw env, tur_dkw v) {  /* hole / other */\n"
 "    return tur_idiv(v, env);\n"
 "}\n"
 "static DKFrame __sk_frame_for_tag(int tag) {\n"
@@ -287,7 +287,7 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
     buf_puts(out,
 "/* Resume a (possibly deserialized) serial continuation on a value. */\n"
 "static int64_t tur_serial_cont_resume(int64_t k, int64_t v) {\n"
-"    return (int64_t)dk_invoke((DK *)(intptr_t)k, (intptr_t)v);\n"
+"    return (int64_t)dk_invoke((DK *)(intptr_t)k, (tur_dkw)v);\n"
 "}\n"
 "/* Marshal to a length-prefixed buffer ([int64 payload_len][int64 n][records]).\n"
 " * Each record is self-describing. An arithmetic frame is [tag(1..6)][int64 env].\n"
@@ -488,7 +488,7 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "    uint8_t *c = (uint8_t *)(intptr_t)bytes + 8;  /* skip the length prefix */\n"
 "    int64_t n; memcpy(&n, c, 8); c += 8;\n"
 "    DKFrame *fns = (DKFrame *)malloc(sizeof(DKFrame) * (size_t)(n > 0 ? n : 1));\n"
-"    intptr_t *envs = (intptr_t *)malloc(sizeof(intptr_t) * (size_t)(n > 0 ? n : 1));\n"
+"    tur_dkw *envs = (tur_dkw *)malloc(sizeof(tur_dkw) * (size_t)(n > 0 ? n : 1));\n"
 "    if (!fns || !envs) abort();\n"
 "    for (int64_t i = 0; i < n; i++) {\n"
 "        int64_t tag; memcpy(&tag, c, 8); c += 8;\n"
@@ -507,7 +507,7 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "                if (!s) abort();\n"
 "                if (sl) memcpy(s, c, (size_t)sl);\n"
 "                s[sl] = 0; c += sl;\n"
-"                envs[i] = (intptr_t)s;\n"
+"                envs[i] = (tur_dkw)s;\n"
 "            } else if (ek == SK_ENV_SER) {\n"
 "                int64_t bl; memcpy(&bl, c, 8); c += 8;\n"
 "                int64_t *bb = (int64_t *)malloc(sizeof(int64_t) + (size_t)bl);\n"
@@ -515,16 +515,16 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "                bb[0] = bl;\n"
 "                if (bl) memcpy(bb + 1, c, (size_t)bl);\n"
 "                c += bl;\n"
-"                envs[i] = (intptr_t)reg->deser(bb);  /* checked non-NULL */\n"
+"                envs[i] = (tur_dkw)reg->deser(bb);  /* checked non-NULL */\n"
 "                free(bb);\n"
 "            } else {\n"
 "                int64_t env; memcpy(&env, c, 8); c += 8;\n"
-"                envs[i] = (intptr_t)env;\n"
+"                envs[i] = (tur_dkw)env;\n"
 "            }\n"
 "        } else {\n"
 "            fns[i] = __sk_frame_for_tag((int)tag);\n"
 "            int64_t env; memcpy(&env, c, 8); c += 8;\n"
-"            envs[i] = (intptr_t)env;\n"
+"            envs[i] = (tur_dkw)env;\n"
 "        }\n"
 "    }\n"
 "    DK *chain = dk_prompt(1, dk_done());\n"
@@ -648,6 +648,20 @@ void emit_tur_jmp_buf_prelude(Buf *out) {
 "#define TUR_LONGJMP(b) longjmp((b), 1)\n"
 "#endif\n");
     }
+    /* The delimited-control machine's word: what a DK frame, body or handler
+     * receives and returns, and what its env slots hold.  A value is 64 bits --
+     * an int64_t, or a float's bits -- so where intptr_t is narrower (wasm32,
+     * the browser's JIT engine) the word is int64_t; everywhere else it is
+     * intptr_t, the type it has always had.  Emitted with the landing pad
+     * because both are needed by consumers gated differently, and spelled as a
+     * preprocessor test both halves of an S2 split answer alike (like _WIN32
+     * above), so the text is the same on every host. */
+    buf_puts(out,
+"#if INTPTR_MAX < INT64_MAX\n"
+"typedef int64_t tur_dkw;\n"
+"#else\n"
+"typedef intptr_t tur_dkw;\n"
+"#endif\n");
 }
 
 void emit_cps_runtime_prelude(Buf *out) {
@@ -665,28 +679,28 @@ void emit_cps_runtime_prelude(Buf *out) {
 "#define DK_CATCH_TAG (-31337)\n"
 "#define DK_DEAD_CATCH_TAG (-31338)\n"
 "typedef struct DK DK;\n"
-"typedef intptr_t (*DKFrame)(intptr_t env, intptr_t value);\n"
-"typedef intptr_t (*DKBody)(intptr_t env, DK *subk);\n"
-"typedef intptr_t (*DKHandler)(intptr_t env, intptr_t arg, DK *subk);\n"
+"typedef tur_dkw (*DKFrame)(tur_dkw env, tur_dkw value);\n"
+"typedef tur_dkw (*DKBody)(tur_dkw env, DK *subk);\n"
+"typedef tur_dkw (*DKHandler)(tur_dkw env, tur_dkw arg, DK *subk);\n"
 /* A RESUME frame (multi-suspension continuation lowering, Track A): unlike a
  * plain DKK_FRAME value-transform, it receives its run-time downstream chain
  * `rest` (this node's k->next as spliced by dk_perform -- the reinstalled
  * handler tail) and CONSUMES it (dk_run_impl returns rfn's result rather than
  * continuing the loop).  That is what lets a nested control op inside a lifted
  * continuation thread the correct enclosing handler and deliver exactly once. */
-"typedef intptr_t (*DKResumeFrame)(intptr_t env, intptr_t value, DK *rest);\n"
+"typedef tur_dkw (*DKResumeFrame)(tur_dkw env, tur_dkw value, DK *rest);\n"
 /* E3a (cps-backend-owning-env-teardown): owning-env clone/drop glue.  A frame
  * whose captured env holds an owning value carries this pair so a multi-shot
  * resume gets its own refcounted copy instead of a shared shallow alias; both
  * default NULL, in which case dk_copy_node keeps the shallow env-pointer copy
  * and dk_free never touches the env -- byte-identical to the pre-E3a path. */
-"typedef intptr_t (*DKEnvClone)(intptr_t env);\n"
-"typedef void (*DKEnvDrop)(intptr_t env);\n"
+"typedef tur_dkw (*DKEnvClone)(tur_dkw env);\n"
+"typedef void (*DKEnvDrop)(tur_dkw env);\n"
 "typedef enum { DKK_DONE, DKK_FRAME, DKK_PROMPT, DKK_SHIFT, DKK_SHIFT0, DKK_HANDLER, DKK_RESUME_FRAME } DKKind;\n"
 "struct DK {\n"
-"    DKKind kind; DKFrame fn; intptr_t env; int tag;\n"
-"    DKBody body; intptr_t body_env;\n"
-"    DKHandler handler; intptr_t handler_env; bool shallow;\n"
+"    DKKind kind; DKFrame fn; tur_dkw env; int tag;\n"
+"    DKBody body; tur_dkw body_env;\n"
+"    DKHandler handler; tur_dkw handler_env; bool shallow;\n"
 /* fn-value-call-cps-frames-held-until-outer-entry, effect half: `tail_inplace`
  * marks a deep handler whose case resumes its continuation exactly once, in
  * tail position, and uses it for nothing else (dk_handler_tail_inplace); a
@@ -727,7 +741,7 @@ void emit_cps_runtime_prelude(Buf *out) {
  * at the moment the case returns or the escape lands (__dk_abort_abandon,
  * __dk_abort_pending, __dk_escape_abandon; cps-defer-skipped-on-abortive-
  * effect, archived). */
-"    void (*unwind)(intptr_t env);\n"
+"    void (*unwind)(tur_dkw env);\n"
 /* Re-opening delivery protocol (cps-case-reopen-marker-kont-truncates-capture):
  * a handler whose case RE-OPENS an outer effect runs with the REAL enclosing
  * chain as its continuation and delivers its own value through it
@@ -834,33 +848,33 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    k->ss = next ? __dk_ss_after(next) : true; return k;\n"
 "}\n"
 "static DK *dk_done(void) { return dk_new(DKK_DONE, NULL); }\n"
-"static DK *dk_frame(DKFrame fn, intptr_t env, DK *next) {\n"
+"static DK *dk_frame(DKFrame fn, tur_dkw env, DK *next) {\n"
 "    DK *k = dk_new(DKK_FRAME, next); k->fn = fn; k->env = env; return k;\n"
 "}\n"
 "/* E3a: a plain frame whose env is owning -- carries the clone/drop pair fired\n"
 " * by dk_copy_node / dk_free.  NULL for both is exactly dk_frame. */\n"
 "__attribute__((unused))\n"
-"static DK *dk_frame_owning(DKFrame fn, intptr_t env,\n"
+"static DK *dk_frame_owning(DKFrame fn, tur_dkw env,\n"
 "                           DKEnvClone env_clone, DKEnvDrop env_drop, DK *next) {\n"
 "    DK *k = dk_new(DKK_FRAME, next); k->fn = fn; k->env = env;\n"
 "    k->env_clone = env_clone; k->env_drop = env_drop; return k;\n"
 "}\n"
-"static DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {\n"
+"static DK *dk_frame_resume(DKResumeFrame fn, tur_dkw env, DK *next) {\n"
 "    DK *k = dk_new(DKK_RESUME_FRAME, next); k->rfn = fn; k->env = env; return k;\n"
 "}\n"
 "/* A heap-join frame (emit_heap_join): the continuation of one non-tail\n"
 " * cps->cps call, spliced onto the caller's chain and registered for a\n"
 " * single-node reap.  See __dk_join_release_node. */\n"
 "__attribute__((unused))\n"
-"static DK *dk_frame_join(DKFrame fn, intptr_t env, DK *next) {\n"
+"static DK *dk_frame_join(DKFrame fn, tur_dkw env, DK *next) {\n"
 "    DK *k = dk_frame(fn, env, next); k->join_once = true; return k;\n"
 "}\n"
 "__attribute__((unused))\n"
-"static DK *dk_frame_resume_join(DKResumeFrame fn, intptr_t env, DK *next) {\n"
+"static DK *dk_frame_resume_join(DKResumeFrame fn, tur_dkw env, DK *next) {\n"
 "    DK *k = dk_frame_resume(fn, env, next); k->join_once = true; return k;\n"
 "}\n");
     buf_puts(out,
-"__attribute__((unused)) static DK *__dk_with_unwind(DK *k, void (*u)(intptr_t)) { k->unwind = u; return k; }\n"
+"__attribute__((unused)) static DK *__dk_with_unwind(DK *k, void (*u)(tur_dkw)) { k->unwind = u; return k; }\n"
 /* The chain a panic abandons: fire each never-run frame's unwinder once,
  * innermost first (chain order), down to the entry's root.  Walking an
  * already-walked chain again (a nested driver, then its caller) finds the
@@ -877,7 +891,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "__attribute__((unused)) static void __dk_panic_abandon(DK *k) {\n"
 "    for (; k; k = k->next) {\n"
 "        if (__dk_catch_takes(k)) break;\n"
-"        if (k->unwind) { void (*u)(intptr_t) = k->unwind; k->unwind = NULL; u(k->env); }\n"
+"        if (k->unwind) { void (*u)(tur_dkw) = k->unwind; k->unwind = NULL; u(k->env); }\n"
 "        if (k->kind == DKK_DONE) break;\n"
 "    }\n"
 "}\n"
@@ -908,7 +922,7 @@ void emit_cps_runtime_prelude(Buf *out) {
  * deferred body panics, which the caller then sees as an ordinary panic. */
 "__attribute__((unused)) static void __dk_abort_abandon(DK *k, const DK *H) {\n"
 "    for (; k && k != H; k = k->next) {\n"
-"        if (k->unwind) { void (*u)(intptr_t) = k->unwind; k->unwind = NULL; u(k->env); }\n"
+"        if (k->unwind) { void (*u)(tur_dkw) = k->unwind; k->unwind = NULL; u(k->env); }\n"
 "        if (k->kind == DKK_DONE) break;\n"
 "    }\n"
 "}\n"
@@ -924,12 +938,12 @@ void emit_cps_runtime_prelude(Buf *out) {
 " * delimiter.  borrow_next keeps dk_free out of the enclosing chain (it has its\n"
 " * own reap owner). */\n"
 "__attribute__((unused))\n"
-"static DK *dk_frame_resume_borrow(DKResumeFrame fn, intptr_t env, DK *next) {\n"
+"static DK *dk_frame_resume_borrow(DKResumeFrame fn, tur_dkw env, DK *next) {\n"
 "    DK *k = dk_frame_resume(fn, env, next); k->borrow_next = true; return k;\n"
 "}\n"
 "/* A `handle`'s continuation frame (emit_handle): see __dk_group_release. */\n"
 "__attribute__((unused))\n"
-"static DK *dk_frame_resume_group_end(DKResumeFrame fn, intptr_t env, DK *next) {\n"
+"static DK *dk_frame_resume_group_end(DKResumeFrame fn, tur_dkw env, DK *next) {\n"
 "    DK *k = dk_frame_resume_borrow(fn, env, next); k->group_end = true; return k;\n"
 "}\n"
 "static DK *dk_prompt(int tag, DK *next) {\n"
@@ -939,22 +953,22 @@ void emit_cps_runtime_prelude(Buf *out) {
 "__attribute__((unused)) static DK *dk_prompt_catch(int ptype, int reap, DK *next) {\n"
 "    DK *k = dk_new(DKK_PROMPT, next); k->tag = DK_CATCH_TAG; k->env = ptype; k->catch_reap = reap != 0; return k;\n"
 "}\n"
-"static DK *dk_shift_impl(DKKind kind, int tag, DKBody body, intptr_t env, DK *next) {\n"
+"static DK *dk_shift_impl(DKKind kind, int tag, DKBody body, tur_dkw env, DK *next) {\n"
 "    DK *k = dk_new(kind, next); k->tag = tag; k->body = body; k->body_env = env; return k;\n"
 "}\n"
-"static DK *dk_shift(int tag, DKBody body, intptr_t env, DK *next) {\n"
+"static DK *dk_shift(int tag, DKBody body, tur_dkw env, DK *next) {\n"
 "    return dk_shift_impl(DKK_SHIFT, tag, body, env, next);\n"
 "}\n"
-"static DK *dk_shift0(int tag, DKBody body, intptr_t env, DK *next) {\n"
+"static DK *dk_shift0(int tag, DKBody body, tur_dkw env, DK *next) {\n"
 "    return dk_shift_impl(DKK_SHIFT0, tag, body, env, next);\n"
 "}\n"
-"static DK *dk_handler_impl(int tag, DKHandler fn, intptr_t env, bool shallow, DK *next) {\n"
+"static DK *dk_handler_impl(int tag, DKHandler fn, tur_dkw env, bool shallow, DK *next) {\n"
 "    DK *k = dk_new(DKK_HANDLER, next); k->tag = tag; k->handler = fn; k->handler_env = env; k->shallow = shallow; return k;\n"
 "}\n"
-"static DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next) {\n"
+"static DK *dk_handler(int tag, DKHandler fn, tur_dkw env, DK *next) {\n"
 "    return dk_handler_impl(tag, fn, env, false, next);\n"
 "}\n"
-"static DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next) {\n"
+"static DK *dk_handler_shallow(int tag, DKHandler fn, tur_dkw env, DK *next) {\n"
 "    return dk_handler_impl(tag, fn, env, true, next);\n"
 "}\n"
 "/* Mark a handler whose case delivers its own value through the real chain\n"
@@ -989,13 +1003,13 @@ void emit_cps_runtime_prelude(Buf *out) {
     buf_puts(out,
 "/* E7: a deep handler whose case tail-resumes -- dk_perform yields to the entry\n"
 " * driver instead of resuming inline, keeping deep effectful recursion flat. */\n"
-"static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {\n"
+"static DK *dk_handler_tail(int tag, DKHandler fn, tur_dkw env, DK *next) {\n"
 "    DK *k = dk_handler_impl(tag, fn, env, false, next); k->tail_resume = true; return k;\n"
 "}\n"
 "/* A dk_handler_tail whose case uses its continuation only for that one tail\n"
 " * resume (emit_handle, case_resumes_k_only_in_tail): see dk_perform. */\n"
 "__attribute__((unused))\n"
-"static DK *dk_handler_tail_inplace(int tag, DKHandler fn, intptr_t env, DK *next) {\n"
+"static DK *dk_handler_tail_inplace(int tag, DKHandler fn, tur_dkw env, DK *next) {\n"
 "    DK *k = dk_handler_tail(tag, fn, env, next); k->tail_inplace = true; return k;\n"
 "}\n"
 "/* Re-opening: stamp the maximal run of consecutive DKK_HANDLER nodes starting at\n"
@@ -1033,7 +1047,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "        /* The emitted DK case fns always end in a tail `return dk_tail_resume`,\n"
 "         * so install as a tail handler (dk_perform yields the resumed chain to\n"
 "         * the entry driver), matching the static handle path. */\n"
-"        head = dk_handler_tail(e->dk_tag, (DKHandler)e->dk_fn, (intptr_t)e->env, head);\n"
+"        head = dk_handler_tail(e->dk_tag, (DKHandler)e->dk_fn, (tur_dkw)e->env, head);\n"
 "        head->multishot = true;   /* a table case's shape is not known here: see `ss` */\n"
 "    }\n"
 "    return dk_hgroup(head);\n"
@@ -1044,10 +1058,10 @@ void emit_cps_runtime_prelude(Buf *out) {
      * same as the original -- an owning capture keeps the env's single +1
      * either way (the read-out increfs per run). */
     buf_puts(out,
-"static intptr_t __dk_env_dup(intptr_t env, size_t size) {\n"
+"static tur_dkw __dk_env_dup(tur_dkw env, size_t size) {\n"
 "    void *c = malloc(size);\n"
 "    memcpy(c, (const void *)env, size);\n"
-"    return (intptr_t)c;\n"
+"    return (tur_dkw)c;\n"
 "}\n"
 "/* Record the size of a frame's env struct, so a parked copy can own a copy\n"
 " * of it.  Not for an E3a owning frame, whose clone glue already copies it. */\n"
@@ -1177,17 +1191,17 @@ void emit_cps_runtime_prelude(Buf *out) {
 "__attribute__((unused)) static void dk_free_node(DK *k) { if (tur_dk_pinned) return; if (k && k->env_drop) k->env_drop(k->env); else if (k && k->env_owned) free((void *)k->env); free(k); }\n");
     buf_puts(out,
 "/* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */\n"
-"typedef intptr_t (*__tur_cps_fn)();\n"
+"typedef tur_dkw (*__tur_cps_fn)();\n"
 /* cps-callback-registry-overflows-past-256: the registry grows.  It was a
  * 256-entry array that dropped every later registration, so the 257th
  * threadable callback missed its lookup, took the direct entry (a fresh DK
  * root) and aborted with "unhandled effect".  A miss cannot be made loud at
  * the fat dispatch: a PURE fn-value in an effectful slot is never registered
  * and takes that same direct entry on purpose. */
-"static struct { intptr_t direct; __tur_cps_fn cps; } *__tur_cps_reg;\n"
+"static struct { tur_dkw direct; __tur_cps_fn cps; } *__tur_cps_reg;\n"
 "static int __tur_cps_reg_n = 0;\n"
 "static int __tur_cps_reg_cap = 0;\n"
-"__attribute__((unused)) static void __tur_cps_register(intptr_t direct, __tur_cps_fn cps) {\n"
+"__attribute__((unused)) static void __tur_cps_register(tur_dkw direct, __tur_cps_fn cps) {\n"
 "    if (__tur_cps_reg_n == __tur_cps_reg_cap) {\n"
 "        int cap = __tur_cps_reg_cap ? __tur_cps_reg_cap * 2 : 256;\n"
 "        void *grown = realloc(__tur_cps_reg, (size_t)cap * sizeof(*__tur_cps_reg));\n"
@@ -1197,7 +1211,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    __tur_cps_reg[__tur_cps_reg_n].direct = direct;\n"
 "    __tur_cps_reg[__tur_cps_reg_n].cps = cps; __tur_cps_reg_n++;\n"
 "}\n"
-"__attribute__((unused)) static __tur_cps_fn __tur_cps_lookup(intptr_t direct) {\n"
+"__attribute__((unused)) static __tur_cps_fn __tur_cps_lookup(tur_dkw direct) {\n"
 "    for (int i = 0; i < __tur_cps_reg_n; i++)\n"
 "        if (__tur_cps_reg[i].direct == direct) return __tur_cps_reg[i].cps;\n"
 "    return (__tur_cps_fn)0;\n"
@@ -1206,7 +1220,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "   which lands as a bare SIGSEGV with nothing pointing at the cause.  Only a\n"
 "   value whose CPS entry was registered at startup can thread the handler\n"
 "   chain, so a miss is a compiler bug, not a user error; say so and stop. */\n"
-"__attribute__((unused)) static __tur_cps_fn __tur_cps_lookup_checked(intptr_t direct,\n"
+"__attribute__((unused)) static __tur_cps_fn __tur_cps_lookup_checked(tur_dkw direct,\n"
 "                                                                     const char *who) {\n"
 "    __tur_cps_fn f = __tur_cps_lookup(direct);\n"
 "    if (!f) {\n"
@@ -1265,7 +1279,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "/* The current entry-driver landing; NULL runs a tail resume inline. */\n"
 "static TUR_THREAD_LOCAL tur_jmp_buf *g_dk_driver;\n"
 "static TUR_THREAD_LOCAL DK *g_dk_resume_chain;\n"
-"static TUR_THREAD_LOCAL intptr_t g_dk_resume_val;\n"
+"static TUR_THREAD_LOCAL tur_dkw g_dk_resume_val;\n"
 "#else\n"
 "/* A front end without thread-locals (c2mir, `tur jit`): the host keeps a\n"
 " * real per-thread slot each (src/runtime/tur_tls.c), as emit_rt_tls does. */\n"
@@ -1276,7 +1290,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "extern int *tur_tls_dk_entry_depth_ptr(void);\n"
 "extern void **tur_tls_dk_driver_ptr(void);\n"
 "extern void **tur_tls_dk_resume_chain_ptr(void);\n"
-"extern intptr_t *tur_tls_dk_resume_val_ptr(void);\n"
+"extern tur_dkw *tur_tls_dk_resume_val_ptr(void);\n"
 "extern void **tur_tls_dk_pend_perform_ptr(void);\n"
 "#define g_dk_pend_perform (*(DKPendPerform **)tur_tls_dk_pend_perform_ptr())\n"
 "#define __dk_reap_v (*(void ***)tur_tls_dk_reap_v_ptr())\n"
@@ -1300,7 +1314,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "TUR_TLS_FRESH(int, __dk_entry_depth, __dk_entry_depth__at);\n"
 "TUR_TLS_FRESH(tur_jmp_buf *, g_dk_driver, g_dk_driver__at);\n"
 "TUR_TLS_FRESH(DK *, g_dk_resume_chain, g_dk_resume_chain__at);\n"
-"TUR_TLS_FRESH(intptr_t, g_dk_resume_val, g_dk_resume_val__at);\n"
+"TUR_TLS_FRESH(tur_dkw, g_dk_resume_val, g_dk_resume_val__at);\n"
 "TUR_TLS_FRESH(DKPendPerform *, g_dk_pend_perform, g_dk_pend_perform__at);\n"
 "#define g_dk_pend_perform (*g_dk_pend_perform__at())\n"
 "#define __dk_reap_v (*__dk_reap_v__at())\n"
@@ -1322,7 +1336,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    __dk_reap_v[__dk_reap_n] = p; __dk_reap_kind[__dk_reap_n] = kind; __dk_reap_n++;\n"
 "}\n"
 "__attribute__((unused)) static DK *__dk_reap_keep(DK *k) { __dk_reap_push(k, 1); return k; }\n"
-"__attribute__((unused)) static intptr_t __dk_reap_ptr(intptr_t p) { __dk_reap_push((void *)p, 0); return p; }\n"
+"__attribute__((unused)) static tur_dkw __dk_reap_ptr(tur_dkw p) { __dk_reap_push((void *)p, 0); return p; }\n"
 "/* Register a single spliced node (->next points into an enclosing k) for a\n"
 " * single-node free at reap -- dk_free would walk into the enclosing chain.\n"
 " * Kind 3, freed like kind 0, but known to be a node: a park's hand-off reads\n"
@@ -1339,7 +1353,7 @@ void emit_cps_runtime_prelude(Buf *out) {
  * function's release (__dk_join_release_env) finds it last.  An env too large
  * for env_size is registered as before. */
 "__attribute__((unused))\n"
-"static DK *dk_frame_resume_borrow_owned(DKResumeFrame fn, intptr_t env, size_t size, DK *next) {\n"
+"static DK *dk_frame_resume_borrow_owned(DKResumeFrame fn, tur_dkw env, size_t size, DK *next) {\n"
 "    DK *k = dk_frame_resume_borrow(fn, env, next);\n"
 "    if (!env) return k;\n"
 "    if (size > 0xFFFF) { __dk_reap_ptr(env); return k; }\n"
@@ -1352,14 +1366,14 @@ void emit_cps_runtime_prelude(Buf *out) {
      * through TUR_CLOSURE_DROP (recovers the header, walks owning captures, frees
      * the base). */
     buf_puts(out,
-"__attribute__((unused)) static intptr_t __dk_reap_closure(intptr_t p) { __dk_reap_push((void *)p, 2); return p; }\n"
+"__attribute__((unused)) static tur_dkw __dk_reap_closure(tur_dkw p) { __dk_reap_push((void *)p, 2); return p; }\n"
 /* closure-let-in-self-tail-loop-leaks: a CPS self-tail loop's backedge frees
  * the closures that turn registered, instead of holding one per turn until the
  * outermost entry returns.  The entry comes OFF the list (order kept, so no
  * entry's mark moves) before the drop, so the boundary never frees it twice.
  * Pinned (a kept continuation may still reach it) or not found (the collector
  * already forgot it), it is left alone. */
-"__attribute__((unused)) static void __dk_reap_closure_now(intptr_t p) {\n"
+"__attribute__((unused)) static void __dk_reap_closure_now(tur_dkw p) {\n"
 "    if (tur_dk_pinned) return;\n"
 "    for (size_t i = __dk_reap_n; i-- > 0; ) {\n"
 "        if (__dk_reap_v[i] == (void *)p && __dk_reap_kind[i] == 2) {\n"
@@ -1573,7 +1587,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    free(s);\n"
 "    if (!f || !n || __dk_reap_v[n - 1] != (void *)f || __dk_reap_kind[n - 1] != 3) return;\n"
 "    __dk_reap_v[n - 1] = NULL; __dk_reap_n = --n;\n"
-"    intptr_t fe = f->env; bool fe_free = f->orphan_env;\n"
+"    tur_dkw fe = f->env; bool fe_free = f->orphan_env;\n"
 "    free(f);\n"
 "    if (!fe_free || !n || __dk_reap_v[n - 1] != (void *)fe || __dk_reap_kind[n - 1] != 0) return;\n"
 "    __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;\n"
@@ -1593,7 +1607,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    size_t n = __dk_reap_n;\n"
 "    if (tur_dk_pinned || end->ncopy || !n || __dk_reap_kind[n - 1] != 1) return false;\n"
 "    DK *h = (DK *)__dk_reap_v[n - 1];\n"
-"    intptr_t envs[16]; int ne = 0; bool envs_free = true;\n"
+"    tur_dkw envs[16]; int ne = 0; bool envs_free = true;\n"
 "    const DK *p = h;\n"
 "    for (; p && p != end && p->kind == DKK_HANDLER; p = p->next) {\n"
 "        if (p->ncopy) envs_free = false;   /* a copy shares its handler env */\n"
@@ -1612,7 +1626,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    }\n"
 "    return true;\n"
 "}\n"
-"__attribute__((unused)) static void __dk_join_release_env(intptr_t env) {\n"
+"__attribute__((unused)) static void __dk_join_release_env(tur_dkw env) {\n"
 "    size_t n = __dk_reap_n;\n"
 "    if (tur_dk_pinned || !env || !n || __dk_reap_v[n - 1] != (void *)env\n"
 "        || __dk_reap_kind[n - 1] != 0) return;\n"
@@ -1629,7 +1643,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 /* Returned by value, not through an out-parameter: an address-taken local
  * in dk_run_impl / dk_perform would be a red-zoned stack slot in every frame
  * of a deep chain under ASan. */
-"typedef struct { DK *k; intptr_t err; } DKCaught;\n"
+"typedef struct { DK *k; tur_dkw err; } DKCaught;\n"
 "__attribute__((unused)) static DKCaught __dk_panic_catch(DK *k) {\n"
 "    DKCaught c = { NULL, 0 };\n"
 "    __dk_panic_abandon(k);\n"
@@ -1640,10 +1654,10 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    if (!k) return c;\n"
 "    tur_panicking = 0; tur_panic_in_progress = 0;\n"
 "    tur_panic_payload *p = global_panic_payload; global_panic_payload = NULL;\n"
-"    c.err = (intptr_t)tur_box_err((int64_t)(intptr_t)p);\n"
+"    c.err = (tur_dkw)tur_box_err((int64_t)(intptr_t)p);\n"
 "    if (k->catch_reap) {\n"
 "        __dk_reap_ptr(c.err);\n"
-"        if (p) { if (p->owns_value && p->value) __dk_reap_ptr((intptr_t)p->value); __dk_reap_ptr((intptr_t)p); }\n"
+"        if (p) { if (p->owns_value && p->value) __dk_reap_ptr((tur_dkw)p->value); __dk_reap_ptr((tur_dkw)p); }\n"
 "    }\n"
 "    c.k = k->next;\n"
 "    return c;\n"
@@ -1705,11 +1719,11 @@ void emit_cps_runtime_prelude(Buf *out) {
 "        if (k->kind == DKK_PROMPT && k->tag == 1) return 1;\n"
 "    return 0;\n"
 "}\n"
-"__attribute__((unused)) static intptr_t dk_run(DK *k, intptr_t v);\n"
-"__attribute__((unused)) static intptr_t __dk_reset_abort_to(DK *k, int64_t w, int skip) {\n"
+"__attribute__((unused)) static tur_dkw dk_run(DK *k, tur_dkw v);\n"
+"__attribute__((unused)) static tur_dkw __dk_reset_abort_to(DK *k, int64_t w, int skip) {\n"
 "    for (; k && k->kind != DKK_DONE; k = k->next)\n"
-"        if (k->kind == DKK_PROMPT && k->tag == 1 && skip-- == 0) return dk_run(k->next, (intptr_t)w);\n"
-"    return (intptr_t)w;\n"
+"        if (k->kind == DKK_PROMPT && k->tag == 1 && skip-- == 0) return dk_run(k->next, (tur_dkw)w);\n"
+"    return (tur_dkw)w;\n"
 "}\n"
 /* direct-shift-outside-lexical-reset-not-abortive: a shift0 runs its receiver
  * with the reset it aborts to removed.  For a direct landing that is a pop;
@@ -1746,7 +1760,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "}\n"
     );
     buf_puts(out,
-"static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {\n"
+"static tur_dkw dk_run_impl(DK *k, tur_dkw v, bool root) {\n"
 "    while (k) {\n"
 "        switch (k->kind) {\n"
 "            case DKK_DONE: return v;\n"
@@ -1754,7 +1768,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "                DK *n = k->next;\n"
 "                /* A catch prompt reached normally: the thunk returned, so Ok. */\n"
 "                if (k->kind == DKK_PROMPT && (k->tag == DK_CATCH_TAG || k->tag == DK_DEAD_CATCH_TAG)) {\n"
-"                    v = (intptr_t)tur_box_ok((int64_t)v);\n"
+"                    v = (tur_dkw)tur_box_ok((int64_t)v);\n"
 "                    if (k->catch_reap) __dk_reap_ptr(v);\n"
 "                }\n"
 "                if (k->copy_last) __dk_copy_last_release(k);\n"
@@ -1763,7 +1777,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "             * handler returned by signal; the rest of the chain is the rest of the\n"
 "             * program past the panic and must not run.  Its nodes are reap-owned. */\n"
 "            case DKK_FRAME: {\n"
-"                DK *self = k; intptr_t senv = k->env;\n"
+"                DK *self = k; tur_dkw senv = k->env;\n"
 "                k->unwind = NULL;   /* a run frame fires its own pending defers */\n"
 "                v = k->fn(k->env, v);\n"
 "                if (tur_panicking) { DKCaught c = __dk_panic_catch(k->next); if (!c.k) return 0; k = c.k; v = c.err; break; }\n"
@@ -1777,11 +1791,11 @@ void emit_cps_runtime_prelude(Buf *out) {
 "            case DKK_RESUME_FRAME:\n"
 "                k->unwind = NULL;\n"
 "                if (k->join_once) {\n"
-"                    DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;\n"
+"                    DKResumeFrame rf = k->rfn; tur_dkw renv = k->env; DK *rest = k->next;\n"
 "                    if (__dk_join_release_node(k)) return rf(renv, v, rest);\n"
 "                }\n"
 "                if (k->group_end) {\n"
-"                    DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;\n"
+"                    DKResumeFrame rf = k->rfn; tur_dkw renv = k->env; DK *rest = k->next;\n"
 "                    if (__dk_group_release(k)) return rf(renv, v, rest);\n"
 "                }\n"
 "                /* A rest-of-case frame spliced into the chain (dk_resume_into):\n"
@@ -1793,7 +1807,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "                 * list and free it, this frame included (its env goes back from\n"
 "                 * the frame function, registered here as a spliced one's is). */\n"
 "                if (k->copy_tail) {\n"
-"                    DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;\n"
+"                    DKResumeFrame rf = k->rfn; tur_dkw renv = k->env; DK *rest = k->next;\n"
 "                    DK *c = (DK *)k->body_env; k->copy_tail = false; k->body_env = 0;\n"
 "                    if (c && !tur_dk_pinned && !__dk_chain_copied(c) && __dk_reap_take(c, 1)) {\n"
 "                        DK *p = c; while (p->next != k) p = p->next;\n"
@@ -1805,7 +1819,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "                    }\n"
 "                }\n"
 "                if (k->splice_into) {\n"
-"                    DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;\n"
+"                    DKResumeFrame rf = k->rfn; tur_dkw renv = k->env; DK *rest = k->next;\n"
 "                    DK *prev = (DK *)k->body_env;\n"
 "                    if (prev && prev->next == k) prev->next = rest;\n"
 "                    k->splice_into = false;\n"
@@ -1831,7 +1845,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "                 * it will abort to for its body, as a direct shift0 does. */\n"
 "                tur_shift_reset_ctx *__hrs = (to_root && !reinstall) ? tur_cur_shift_reset : NULL;\n"
 "                int __hid = __dk_reset_hide(__hrs);\n"
-"                intptr_t bodyval = k->body(k->body_env, sub);\n"
+"                tur_dkw bodyval = k->body(k->body_env, sub);\n"
 "                __dk_reset_unhide(__hrs, __hid);\n"
 "                dk_free(sub);\n"
 "                if (tur_panicking) {\n"
@@ -1857,14 +1871,14 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    }\n"
 "    (void)root; return v;\n"
 "}\n"
-"static intptr_t dk_run(DK *k, intptr_t v)      { return dk_run_impl(k, v, false); }\n"
-"static intptr_t dk_run_root(DK *k, intptr_t v) { return dk_run_impl(k, v, true); }\n");
+"static tur_dkw dk_run(DK *k, tur_dkw v)      { return dk_run_impl(k, v, false); }\n"
+"static tur_dkw dk_run_root(DK *k, tur_dkw v) { return dk_run_impl(k, v, true); }\n");
     buf_puts(out,
 "/* Forward decl of the bounded driver (defined with the E7 runtime below):\n"
 " * dk_invoke consults g_dk_driver (defined with the reap registry above) to\n"
 " * know whether running the invoked chain might tail-resume out. */\n"
-"static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv);\n"
-"static intptr_t dk_invoke(DK *sub, intptr_t w) {\n"
+"static tur_dkw __dk_drive_bounded(DK *first, tur_dkw firstv);\n"
+"static tur_dkw dk_invoke(DK *sub, tur_dkw w) {\n"
 "    DK *c = dk_copy_range(sub, NULL);\n"
 "    /* A tail-resume inside the invoked chain longjmps to whichever landing\n"
 "     * g_dk_driver names.  That landing must be THIS ONE, not the program entry:\n"
@@ -1887,7 +1901,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "     * ever defers a free to the outermost boundary, never double-frees.\n"
 "     * With no driver a longjmp is impossible -- free eagerly as before. */\n"
 "    if (g_dk_driver) return __dk_drive_bounded(c, w);\n"
-"    intptr_t r = dk_run_impl(c, w, false);\n"
+"    tur_dkw r = dk_run_impl(c, w, false);\n"
 "    dk_free(c); return r;\n"
 "}\n");
     /* discontinue-plan: (discontinue k payload) resumes `sub` by raising the
@@ -1906,7 +1920,7 @@ void emit_cps_runtime_prelude(Buf *out) {
      * nothing above to see the signal (no catch-unwind, no root unwind: another
      * thread), it ends here, as an uncaught panic does. */
     buf_printf(out,
-"__attribute__((unused)) static intptr_t __dk_discontinue(DK *sub, int ptype, intptr_t payload, const char *file, int line) {\n"
+"__attribute__((unused)) static tur_dkw __dk_discontinue(DK *sub, int ptype, tur_dkw payload, const char *file, int line) {\n"
 "    sub->consumed = 1;\n"
 "    if (tur_panic_in_progress) { tur_panic_root_print(); fprintf(stderr, \"double panic: aborting\\n\"); abort(); }\n"
 "    tur_panic_payload *p = ptype == %d\n"
@@ -1923,23 +1937,23 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    size_t n = 0; DK *o = pp->k;\n"
 "    for (; o && o != pp->H; o = o->next, n++) {\n"
 "        if (__dk_catch_takes(o)) break;\n"
-"        if (o->unwind) { void (*u)(intptr_t) = o->unwind; o->unwind = NULL; u(o->env); }\n"
+"        if (o->unwind) { void (*u)(tur_dkw) = o->unwind; o->unwind = NULL; u(o->env); }\n"
 "        if (o->kind == DKK_DONE) return 0;\n"
 "    }\n"
 "    if (!o || o == pp->H || !__dk_catch_takes(o)) return 0;\n"
 "    DK *cs = sub; for (size_t i = 0; i < n && cs; i++) cs = cs->next;\n"
 "    if (!cs || cs->kind != DKK_PROMPT || cs->tag != DK_CATCH_TAG) return 0;\n"
 "    tur_panicking = 0; tur_panic_in_progress = 0; global_panic_payload = NULL;\n"
-"    intptr_t err = (intptr_t)tur_box_err((int64_t)(intptr_t)p);\n"
+"    tur_dkw err = (tur_dkw)tur_box_err((int64_t)(intptr_t)p);\n"
 "    if (cs->catch_reap) {\n"
 "        __dk_reap_ptr(err);\n"
-"        if (p->owns_value && p->value) __dk_reap_ptr((intptr_t)p->value);\n"
-"        __dk_reap_ptr((intptr_t)p);\n"
+"        if (p->owns_value && p->value) __dk_reap_ptr((tur_dkw)p->value);\n"
+"        __dk_reap_ptr((tur_dkw)p);\n"
 "    }\n"
 "    if (sub->ncopy != 255) sub->ncopy++;\n"
 "    DK *c = dk_copy_range(cs->next, NULL);\n"
 "    if (g_dk_driver) return __dk_drive_bounded(c, err);\n"
-"    intptr_t r = dk_run_impl(c, err, false);\n"
+"    tur_dkw r = dk_run_impl(c, err, false);\n"
 "    dk_free(c); return r;\n"
 "}\n", (int)TY_CSTR);
     /* effect-nontail-resume-under-outer-handler-splits-the-capture: dk_invoke
@@ -1964,7 +1978,7 @@ void emit_cps_runtime_prelude(Buf *out) {
      * more peak on a loop opening a handle a turn. */
     buf_puts(out,
 "__attribute__((unused))\n"
-"static intptr_t dk_resume_into(DK *sub, intptr_t v, DK *tail, int borrow) {\n"
+"static tur_dkw dk_resume_into(DK *sub, tur_dkw v, DK *tail, int borrow) {\n"
 /* effect-nontail-resume-copies-held-until-outer-entry: `sub` is the ORIGINAL
  * chain (dk_perform's resume_once branch).  Splice `tail` -- the rest of the
  * case, whose next is the handle's real continuation `ge` -- in after H's
@@ -1980,7 +1994,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "        DK *ge = borrow ? tail : tail->next, *p = k;\n"
 "        while (p && p->next != ge && p->kind != DKK_DONE) p = p->next;\n"
 "        if (p && p->next == ge) {   /* the original case continuation: the chain continues into it */\n"
-"            if (!borrow) { p->next = tail; tail->body_env = (intptr_t)p; tail->splice_into = true; tail->borrow_next = false; }\n"
+"            if (!borrow) { p->next = tail; tail->body_env = (tur_dkw)p; tail->splice_into = true; tail->borrow_next = false; }\n"
 "            k->inplace_head = true;\n"
 "        } else {\n"
 "            /* The resume is made from a COPY of the case's continuation (an\n"
@@ -2012,8 +2026,8 @@ void emit_cps_runtime_prelude(Buf *out) {
 "     * dk_run_impl hands `c` back then if nothing copied it (copy_tail: the\n"
 "     * copy's head in body_env, unused on a resume-frame).  A borrowed tail is\n"
 "     * the handle's own frame and is not marked. */\n"
-"    if (!borrow) { tail->copy_tail = true; tail->body_env = (intptr_t)c; }\n"
-"    else if (last->kind != DKK_SHIFT && last->kind != DKK_SHIFT0) { last->copy_last = true; last->body_env = (intptr_t)c; }\n"
+"    if (!borrow) { tail->copy_tail = true; tail->body_env = (tur_dkw)c; }\n"
+"    else if (last->kind != DKK_SHIFT && last->kind != DKK_SHIFT0) { last->copy_last = true; last->body_env = (tur_dkw)c; }\n"
 "    if (g_dk_driver) {   /* nothing is left to do here: let the driver run it */\n"
 "        /* The case's last use of `sub` (k_last), every use a copy\n"
 "         * (k_copied_only), and the yield below leaves dk_perform's frame --\n"
@@ -2040,7 +2054,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 " * active driver (dk_perform did NOT take its tail-resume yield branch), fall\n"
 " * back to the inline dk_invoke resume -- byte-identical to the non-trampolined\n"
 " * path, keeping the two sides consistent. */\n"
-"static intptr_t dk_tail_resume(DK *sub, intptr_t v) {\n"
+"static tur_dkw dk_tail_resume(DK *sub, tur_dkw v) {\n"
 "    if (!g_dk_driver) return dk_invoke(sub, v);\n"
 "    g_dk_resume_chain = sub; g_dk_resume_val = v;\n"
 "    TUR_LONGJMP(*g_dk_driver);\n"
@@ -2096,7 +2110,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "#endif\n"
 "    return (d > h ? d - h : h - d) > (uintptr_t)TUR_DK_BOUNCE_DEPTH;\n"
 "}\n"
-"__attribute__((unused)) static intptr_t __dk_bounce(DK *n) {\n"
+"__attribute__((unused)) static tur_dkw __dk_bounce(DK *n) {\n"
 "    n->inplace_head = true;   /* the thunk owns it, not the driver */\n"
 "    g_dk_resume_chain = n; g_dk_resume_val = 0;\n"
 "    TUR_LONGJMP(*g_dk_driver);\n"
@@ -2115,18 +2129,18 @@ void emit_cps_runtime_prelude(Buf *out) {
 " * what makes them well-defined on the yield path -- the same structure\n"
 " * __dk_drive_after uses.  A panic signalled out of the chain returns like a\n"
 " * value (cps-body-panic-not-propagated): the wrapper's caller sees the flag. */\n"
-"static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv) {\n"
+"static tur_dkw __dk_drive_bounded(DK *first, tur_dkw firstv) {\n"
 "    tur_jmp_buf jb; tur_jmp_buf *saved = g_dk_driver; DKPendPerform *savedpp = g_dk_pend_perform;\n"
 "    g_dk_driver = &jb;\n"
 "    g_dk_resume_chain = first; g_dk_resume_val = firstv;\n"
-"    intptr_t r;\n"
+"    tur_dkw r;\n"
 "    /* `first` -- dk_invoke's copy -- is registered before it runs, so an\n"
 "     * escape that longjmps over this frame still leaves it owned, and taken\n"
 "     * back below once every run through it is over. */\n"
 "    bool first_kept = !(first && first->inplace_head);\n"
 "    if (first_kept) __dk_reap_keep(first);\n"
 "    for (;;) {\n"
-"        DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;\n"
+"        DK *ch = g_dk_resume_chain; tur_dkw rv = g_dk_resume_val;\n"
 "        bool own = !(ch && ch->inplace_head) && ch != first;   /* an in-place chain has its own owners */\n"
 "        if (TUR_SETJMP(jb) == 0) {\n"
 "            r = dk_run_impl(ch, rv, false);\n"
@@ -2149,13 +2163,13 @@ void emit_cps_runtime_prelude(Buf *out) {
 "}\n"
 "/* Run the trampoline to completion after a tail-resume longjmp landed in the\n"
 " * entry wrapper. Owns its own jmp_buf so further yields land here. */\n"
-"static intptr_t __dk_drive_after(void) {\n"
+"static tur_dkw __dk_drive_after(void) {\n"
 "    tur_jmp_buf jb; g_dk_driver = &jb; DKPendPerform *savedpp = g_dk_pend_perform;\n"
 "    for (;;) {\n"
-"        DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;\n"
+"        DK *ch = g_dk_resume_chain; tur_dkw rv = g_dk_resume_val;\n"
 "        bool own = !(ch && ch->inplace_head);   /* an in-place chain has its own owners */\n"
 "        if (TUR_SETJMP(jb) == 0) {\n"
-"            intptr_t r = dk_run_impl(ch, rv, false);\n"
+"            tur_dkw r = dk_run_impl(ch, rv, false);\n"
 "            if (own) dk_free(ch);\n"
 "            return r;\n"
 "        }\n"
@@ -2220,14 +2234,14 @@ void emit_cps_runtime_prelude(Buf *out) {
 "        if (!__dk_pp_kept(p)) __dk_abort_abandon(p->k, p->H);\n"
 "    g_dk_pend_perform = to;\n"
 "}\n"
-"static intptr_t dk_perform(int tag, const char *name, intptr_t arg, DK *k) {\n"
+"static tur_dkw dk_perform(int tag, const char *name, tur_dkw arg, DK *k) {\n"
 "    DK *H = k;\n"
 "    while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE) H = H->next;\n"
 "    if (!H || H->kind == DKK_DONE) { fflush(stdout); fprintf(stderr, \"tur: unhandled effect: %s (tag %d)\\n\", name ? name : \"?\", tag); abort(); }\n"
 "    if (H->tail_inplace && H->tail_resume && !H->shallow && g_dk_driver) {\n"
 "        k->inplace_head = true;\n"
 "        g_dk_case_reopen_hnode = H;\n"
-"        { intptr_t r0 = H->handler(H->handler_env, arg, k);  /* ends in dk_tail_resume -> longjmp */\n"
+"        { tur_dkw r0 = H->handler(H->handler_env, arg, k);  /* ends in dk_tail_resume -> longjmp */\n"
 "          if (tur_panicking) { DKCaught pc = __dk_case_panicked(k, H); if (pc.k) return dk_run(pc.k, pc.err); }\n"
 "          return r0; }\n"
 "    }\n");
@@ -2248,7 +2262,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    if (H->tail_resume && !H->shallow && g_dk_driver) {\n"
 "        DK *sub = dk_copy_range(k, NULL);\n"
 "        g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */\n"
-"        { intptr_t r0 = H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */\n"
+"        { tur_dkw r0 = H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */\n"
 "          if (tur_panicking) { DKCaught pc = __dk_case_panicked(k, H); if (pc.k) return dk_run(pc.k, pc.err); }\n"
 "          return r0; }\n"
 "    }\n"
@@ -2269,10 +2283,10 @@ void emit_cps_runtime_prelude(Buf *out) {
      * nothing pinned (r7rs call/cc keeps every node where it is). */
 "    if ((H->resume_once || (H->resume_once_dyn && __dk_ss_after(dk_case_enclosing_real(H))))\n"
 "        && !H->shallow && g_dk_driver && !tur_dk_pinned) {\n"
-"        k->resume_inplace = true; k->body_env = (intptr_t)H;   /* body_env: unused on a frame or handler */\n"
+"        k->resume_inplace = true; k->body_env = (tur_dkw)H;   /* body_env: unused on a frame or handler */\n"
 "        g_dk_case_reopen_hnode = H;\n"
 "        DKPendPerform pp = { k, H, NULL, g_dk_pend_perform }; g_dk_pend_perform = &pp;\n"
-"        intptr_t r0 = H->handler(H->handler_env, arg, k);   /* a resume ends in dk_resume_into -> longjmp */\n"
+"        tur_dkw r0 = H->handler(H->handler_env, arg, k);   /* a resume ends in dk_resume_into -> longjmp */\n"
 "        g_dk_pend_perform = pp.up;\n"
 "        k->resume_inplace = false; k->body_env = 0;\n"
 "        if (tur_panicking) { DKCaught pc = __dk_case_panicked(k, H); if (pc.k) return dk_run(pc.k, pc.err); return r0; }\n"
@@ -2345,7 +2359,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "     * (__dk_group_release). */\n"
 "    bool H_delivers = H->case_delivers; DK *H_next = H->next; bool H_kcopy = H->k_copied_only;\n"
 "    DKPendPerform pp = { k, H, sub, g_dk_pend_perform }; g_dk_pend_perform = &pp;\n"
-"    intptr_t r = H->handler(H->handler_env, arg, sub);\n"
+"    tur_dkw r = H->handler(H->handler_env, arg, sub);\n"
 "    g_dk_pend_perform = pp.up;\n"
 "    if (tur_panicking) {   /* the case panicked: the perform's chain never runs */\n"
 "        DKCaught pc = __dk_case_panicked(k, H); if (pc.k) return dk_run(pc.k, pc.err); return r;\n"

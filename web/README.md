@@ -319,17 +319,24 @@ and its tools are in `tools/wasm-jit/`.
   the stdlib from `stdlib.data`, which the service worker precaches, so the
   first Compile downloads only the module itself.
 - Each Run compiles and runs the whole buffer, `main` included, as `tur run`
-  does. It does not touch the interpreter's session: the prompt keeps what it
-  had, and what the program defines is not callable there.
+  does. It does not touch either session: what the program defines is not
+  callable at the prompt afterwards.
+- The prompt goes to a session of the Compile engine's own while Compile is
+  picked (wasm-jit-plan P6), and to the interpreter's again under Interpret:
+  the two sessions are separate. In the Compile engine's session an inline-C
+  `defn` the interpreter cannot run compiles on its first call and is a native
+  from then on ([aot-compiled-repl-plan](../docs/upcoming/aot-compiled-repl-plan.md)
+  C1, on MIR's interpreter). The prompt is one line, and so is a fence there:
+  ``(defn seven [] : int ```c return 7; ```)``.
 - After the output comes the engine line: `compiled -- front, c2mir, run`
   timings, or `interpreted (the compiler fell back)` when the module refused
   the program (an import it lacks, a `setjmp` landing, a thread) and ran it on
   its own interpreter instead. The reason is printed above it.
-- Stop and the watchdog cover Compile runs too; stopping one loses nothing,
-  since the Compile engine keeps no session. A trap -- including a stack
-  overflow, which the browser's stack limit reaches at about 1,700
-  interpreted frames -- retires the module instance, and the next Run boots a
-  fresh one.
+- Stop and the watchdog cover Compile runs and turns too. Stopping, or a
+  trap -- including a stack overflow, which the browser's stack limit reaches
+  at about 1,700 interpreted frames -- retires the module instance: the next
+  Run or turn boots a fresh one, and the Compile engine's prompt session
+  starts over. The interpreter's session is never touched.
 
 `tests/jit-engine.spec.js` drives all of this in the page.
 

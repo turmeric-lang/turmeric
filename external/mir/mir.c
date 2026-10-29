@@ -1972,9 +1972,28 @@ void MIR_load_module (MIR_context_t ctx, MIR_module_t m) {
 #define SETJMP_NAME "setjmp"
 #define SETJMP_NAME2 "_setjmp"
 
+#if defined(__wasm32__) || defined(__EMSCRIPTEN__)
+/* wasm: emcc refuses any indirect use of setjmp ("Indirect use of setjmp is
+   not supported"), so no embedder can hand us setjmp's address.  It resolves
+   setjmp to any non-NULL address instead, and setjmp_addr becomes this
+   function: the interpreter recognizes it and calls setjmp itself, directly,
+   in eval's frame (INTERP_SETJMP in mir-interp.c).  Only a call the
+   interpreter cannot take that way (a tail call or jcall of setjmp) reaches
+   it, through the FFI, and there is no frame for such a setjmp to land in. */
+static int wasm_setjmp_marker (void *buf) {
+  fprintf (stderr, "MIR: setjmp called through the FFI, which wasm cannot do\n");
+  abort ();
+  return 0;
+}
+#endif
+
 void MIR_load_external (MIR_context_t ctx, const char *name, void *addr) {
-  if (strcmp (name, SETJMP_NAME) == 0 || (SETJMP_NAME2 != NULL && strcmp (name, SETJMP_NAME2) == 0))
+  if (strcmp (name, SETJMP_NAME) == 0 || (SETJMP_NAME2 != NULL && strcmp (name, SETJMP_NAME2) == 0)) {
+#if defined(__wasm32__) || defined(__EMSCRIPTEN__)
+    addr = (void *) wasm_setjmp_marker;
+#endif
     setjmp_addr = addr;
+  }
   setup_global (ctx, name, addr, NULL);
 }
 
@@ -4053,6 +4072,16 @@ static int func_tcall_p (MIR_func_t func) {
   return FALSE;
 }
 
+/* A function with no return (one that only loops forever) is never inlined:
+   the inliner splices the callee's result through its last [J]RET, and there
+   is none to find.  Inlining it would buy nothing anyway. */
+static int func_ret_p (MIR_func_t func) {
+  for (MIR_insn_t insn = DLIST_TAIL (MIR_insn_t, func->insns); insn != NULL;
+       insn = DLIST_PREV (MIR_insn_t, insn))
+    if (insn->code == MIR_RET || insn->code == MIR_JRET) return TRUE;
+  return FALSE;
+}
+
 /* Only simplified code should be inlined because we need already
    extensions and one return.  */
 
@@ -4122,7 +4151,7 @@ static void process_inlines (MIR_context_t ctx, MIR_item_t func_item) {
                                                                 : MIR_MAX_INSNS_FOR_CALL_INLINE)
         || (func_insns_num > MIR_MAX_FUNC_INLINE_GROWTH * original_func_insns_num / 100
             && func_insns_num > MIR_MAX_CALLER_SIZE_FOR_ANY_GROWTH_INLINE)
-        || func_tcall_p (called_func)) {
+        || func_tcall_p (called_func) || !func_ret_p (called_func)) {
       simplify_op (ctx, func_item, func_insn, 1, FALSE, func_insn->code, FALSE, TRUE);
       continue;
     }

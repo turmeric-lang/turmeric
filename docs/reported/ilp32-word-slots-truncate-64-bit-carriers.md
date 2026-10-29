@@ -24,7 +24,11 @@ every large int does not**.
 
 Three shapes, all measured on the module:
 
-1. **The CPS backend's slots are `intptr_t`.**
+1. **The CPS backend's slots are `intptr_t`.** *Fixed 2026-10-28
+   (wasm-jit-plan P5):* the DK machine's word is `tur_dkw`, `intptr_t` where
+   that is 64 bits and `int64_t` where it is narrower, across the DK runtime,
+   the CPS and effects emitters and the resume value's thread-local. What
+   follows is the defect as found.
    `tests/fixtures/cps-backend-float` prints `0` instead of `7.75`. The emitted
    continuation is
    `static intptr_t compute_k0(intptr_t __lh_env, intptr_t __t0__slot, DK *__kont)`,

@@ -3174,11 +3174,11 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
     for (uint32_t i = 0; i < n_lead_ignore; i++)
         buf_printf(target, "    (void)__pwd%u;\n", i);
     buf_free(&lead);
-    buf_printf(target, "    __tur_cps_fn __c = __tur_cps_lookup((intptr_t)%s);\n", inner_fn);
+    buf_printf(target, "    __tur_cps_fn __c = __tur_cps_lookup((tur_dkw)%s);\n", inner_fn);
     buf_printf(target, "    if (__c) return ((int64_t(*)(%sstruct DK *))__c)(%s%s__kont);\n",
                cast.data, fwd.data, n ? ", " : "");
     if (rk == TY_NIL)
-        buf_printf(target, "    %s(%s);\n    return dk_run(__kont, (intptr_t)0);\n",
+        buf_printf(target, "    %s(%s);\n    return dk_run(__kont, (tur_dkw)0);\n",
                    inner_fn, dir.data);
     else if (rk == TY_FLOAT || rk == TY_FLOAT64 || rk == TY_FLOAT32) {
         /* Delivered by its bits, as the `__cps` entry delivers it. */
@@ -3186,10 +3186,10 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
         buf_printf(&cl, "%s(%s)", inner_fn, dir.data);
         buf_putc(&cl, '\0');
         char *w = cps_ir_fncps_word_of(rk, cl.data);
-        buf_printf(target, "    return dk_run(__kont, (intptr_t)(%s));\n", w);
+        buf_printf(target, "    return dk_run(__kont, (tur_dkw)(%s));\n", w);
         free(w); buf_free(&cl);
     } else
-        buf_printf(target, "    return dk_run(__kont, (intptr_t)%s(%s));\n", inner_fn, dir.data);
+        buf_printf(target, "    return dk_run(__kont, (tur_dkw)%s(%s));\n", inner_fn, dir.data);
     buf_puts(target, "}\n");
     buf_free(&decl); buf_free(&prm); buf_free(&fwd); buf_free(&cast); buf_free(&dir);
     return name;
@@ -3275,19 +3275,19 @@ char *ensure_fncps_env_dispatch(EmitCtx *ctx, const Type *lifted_ty) {
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     buf_printf(target, "static int64_t %s(void *__pwe%s, struct DK *__kont) {\n", name, prm.data);
     buf_puts(target, "    int64_t __pwf = ((int64_t *)__pwe)[0];\n");
-    buf_puts(target, "    __tur_cps_fn __c = __tur_cps_lookup((intptr_t)__pwf);\n");
+    buf_puts(target, "    __tur_cps_fn __c = __tur_cps_lookup((tur_dkw)__pwf);\n");
     buf_printf(target, "    if (__c) return ((int64_t(*)(void *%s, struct DK *))__c)(__pwe%s, __kont);\n",
                hs.data, ha.data);
     if (void_result) {
         buf_printf(target, "    ((void(*)(void *%s))(intptr_t)__pwf)(__pwe%s);\n"
-                           "    return dk_run(__kont, (intptr_t)0);\n", ss.data, sa.data);
+                           "    return dk_run(__kont, (tur_dkw)0);\n", ss.data, sa.data);
     } else {
         const char *rc = cps_ir_fncps_arg_ctype(rk);
         Buf cl; buf_init(&cl);
         buf_printf(&cl, "((%s(*)(void *%s))(intptr_t)__pwf)(__pwe%s)", rc, ss.data, sa.data);
         buf_putc(&cl, '\0');
         char *w = cps_ir_fncps_word_of(rk, cl.data);
-        buf_printf(target, "    return dk_run(__kont, (intptr_t)(%s));\n", w);
+        buf_printf(target, "    return dk_run(__kont, (tur_dkw)(%s));\n", w);
         free(w); buf_free(&cl);
     }
     buf_puts(target, "}\n");
@@ -16135,7 +16135,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, " * (dk_hgroup_from_table) instead of running the body on the fiber.  The fiber\n");
     buf_puts(out, " * path leaves them 0 (calloc-zeroed) and never reads them. */\n");
     buf_puts(out, "struct DK;\n");
-    buf_puts(out, "typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; int dk_tag; intptr_t (*dk_fn)(intptr_t, intptr_t, struct DK *); } tur_handler_entry_t;\n");
+    buf_puts(out, "typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; int dk_tag; tur_dkw (*dk_fn)(tur_dkw, tur_dkw, struct DK *); } tur_handler_entry_t;\n");
     buf_puts(out, "/* FH1: first-class handler value -- effect-keyed dispatch table */\n");
     buf_puts(out, "typedef struct { tur_handler_entry_t *entries; int n_entries; } tur_handler_table_t;\n");
     buf_puts(out, "static tur_handler_table_t *tur_handler_table_new(int n) {\n");
@@ -18858,7 +18858,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the chain (`inplace_head`: the trampoline neither frees nor keeps it), and
      * frees it once the run is over, as dk_invoke freed its copy. */
     buf_puts(out, "    rec->subk->inplace_head = true;\n");
-    buf_puts(out, "    int64_t r = (int64_t)__dk_drive_bounded(rec->subk, (intptr_t)value);\n");
+    buf_puts(out, "    int64_t r = (int64_t)__dk_drive_bounded(rec->subk, (tur_dkw)value);\n");
     buf_puts(out, "    dk_free(rec->subk);\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        /* re-parked on a further pending await: thread the outer future through */\n");
@@ -18908,8 +18908,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            tur_scheduler_run_one(tur_scheduler);\n");
     buf_puts(out, "    return f->status == FUTURE_FULFILLED;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "__attribute__((unused)) static intptr_t __tur_await_value(void *fp) {\n");
-    buf_puts(out, "    return (intptr_t)__tur_future_take((TurFuture *)fp);\n");
+    buf_puts(out, "__attribute__((unused)) static tur_dkw __tur_await_value(void *fp) {\n");
+    buf_puts(out, "    return (tur_dkw)__tur_future_take((TurFuture *)fp);\n");
     buf_puts(out, "}\n\n");
     /* async-repeated-park-holds-frames-until-settle: asked once an await's
      * shift has returned.  Only the shift's own park leaves the awaited future
@@ -18928,7 +18928,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * future's on_complete seam and SUSPENDS (via the tur_async_suspended flag);
      * the async boundary that ran the body leaves its outer future pending, and
      * the eventual tur_future_fulfill resumes the parked continuation. */
-    buf_puts(out, "static intptr_t __tur_await_body(intptr_t env, DK *subk) {\n");
+    buf_puts(out, "static tur_dkw __tur_await_body(tur_dkw env, DK *subk) {\n");
     buf_puts(out, "    TurFuture *f = (TurFuture *)(intptr_t)env;\n");
     buf_puts(out, "    if (!f) { fprintf(stderr, \"await: null future\\n\"); abort(); }\n");
     buf_puts(out, "    tur_future_join_thread(f);\n");
