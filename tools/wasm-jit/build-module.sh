@@ -56,14 +56,28 @@ put_rsp() {   # put_rsp FILE FLAG...
   printf '%s\n' "$@" > "$f.new"
   if cmp -s "$f.new" "$f"; then rm -f "$f.new"; else mv "$f.new" "$f"; fi
 }
+# setjmp/longjmp on wasm exception handling (-fwasm-exceptions at every
+# compile, -sSUPPORT_LONGJMP=wasm at the link), not Emscripten's JS-based
+# default.  MIR's interpreter calls setjmp in eval's own frame on wasm
+# (mir#17), and under the JS mode LLVM then sends every call eval makes
+# through a JavaScript invoke_* wrapper: a JS frame per interpreted call,
+# which cut a Turmeric recursion to about 300 frames in a worker and made
+# every call a JS round trip.  Under wasm EH the landing is a try region and
+# the calls are plain; measured 700 frames in the worker, 1,500 under node,
+# and no change across the corpus
+# (docs/reported/wasm-jit-recursion-depth-is-about-300.md).  The one thing
+# this rules out is Asyncify, which the module never used; a page that needs
+# a compiled program to yield uses JSPI on this build
+# (tools/wasm-jit-spike/jspi/).
+SJLJ_CFLAGS=(-fwasm-exceptions)
 # shellcheck disable=SC2086
-BASE=($INCS -O2 -std=c11 -Wall -Wextra -Wno-unused-parameter -D_DEFAULT_SOURCE -pthread
+BASE=($INCS "${SJLJ_CFLAGS[@]}" -O2 -std=c11 -Wall -Wextra -Wno-unused-parameter -D_DEFAULT_SOURCE -pthread
       "-DTUR_VERSION=\\\"$VERSION\\\"")
 put_rsp "$OUT/rt.rsp" "${BASE[@]}" -pedantic
 # The engine as tur_jit_obj builds it natively: no -pedantic, which MIR's
 # headers do not pass (extra semicolons from its DLIST macros).
 put_rsp "$OUT/engine.rsp" "${BASE[@]}" "-I$MIR" "-I$MIR/c2mir" -DTUR_HAVE_JIT=1
-put_rsp "$OUT/mir.rsp" "-I$MIR" "-I$MIR/c2mir" -O2 -std=gnu11 -fsigned-char -w -pthread
+put_rsp "$OUT/mir.rsp" "-I$MIR" "-I$MIR/c2mir" "${SJLJ_CFLAGS[@]}" -O2 -std=gnu11 -fsigned-char -w -pthread
 RT_FLAGS="@$OUT/rt.rsp"
 ENGINE_FLAGS="@$OUT/engine.rsp"
 MIR_FLAGS="@$OUT/mir.rsp"
@@ -116,8 +130,8 @@ for _attempt in 1 2 3 4 5 6 7 8; do
     --stubs "$OUT/tur_wasm_jit_stubs.c"
   # shellcheck disable=SC2086
   if emcc -c "$SYMTAB" -o "$OUT/symtab.o" $RT_FLAGS -w 2> "$OUT/symtab-cc.log" \
-     && emcc -c "$OUT/tur_wasm_jit_symtab_rt.c" -o "$OUT/symtab_rt.o" -O2 -w 2>> "$OUT/symtab-cc.log" \
-     && emcc -c "$OUT/tur_wasm_jit_stubs.c" -o "$OUT/stubs.o" -O2 -w 2>> "$OUT/symtab-cc.log"; then
+     && emcc -c "$OUT/tur_wasm_jit_symtab_rt.c" -o "$OUT/symtab_rt.o" "${SJLJ_CFLAGS[@]}" -O2 -w 2>> "$OUT/symtab-cc.log" \
+     && emcc -c "$OUT/tur_wasm_jit_stubs.c" -o "$OUT/stubs.o" "${SJLJ_CFLAGS[@]}" -O2 -w 2>> "$OUT/symtab-cc.log"; then
     symtab_ok=1
     break
   fi
@@ -152,8 +166,9 @@ METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8,ccall,cwrap,FS,ENV,wasmTable,a
 # stack before the JS stack limit: a large local in a recursion, the allocas a
 # MIR tail call keeps, c2mir's per-call va buffers.  Unchecked, that overwrote
 # memory below the stack and trapped later as an out-of-bounds access or a
-# signature mismatch; checked, it aborts with "stack overflow", which the page
-# reports as one (web/public/jit-worker.js).  See
+# signature mismatch; checked, it aborts with "stack overflow" on stderr (under
+# wasm EH the exception JavaScript sees is a plain `unreachable`, so the page
+# reads the stderr line, web/public/jit-worker.js).  See
 # docs/reported/wasm-linear-stack-overflow-unchecked.md.
 # The check also turns on CHECK_NULL_WRITES, which plants a canary word at
 # address 0, so a program that READS through a null pointer sees that word
@@ -170,6 +185,7 @@ emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" "$OUT/stubs.o" -o "$OUT/t
   -pthread -sPTHREAD_POOL_SIZE_STRICT=0 -sEXIT_RUNTIME=0 \
   -sSTACK_SIZE=16777216 -sDEFAULT_PTHREAD_STACK_SIZE=8388608 \
   -sSTACK_OVERFLOW_CHECK=2 -sCHECK_NULL_WRITES=0 \
+  "${SJLJ_CFLAGS[@]}" -sSUPPORT_LONGJMP=wasm \
   -sINITIAL_MEMORY=134217728 \
   -sEXPORTED_FUNCTIONS="$EXPORTS" \
   -sEXPORTED_RUNTIME_METHODS="$METHODS" \

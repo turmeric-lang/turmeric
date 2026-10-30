@@ -25,7 +25,13 @@ raylib-web-playground-plan's prerequisite 3. `link.sh` relinks a built
 the import table; `drive.js` runs a program through `turi_wasm_jit_run` with
 ccall's async mode and counts event-loop ticks; `frames.tur` and `while.tur`
 sleep 16 ms a frame from inline C. The results are in that plan's section 7,
-prerequisite 3.
+prerequisite 3. **They were measured on the JS-`setjmp` build of 2026-10-29.**
+Since 2026-10-30 `build-module.sh` compiles with `-fwasm-exceptions` and links
+`setjmp` on wasm exception handling, which Asyncify cannot be combined with,
+so `link.sh` no longer applies to a default build: an Asyncify module needs
+objects compiled without `-fwasm-exceptions` (`SJLJ_CFLAGS=()` in a copy of
+the script). `jspi/` below is the live spike; `drive.js`, `frames.tur` and
+`while.tur` serve both.
 
 ```sh
 bash tools/wasm-jit-spike/asyncify/link.sh /tmp/async -sASYNCIFY
@@ -36,19 +42,20 @@ node tools/wasm-jit-spike/asyncify/drive.js /tmp/async tools/wasm-jit-spike/asyn
 
 The measured fix of
 [wasm-jit-recursion-depth-is-about-300](../../docs/reported/wasm-jit-recursion-depth-is-about-300.md)
-and the JSPI half of raylib-web-playground-plan's prerequisite 3. `build.sh`
-derives a variant of `tools/wasm-jit/build-module.sh` that compiles with
-`-fwasm-exceptions` and links with `-sSUPPORT_LONGJMP=wasm` (so `eval`'s
-`setjmp` brings no JS `invoke_*` frames), and with `jspi` adds `-sJSPI`, under
-which `turi_wasm_jit_run` returns a Promise and a compiled `emscripten_sleep`
-suspends the wasm stack instead of Asyncify unwinding it. `index.html`,
+and the JSPI half of raylib-web-playground-plan's prerequisite 3. The spike
+measured the module compiled with `-fwasm-exceptions` and linked with
+`-sSUPPORT_LONGJMP=wasm` (so `eval`'s `setjmp` brings no JS `invoke_*`
+frames); since 2026-10-30 that is `tools/wasm-jit/build-module.sh`'s own link
+mode. `build.sh` derives a variant of it that adds `emscripten_sleep` to the
+import table and, with `jspi`, links `-sJSPI`, under which `turi_wasm_jit_run`
+returns a Promise and a compiled `emscripten_sleep` suspends the wasm stack
+instead of Asyncify unwinding it. `index.html`,
 `harness.js` and `worker.js` boot such a module on a page's main thread or in a
 Web Worker and run one program; `jspi.spec.js` drives them from Playwright
 (node 22's V8 has no JSPI, so the browser is the only place to run the `jspi`
 build). The results are in the report.
 
 ```sh
-bash tools/wasm-jit-spike/jspi/build.sh /tmp/sjlj            # depth, speed, the corpus under node
 bash tools/wasm-jit-spike/jspi/build.sh /tmp/sjlj jspi       # the sleep, in Chromium
 mkdir -p web/public/jspi-harness/b && cp /tmp/sjlj/wasm-jit/{turmeric-jit.js,turmeric-jit.wasm,stdlib.data} web/public/jspi-harness/b/
 cp tools/wasm-jit-spike/jspi/{index.html,harness.js,worker.js} web/public/jspi-harness/

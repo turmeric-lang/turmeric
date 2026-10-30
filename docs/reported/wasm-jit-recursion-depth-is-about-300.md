@@ -1,11 +1,14 @@
 # On the browser JIT, a Turmeric recursion overflows about 300 calls deep, not 1,700
 
 **Severity:** medium (browser JIT, user-visible). **Cause confirmed
-2026-10-29** (below): `eval`'s own `setjmp` call, since mir#17. **Fix measured
-2026-10-30**: linking with wasm-native `setjmp` (`-fwasm-exceptions
--sSUPPORT_LONGJMP=wasm`) removes the wrappers with no MIR change, 300 -> 700 in
-the worker; JSPI then stands in for Asyncify where the playground needs a
-blocking loop to yield. Try Turmeric's Compile
+2026-10-29** (below): `eval`'s own `setjmp` call, since mir#17. **Fixed 2026-10-30**:
+`tools/wasm-jit/build-module.sh` links `setjmp` on wasm exception handling
+(`-fwasm-exceptions -sSUPPORT_LONGJMP=wasm`), which removes the wrappers with
+no MIR change: 300 -> 700 in the worker, 575 -> 1,100 on a main thread. The
+page's note says ~700. Open here: four wasm frames per interpreted call
+remain, and the Interpret module (`turmeric.wasm`) still links the JS
+`setjmp`; see "What to do". JSPI stands in for Asyncify where the playground
+needs a blocking loop to yield. Try Turmeric's Compile
 engine said "recursion depth ~1,700"; a plain non-tail recursion overflows at
 about 310 calls in Chromium's worker and about 590 under node. A program that
 recurses over a 400-element list works under Interpret and stops with
@@ -178,6 +181,12 @@ raylib-web-playground-plan's, recorded there under prerequisite 3.
    four flag sites above), re-run the corpus for a new baseline, and teach
    `jit-worker.js` the `unreachable`-plus-stderr shape of the stack abort.
    No fork change; Try's Compile engine gets 700 frames in the worker.
+   **Done 2026-10-30** (`SJLJ_CFLAGS` in the script; the worker notes the
+   stderr line; `jit-engine.spec.js` 7/7, the examples gate, and the corpus
+   baseline regenerated on the new module). Not done, and the same change
+   would apply: `turmeric.wasm`, the Interpret module, whose tree-walker's
+   `eval_expr_impl` carries 335 of the same wrappers (depth is heap-bounded
+   there, so only its call speed under older V8s is at stake).
 2. The playground decides Asyncify (second object set) against JSPI
    (Chrome-first) for the blocking style, or goes callback-first.
 3. The two-`eval` fork change below is then unnecessary. It stays recorded in

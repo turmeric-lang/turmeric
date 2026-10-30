@@ -26,7 +26,10 @@
 // The other stack can run out first -- the 16 MiB linear stack, under a large
 // local or allocas that pile up -- and the module is linked to abort then
 // (STACK_OVERFLOW_CHECK=2, tools/wasm-jit/build-module.sh), so both are
-// reported as the stack overflow they are.
+// reported as the stack overflow they are.  That abort prints its message on
+// stderr; the exception that reaches us is `Aborted(...)` under Emscripten's
+// JS setjmp and a bare `unreachable` under the wasm-native setjmp the module
+// links with now, so the stderr line is what identifies it.
 
 let jitModule = null;
 let ready = false;
@@ -57,12 +60,16 @@ function flushStreams() {
     if (stderrStream.bytes.length) emitStreamLine(stderrStream);
 }
 
-// Emscripten's abort when the linear stack's bound check fires; it also prints
-// this text through printErr, which the answer's reason already covers.
+// Emscripten's abort when the linear stack's bound check fires.  It prints
+// this text through printErr (where it is noted and withheld, since the
+// answer's reason carries it) and then throws -- `Aborted(...)` or, under
+// wasm exception handling, `unreachable`.
 const LINEAR_STACK_ABORT = 'Aborted(stack overflow';
+let linearStackAborted = false;
 
 function isStackOverflow(err) {
     if (err instanceof RangeError) return true;   // the JS stack limit
+    if (linearStackAborted) return true;          // the linear stack's check
     return String(err && err.message ? err.message : err).startsWith(LINEAR_STACK_ABORT);
 }
 
@@ -75,6 +82,7 @@ function withString(str, fn) {
 
 function runProgram(msg) {
     const id = msg.id;
+    linearStackAborted = false;
     try {
         const resultPtr = withString(msg.input, (srcPtr) =>
             withString(msg.args || '', (argsPtr) => jitModule._turi_wasm_jit_run(srcPtr, argsPtr)));
@@ -102,6 +110,7 @@ function runProgram(msg) {
 
 function evalTurn(msg) {
     const id = msg.id;
+    linearStackAborted = false;
     try {
         // aot-compiled-repl-plan C2: compiled turns for this session, when
         // the page asks (an older module has no switch, and stays off).
@@ -147,7 +156,8 @@ self.addEventListener('message', function (e) {
         factory({
             print:    (text) => self.postMessage({ type: 'print', text }),
             printErr: (text) => {
-                if (!String(text).startsWith(LINEAR_STACK_ABORT)) self.postMessage({ type: 'printErr', text });
+                if (String(text).startsWith(LINEAR_STACK_ABORT)) linearStackAborted = true;
+                else self.postMessage({ type: 'printErr', text });
             },
             stdout:   (byte) => streamByte(stdoutStream, byte),
             stderr:   (byte) => streamByte(stderrStream, byte),

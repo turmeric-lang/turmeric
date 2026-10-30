@@ -6,7 +6,7 @@
 //   compile    the browser JIT (jit-worker.js): the buffer is compiled to C
 //              and run on MIR's interpreter, as `tur jit` runs it, so inline C
 //              works.  Each Run is a whole program; recursion is bounded by
-//              the JS stack: about 300 Turmeric calls deep in Chromium's
+//              the JS stack: about 700 Turmeric calls deep in Chromium's
 //              worker (docs/reported/wasm-jit-recursion-depth-is-about-300.md).
 //
 // The choice is a per-browser convenience, kept in localStorage; when storage
@@ -75,7 +75,7 @@ const ROWS = [
     { engine: 'interpret', name: 'Interpret',
       note: 'REPL session; definitions persist between runs' },
     { engine: 'compile', name: 'Compile',
-      note: 'compiles to C and runs it; inline C works; each Run is a whole program; recursion depth ~300' },
+      note: 'compiles to C and runs it; inline C works; each Run is a whole program; recursion depth ~700' },
 ];
 
 function render() {
