@@ -17,6 +17,24 @@
 # OUT_DIR's sibling stdlib-pkg/, which is where CMake writes it.
 # Needs emcc and em-config on PATH (the emsdk environment), python3 and make.
 #
+# Extras (raylib-web-playground-plan J0/J1: the arcade module is this module
+# plus raylib, not a fork of the script), all optional, all from the
+# environment:
+#   TUR_WASM_JIT_EXTRA_OBJECTS   objects and archives to link in, whitespace-
+#                                separated (libraylib.a, rl_web_loop.o).  Each
+#                                object, and every member of an archive, joins
+#                                the --wasm-objects list, so its functions get
+#                                import-table rows at their wasm signatures and
+#                                exact-signature call stubs -- J1 by
+#                                construction, struct-by-value calls included,
+#                                since at the wasm level an aggregate is an
+#                                i32 address on both sides.
+#   TUR_WASM_JIT_EXTRA_HEADERS   header files copied into /sysinclude by
+#                                basename (raylib.h), for the program's
+#                                inline C to #include.
+#   TUR_WASM_JIT_EXTRA_LINK      extra emcc link flags, word-split (-sUSE_GLFW=3,
+#                                an --embed-file of a spice's src/, ...).
+#
 # Four steps:
 #   1. compile every source to an object under OUT_DIR/obj, through a
 #      generated Makefile so a rerun rebuilds only what changed (-MMD);
@@ -129,6 +147,26 @@ SYMTAB=$OUT/tur_wasm_jit_symtab.c
 # src/async (the generated runtime split among them), not the compiler or
 # the interpreter.
 ls "$OUT"/obj/src_runtime_*.o "$OUT"/obj/src_async_*.o > "$OUT/runtime-objects.txt"
+# The extras (see the header): archives are unpacked so the generator can
+# read each member's symbols and signatures.
+EXTRA_OBJS=()
+rm -rf "$OUT/extra"
+if [ -n "${TUR_WASM_JIT_EXTRA_OBJECTS:-}" ]; then
+  mkdir -p "$OUT/extra"
+  # shellcheck disable=SC2086
+  for x in $TUR_WASM_JIT_EXTRA_OBJECTS; do
+    [ -f "$x" ] || { echo "build-module.sh: TUR_WASM_JIT_EXTRA_OBJECTS: no $x" >&2; exit 2; }
+    EXTRA_OBJS+=("$x")
+    case $x in
+      *.a)
+        d=$OUT/extra/$(basename "$x" .a)
+        mkdir -p "$d"
+        (cd "$d" && "$LLVM_BIN/llvm-ar" x "$x")
+        ls "$d"/*.o >> "$OUT/runtime-objects.txt" ;;
+      *) echo "$x" >> "$OUT/runtime-objects.txt" ;;
+    esac
+  done
+fi
 "$NM" --defined-only --extern-only "$OUT"/obj/*.o > "$OUT/nm.txt"
 # Names the hosted declarations turn into macros (the thread-locals routed
 # through tur_tls_* accessors) are not symbols: ask the preprocessor.
@@ -173,6 +211,11 @@ cp "$ROOT/src/runtime/hamt.h" "$HDR/src/runtime/hamt.h"
 # twins include turi/r7rs_embed.h from stdlib/r7rs/eval.tur.
 cp "$HERE/stdatomic.h" "$HDR/sysinclude/stdatomic.h"
 cp "$ROOT/src/turi/r7rs_embed.h" "$HDR/src/turi/r7rs_embed.h"
+# shellcheck disable=SC2086
+for h in ${TUR_WASM_JIT_EXTRA_HEADERS:-}; do
+  [ -f "$h" ] || { echo "build-module.sh: TUR_WASM_JIT_EXTRA_HEADERS: no $h" >&2; exit 2; }
+  cp "$h" "$HDR/sysinclude/$(basename "$h")"
+done
 
 # --- 4. link -----------------------------------------------------------------
 EXPORTS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_eval,_turi_wasm_set_compiled_repl,_turi_wasm_eval_ex,_turi_wasm_free_string,_turi_wasm_version,_turi_wasm_jit_run,_turi_wasm_add_include_dir,_turi_wasm_clear_include_dirs,_malloc,_free
@@ -192,7 +235,9 @@ METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8,ccall,cwrap,FS,ENV,wasmTable,a
 # are a defect of their own, shape 4 of
 # docs/reported/ilp32-word-slots-truncate-64-bit-carriers.md, so the canary
 # stays off here rather than turning a stack check into a behaviour change.
-emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" "$OUT/stubs.o" -o "$OUT/turmeric-jit.js" \
+# shellcheck disable=SC2086
+emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" "$OUT/stubs.o" \
+  ${EXTRA_OBJS[@]+"${EXTRA_OBJS[@]}"} ${TUR_WASM_JIT_EXTRA_LINK:-} -o "$OUT/turmeric-jit.js" \
   --pre-js "$PKG/stdlib.data.js" -sFORCE_FILESYSTEM=1 \
   --embed-file "$HDR/sysinclude@/sysinclude" \
   --embed-file "$HDR/src@/src" \
