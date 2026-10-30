@@ -17,9 +17,10 @@
 > [section 3](#3-the-central-decision-how-does-typed-code-reach-raylib)'s J
 > over A, since JSPI is a route only the JIT arm has. **The same day the
 > owner chose its own repository** ([section 4](#4-where-it-lives)). Every
-> decision this plan asked for is made; what remains before P0 is work
-> ([section 7](#prerequisites-before-p0)), and the repo's name and domain,
-> which the owner picks when it is created.
+> decision this plan asked for is made, and the repo exists:
+> **[turmeric-lang/turmeric-arcade](https://github.com/turmeric-lang/turmeric-arcade)**,
+> deployed to **play.turmeric-lang.com**. What remains before P0 is work
+> ([section 7](#prerequisites-before-p0)).
 > **Type:** Web platform / browser JIT module (`tools/wasm-jit/`,
 > `src/web/wasm_jit_glue.c`, `src/jit_engine.c`) / a new site. The interpreter
 > side (`src/turi/`) and the build driver (`src/driver/cmd_build.c`) only if the
@@ -268,12 +269,12 @@ eval watchdog.
 ## 4. Where it lives
 
 Three candidates were asked about. Recommendation, and **the owner's decision
-on 2026-10-30: its own repository.** The working name below stands until the
-repo is created.
+on 2026-10-30: its own repository**, created the same day as
+`turmeric-lang/turmeric-arcade`, to deploy to `play.turmeric-lang.com`.
 
 | Option | For | Against |
 |---|---|---|
-| **Own repo, `turmeric-lang/turmeric-arcade`** (working name; the site would be `arcade.turmeric-lang.com` or `play.`) -- recommended | Its build needs emsdk, raylib's web archive and a pinned turmeric-spices checkout; none of that belongs in the compiler repo's deploy. Own release clock (a new example or spice should not wait on a compiler tag). The extras-repo-split pattern exists: pin a `tur` release (`scripts/install-tur.sh` in turmeric-spices is the template), pin a spices ref, build the module in its own CI. The editor-palette contract (`web/editor-palette.json` + `tests/check-editor-palette.py`) already shows how a sibling repo stays in step with this one. | Duplicates the parts of `web/main.js` it needs (eval-worker pattern, `share-codec.js`, `csp.js`, examples menu, theme). The LSP worker needs the spice sources embedded too, so it builds its own `lsp-worker` module rather than reusing Try's. Mitigation: copy, do not abstract; the arcade page is a fraction of `main.js`. |
+| **Own repo, `turmeric-lang/turmeric-arcade`**, the site at `play.turmeric-lang.com` -- recommended, and chosen | Its build needs emsdk, raylib's web archive and a pinned turmeric-spices checkout; none of that belongs in the compiler repo's deploy. Own release clock (a new example or spice should not wait on a compiler tag). The extras-repo-split pattern exists: pin a `tur` release (`scripts/install-tur.sh` in turmeric-spices is the template), pin a spices ref, build the module in its own CI. The editor-palette contract (`web/editor-palette.json` + `tests/check-editor-palette.py`) already shows how a sibling repo stays in step with this one. | Duplicates the parts of `web/main.js` it needs (eval-worker pattern, `share-codec.js`, `csp.js`, examples menu, theme). The LSP worker needs the spice sources embedded too, so it builds its own `lsp-worker` module rather than reusing Try's. Mitigation: copy, do not abstract; the arcade page is a fraction of `main.js`. |
 | A fifth page in `web/` (`web/arcade/index.html`, next to `try/`, `tour/`, `trowel/`, `ci/` in `vite.config.js`) | Maximum reuse of `main.js`; one deploy; the LSP worker could be one module for both pages. | `tur run wasm` and `deploy-web` would need emsdk's raylib build and a spices checkout; the compiler's release-cut workflow would depend on turmeric-spices being green. That coupling is the thing extras-repo-split was undoing. |
 | A spice | -- | A spice is a library `tur` builds; this is a site. The closest fit, a `:bin` that serves the page, still needs the web build pipeline, which spices do not have. The *examples* can be a spice-shaped directory (plain `.tur` files with `defscript` headers), but the app is not one. |
 
@@ -874,8 +875,8 @@ against the spices' sources (under J they are compiled with the program), and
    an interpreter re-entry without a JS frame) is a PR to turmeric-lang/mir,
    of which CLAUDE.md allows one open at a time. Batch them behind P0's
    findings.
-10. **Name and domain** are the owner's call; nothing in the plan depends on
-    them.
+10. **Name and domain** were the owner's call, made 2026-10-30:
+    `turmeric-lang/turmeric-arcade` at `play.turmeric-lang.com`.
 
 ## 10. Relationship to existing plans
 
