@@ -30,7 +30,6 @@ cancel-select fail  # stdout mismatch on the interpreted path: the program start
 childhandle-linear fail  # stdout mismatch on the interpreted path: import of undefined item fork
 class-var-applied-result-in-constrained-generic fail  # stdout mismatch on the compiled path
 classic-list-surface interpreted  # the program starts threads (pthread_create), which this engine cannot run
-comparator-float-elements-word-adapter fail  # stdout mismatch on the compiled path
 constrained-defn-cons-return-monomorphize fail  # stdout mismatch on the compiled path
 constrained-instance-dispatch-nested-parametric-element fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
 constrained-instance-element-dispatch fail  # stdout mismatch on the compiled path
@@ -60,7 +59,6 @@ dynvar-convey-isolation fail  # stdout mismatch on the interpreted path: the pro
 effect-capturing-closure-thin-param fail  # stdout mismatch on the error path: the module threw: unreachable
 effect-nontail-resume-once-in-place fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 effect-nontail-resume-under-outer fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
-eq-carrier-capturing-comparator fail  # stdout mismatch on the compiled path
 eq-nested-binary-class-method-spec fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
 eqmap-cstr-content fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 escape-deep-capture fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
@@ -154,7 +152,6 @@ neoteric-ascription-sweet fail  # stdout mismatch on the error path: the module 
 nested-construct-byvalue-decode fail  # stdout mismatch on the compiled path
 net-blocking-tcp fail  # stdout mismatch on the interpreted path: import of undefined item socket
 niche-elem-comparator-conventions fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-option-niche-vec-closure-cmp fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
 os-misc-surface fail  # stdout mismatch on the interpreted path: import of undefined item getgid
 p19-8-fiber-effect-chain fail  # stdout mismatch on the error path: the module threw: unreachable
 panic-catch-unwind-signal fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
@@ -443,9 +440,6 @@ time-dates-iso8601 fail  # stdout mismatch on the compiled path
 turi-option-result-map-deep-recursion fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 tvar-float-payload-value-converted fail  # stdout mismatch on the compiled path
 typeclass-unsafe-passbyptr-struct-arg fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-typed/vec-basic fail  # stdout mismatch on the compiled path
-vec-of-tvec-eq fail  # stdout mismatch on the compiled path
-vec-of-tvec-eq-manual fail  # stdout mismatch on the compiled path
 weak-upgrade-after-drop fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
 weak-upgrade-option fail  # stdout mismatch on the compiled path
 workstealing-balance fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run

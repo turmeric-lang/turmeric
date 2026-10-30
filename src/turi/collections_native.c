@@ -38,7 +38,7 @@ static TuriValue native_tur_hamt_retain(TuriEnv *e, TuriValue *a, uint32_t n, vo
 static TuriValue native_tur_hamt_count(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     Hamt *m = (n >= 1) ? (Hamt *)(intptr_t)a[0].as_int : NULL;
-    uint32_t c = tur_hamt_count(m);
+    int64_t c = tur_hamt_count(m);
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)c; return v;
 }
 static TuriValue native_tur_hamt_set(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {

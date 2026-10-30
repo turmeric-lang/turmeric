@@ -8872,12 +8872,12 @@ static void tur_hyvec_hyhomog_un_un(int64_t a, int64_t b) {
 }
 
 static bool vec_hyeq_qu(int64_t v1, int64_t v2, int64_t cmp_fn) {
-        struct { int64_t *data; size_t len; size_t cap; } *a = (void*)(intptr_t)v1;
-  struct { int64_t *data; size_t len; size_t cap; } *b = (void*)(intptr_t)v2;
+        struct { int64_t *data; int64_t len; int64_t cap; } *a = (void*)(intptr_t)v1;
+  struct { int64_t *data; int64_t len; int64_t cap; } *b = (void*)(intptr_t)v2;
   if (a->len != b->len) return false;
   /* CRU B-3: cmp-fn is a fat closure box; fat-dispatch via slot 0 (a capturing
      element comparator works; captureless lambdas are boxed at the call site). */
-  for (size_t i = 0; i < a->len; i++) {
+  for (int64_t i = 0; i < a->len; i++) {
       if (!((int64_t(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)cmp_fn)[0])((void*)(intptr_t)cmp_fn, a->data[i], b->data[i]))
           return false;
   }
@@ -9067,12 +9067,12 @@ static bool tnil_qu(int64_t l) {
 }
 
 static int64_t list_hylength(int64_t l) {
-        struct __tur_cell_t { int64_t head; int64_t tail; };
+        struct __tur_cell_t { int64_t head; void *tail; };
   struct __tur_cell_t *cell = (void*)(intptr_t)l;
   int64_t count = 0;
   while (cell) {
       count++;
-      cell = (void*)(intptr_t)cell->tail;
+      cell = cell->tail;
   }
   return count;
   
@@ -9310,14 +9310,14 @@ static void tur_hylist_hyhomog_un_un(int64_t a, int64_t b) {
 }
 
 static int64_t list_hyhead(int64_t l) {
-        struct __tur_cell_t { int64_t head; int64_t tail; };
+        struct __tur_cell_t { int64_t head; void *tail; };
   return ((struct __tur_cell_t *)(intptr_t)l)->head;
   
 }
 
 static int64_t list_hytail(int64_t l) {
-        struct __tur_cell_t { int64_t head; int64_t tail; };
-  return ((struct __tur_cell_t *)(intptr_t)l)->tail;
+        struct __tur_cell_t { int64_t head; void *tail; };
+  return (int64_t)(intptr_t)((struct __tur_cell_t *)(intptr_t)l)->tail;
   
 }
 

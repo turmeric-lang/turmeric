@@ -41,14 +41,25 @@ Four shapes, all measured on the module:
    a denormal (7.1 reads as 8.48798e-315). `tce3-map-cstr-val`,
    `mut-map-reassign`, `generic-map-assoc-sig-tyvar-value` and the `typed/vec-*`
    rows are this.
-3. **Declarations at the wrong width.** `stdlib/hamt.tur:16` declares
-   `(extern-c tur_hamt_count [m :ptr] :int)`, which emits
-   `extern int64_t tur_hamt_count(void *)` against the runtime's
+3. **Declarations at the wrong width.** *Fixed 2026-10-30.*
+   `stdlib/hamt.tur:16` declares `(extern-c tur_hamt_count [m :ptr] :int)`,
+   which emits `extern int64_t tur_hamt_count(void *)` against the runtime's
    `uint32_t tur_hamt_count(Hamt *)`. Natively the 32-bit return is
    zero-extended in a 64-bit register and happens to work. On wasm the caller
-   and callee disagree on the return type (i64 against i32). It is listed from
-   reading the code; which fixture rows it accounts for was not separated from
-   shape 2.
+   and callee disagree on the return type (i64 against i32). The runtime
+   returns `int64_t` now, and `tests/check-extern-c-widths.py` (in Docs lint)
+   compares every stdlib `extern-c` return against the runtime prototypes:
+   this was the only such mismatch among 300 prototypes.
+   The same shape inside the stdlib's own inline C: `vec.tur`'s `vec-eq?`,
+   and every vector `csv.tur` and `digest.tur` build, viewed the vector
+   header as `{ int64_t *data; size_t len; size_t cap; }` where the rest of
+   `vec.tur` has `int64_t len; int64_t cap`. On wasm32 `size_t` is 4 bytes,
+   so `vec-eq?` compared the wrong lengths (false for equal vectors) and a
+   CSV-built vector had a header the vector functions misread. All eleven
+   views say `int64_t` now; `typed/vec-basic`, `vec-of-tvec-eq`,
+   `vec-of-tvec-eq-manual`, `eq-carrier-capturing-comparator`,
+   `comparator-float-elements-word-adapter` and `option-niche-vec-closure-cmp`
+   left the baseline.
 
 4. **A struct's pointer field read through a 64-bit cell view.** *Found
    2026-10-29* (raylib-web-playground-plan prerequisite 2), by Emscripten's

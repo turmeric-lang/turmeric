@@ -1134,7 +1134,7 @@ Hamt *tur_hamt_retain(Hamt *m) {
     return m;
 }
 
-uint32_t tur_hamt_count(Hamt *m) {
+int64_t tur_hamt_count(Hamt *m) {
     if (!m) return 0;
     return m->count;
 }

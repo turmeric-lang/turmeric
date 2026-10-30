@@ -279,7 +279,7 @@ void *tur_hamt_get_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq,
 bool tur_hamt_eq_dynamic(int64_t a_handle, int64_t b_handle, int64_t val_cmp);
 
 /* Get the number of key/value pairs in the map. O(1). */
-uint32_t tur_hamt_count(Hamt *m);
+int64_t tur_hamt_count(Hamt *m);
 
 /* Merge two HAMTs. b wins on collision.
  * Returns: new Hamt with ref_count=1 containing all entries from both maps.
