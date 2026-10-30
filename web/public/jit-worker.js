@@ -19,8 +19,8 @@
 //
 // A JavaScript exception out of the module means the instance is done for
 // (wasm-jit-plan 5.8): a wasm trap leaves its state wherever the trap
-// happened, and the JS stack limit (a RangeError, which deep recursion under
-// MIR's interpreter reaches at ~1,700 frames) leaves the linear stack pointer
+// happened, and the JS stack limit (a RangeError, which a Turmeric recursion
+// reaches about 300 calls deep in Chromium's worker) leaves the linear stack pointer
 // and the interpreter's frames mid-call.  The answer then carries `trapped`,
 // and jit-client.js terminates this worker; the next Compile boots a fresh one.
 // The other stack can run out first -- the 16 MiB linear stack, under a large

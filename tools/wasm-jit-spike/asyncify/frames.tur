@@ -1,0 +1,14 @@
+;; frames.tur -- a frame loop as a self tail call, sleeping 16 ms a frame from
+;; compiled inline C.  Prints 0..4 then 5, and the event loop runs meanwhile.
+(defn nap [ms : int] : void
+  ```c
+  extern void emscripten_sleep(unsigned int);
+  emscripten_sleep((unsigned int)ms);
+  ```)
+(defn frames [i : int n : int] : int
+  (if (= i n)
+    i
+    (do (nap 16)
+        (println i)
+        (frames (+ i 1) n))))
+(println (frames 0 5))

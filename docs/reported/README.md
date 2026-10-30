@@ -121,6 +121,12 @@ directory is worse for triage than no index.
 | --- | --- | --- |
 | ~~[installed-bin-entry-modules-still-importable](../archive/installed-bin-entry-modules-still-importable.md)~~ | low-medium (silent wrong resolution) | **RESOLVED 2026-10-28** (archived): NB0 of namespaced-spice-binaries-plan hides `:bin` entry files from the search path and asks the registry first. Original: The conflict check skips `:bin` entry files, but `spice_search` still puts them on the path, so a project-less `(import main)` picks the first installed tool's entry and hides the rest. A bin-name collision between `--path` installs is also refused as "not owned by tur" |
 
+## Found doing raylib-web-playground-plan's prerequisites (filed 2026-10-29)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [wasm-jit-recursion-depth-is-about-300](wasm-jit-recursion-depth-is-about-300.md) | medium (browser JIT, user-visible) | A non-tail Turmeric recursion overflows about 310 calls deep in Chromium's worker (590 under node), where the page said ~1,700. The 1,696 was a pre-P5 C spike; since mir#17 `eval` calls `setjmp`, so every call it makes goes through a JS `invoke_*` wrapper. Probable cause, not confirmed |
+
 ## Found checking two agent claims: wasm stack depth, diag file 0 (filed 2026-10-24)
 
 | Report | Severity | One line |

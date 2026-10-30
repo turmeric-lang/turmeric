@@ -17,3 +17,18 @@ P1's `engine/` (the engine linked into a copy of the REPL module by hand) was
 replaced in P3 by the real build: the `tur_wasm_jit` CMake target and
 [`tools/wasm-jit/`](../wasm-jit/README.md).  Its four programs live on as
 `tools/wasm-jit/smoke/`; the plan's P1 section keeps its measurements.
+
+## `asyncify/` -- can a compiled program yield? (2026-10-29)
+
+raylib-web-playground-plan's prerequisite 3. `link.sh` relinks a built
+`tur_wasm_jit` with extra emcc flags (`-sASYNCIFY`) and `emscripten_sleep` in
+the import table; `drive.js` runs a program through `turi_wasm_jit_run` with
+ccall's async mode and counts event-loop ticks; `frames.tur` and `while.tur`
+sleep 16 ms a frame from inline C. The results are in that plan's section 7,
+prerequisite 3.
+
+```sh
+bash tools/wasm-jit-spike/asyncify/link.sh /tmp/async -sASYNCIFY
+node tools/wasm-jit-spike/asyncify/drive.js /tmp/async tools/wasm-jit-spike/asyncify/while.tur
+```
+

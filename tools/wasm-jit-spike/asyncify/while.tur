@@ -1,0 +1,16 @@
+;; while.tur -- the blocking frame-loop shape a raylib example has: state in
+;; ^mut let bindings, a `while`, and a sleep per frame from compiled inline C.
+(defn nap [ms : int] : void
+  ```c
+  extern void emscripten_sleep(unsigned int);
+  emscripten_sleep((unsigned int)ms);
+  ```)
+(defn main [] : int
+  (let [^mut frame 0
+        ^mut x     7.1]
+    (while (< frame 4)
+      (nap 16)
+      (set! x (+ x 0.25))
+      (println x)
+      (set! frame (+ frame 1)))
+    0))
