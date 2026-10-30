@@ -507,9 +507,9 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.78.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_compiled_repl },
-    /* simd GRADUATED 2026-10-30, in the 0.72 line, before any release shipped
-     * it (introduced on main for 0.73.0, prototype, advisory expires_at
-     * 0.77.0).  `(load "stdlib/simd.tur")` gives the 16-byte vector types and
+    /* simd GRADUATED 2026-10-30, in the 0.72 line (shipped behind the flag in
+     * v0.72.1, its row labeled introduced 0.73.0, prototype, advisory
+     * expires_at 0.77.0).  `(load "stdlib/simd.tur")` gives the 16-byte vector types and
      * their operations -- one GNU-vector instruction each on cc, a lane loop
      * under `tur jit`, natives under turi, bit-identical -- with no flag.
      * Graduated straight from prototype: every S1 graduation test passed
@@ -629,7 +629,7 @@ static const char *const GRADUATED[] = {
      * told users to pass it, so it keeps the full window.  Eligible to age out
      * at 0.72.0.  See docs/upcoming/r7rs-heap-frames-plan.md. */
     "r7rs-segmented-stack",
-    /* graduated 2026-10-30, in the 0.72 line, before a release carried it;
+    /* graduated 2026-10-30, in the 0.72 line; v0.72.1 carried the flag and
      * tur-simd's build.tur (turmeric-spices) enabled it.  Eligible to age out
      * at 0.74.0.  See docs/upcoming/simd-and-vectorization-plan.md. */
     "simd",

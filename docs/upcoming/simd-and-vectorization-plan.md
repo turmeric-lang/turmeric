@@ -925,7 +925,7 @@ both).
   accepted" clause). `simd-generic-positions` pins all four positions on
   cc, `tur jit` and turi; the module header now says which one boxes.
 
-**S1 graduated (2026-10-30), before any release carried the flag.** The
+**S1 graduated (2026-10-30), after v0.72.1 shipped it behind the flag.** The
 `simd` row is gone from `EXPERIMENTS[]` and `(load "stdlib/simd.tur")` needs
 no flag; the name is in `GRADUATED[]`, so a leftover `--enable=simd` (or
 tur-simd's `:experiments ["simd"]`) is a TUR-W0063 no-op until it ages out,
