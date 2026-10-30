@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.72.1` -- 16-byte SIMD vector types arrive behind `--enable=simd` (with masks, select, shuffle and conversions), and `tur repl` gains compiled turns behind `--enable=compiled-repl`.
+**Latest release:** `v0.73.0` -- SIMD vector types graduate: `(load "stdlib/simd.tur")` now works without `--enable=simd`.
 
 ## What
 
