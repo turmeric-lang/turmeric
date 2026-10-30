@@ -1542,18 +1542,6 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
                 }
             }
         }
-        /* simd-and-vectorization-plan S1: the vector types live in
-         * stdlib/simd.tur, and loading it is how a program first names one,
-         * so this is where `--enable=simd` is required. */
-        if (strcmp(path_buf, "stdlib/simd.tur") == 0) {
-            if (!g_opt_simd) {
-                diag_emit(DIAG_ERROR, path_f->span,
-                          "stdlib/simd.tur needs --enable=simd: the vector types are "
-                          "an experiment (docs/upcoming/simd-and-vectorization-plan.md, S1)");
-                continue;
-            }
-            experiment_warn_if_used("simd");
-        }
         const Symbol *key = load_path_key(st, path_buf, e->module_stdlib_dir);
         /* The visited set is compilation-global (on the Elab) so a path the
          * entry already spliced is not re-spliced when an imported module loads

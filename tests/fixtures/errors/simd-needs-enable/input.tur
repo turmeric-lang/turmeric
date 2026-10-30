@@ -1,6 +1,0 @@
-;; simd-needs-enable: the vector types are an experiment, and loading
-;; stdlib/simd.tur without --enable=simd is refused with the flag named.
-(load "stdlib/simd.tur")
-
-(defn main [] : int
-  0)

@@ -1,5 +1,5 @@
 ;; simd-ops: every operation of stdlib/simd.tur (simd-and-vectorization-plan
-;; S1, --enable=simd) on every vector type.  Floats print as bit patterns, so
+;; S1) on every vector type.  Floats print as bit patterns, so
 ;; cc (vector instructions), `tur jit` (lane loops) and turi (natives) must
 ;; agree to the last bit; integer inputs sit where lanes wrap.
 (load "stdlib/simd.tur")

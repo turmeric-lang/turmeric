@@ -7,7 +7,8 @@
 > types, not a `(NumVec T)` rewrite (section 3.1, "2026-10-29") -- **built
 > 2026-10-29** (3.1, "As built: NumArray"). **S0 built 2026-10-29** as the
 > `tur-simd` spice (S0, "As built"; its findings reshape S1's type list).
-> **S1a built 2026-10-29** behind `--enable=simd` (S1, "As built: S1a");
+> **S1 GRADUATED 2026-10-30** -- `(load "stdlib/simd.tur")` needs no flag
+> (S1, "S1 graduated"). **S1a built 2026-10-29** (S1, "As built: S1a");
 > **S1b** (masks, comparisons, `select`, `shuffle`, conversions, no 32-byte
 > types, the generic-position restriction lifted as measured unneeded)
 > 2026-10-30 (S1, "As built: S1b"). N2
@@ -924,13 +925,45 @@ both).
   accepted" clause). `simd-generic-positions` pins all four positions on
   cc, `tur jit` and turi; the module header now says which one boxes.
 
+**S1 graduated (2026-10-30), after v0.72.1 shipped it behind the flag.** The
+`simd` row is gone from `EXPERIMENTS[]` and `(load "stdlib/simd.tur")` needs
+no flag; the name is in `GRADUATED[]`, so a leftover `--enable=simd` (or
+tur-simd's `:experiments ["simd"]`) is a TUR-W0063 no-op until it ages out,
+eligible at 0.74.0 (`simd-graduated-enable-noop`). Graduated straight from
+prototype; the three tests above, as met:
+
+- **Engines agree:** `simd-ops`, `simd-masks-shuffle-convert`,
+  `simd-generic-positions` and `simd-load-out-of-bounds-panics` give the same
+  output on cc (gcc and clang), `tur jit` and turi.
+- **Generic positions:** lifted, measured (S1b above).
+- **A spice kernel on S1 types, no slower than its inline C:** tur-simd's
+  `simd/s1` (turmeric-spices#131) rewrites S0's three kernels in Turmeric on
+  these types, the same bits as the inline-C ones. ns/elem, `-O2`, x86-64:
+
+  | kernel | gcc: inline C | gcc: S1 | clang: inline C | clang: S1 |
+  |---|---|---|---|---|
+  | dot f64 (`F64x2`) | 0.242 | 0.249 | 0.251 | 0.237 |
+  | blend u8 (`U8x16` / `U16x8`) | 0.299 | 0.299 | 0.146 | 0.151 |
+  | biquad x4 f32 (`F32x4`) | 0.969 | 0.985 | 0.974 | 1.32 |
+
+  The dot product and the blend meet the test on both compilers. The biquad
+  is 1.35x slower on clang: a vector carried around a latency-bound loop is
+  kept as the two halves the x86-64 ABI passes a 16-byte float struct in,
+  split and rejoined each iteration. A performance gap, not a wrong answer,
+  and open as
+  [docs/reported/simd-loop-carried-vector-split-by-clang.md](../reported/simd-loop-carried-vector-split-by-clang.md);
+  graduation does not wait on it.
+
+The gate only ever refused the load -- there is no off path to keep -- so
+the refusal fixture (`errors/simd-needs-enable`) retired rather than inverted.
+
 ## 4. Engine matrix after each phase
 
 | | cc | `tur jit` | turi | wasm |
 |---|---|---|---|---|
 | N0/N1 | vectorized kernels at `-O2` and `-O3` (gcc and clang) | same C, MIR scalar code | the same kernel C, built with the host's `tur` | vectorized with `-msimd128`, on by default (Q5) |
 | N2 | read loops vectorize at `-O3`; store loops through `-map!` / `-build` at clang `-O2` and gcc `-O3` (Q7) | scalar | scalar | scalar |
-| S1 | vector extensions (SSE2 baseline, AVX with `-march`) | struct-of-lanes helpers | struct-of-lanes natives | simd128 if enabled |
+| S1 | vector extensions (SSE2 baseline, AVX with `-march`) | struct-of-lanes helpers | struct-of-lanes natives | simd128, on by default (Q5) |
 
 Results identical in every cell.
 
