@@ -125,7 +125,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [wasm-jit-recursion-depth-is-about-300](wasm-jit-recursion-depth-is-about-300.md) | medium (browser JIT, user-visible) | A non-tail Turmeric recursion overflows about 310 calls deep in Chromium's worker (590 under node), where the page said ~1,700. The 1,696 was a pre-P5 C spike. **Cause confirmed**: since mir#17 `eval` calls `setjmp`, so every call it makes goes through a JS `invoke_*` wrapper; with that one line changed, depth is 900 in Chromium and 1,800 under node. Fix direction: a second `eval` without `setjmp` for the functions that do not call it (fork change) |
+| [wasm-jit-recursion-depth-is-about-300](wasm-jit-recursion-depth-is-about-300.md) | medium (browser JIT, user-visible) | A non-tail Turmeric recursion overflows about 310 calls deep in Chromium's worker (590 under node), where the page said ~1,700. The 1,696 was a pre-P5 C spike. **Cause confirmed**: since mir#17 `eval` calls `setjmp`, so every call it makes goes through a JS `invoke_*` wrapper; with that one line changed, depth is 900 in Chromium and 1,800 under node, and `fib 30` runs 1.7x faster (every interpreted call pays the JS hop). Fix direction: a second `eval` without `setjmp` for the functions that do not call it (fork change; designed in the report) |
 
 ## Found checking two agent claims: wasm stack depth, diag file 0 (filed 2026-10-24)
 
