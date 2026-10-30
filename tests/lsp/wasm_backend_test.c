@@ -517,8 +517,10 @@ static void test_outline_omits_lifted_lambdas(void) {
  * --------------------------------------------------------------------- */
 
 static void test_import_resolves_through_added_include_dir(void) {
-    char dir[] = "/tmp/tur-lsp-incXXXXXX";
-    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    /* A directory of its own under the working directory (no mkdtemp: MinGW
+     * has none), created through platform_fs.h's mkdir. */
+    const char *dir = "tur-lsp-wasm-backend-inc";
+    mkdir(dir, 0777);
     char sub[300], path[340];
     snprintf(sub, sizeof sub, "%s/arcadetest", dir);
     mkdir(sub, 0777);

@@ -41,6 +41,8 @@
 #include "elab.h"
 #include "expr.h"
 #include "pkg.h"   /* pkg_script_header_read: a defscript header */
+#include "platform_fs.h"  /* mkdir(path, mode) on MinGW too: this TU also
+                           * builds natively, as libturi_wasm */
 #include <sys/stat.h>
 #include "forms.h"
 #include "types.h"
