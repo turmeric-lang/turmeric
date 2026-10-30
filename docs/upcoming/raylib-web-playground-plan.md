@@ -1,36 +1,35 @@
 # Plan: a raylib playground in the browser ("Try Turmeric with a screen")
 
-> **Status:** Draft, 2026-10-23; revised 2026-10-29 after the browser JIT
-> landed ([wasm-jit-plan](wasm-jit-plan.md) P0-P5 and P6's C1, 2026-10-28).
-> Nothing of this plan is built. **What changed:** the premise that "a program
-> typed into the page cannot be compiled there" is false. Try Turmeric has a
-> Compile engine (c2mir + MIR's interpreter in the page, inline C works), and
-> the raylib spice is *pure inline C* that `#include <raylib.h>`, so the
-> browser can compile it from source: the static spice image of the old A1 and
-> the build service of the old B are both unnecessary for raylib. The
-> recommendation therefore flips to **the JIT engine first (section 3, "J"),
-> gated by a spike of about a week (P0); the interpreter-with-baked-images
-> architecture (A) is kept as the fallback if the spike fails.** What the spike
-> must answer, and the prerequisite work that should land before it, is
-> [section 7](#prerequisites-before-p0). **2026-10-30: the owner chose JSPI
-> for the blocking frame loop** (J4, prerequisite 3), which settles
-> [section 3](#3-the-central-decision-how-does-typed-code-reach-raylib)'s J
-> over A, since JSPI is a route only the JIT arm has. **The same day the
-> owner chose its own repository** ([section 4](#4-where-it-lives)). Every
-> decision this plan asked for is made, and the repo exists:
+> **Status:** P0 go on J (2026-10-30); **P1 next** (the arcade module as a
+> CMake target and a CI job, [section 7](#p1----the-arcade-module-this-repo)).
+> Every decision this plan asked for is made: **J** -- the browser JIT engine
+> on the page with raylib linked in, compiling the raylib spice's inline C from
+> source ([section 3](#3-the-central-decision-how-does-typed-code-reach-raylib));
+> **JSPI** for the blocking frame loop (J4, prerequisite 3), which is a J-only
+> route and so also settled J over A; and **its own repository**
+> ([section 4](#4-where-it-lives)),
 > **[turmeric-lang/turmeric-arcade](https://github.com/turmeric-lang/turmeric-arcade)**,
-> deployed to **play.turmeric-lang.com**. Its first commit (2026-10-30) is
-> the scaffold: Try's site shape (COOP/COEP, one CSP, the Worker), the
-> screen pane's shell of [5.2](#52-the-screen-pane) running a program in an
-> iframe on the JSPI module and streaming its lines, `scripts/fetch-engine.sh`
-> building that module from a pinned turmeric commit, and four Playwright
-> tests (run, streaming, Stop, stack overflow) green in Chromium 153. **P0
-> began the same day and answered its first three questions yes** (the
-> [results](#p0-results-2026-10-30-day-one-go-on-j) under section 7): the
-> quick-start program draws on the arcade module, callback mode survives
-> `main`, and the blocking loop yields through raylib's own sleep under
-> JSPI. Of the prerequisites, 1-5, 8-10, 12 and 13 are closed or spiked; 11
-> is turmeric-spices work for the Spices menu.
+> deployed to **play.turmeric-lang.com**. What is built:
+> - the arcade repo's scaffold (2026-10-30): Try's site shape (COOP/COEP, one
+>   CSP, the Worker), the screen pane of [5.2](#52-the-screen-pane) running a
+>   program in an iframe on the JSPI module and streaming its lines,
+>   `scripts/fetch-engine.sh` building that module from the turmeric commit
+>   `scripts/engine.lock` pins, and Playwright tests green in Chromium 153;
+> - the P0 spike, whose day one answered its first three questions yes (the
+>   [results](#p0-results-2026-10-30-day-one-go-on-j)): the quick-start
+>   program draws through struct-by-value calls, callback mode survives
+>   `main`, and the blocking loop yields through raylib's own sleep under
+>   JSPI. The arcade module is still a spike script,
+>   `tools/wasm-jit-spike/arcade/build.sh`, which P1 makes a target.
+>
+> Of the [prerequisites](#prerequisites-before-p0), 1-5, 8-10, 12 and 13 are
+> closed or spiked; 6 and 7 (c2mir's per-call vararg buffer, a tail call
+> keeping its allocas) are open and gate only the examples (P3); 11 is
+> turmeric-spices work for the Spices menu. History: drafted 2026-10-23 with
+> an interpreter-plus-baked-images design (A, now the fallback); revised
+> 2026-10-29 once the browser JIT landed ([wasm-jit-plan](wasm-jit-plan.md)
+> P0-P5 and P6's C1, 2026-10-28) made compiling the spice in the page
+> possible, which is what flipped the recommendation to J.
 > **Type:** Web platform / browser JIT module (`tools/wasm-jit/`,
 > `src/web/wasm_jit_glue.c`, `src/jit_engine.c`) / a new site. The interpreter
 > side (`src/turi/`) and the build driver (`src/driver/cmd_build.c`) only if the
