@@ -1,0 +1,38 @@
+;; assoc-typed-receiver-dispatches-representative: a class method whose FIRST
+;; parameter has the class's associated type -- `(peek [h : Handle] ...)` --
+;; called in a generic body on a `(Handle C)` value.  Each spec must call its
+;; own instance's method.  The emitter read the receiver as itself: the spec
+;; reduced `(Handle C)` to the handle type, no instance is keyed on that, and
+;; every spec called the representative instance's method -- a double array
+;; written through an int32 view, in the numvec class that found it.
+;; A result of the associated type already dispatched on C; the receiver now
+;; does the same.
+
+(defopaque AHandle :int)
+(defopaque BHandle :int)
+
+(defstruct A [x : int])
+(defstruct B [y : float])
+
+(defclass Store [c]
+  (type Handle : Type)
+  (grab [^borrow s : c] : Handle)
+  (peek [h : Handle] : float))
+
+(definstance Store [A] (type Handle = AHandle)
+  (grab [s] (:: (.x s) AHandle))
+  (peek [h] {(as float (:: h int)) + 0.25}))
+
+(definstance Store [B] (type Handle = BHandle)
+  (grab [s] (:: 7 BHandle))
+  (peek [h] {(as float (:: h int)) * 1.5}))
+
+;; generic: the receiver of `peek` is a `(Handle C)`, not a C
+(defn look [C] [(Store C)] [^borrow s : C] : float
+  (let [h (grab s)]
+    (peek h)))
+
+(defn main [] : int
+  (println (look (A 3)))       ; A's peek: 3 + 0.25
+  (println (look (B 9.1)))     ; B's peek: 7 * 1.5
+  0)

@@ -1,0 +1,70 @@
+;; numvec-class: the NumArray class of stdlib/numvec.tur -- one generic layer
+;; over F64Vec, F32Vec, I64Vec, I32Vec and U8Vec.  Each generic below is
+;; written once and specialized per type; every method is called through it,
+;; and the results (fractional floats, wrapping integers) are the per-type
+;; functions'.  na-copy's result is freed by hand: a generic-typed local is
+;; not dropped at scope exit yet (docs/reported/generic-affine-local-never-
+;; dropped.md).  Leak-checked.
+(load "stdlib/numvec.tur")
+
+(defn mean [V] [(NumArray V) (NumCast (Sum V))] [^borrow a : V] : float
+  {(to-float (na-sum a)) / (as float (na-len a))})
+
+(defn count-pos [V] [(NumArray V) (Ord (Elem V)) (NumCast (Elem V))] [^borrow a : V] : int
+  (let [^mut n 0]
+    (na-for [x a] (when (> x (:: (from-int 0) (Elem V))) (set! n {n + 1})))
+    n))
+
+(defn double! [V] [(NumArray V) (Num (Elem V))] [^borrow a : V] : nil
+  (na-map! a [x a] {x + x}))
+
+(defn spread [V] [(NumArray V) (Num (Elem V)) (NumCast (Elem V))] [^borrow a : V] : float
+  (to-float {(na-max a) - (na-min a)}))
+
+;; swap the ends through checked and unchecked access, then a view
+(defn swap-ends! [V] [(NumArray V)] [^borrow a : V] : nil
+  (let [n (na-len a)
+        f (na-ref a 0)
+        l (unsafe (na-ref-unchecked a {n - 1}))]
+    (na-set! a 0 l)
+    (unsafe (na-set-unchecked! a {n - 1} f))
+    (let [w (unsafe (na-view a))
+          m (unsafe (na-view-ref a w 1))]
+      (unsafe (na-view-set! a w 1 m)))))
+
+(defn show-it [V] [(NumArray V)] [^borrow a : V] : nil
+  (let [s (na-show a)]
+    (println (string/to-cstr s))
+    (string/release s)))
+
+(defn report [V] [(NumArray V) (Num (Elem V)) (Ord (Elem V)) (NumCast (Elem V)) (NumCast (Sum V))]
+             [^borrow a : V] : nil
+  (double! a)
+  (swap-ends! a)
+  (show-it a)
+  (let [c (na-copy a)]
+    (na-add! c a)
+    (na-sub! c a)
+    (na-add-scalar! c (from-int 1))
+    (println (mean c))
+    (println (na-fold [s 0.0 x c] {s + (to-float x)}))
+    (println (count-pos a))
+    (println (spread a))
+    (show-it c)
+    (na-fill! c (from-int 3))
+    (na-copy! a c)
+    (show-it a)
+    (na-free c)))
+
+(defn main [] : int
+  (let [a (f64vec-of 7.1 -3.25 2.5)
+        b (f32vec-of (:: 7.1 float32) (:: -3.25 float32) (:: 2.5 float32))
+        c (i64vec-of 7 -3 9223372036854775807)
+        d (i32vec-of (as int32 7) (as int32 -3) (as int32 2147483647))
+        e (u8vec-of (as uint8 200) (as uint8 3) (as uint8 0))]
+    (report a)
+    (report b)
+    (report c)
+    (report d)
+    (report e))
+  0)

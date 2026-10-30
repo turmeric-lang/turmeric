@@ -35,11 +35,17 @@
 ;;;   `P-sum-ordered`.  A float reduction uses a fixed eight-lane order, so it
 ;;;   is vectorized without -ffast-math and is bit-identical on every engine;
 ;;;   integer arithmetic wraps;
-;;; - loops (phase N2): `P-for`, `P-for-index`, `P-fold`, `P-build`, which
-;;;   bind elements, never an index the program could get wrong, and read
-;;;   through the unchecked `P-ref-unchecked` / `P-set-unchecked!`
-;;;   (`#fx{Unsafe}`).  A loop that only reads an array vectorizes; one that
-;;;   stores into one does not yet (see the plan's N2 notes).
+;;; - loops (phase N2): `P-for`, `P-for-index`, `P-fold`, `P-build`, `P-map!`,
+;;;   which bind elements, never an index the program could get wrong, and go
+;;;   through the unchecked accessors (`#fx{Unsafe}`).  Reads vectorize;
+;;;   `P-build` and `P-map!` store through a view (`P-view`, `P-view-ref`,
+;;;   `P-view-set!`), which is what lets a store loop vectorize too;
+;;; - more kernels for common store loops, vectorized at -O2 on every
+;;;   compiler: `P-sub!`, `P-add-scalar!`, and except on U8Vec `P-mul!`.
+;;;
+;;; Generic code over all five types goes through the `NumArray` class at the
+;;; end of the module: `na-len`, `na-ref`, `na-sum`, ... and the loops
+;;; `na-for`, `na-fold`, `na-map!`, with the element type as `(Elem V)`.
 ;;;
 ;;; Ownership: each type is `^affine` with a `Drop` instance, so a let-bound
 ;;; array is freed at scope exit, exactly once, and moving it (returning it,
@@ -103,6 +109,14 @@
 ;;;
 ;;; Since: Phase N0
 (defopaque ^affine F64Vec :int)
+;;; F64View -- a view of a F64Vec's elements: the data pointer, for a store loop.
+;;;
+;;; Made by `f64vec-view`, read and written by `f64vec-view-ref` / `f64vec-view-set!`.
+;;; Not owned and not affine: it frees nothing, and it is valid exactly as long
+;;; as the array it came from (an array never resizes, so its data never moves).
+;;;
+;;; Since: Phase N2
+(defopaque F64View :int)
 ;; Every operation that touches the header is an inline-C body of its own,
 ;; never a Turmeric wrapper over a raw one, so a panic is reported at the
 ;; CALLER's line (as vec-get's is) and turi's natives are keyed by the public
@@ -574,6 +588,154 @@
   for (; i < n; i++) { double m = s * xd[i]; yd[i] = yd[i] + m; }
   #endif
   ```)
+;;; f64vec-sub! -- dst[i] -= src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; dst and src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array subtracted (borrowed)
+;;;
+;;; Example:
+;;;   (f64vec-sub! y x)
+;;;
+;;; Since: Phase N1
+
+(defn f64vec-sub! [^borrow dst : F64Vec ^borrow src : F64Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; double *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; double *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("f64vec-sub!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  double *yd = y->data;
+  const double *xd = x->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) yd[i] = yd[i] - xd[i];
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    double y0 = yd[i], x0 = xd[i];
+    double y1 = yd[i + 1], x1 = xd[i + 1];
+    double y2 = yd[i + 2], x2 = xd[i + 2];
+    double y3 = yd[i + 3], x3 = xd[i + 3];
+    double y4 = yd[i + 4], x4 = xd[i + 4];
+    double y5 = yd[i + 5], x5 = xd[i + 5];
+    double y6 = yd[i + 6], x6 = xd[i + 6];
+    double y7 = yd[i + 7], x7 = xd[i + 7];
+    yd[i] = y0 - x0;
+    yd[i + 1] = y1 - x1;
+    yd[i + 2] = y2 - x2;
+    yd[i + 3] = y3 - x3;
+    yd[i + 4] = y4 - x4;
+    yd[i + 5] = y5 - x5;
+    yd[i + 6] = y6 - x6;
+    yd[i + 7] = y7 - x7;
+  }
+  for (; i < n; i++) yd[i] = yd[i] - xd[i];
+  #endif
+  ```)
+;;; f64vec-mul! -- dst[i] *= src[i] for every i (same length, or a panic).
+;;;
+;;; Element-wise, not a dot product.  Integer arithmetic wraps; dst and
+;;; src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array multiplied in (borrowed)
+;;;
+;;; Example:
+;;;   (f64vec-mul! y x)
+;;;
+;;; Since: Phase N1
+
+(defn f64vec-mul! [^borrow dst : F64Vec ^borrow src : F64Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; double *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; double *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("f64vec-mul!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  double *yd = y->data;
+  const double *xd = x->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) yd[i] = yd[i] * xd[i];
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    double y0 = yd[i], x0 = xd[i];
+    double y1 = yd[i + 1], x1 = xd[i + 1];
+    double y2 = yd[i + 2], x2 = xd[i + 2];
+    double y3 = yd[i + 3], x3 = xd[i + 3];
+    double y4 = yd[i + 4], x4 = xd[i + 4];
+    double y5 = yd[i + 5], x5 = xd[i + 5];
+    double y6 = yd[i + 6], x6 = xd[i + 6];
+    double y7 = yd[i + 7], x7 = xd[i + 7];
+    yd[i] = y0 * x0;
+    yd[i + 1] = y1 * x1;
+    yd[i + 2] = y2 * x2;
+    yd[i + 3] = y3 * x3;
+    yd[i + 4] = y4 * x4;
+    yd[i + 5] = y5 * x5;
+    yd[i + 6] = y6 * x6;
+    yd[i + 7] = y7 * x7;
+  }
+  for (; i < n; i++) yd[i] = yd[i] * xd[i];
+  #endif
+  ```)
+;;; f64vec-add-scalar! -- add s to every element, in place.
+;;;
+;;; Integer arithmetic wraps.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   s -- the value added
+;;;
+;;; Example:
+;;;   (f64vec-add-scalar! v 2.5)
+;;;
+;;; Since: Phase N1
+
+(defn f64vec-add-scalar! [^borrow v : F64Vec s : float]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  double *d = a->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) d[i] = d[i] + s;
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    d[i] = d[i] + s;
+    d[i + 1] = d[i + 1] + s;
+    d[i + 2] = d[i + 2] + s;
+    d[i + 3] = d[i + 3] + s;
+    d[i + 4] = d[i + 4] + s;
+    d[i + 5] = d[i + 5] + s;
+    d[i + 6] = d[i + 6] + s;
+    d[i + 7] = d[i + 7] + s;
+  }
+  for (; i < n; i++) d[i] = d[i] + s;
+  #endif
+  ```)
 ;;; f64vec-sum -- the sum of the elements.
 ;;;
 ;;; A float sum is computed in eight interleaved partial sums (lane k
@@ -866,6 +1028,79 @@
   struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
   a->data[i] = x;
   ```)
+;;; f64vec-view -- a view of v's elements, for a loop that stores into it.
+;;;
+;;; `#fx{Unsafe}`: nothing ties the view to the array, so a view used after
+;;; the array is freed reads freed memory.  Why it exists: a store through
+;;; the array (`-set-unchecked!`) re-reads the header's data pointer, which
+;;; the store might have overwritten as far as the C compiler knows, so the
+;;; loop does not vectorize; a view is that pointer, read once.  `-build`
+;;; and `-map!` store through one; reach for it directly only for a store
+;;; loop they do not cover.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed); the view is valid while v is
+;;;
+;;; Returns:
+;;;   A F64View.
+;;;
+;;; Example:
+;;;   (let [v (f64vec-of 1.5 2.5) w (unsafe (f64vec-view v))] (unsafe (f64vec-view-ref w 1)))   ; => 2.5
+;;;
+;;; Since: Phase N2
+
+(defn f64vec-view [^borrow v : F64Vec]
+  #fx{Unsafe}
+  #reads v
+  : F64View
+  ```c
+  struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
+  return (int64_t)(intptr_t)a->data;
+  ```)
+;;; f64vec-view-ref -- the element at index i of a view, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  The interpreter checks
+;;; the index anyway, as it does for `-ref-unchecked`.
+;;;
+;;; Parameters:
+;;;   w -- the view
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;
+;;; Returns:
+;;;   A float.
+;;;
+;;; Example:
+;;;   (unsafe (f64vec-view-ref w 0))
+;;;
+;;; Since: Phase N2
+
+(defn f64vec-view-ref [w : F64View i : int]
+  #fx{Unsafe}
+  : float
+  ```c
+  return ((double *)(intptr_t)w)[i];
+  ```)
+;;; f64vec-view-set! -- store x at index i of a view, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no
+;;; TUR_REGION_NOTE.  The interpreter checks the index anyway.
+;;;
+;;; Parameters:
+;;;   w -- the view
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;   x -- the new element
+;;;
+;;; Example:
+;;;   (unsafe (f64vec-view-set! w 0 1.5))
+;;;
+;;; Since: Phase N2
+
+(defn f64vec-view-set! [w : F64View i : int x : float]
+  #fx{Unsafe}
+  : nil
+  ```c
+  ((double *)(intptr_t)w)[i] = x;
+  ```)
 ;;; f64vec-for -- run body once per element of one or two F64Vecs.
 ;;;
 ;;; `(for [x v] body...)` binds x to each element of v in order;
@@ -978,7 +1213,9 @@
 ;;; f64vec-build -- a fresh F64Vec of n elements, element i the value of expr.
 ;;;
 ;;; `(build n [i] expr)`, after Racket's `for/flvector`: i is bound to each
-;;; index in turn, and expr runs outside any `unsafe`.
+;;; index in turn, and expr runs outside any `unsafe`.  The stores go through a
+;;; view (`f64vec-view`), so the loop vectorizes where expr allows: at -O2 under
+;;; clang, at -O3 (`--release`) under gcc.
 ;;;
 ;;; Parameters:
 ;;;   n    -- the length (evaluated once)
@@ -998,16 +1235,82 @@
         m   (gensym "n")
         e   (gensym "e")
         out (gensym "out")
+        w   (gensym "w")
         iv  (first bv)]
     `(let [~m      ~n
            ~out    (f64vec-new ~m 0.0)
+           ~w      (unsafe (f64vec-view ~out))
            ^mut ~i 0]
        (while (< ~i ~m)
          (let [~iv ~i
                ~e  ~expr]
-           (unsafe (f64vec-set-unchecked! ~out ~i ~e)))
+           (unsafe (f64vec-view-set! ~w ~i ~e)))
          (set! ~i (+ ~i 1)))
        ~out)))
+;;; f64vec-map! -- store expr into dst[i] for every i, x bound to src[i].
+;;;
+;;; `(map! dst [x src] expr)` stores into each slot of dst the value of expr
+;;; with x bound to the element of src at the same index; `(map! dst [x a y b]
+;;; expr)` walks two sources together.  dst may be one of the sources:
+;;; `(map! v [x v] {x * 2})` maps in place.  Every array has the same length,
+;;; or a panic before the first element.  The loop reads and stores through
+;;; views (`f64vec-view`), so it vectorizes where expr allows: at -O2 under clang,
+;;; at -O3 (`--release`) under gcc.  expr runs outside any `unsafe`; an array
+;;; argument that is not a name is evaluated once, and freed after the loop.
+;;;
+;;; Parameters:
+;;;   dst      -- the array stored into (borrowed)
+;;;   bindings -- `[x src]` or `[x a y b]`
+;;;   expr     -- the new element, of type float
+;;;
+;;; Example:
+;;;   (let [v (f64vec-of 1.5 2.5)] (f64vec-map! v [x v] x) (f64vec-ref v 1))   ; => 2.5
+;;;
+;;; Since: Phase N2
+
+(defmacro f64vec-map! [dst bv expr]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        e    (gensym "e")
+        wd   (gensym "wd")
+        wa   (gensym "wa")
+        wb   (gensym "wb")
+        x    (first bv)
+        a    (second bv)
+        more (rest (rest bv))]
+    (if (list? dst)
+      (let [t (gensym "nv")] `(let [~t ~dst] (f64vec-map! ~t ~bv ~expr)))
+      (if (list? a)
+        (let [t (gensym "nv")]
+          `(let [~t ~a] (f64vec-map! ~dst [~x ~t ~@more] ~expr)))
+        (if (empty? more)
+          `(let [~n      (f64vec-same-len__ ~dst ~a)
+                 ~wd     (unsafe (f64vec-view ~dst))
+                 ~wa     (unsafe (f64vec-view ~a))
+                 ^mut ~i 0]
+             (while (< ~i ~n)
+               (let [~x (unsafe (f64vec-view-ref ~wa ~i))
+                     ~e ~expr]
+                 (unsafe (f64vec-view-set! ~wd ~i ~e)))
+               (set! ~i (+ ~i 1))))
+          (let [y (first more)
+                b (second more)]
+            (if (list? b)
+              (let [t (gensym "nv")]
+                `(let [~t ~b] (f64vec-map! ~dst [~x ~a ~y ~t] ~expr)))
+              `(let [~n      (do
+                               (f64vec-same-len__ ~a ~b)
+                               (f64vec-same-len__ ~dst ~a))
+                     ~wd     (unsafe (f64vec-view ~dst))
+                     ~wa     (unsafe (f64vec-view ~a))
+                     ~wb     (unsafe (f64vec-view ~b))
+                     ^mut ~i 0]
+                 (while (< ~i ~n)
+                   (let [~x (unsafe (f64vec-view-ref ~wa ~i))
+                         ~y (unsafe (f64vec-view-ref ~wb ~i))
+                         ~e ~expr]
+                     (unsafe (f64vec-view-set! ~wd ~i ~e)))
+                   (set! ~i (+ ~i 1)))))))))))
 ;;; f64vec-same-len__ -- internal: the common length of two arrays, or a panic.
 
 (defn f64vec-same-len__ [^borrow a : F64Vec ^borrow b : F64Vec]
@@ -1032,6 +1335,14 @@
 ;;;
 ;;; Since: Phase N0
 (defopaque ^affine F32Vec :int)
+;;; F32View -- a view of a F32Vec's elements: the data pointer, for a store loop.
+;;;
+;;; Made by `f32vec-view`, read and written by `f32vec-view-ref` / `f32vec-view-set!`.
+;;; Not owned and not affine: it frees nothing, and it is valid exactly as long
+;;; as the array it came from (an array never resizes, so its data never moves).
+;;;
+;;; Since: Phase N2
+(defopaque F32View :int)
 ;; Every operation that touches the header is an inline-C body of its own,
 ;; never a Turmeric wrapper over a raw one, so a panic is reported at the
 ;; CALLER's line (as vec-get's is) and turi's natives are keyed by the public
@@ -1504,6 +1815,154 @@
   for (; i < n; i++) { float m = s * xd[i]; yd[i] = yd[i] + m; }
   #endif
   ```)
+;;; f32vec-sub! -- dst[i] -= src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; dst and src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array subtracted (borrowed)
+;;;
+;;; Example:
+;;;   (f32vec-sub! y x)
+;;;
+;;; Since: Phase N1
+
+(defn f32vec-sub! [^borrow dst : F32Vec ^borrow src : F32Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; float *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; float *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("f32vec-sub!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  float *yd = y->data;
+  const float *xd = x->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) yd[i] = yd[i] - xd[i];
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    float y0 = yd[i], x0 = xd[i];
+    float y1 = yd[i + 1], x1 = xd[i + 1];
+    float y2 = yd[i + 2], x2 = xd[i + 2];
+    float y3 = yd[i + 3], x3 = xd[i + 3];
+    float y4 = yd[i + 4], x4 = xd[i + 4];
+    float y5 = yd[i + 5], x5 = xd[i + 5];
+    float y6 = yd[i + 6], x6 = xd[i + 6];
+    float y7 = yd[i + 7], x7 = xd[i + 7];
+    yd[i] = y0 - x0;
+    yd[i + 1] = y1 - x1;
+    yd[i + 2] = y2 - x2;
+    yd[i + 3] = y3 - x3;
+    yd[i + 4] = y4 - x4;
+    yd[i + 5] = y5 - x5;
+    yd[i + 6] = y6 - x6;
+    yd[i + 7] = y7 - x7;
+  }
+  for (; i < n; i++) yd[i] = yd[i] - xd[i];
+  #endif
+  ```)
+;;; f32vec-mul! -- dst[i] *= src[i] for every i (same length, or a panic).
+;;;
+;;; Element-wise, not a dot product.  Integer arithmetic wraps; dst and
+;;; src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array multiplied in (borrowed)
+;;;
+;;; Example:
+;;;   (f32vec-mul! y x)
+;;;
+;;; Since: Phase N1
+
+(defn f32vec-mul! [^borrow dst : F32Vec ^borrow src : F32Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; float *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; float *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("f32vec-mul!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  float *yd = y->data;
+  const float *xd = x->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) yd[i] = yd[i] * xd[i];
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    float y0 = yd[i], x0 = xd[i];
+    float y1 = yd[i + 1], x1 = xd[i + 1];
+    float y2 = yd[i + 2], x2 = xd[i + 2];
+    float y3 = yd[i + 3], x3 = xd[i + 3];
+    float y4 = yd[i + 4], x4 = xd[i + 4];
+    float y5 = yd[i + 5], x5 = xd[i + 5];
+    float y6 = yd[i + 6], x6 = xd[i + 6];
+    float y7 = yd[i + 7], x7 = xd[i + 7];
+    yd[i] = y0 * x0;
+    yd[i + 1] = y1 * x1;
+    yd[i + 2] = y2 * x2;
+    yd[i + 3] = y3 * x3;
+    yd[i + 4] = y4 * x4;
+    yd[i + 5] = y5 * x5;
+    yd[i + 6] = y6 * x6;
+    yd[i + 7] = y7 * x7;
+  }
+  for (; i < n; i++) yd[i] = yd[i] * xd[i];
+  #endif
+  ```)
+;;; f32vec-add-scalar! -- add s to every element, in place.
+;;;
+;;; Integer arithmetic wraps.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   s -- the value added
+;;;
+;;; Example:
+;;;   (f32vec-add-scalar! v (:: 2.5 float32))
+;;;
+;;; Since: Phase N1
+
+(defn f32vec-add-scalar! [^borrow v : F32Vec s : float32]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  float *d = a->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) d[i] = d[i] + s;
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    d[i] = d[i] + s;
+    d[i + 1] = d[i + 1] + s;
+    d[i + 2] = d[i + 2] + s;
+    d[i + 3] = d[i + 3] + s;
+    d[i + 4] = d[i + 4] + s;
+    d[i + 5] = d[i + 5] + s;
+    d[i + 6] = d[i + 6] + s;
+    d[i + 7] = d[i + 7] + s;
+  }
+  for (; i < n; i++) d[i] = d[i] + s;
+  #endif
+  ```)
 ;;; f32vec-sum -- the sum of the elements.
 ;;;
 ;;; A float sum is computed in eight interleaved partial sums (lane k
@@ -1796,6 +2255,79 @@
   struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
   a->data[i] = x;
   ```)
+;;; f32vec-view -- a view of v's elements, for a loop that stores into it.
+;;;
+;;; `#fx{Unsafe}`: nothing ties the view to the array, so a view used after
+;;; the array is freed reads freed memory.  Why it exists: a store through
+;;; the array (`-set-unchecked!`) re-reads the header's data pointer, which
+;;; the store might have overwritten as far as the C compiler knows, so the
+;;; loop does not vectorize; a view is that pointer, read once.  `-build`
+;;; and `-map!` store through one; reach for it directly only for a store
+;;; loop they do not cover.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed); the view is valid while v is
+;;;
+;;; Returns:
+;;;   A F32View.
+;;;
+;;; Example:
+;;;   (let [v (f32vec-of (:: 1.5 float32) (:: 2.5 float32)) w (unsafe (f32vec-view v))] (unsafe (f32vec-view-ref w 1)))   ; => (:: 2.5 float32)
+;;;
+;;; Since: Phase N2
+
+(defn f32vec-view [^borrow v : F32Vec]
+  #fx{Unsafe}
+  #reads v
+  : F32View
+  ```c
+  struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
+  return (int64_t)(intptr_t)a->data;
+  ```)
+;;; f32vec-view-ref -- the element at index i of a view, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  The interpreter checks
+;;; the index anyway, as it does for `-ref-unchecked`.
+;;;
+;;; Parameters:
+;;;   w -- the view
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;
+;;; Returns:
+;;;   A float32.
+;;;
+;;; Example:
+;;;   (unsafe (f32vec-view-ref w 0))
+;;;
+;;; Since: Phase N2
+
+(defn f32vec-view-ref [w : F32View i : int]
+  #fx{Unsafe}
+  : float32
+  ```c
+  return ((float *)(intptr_t)w)[i];
+  ```)
+;;; f32vec-view-set! -- store x at index i of a view, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no
+;;; TUR_REGION_NOTE.  The interpreter checks the index anyway.
+;;;
+;;; Parameters:
+;;;   w -- the view
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;   x -- the new element
+;;;
+;;; Example:
+;;;   (unsafe (f32vec-view-set! w 0 (:: 1.5 float32)))
+;;;
+;;; Since: Phase N2
+
+(defn f32vec-view-set! [w : F32View i : int x : float32]
+  #fx{Unsafe}
+  : nil
+  ```c
+  ((float *)(intptr_t)w)[i] = x;
+  ```)
 ;;; f32vec-for -- run body once per element of one or two F32Vecs.
 ;;;
 ;;; `(for [x v] body...)` binds x to each element of v in order;
@@ -1908,7 +2440,9 @@
 ;;; f32vec-build -- a fresh F32Vec of n elements, element i the value of expr.
 ;;;
 ;;; `(build n [i] expr)`, after Racket's `for/flvector`: i is bound to each
-;;; index in turn, and expr runs outside any `unsafe`.
+;;; index in turn, and expr runs outside any `unsafe`.  The stores go through a
+;;; view (`f32vec-view`), so the loop vectorizes where expr allows: at -O2 under
+;;; clang, at -O3 (`--release`) under gcc.
 ;;;
 ;;; Parameters:
 ;;;   n    -- the length (evaluated once)
@@ -1928,16 +2462,82 @@
         m   (gensym "n")
         e   (gensym "e")
         out (gensym "out")
+        w   (gensym "w")
         iv  (first bv)]
     `(let [~m      ~n
            ~out    (f32vec-new ~m (as float32 0.0))
+           ~w      (unsafe (f32vec-view ~out))
            ^mut ~i 0]
        (while (< ~i ~m)
          (let [~iv ~i
                ~e  ~expr]
-           (unsafe (f32vec-set-unchecked! ~out ~i ~e)))
+           (unsafe (f32vec-view-set! ~w ~i ~e)))
          (set! ~i (+ ~i 1)))
        ~out)))
+;;; f32vec-map! -- store expr into dst[i] for every i, x bound to src[i].
+;;;
+;;; `(map! dst [x src] expr)` stores into each slot of dst the value of expr
+;;; with x bound to the element of src at the same index; `(map! dst [x a y b]
+;;; expr)` walks two sources together.  dst may be one of the sources:
+;;; `(map! v [x v] {x * 2})` maps in place.  Every array has the same length,
+;;; or a panic before the first element.  The loop reads and stores through
+;;; views (`f32vec-view`), so it vectorizes where expr allows: at -O2 under clang,
+;;; at -O3 (`--release`) under gcc.  expr runs outside any `unsafe`; an array
+;;; argument that is not a name is evaluated once, and freed after the loop.
+;;;
+;;; Parameters:
+;;;   dst      -- the array stored into (borrowed)
+;;;   bindings -- `[x src]` or `[x a y b]`
+;;;   expr     -- the new element, of type float32
+;;;
+;;; Example:
+;;;   (let [v (f32vec-of (:: 1.5 float32) (:: 2.5 float32))] (f32vec-map! v [x v] x) (f32vec-ref v 1))   ; => (:: 2.5 float32)
+;;;
+;;; Since: Phase N2
+
+(defmacro f32vec-map! [dst bv expr]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        e    (gensym "e")
+        wd   (gensym "wd")
+        wa   (gensym "wa")
+        wb   (gensym "wb")
+        x    (first bv)
+        a    (second bv)
+        more (rest (rest bv))]
+    (if (list? dst)
+      (let [t (gensym "nv")] `(let [~t ~dst] (f32vec-map! ~t ~bv ~expr)))
+      (if (list? a)
+        (let [t (gensym "nv")]
+          `(let [~t ~a] (f32vec-map! ~dst [~x ~t ~@more] ~expr)))
+        (if (empty? more)
+          `(let [~n      (f32vec-same-len__ ~dst ~a)
+                 ~wd     (unsafe (f32vec-view ~dst))
+                 ~wa     (unsafe (f32vec-view ~a))
+                 ^mut ~i 0]
+             (while (< ~i ~n)
+               (let [~x (unsafe (f32vec-view-ref ~wa ~i))
+                     ~e ~expr]
+                 (unsafe (f32vec-view-set! ~wd ~i ~e)))
+               (set! ~i (+ ~i 1))))
+          (let [y (first more)
+                b (second more)]
+            (if (list? b)
+              (let [t (gensym "nv")]
+                `(let [~t ~b] (f32vec-map! ~dst [~x ~a ~y ~t] ~expr)))
+              `(let [~n      (do
+                               (f32vec-same-len__ ~a ~b)
+                               (f32vec-same-len__ ~dst ~a))
+                     ~wd     (unsafe (f32vec-view ~dst))
+                     ~wa     (unsafe (f32vec-view ~a))
+                     ~wb     (unsafe (f32vec-view ~b))
+                     ^mut ~i 0]
+                 (while (< ~i ~n)
+                   (let [~x (unsafe (f32vec-view-ref ~wa ~i))
+                         ~y (unsafe (f32vec-view-ref ~wb ~i))
+                         ~e ~expr]
+                     (unsafe (f32vec-view-set! ~wd ~i ~e)))
+                   (set! ~i (+ ~i 1)))))))))))
 ;;; f32vec-same-len__ -- internal: the common length of two arrays, or a panic.
 
 (defn f32vec-same-len__ [^borrow a : F32Vec ^borrow b : F32Vec]
@@ -1962,6 +2562,14 @@
 ;;;
 ;;; Since: Phase N0
 (defopaque ^affine I64Vec :int)
+;;; I64View -- a view of a I64Vec's elements: the data pointer, for a store loop.
+;;;
+;;; Made by `i64vec-view`, read and written by `i64vec-view-ref` / `i64vec-view-set!`.
+;;; Not owned and not affine: it frees nothing, and it is valid exactly as long
+;;; as the array it came from (an array never resizes, so its data never moves).
+;;;
+;;; Since: Phase N2
+(defopaque I64View :int)
 ;; Every operation that touches the header is an inline-C body of its own,
 ;; never a Turmeric wrapper over a raw one, so a panic is reported at the
 ;; CALLER's line (as vec-get's is) and turi's natives are keyed by the public
@@ -2433,6 +3041,154 @@
   for (; i < n; i++) { uint64_t m = (uint64_t)s * (uint64_t)xd[i]; yd[i] = (int64_t)((uint64_t)yd[i] + m); }
   #endif
   ```)
+;;; i64vec-sub! -- dst[i] -= src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; dst and src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array subtracted (borrowed)
+;;;
+;;; Example:
+;;;   (i64vec-sub! y x)
+;;;
+;;; Since: Phase N1
+
+(defn i64vec-sub! [^borrow dst : I64Vec ^borrow src : I64Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; int64_t *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("i64vec-sub!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  int64_t *yd = y->data;
+  const int64_t *xd = x->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) yd[i] = (int64_t)((uint64_t)yd[i] - (uint64_t)xd[i]);
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    int64_t y0 = yd[i], x0 = xd[i];
+    int64_t y1 = yd[i + 1], x1 = xd[i + 1];
+    int64_t y2 = yd[i + 2], x2 = xd[i + 2];
+    int64_t y3 = yd[i + 3], x3 = xd[i + 3];
+    int64_t y4 = yd[i + 4], x4 = xd[i + 4];
+    int64_t y5 = yd[i + 5], x5 = xd[i + 5];
+    int64_t y6 = yd[i + 6], x6 = xd[i + 6];
+    int64_t y7 = yd[i + 7], x7 = xd[i + 7];
+    yd[i] = (int64_t)((uint64_t)y0 - (uint64_t)x0);
+    yd[i + 1] = (int64_t)((uint64_t)y1 - (uint64_t)x1);
+    yd[i + 2] = (int64_t)((uint64_t)y2 - (uint64_t)x2);
+    yd[i + 3] = (int64_t)((uint64_t)y3 - (uint64_t)x3);
+    yd[i + 4] = (int64_t)((uint64_t)y4 - (uint64_t)x4);
+    yd[i + 5] = (int64_t)((uint64_t)y5 - (uint64_t)x5);
+    yd[i + 6] = (int64_t)((uint64_t)y6 - (uint64_t)x6);
+    yd[i + 7] = (int64_t)((uint64_t)y7 - (uint64_t)x7);
+  }
+  for (; i < n; i++) yd[i] = (int64_t)((uint64_t)yd[i] - (uint64_t)xd[i]);
+  #endif
+  ```)
+;;; i64vec-mul! -- dst[i] *= src[i] for every i (same length, or a panic).
+;;;
+;;; Element-wise, not a dot product.  Integer arithmetic wraps; dst and
+;;; src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array multiplied in (borrowed)
+;;;
+;;; Example:
+;;;   (i64vec-mul! y x)
+;;;
+;;; Since: Phase N1
+
+(defn i64vec-mul! [^borrow dst : I64Vec ^borrow src : I64Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; int64_t *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("i64vec-mul!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  int64_t *yd = y->data;
+  const int64_t *xd = x->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) yd[i] = (int64_t)((uint64_t)yd[i] * (uint64_t)xd[i]);
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    int64_t y0 = yd[i], x0 = xd[i];
+    int64_t y1 = yd[i + 1], x1 = xd[i + 1];
+    int64_t y2 = yd[i + 2], x2 = xd[i + 2];
+    int64_t y3 = yd[i + 3], x3 = xd[i + 3];
+    int64_t y4 = yd[i + 4], x4 = xd[i + 4];
+    int64_t y5 = yd[i + 5], x5 = xd[i + 5];
+    int64_t y6 = yd[i + 6], x6 = xd[i + 6];
+    int64_t y7 = yd[i + 7], x7 = xd[i + 7];
+    yd[i] = (int64_t)((uint64_t)y0 * (uint64_t)x0);
+    yd[i + 1] = (int64_t)((uint64_t)y1 * (uint64_t)x1);
+    yd[i + 2] = (int64_t)((uint64_t)y2 * (uint64_t)x2);
+    yd[i + 3] = (int64_t)((uint64_t)y3 * (uint64_t)x3);
+    yd[i + 4] = (int64_t)((uint64_t)y4 * (uint64_t)x4);
+    yd[i + 5] = (int64_t)((uint64_t)y5 * (uint64_t)x5);
+    yd[i + 6] = (int64_t)((uint64_t)y6 * (uint64_t)x6);
+    yd[i + 7] = (int64_t)((uint64_t)y7 * (uint64_t)x7);
+  }
+  for (; i < n; i++) yd[i] = (int64_t)((uint64_t)yd[i] * (uint64_t)xd[i]);
+  #endif
+  ```)
+;;; i64vec-add-scalar! -- add s to every element, in place.
+;;;
+;;; Integer arithmetic wraps.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   s -- the value added
+;;;
+;;; Example:
+;;;   (i64vec-add-scalar! v 2)
+;;;
+;;; Since: Phase N1
+
+(defn i64vec-add-scalar! [^borrow v : I64Vec s : int]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  int64_t *d = a->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) d[i] = (int64_t)((uint64_t)d[i] + (uint64_t)s);
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    d[i] = (int64_t)((uint64_t)d[i] + (uint64_t)s);
+    d[i + 1] = (int64_t)((uint64_t)d[i + 1] + (uint64_t)s);
+    d[i + 2] = (int64_t)((uint64_t)d[i + 2] + (uint64_t)s);
+    d[i + 3] = (int64_t)((uint64_t)d[i + 3] + (uint64_t)s);
+    d[i + 4] = (int64_t)((uint64_t)d[i + 4] + (uint64_t)s);
+    d[i + 5] = (int64_t)((uint64_t)d[i + 5] + (uint64_t)s);
+    d[i + 6] = (int64_t)((uint64_t)d[i + 6] + (uint64_t)s);
+    d[i + 7] = (int64_t)((uint64_t)d[i + 7] + (uint64_t)s);
+  }
+  for (; i < n; i++) d[i] = (int64_t)((uint64_t)d[i] + (uint64_t)s);
+  #endif
+  ```)
 ;;; i64vec-sum -- the sum of the elements.
 ;;;
 ;;; A float sum is computed in eight interleaved partial sums (lane k
@@ -2680,6 +3436,79 @@
   struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
   a->data[i] = x;
   ```)
+;;; i64vec-view -- a view of v's elements, for a loop that stores into it.
+;;;
+;;; `#fx{Unsafe}`: nothing ties the view to the array, so a view used after
+;;; the array is freed reads freed memory.  Why it exists: a store through
+;;; the array (`-set-unchecked!`) re-reads the header's data pointer, which
+;;; the store might have overwritten as far as the C compiler knows, so the
+;;; loop does not vectorize; a view is that pointer, read once.  `-build`
+;;; and `-map!` store through one; reach for it directly only for a store
+;;; loop they do not cover.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed); the view is valid while v is
+;;;
+;;; Returns:
+;;;   A I64View.
+;;;
+;;; Example:
+;;;   (let [v (i64vec-of 1 2) w (unsafe (i64vec-view v))] (unsafe (i64vec-view-ref w 1)))   ; => 2
+;;;
+;;; Since: Phase N2
+
+(defn i64vec-view [^borrow v : I64Vec]
+  #fx{Unsafe}
+  #reads v
+  : I64View
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  return (int64_t)(intptr_t)a->data;
+  ```)
+;;; i64vec-view-ref -- the element at index i of a view, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  The interpreter checks
+;;; the index anyway, as it does for `-ref-unchecked`.
+;;;
+;;; Parameters:
+;;;   w -- the view
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;
+;;; Returns:
+;;;   A int.
+;;;
+;;; Example:
+;;;   (unsafe (i64vec-view-ref w 0))
+;;;
+;;; Since: Phase N2
+
+(defn i64vec-view-ref [w : I64View i : int]
+  #fx{Unsafe}
+  : int
+  ```c
+  return ((int64_t *)(intptr_t)w)[i];
+  ```)
+;;; i64vec-view-set! -- store x at index i of a view, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no
+;;; TUR_REGION_NOTE.  The interpreter checks the index anyway.
+;;;
+;;; Parameters:
+;;;   w -- the view
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;   x -- the new element
+;;;
+;;; Example:
+;;;   (unsafe (i64vec-view-set! w 0 1))
+;;;
+;;; Since: Phase N2
+
+(defn i64vec-view-set! [w : I64View i : int x : int]
+  #fx{Unsafe}
+  : nil
+  ```c
+  ((int64_t *)(intptr_t)w)[i] = x;
+  ```)
 ;;; i64vec-for -- run body once per element of one or two I64Vecs.
 ;;;
 ;;; `(for [x v] body...)` binds x to each element of v in order;
@@ -2792,7 +3621,9 @@
 ;;; i64vec-build -- a fresh I64Vec of n elements, element i the value of expr.
 ;;;
 ;;; `(build n [i] expr)`, after Racket's `for/flvector`: i is bound to each
-;;; index in turn, and expr runs outside any `unsafe`.
+;;; index in turn, and expr runs outside any `unsafe`.  The stores go through a
+;;; view (`i64vec-view`), so the loop vectorizes where expr allows: at -O2 under
+;;; clang, at -O3 (`--release`) under gcc.
 ;;;
 ;;; Parameters:
 ;;;   n    -- the length (evaluated once)
@@ -2812,16 +3643,82 @@
         m   (gensym "n")
         e   (gensym "e")
         out (gensym "out")
+        w   (gensym "w")
         iv  (first bv)]
     `(let [~m      ~n
            ~out    (i64vec-new ~m 0)
+           ~w      (unsafe (i64vec-view ~out))
            ^mut ~i 0]
        (while (< ~i ~m)
          (let [~iv ~i
                ~e  ~expr]
-           (unsafe (i64vec-set-unchecked! ~out ~i ~e)))
+           (unsafe (i64vec-view-set! ~w ~i ~e)))
          (set! ~i (+ ~i 1)))
        ~out)))
+;;; i64vec-map! -- store expr into dst[i] for every i, x bound to src[i].
+;;;
+;;; `(map! dst [x src] expr)` stores into each slot of dst the value of expr
+;;; with x bound to the element of src at the same index; `(map! dst [x a y b]
+;;; expr)` walks two sources together.  dst may be one of the sources:
+;;; `(map! v [x v] {x * 2})` maps in place.  Every array has the same length,
+;;; or a panic before the first element.  The loop reads and stores through
+;;; views (`i64vec-view`), so it vectorizes where expr allows: at -O2 under clang,
+;;; at -O3 (`--release`) under gcc.  expr runs outside any `unsafe`; an array
+;;; argument that is not a name is evaluated once, and freed after the loop.
+;;;
+;;; Parameters:
+;;;   dst      -- the array stored into (borrowed)
+;;;   bindings -- `[x src]` or `[x a y b]`
+;;;   expr     -- the new element, of type int
+;;;
+;;; Example:
+;;;   (let [v (i64vec-of 1 2)] (i64vec-map! v [x v] x) (i64vec-ref v 1))   ; => 2
+;;;
+;;; Since: Phase N2
+
+(defmacro i64vec-map! [dst bv expr]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        e    (gensym "e")
+        wd   (gensym "wd")
+        wa   (gensym "wa")
+        wb   (gensym "wb")
+        x    (first bv)
+        a    (second bv)
+        more (rest (rest bv))]
+    (if (list? dst)
+      (let [t (gensym "nv")] `(let [~t ~dst] (i64vec-map! ~t ~bv ~expr)))
+      (if (list? a)
+        (let [t (gensym "nv")]
+          `(let [~t ~a] (i64vec-map! ~dst [~x ~t ~@more] ~expr)))
+        (if (empty? more)
+          `(let [~n      (i64vec-same-len__ ~dst ~a)
+                 ~wd     (unsafe (i64vec-view ~dst))
+                 ~wa     (unsafe (i64vec-view ~a))
+                 ^mut ~i 0]
+             (while (< ~i ~n)
+               (let [~x (unsafe (i64vec-view-ref ~wa ~i))
+                     ~e ~expr]
+                 (unsafe (i64vec-view-set! ~wd ~i ~e)))
+               (set! ~i (+ ~i 1))))
+          (let [y (first more)
+                b (second more)]
+            (if (list? b)
+              (let [t (gensym "nv")]
+                `(let [~t ~b] (i64vec-map! ~dst [~x ~a ~y ~t] ~expr)))
+              `(let [~n      (do
+                               (i64vec-same-len__ ~a ~b)
+                               (i64vec-same-len__ ~dst ~a))
+                     ~wd     (unsafe (i64vec-view ~dst))
+                     ~wa     (unsafe (i64vec-view ~a))
+                     ~wb     (unsafe (i64vec-view ~b))
+                     ^mut ~i 0]
+                 (while (< ~i ~n)
+                   (let [~x (unsafe (i64vec-view-ref ~wa ~i))
+                         ~y (unsafe (i64vec-view-ref ~wb ~i))
+                         ~e ~expr]
+                     (unsafe (i64vec-view-set! ~wd ~i ~e)))
+                   (set! ~i (+ ~i 1)))))))))))
 ;;; i64vec-same-len__ -- internal: the common length of two arrays, or a panic.
 
 (defn i64vec-same-len__ [^borrow a : I64Vec ^borrow b : I64Vec]
@@ -2846,6 +3743,14 @@
 ;;;
 ;;; Since: Phase N0
 (defopaque ^affine I32Vec :int)
+;;; I32View -- a view of a I32Vec's elements: the data pointer, for a store loop.
+;;;
+;;; Made by `i32vec-view`, read and written by `i32vec-view-ref` / `i32vec-view-set!`.
+;;; Not owned and not affine: it frees nothing, and it is valid exactly as long
+;;; as the array it came from (an array never resizes, so its data never moves).
+;;;
+;;; Since: Phase N2
+(defopaque I32View :int)
 ;; Every operation that touches the header is an inline-C body of its own,
 ;; never a Turmeric wrapper over a raw one, so a panic is reported at the
 ;; CALLER's line (as vec-get's is) and turi's natives are keyed by the public
@@ -3318,6 +4223,154 @@
   for (; i < n; i++) { uint32_t m = (uint32_t)s * (uint32_t)xd[i]; yd[i] = (int32_t)((uint32_t)yd[i] + m); }
   #endif
   ```)
+;;; i32vec-sub! -- dst[i] -= src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; dst and src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array subtracted (borrowed)
+;;;
+;;; Example:
+;;;   (i32vec-sub! y x)
+;;;
+;;; Since: Phase N1
+
+(defn i32vec-sub! [^borrow dst : I32Vec ^borrow src : I32Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; int32_t *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("i32vec-sub!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  int32_t *yd = y->data;
+  const int32_t *xd = x->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) yd[i] = (int32_t)((uint32_t)yd[i] - (uint32_t)xd[i]);
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    int32_t y0 = yd[i], x0 = xd[i];
+    int32_t y1 = yd[i + 1], x1 = xd[i + 1];
+    int32_t y2 = yd[i + 2], x2 = xd[i + 2];
+    int32_t y3 = yd[i + 3], x3 = xd[i + 3];
+    int32_t y4 = yd[i + 4], x4 = xd[i + 4];
+    int32_t y5 = yd[i + 5], x5 = xd[i + 5];
+    int32_t y6 = yd[i + 6], x6 = xd[i + 6];
+    int32_t y7 = yd[i + 7], x7 = xd[i + 7];
+    yd[i] = (int32_t)((uint32_t)y0 - (uint32_t)x0);
+    yd[i + 1] = (int32_t)((uint32_t)y1 - (uint32_t)x1);
+    yd[i + 2] = (int32_t)((uint32_t)y2 - (uint32_t)x2);
+    yd[i + 3] = (int32_t)((uint32_t)y3 - (uint32_t)x3);
+    yd[i + 4] = (int32_t)((uint32_t)y4 - (uint32_t)x4);
+    yd[i + 5] = (int32_t)((uint32_t)y5 - (uint32_t)x5);
+    yd[i + 6] = (int32_t)((uint32_t)y6 - (uint32_t)x6);
+    yd[i + 7] = (int32_t)((uint32_t)y7 - (uint32_t)x7);
+  }
+  for (; i < n; i++) yd[i] = (int32_t)((uint32_t)yd[i] - (uint32_t)xd[i]);
+  #endif
+  ```)
+;;; i32vec-mul! -- dst[i] *= src[i] for every i (same length, or a panic).
+;;;
+;;; Element-wise, not a dot product.  Integer arithmetic wraps; dst and
+;;; src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array multiplied in (borrowed)
+;;;
+;;; Example:
+;;;   (i32vec-mul! y x)
+;;;
+;;; Since: Phase N1
+
+(defn i32vec-mul! [^borrow dst : I32Vec ^borrow src : I32Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; int32_t *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("i32vec-mul!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  int32_t *yd = y->data;
+  const int32_t *xd = x->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) yd[i] = (int32_t)((uint32_t)yd[i] * (uint32_t)xd[i]);
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    int32_t y0 = yd[i], x0 = xd[i];
+    int32_t y1 = yd[i + 1], x1 = xd[i + 1];
+    int32_t y2 = yd[i + 2], x2 = xd[i + 2];
+    int32_t y3 = yd[i + 3], x3 = xd[i + 3];
+    int32_t y4 = yd[i + 4], x4 = xd[i + 4];
+    int32_t y5 = yd[i + 5], x5 = xd[i + 5];
+    int32_t y6 = yd[i + 6], x6 = xd[i + 6];
+    int32_t y7 = yd[i + 7], x7 = xd[i + 7];
+    yd[i] = (int32_t)((uint32_t)y0 * (uint32_t)x0);
+    yd[i + 1] = (int32_t)((uint32_t)y1 * (uint32_t)x1);
+    yd[i + 2] = (int32_t)((uint32_t)y2 * (uint32_t)x2);
+    yd[i + 3] = (int32_t)((uint32_t)y3 * (uint32_t)x3);
+    yd[i + 4] = (int32_t)((uint32_t)y4 * (uint32_t)x4);
+    yd[i + 5] = (int32_t)((uint32_t)y5 * (uint32_t)x5);
+    yd[i + 6] = (int32_t)((uint32_t)y6 * (uint32_t)x6);
+    yd[i + 7] = (int32_t)((uint32_t)y7 * (uint32_t)x7);
+  }
+  for (; i < n; i++) yd[i] = (int32_t)((uint32_t)yd[i] * (uint32_t)xd[i]);
+  #endif
+  ```)
+;;; i32vec-add-scalar! -- add s to every element, in place.
+;;;
+;;; Integer arithmetic wraps.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   s -- the value added
+;;;
+;;; Example:
+;;;   (i32vec-add-scalar! v (as int32 2))
+;;;
+;;; Since: Phase N1
+
+(defn i32vec-add-scalar! [^borrow v : I32Vec s : int32]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  int32_t *d = a->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) d[i] = (int32_t)((uint32_t)d[i] + (uint32_t)s);
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    d[i] = (int32_t)((uint32_t)d[i] + (uint32_t)s);
+    d[i + 1] = (int32_t)((uint32_t)d[i + 1] + (uint32_t)s);
+    d[i + 2] = (int32_t)((uint32_t)d[i + 2] + (uint32_t)s);
+    d[i + 3] = (int32_t)((uint32_t)d[i + 3] + (uint32_t)s);
+    d[i + 4] = (int32_t)((uint32_t)d[i + 4] + (uint32_t)s);
+    d[i + 5] = (int32_t)((uint32_t)d[i + 5] + (uint32_t)s);
+    d[i + 6] = (int32_t)((uint32_t)d[i + 6] + (uint32_t)s);
+    d[i + 7] = (int32_t)((uint32_t)d[i + 7] + (uint32_t)s);
+  }
+  for (; i < n; i++) d[i] = (int32_t)((uint32_t)d[i] + (uint32_t)s);
+  #endif
+  ```)
 ;;; i32vec-sum -- the sum of the elements.
 ;;;
 ;;; A float sum is computed in eight interleaved partial sums (lane k
@@ -3565,6 +4618,79 @@
   struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
   a->data[i] = x;
   ```)
+;;; i32vec-view -- a view of v's elements, for a loop that stores into it.
+;;;
+;;; `#fx{Unsafe}`: nothing ties the view to the array, so a view used after
+;;; the array is freed reads freed memory.  Why it exists: a store through
+;;; the array (`-set-unchecked!`) re-reads the header's data pointer, which
+;;; the store might have overwritten as far as the C compiler knows, so the
+;;; loop does not vectorize; a view is that pointer, read once.  `-build`
+;;; and `-map!` store through one; reach for it directly only for a store
+;;; loop they do not cover.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed); the view is valid while v is
+;;;
+;;; Returns:
+;;;   A I32View.
+;;;
+;;; Example:
+;;;   (let [v (i32vec-of (as int32 1) (as int32 2)) w (unsafe (i32vec-view v))] (unsafe (i32vec-view-ref w 1)))   ; => (as int32 2)
+;;;
+;;; Since: Phase N2
+
+(defn i32vec-view [^borrow v : I32Vec]
+  #fx{Unsafe}
+  #reads v
+  : I32View
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  return (int64_t)(intptr_t)a->data;
+  ```)
+;;; i32vec-view-ref -- the element at index i of a view, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  The interpreter checks
+;;; the index anyway, as it does for `-ref-unchecked`.
+;;;
+;;; Parameters:
+;;;   w -- the view
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;
+;;; Returns:
+;;;   A int32.
+;;;
+;;; Example:
+;;;   (unsafe (i32vec-view-ref w 0))
+;;;
+;;; Since: Phase N2
+
+(defn i32vec-view-ref [w : I32View i : int]
+  #fx{Unsafe}
+  : int32
+  ```c
+  return ((int32_t *)(intptr_t)w)[i];
+  ```)
+;;; i32vec-view-set! -- store x at index i of a view, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no
+;;; TUR_REGION_NOTE.  The interpreter checks the index anyway.
+;;;
+;;; Parameters:
+;;;   w -- the view
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;   x -- the new element
+;;;
+;;; Example:
+;;;   (unsafe (i32vec-view-set! w 0 (as int32 1)))
+;;;
+;;; Since: Phase N2
+
+(defn i32vec-view-set! [w : I32View i : int x : int32]
+  #fx{Unsafe}
+  : nil
+  ```c
+  ((int32_t *)(intptr_t)w)[i] = x;
+  ```)
 ;;; i32vec-for -- run body once per element of one or two I32Vecs.
 ;;;
 ;;; `(for [x v] body...)` binds x to each element of v in order;
@@ -3677,7 +4803,9 @@
 ;;; i32vec-build -- a fresh I32Vec of n elements, element i the value of expr.
 ;;;
 ;;; `(build n [i] expr)`, after Racket's `for/flvector`: i is bound to each
-;;; index in turn, and expr runs outside any `unsafe`.
+;;; index in turn, and expr runs outside any `unsafe`.  The stores go through a
+;;; view (`i32vec-view`), so the loop vectorizes where expr allows: at -O2 under
+;;; clang, at -O3 (`--release`) under gcc.
 ;;;
 ;;; Parameters:
 ;;;   n    -- the length (evaluated once)
@@ -3697,16 +4825,82 @@
         m   (gensym "n")
         e   (gensym "e")
         out (gensym "out")
+        w   (gensym "w")
         iv  (first bv)]
     `(let [~m      ~n
            ~out    (i32vec-new ~m (as int32 0))
+           ~w      (unsafe (i32vec-view ~out))
            ^mut ~i 0]
        (while (< ~i ~m)
          (let [~iv ~i
                ~e  ~expr]
-           (unsafe (i32vec-set-unchecked! ~out ~i ~e)))
+           (unsafe (i32vec-view-set! ~w ~i ~e)))
          (set! ~i (+ ~i 1)))
        ~out)))
+;;; i32vec-map! -- store expr into dst[i] for every i, x bound to src[i].
+;;;
+;;; `(map! dst [x src] expr)` stores into each slot of dst the value of expr
+;;; with x bound to the element of src at the same index; `(map! dst [x a y b]
+;;; expr)` walks two sources together.  dst may be one of the sources:
+;;; `(map! v [x v] {x * 2})` maps in place.  Every array has the same length,
+;;; or a panic before the first element.  The loop reads and stores through
+;;; views (`i32vec-view`), so it vectorizes where expr allows: at -O2 under clang,
+;;; at -O3 (`--release`) under gcc.  expr runs outside any `unsafe`; an array
+;;; argument that is not a name is evaluated once, and freed after the loop.
+;;;
+;;; Parameters:
+;;;   dst      -- the array stored into (borrowed)
+;;;   bindings -- `[x src]` or `[x a y b]`
+;;;   expr     -- the new element, of type int32
+;;;
+;;; Example:
+;;;   (let [v (i32vec-of (as int32 1) (as int32 2))] (i32vec-map! v [x v] x) (i32vec-ref v 1))   ; => (as int32 2)
+;;;
+;;; Since: Phase N2
+
+(defmacro i32vec-map! [dst bv expr]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        e    (gensym "e")
+        wd   (gensym "wd")
+        wa   (gensym "wa")
+        wb   (gensym "wb")
+        x    (first bv)
+        a    (second bv)
+        more (rest (rest bv))]
+    (if (list? dst)
+      (let [t (gensym "nv")] `(let [~t ~dst] (i32vec-map! ~t ~bv ~expr)))
+      (if (list? a)
+        (let [t (gensym "nv")]
+          `(let [~t ~a] (i32vec-map! ~dst [~x ~t ~@more] ~expr)))
+        (if (empty? more)
+          `(let [~n      (i32vec-same-len__ ~dst ~a)
+                 ~wd     (unsafe (i32vec-view ~dst))
+                 ~wa     (unsafe (i32vec-view ~a))
+                 ^mut ~i 0]
+             (while (< ~i ~n)
+               (let [~x (unsafe (i32vec-view-ref ~wa ~i))
+                     ~e ~expr]
+                 (unsafe (i32vec-view-set! ~wd ~i ~e)))
+               (set! ~i (+ ~i 1))))
+          (let [y (first more)
+                b (second more)]
+            (if (list? b)
+              (let [t (gensym "nv")]
+                `(let [~t ~b] (i32vec-map! ~dst [~x ~a ~y ~t] ~expr)))
+              `(let [~n      (do
+                               (i32vec-same-len__ ~a ~b)
+                               (i32vec-same-len__ ~dst ~a))
+                     ~wd     (unsafe (i32vec-view ~dst))
+                     ~wa     (unsafe (i32vec-view ~a))
+                     ~wb     (unsafe (i32vec-view ~b))
+                     ^mut ~i 0]
+                 (while (< ~i ~n)
+                   (let [~x (unsafe (i32vec-view-ref ~wa ~i))
+                         ~y (unsafe (i32vec-view-ref ~wb ~i))
+                         ~e ~expr]
+                     (unsafe (i32vec-view-set! ~wd ~i ~e)))
+                   (set! ~i (+ ~i 1)))))))))))
 ;;; i32vec-same-len__ -- internal: the common length of two arrays, or a panic.
 
 (defn i32vec-same-len__ [^borrow a : I32Vec ^borrow b : I32Vec]
@@ -3731,6 +4925,14 @@
 ;;;
 ;;; Since: Phase N0
 (defopaque ^affine U8Vec :int)
+;;; U8View -- a view of a U8Vec's elements: the data pointer, for a store loop.
+;;;
+;;; Made by `u8vec-view`, read and written by `u8vec-view-ref` / `u8vec-view-set!`.
+;;; Not owned and not affine: it frees nothing, and it is valid exactly as long
+;;; as the array it came from (an array never resizes, so its data never moves).
+;;;
+;;; Since: Phase N2
+(defopaque U8View :int)
 ;; Every operation that touches the header is an inline-C body of its own,
 ;; never a Turmeric wrapper over a raw one, so a panic is reported at the
 ;; CALLER's line (as vec-get's is) and turi's natives are keyed by the public
@@ -4101,6 +5303,99 @@
   for (; i < n; i++) yd[i] = (uint8_t)((uint8_t)yd[i] + (uint8_t)xd[i]);
   #endif
   ```)
+;;; u8vec-sub! -- dst[i] -= src[i] for every i (same length, or a panic).
+;;;
+;;; Integer arithmetic wraps; dst and src may be the same array.
+;;;
+;;; Parameters:
+;;;   dst -- the array updated (borrowed)
+;;;   src -- the array subtracted (borrowed)
+;;;
+;;; Example:
+;;;   (u8vec-sub! y x)
+;;;
+;;; Since: Phase N1
+
+(defn u8vec-sub! [^borrow dst : U8Vec ^borrow src : U8Vec]
+  #fx{}
+  #writes dst
+  #reads src
+  : nil
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *y = (void*)(intptr_t)dst;
+  struct { int64_t len; uint8_t *data; void *raw; } *x = (void*)(intptr_t)src;
+  if (y->len != x->len) {
+      tur_panic("u8vec-sub!: length mismatch");
+      return;
+    }
+  int64_t n = y->len;
+  uint8_t *yd = y->data;
+  const uint8_t *xd = x->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) yd[i] = (uint8_t)((uint8_t)yd[i] - (uint8_t)xd[i]);
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    uint8_t y0 = yd[i], x0 = xd[i];
+    uint8_t y1 = yd[i + 1], x1 = xd[i + 1];
+    uint8_t y2 = yd[i + 2], x2 = xd[i + 2];
+    uint8_t y3 = yd[i + 3], x3 = xd[i + 3];
+    uint8_t y4 = yd[i + 4], x4 = xd[i + 4];
+    uint8_t y5 = yd[i + 5], x5 = xd[i + 5];
+    uint8_t y6 = yd[i + 6], x6 = xd[i + 6];
+    uint8_t y7 = yd[i + 7], x7 = xd[i + 7];
+    yd[i] = (uint8_t)((uint8_t)y0 - (uint8_t)x0);
+    yd[i + 1] = (uint8_t)((uint8_t)y1 - (uint8_t)x1);
+    yd[i + 2] = (uint8_t)((uint8_t)y2 - (uint8_t)x2);
+    yd[i + 3] = (uint8_t)((uint8_t)y3 - (uint8_t)x3);
+    yd[i + 4] = (uint8_t)((uint8_t)y4 - (uint8_t)x4);
+    yd[i + 5] = (uint8_t)((uint8_t)y5 - (uint8_t)x5);
+    yd[i + 6] = (uint8_t)((uint8_t)y6 - (uint8_t)x6);
+    yd[i + 7] = (uint8_t)((uint8_t)y7 - (uint8_t)x7);
+  }
+  for (; i < n; i++) yd[i] = (uint8_t)((uint8_t)yd[i] - (uint8_t)xd[i]);
+  #endif
+  ```)
+;;; u8vec-add-scalar! -- add s to every element, in place.
+;;;
+;;; Integer arithmetic wraps.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed)
+;;;   s -- the value added
+;;;
+;;; Example:
+;;;   (u8vec-add-scalar! v (as uint8 2))
+;;;
+;;; Since: Phase N1
+
+(defn u8vec-add-scalar! [^borrow v : U8Vec s : uint8]
+  #fx{}
+  #writes v
+  : nil
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  int64_t n = a->len;
+  uint8_t *d = a->data;
+  /* clang vectorizes the plain loop; gcc -O2 only the written-out body */
+  #if defined(__clang__)
+  for (int64_t i = 0; i < n; i++) d[i] = (uint8_t)((uint8_t)d[i] + (uint8_t)s);
+  #else
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    d[i] = (uint8_t)((uint8_t)d[i] + (uint8_t)s);
+    d[i + 1] = (uint8_t)((uint8_t)d[i + 1] + (uint8_t)s);
+    d[i + 2] = (uint8_t)((uint8_t)d[i + 2] + (uint8_t)s);
+    d[i + 3] = (uint8_t)((uint8_t)d[i + 3] + (uint8_t)s);
+    d[i + 4] = (uint8_t)((uint8_t)d[i + 4] + (uint8_t)s);
+    d[i + 5] = (uint8_t)((uint8_t)d[i + 5] + (uint8_t)s);
+    d[i + 6] = (uint8_t)((uint8_t)d[i + 6] + (uint8_t)s);
+    d[i + 7] = (uint8_t)((uint8_t)d[i + 7] + (uint8_t)s);
+  }
+  for (; i < n; i++) d[i] = (uint8_t)((uint8_t)d[i] + (uint8_t)s);
+  #endif
+  ```)
 ;;; u8vec-sum -- the sum of the elements.
 ;;;
 ;;; A float sum is computed in eight interleaved partial sums (lane k
@@ -4308,6 +5603,79 @@
   struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
   a->data[i] = x;
   ```)
+;;; u8vec-view -- a view of v's elements, for a loop that stores into it.
+;;;
+;;; `#fx{Unsafe}`: nothing ties the view to the array, so a view used after
+;;; the array is freed reads freed memory.  Why it exists: a store through
+;;; the array (`-set-unchecked!`) re-reads the header's data pointer, which
+;;; the store might have overwritten as far as the C compiler knows, so the
+;;; loop does not vectorize; a view is that pointer, read once.  `-build`
+;;; and `-map!` store through one; reach for it directly only for a store
+;;; loop they do not cover.
+;;;
+;;; Parameters:
+;;;   v -- the array (borrowed); the view is valid while v is
+;;;
+;;; Returns:
+;;;   A U8View.
+;;;
+;;; Example:
+;;;   (let [v (u8vec-of (as uint8 1) (as uint8 2)) w (unsafe (u8vec-view v))] (unsafe (u8vec-view-ref w 1)))   ; => (as uint8 2)
+;;;
+;;; Since: Phase N2
+
+(defn u8vec-view [^borrow v : U8Vec]
+  #fx{Unsafe}
+  #reads v
+  : U8View
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  return (int64_t)(intptr_t)a->data;
+  ```)
+;;; u8vec-view-ref -- the element at index i of a view, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  The interpreter checks
+;;; the index anyway, as it does for `-ref-unchecked`.
+;;;
+;;; Parameters:
+;;;   w -- the view
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;
+;;; Returns:
+;;;   A uint8.
+;;;
+;;; Example:
+;;;   (unsafe (u8vec-view-ref w 0))
+;;;
+;;; Since: Phase N2
+
+(defn u8vec-view-ref [w : U8View i : int]
+  #fx{Unsafe}
+  : uint8
+  ```c
+  return ((uint8_t *)(intptr_t)w)[i];
+  ```)
+;;; u8vec-view-set! -- store x at index i of a view, NOT bounds-checked.
+;;;
+;;; `#fx{Unsafe}`: call it inside `(unsafe ...)`.  Stores a number: no
+;;; TUR_REGION_NOTE.  The interpreter checks the index anyway.
+;;;
+;;; Parameters:
+;;;   w -- the view
+;;;   i -- zero-based index; the caller proves 0 <= i < len
+;;;   x -- the new element
+;;;
+;;; Example:
+;;;   (unsafe (u8vec-view-set! w 0 (as uint8 1)))
+;;;
+;;; Since: Phase N2
+
+(defn u8vec-view-set! [w : U8View i : int x : uint8]
+  #fx{Unsafe}
+  : nil
+  ```c
+  ((uint8_t *)(intptr_t)w)[i] = x;
+  ```)
 ;;; u8vec-for -- run body once per element of one or two U8Vecs.
 ;;;
 ;;; `(for [x v] body...)` binds x to each element of v in order;
@@ -4420,7 +5788,9 @@
 ;;; u8vec-build -- a fresh U8Vec of n elements, element i the value of expr.
 ;;;
 ;;; `(build n [i] expr)`, after Racket's `for/flvector`: i is bound to each
-;;; index in turn, and expr runs outside any `unsafe`.
+;;; index in turn, and expr runs outside any `unsafe`.  The stores go through a
+;;; view (`u8vec-view`), so the loop vectorizes where expr allows: at -O2 under
+;;; clang, at -O3 (`--release`) under gcc.
 ;;;
 ;;; Parameters:
 ;;;   n    -- the length (evaluated once)
@@ -4440,16 +5810,82 @@
         m   (gensym "n")
         e   (gensym "e")
         out (gensym "out")
+        w   (gensym "w")
         iv  (first bv)]
     `(let [~m      ~n
            ~out    (u8vec-new ~m (as uint8 0))
+           ~w      (unsafe (u8vec-view ~out))
            ^mut ~i 0]
        (while (< ~i ~m)
          (let [~iv ~i
                ~e  ~expr]
-           (unsafe (u8vec-set-unchecked! ~out ~i ~e)))
+           (unsafe (u8vec-view-set! ~w ~i ~e)))
          (set! ~i (+ ~i 1)))
        ~out)))
+;;; u8vec-map! -- store expr into dst[i] for every i, x bound to src[i].
+;;;
+;;; `(map! dst [x src] expr)` stores into each slot of dst the value of expr
+;;; with x bound to the element of src at the same index; `(map! dst [x a y b]
+;;; expr)` walks two sources together.  dst may be one of the sources:
+;;; `(map! v [x v] {x * 2})` maps in place.  Every array has the same length,
+;;; or a panic before the first element.  The loop reads and stores through
+;;; views (`u8vec-view`), so it vectorizes where expr allows: at -O2 under clang,
+;;; at -O3 (`--release`) under gcc.  expr runs outside any `unsafe`; an array
+;;; argument that is not a name is evaluated once, and freed after the loop.
+;;;
+;;; Parameters:
+;;;   dst      -- the array stored into (borrowed)
+;;;   bindings -- `[x src]` or `[x a y b]`
+;;;   expr     -- the new element, of type uint8
+;;;
+;;; Example:
+;;;   (let [v (u8vec-of (as uint8 1) (as uint8 2))] (u8vec-map! v [x v] x) (u8vec-ref v 1))   ; => (as uint8 2)
+;;;
+;;; Since: Phase N2
+
+(defmacro u8vec-map! [dst bv expr]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        e    (gensym "e")
+        wd   (gensym "wd")
+        wa   (gensym "wa")
+        wb   (gensym "wb")
+        x    (first bv)
+        a    (second bv)
+        more (rest (rest bv))]
+    (if (list? dst)
+      (let [t (gensym "nv")] `(let [~t ~dst] (u8vec-map! ~t ~bv ~expr)))
+      (if (list? a)
+        (let [t (gensym "nv")]
+          `(let [~t ~a] (u8vec-map! ~dst [~x ~t ~@more] ~expr)))
+        (if (empty? more)
+          `(let [~n      (u8vec-same-len__ ~dst ~a)
+                 ~wd     (unsafe (u8vec-view ~dst))
+                 ~wa     (unsafe (u8vec-view ~a))
+                 ^mut ~i 0]
+             (while (< ~i ~n)
+               (let [~x (unsafe (u8vec-view-ref ~wa ~i))
+                     ~e ~expr]
+                 (unsafe (u8vec-view-set! ~wd ~i ~e)))
+               (set! ~i (+ ~i 1))))
+          (let [y (first more)
+                b (second more)]
+            (if (list? b)
+              (let [t (gensym "nv")]
+                `(let [~t ~b] (u8vec-map! ~dst [~x ~a ~y ~t] ~expr)))
+              `(let [~n      (do
+                               (u8vec-same-len__ ~a ~b)
+                               (u8vec-same-len__ ~dst ~a))
+                     ~wd     (unsafe (u8vec-view ~dst))
+                     ~wa     (unsafe (u8vec-view ~a))
+                     ~wb     (unsafe (u8vec-view ~b))
+                     ^mut ~i 0]
+                 (while (< ~i ~n)
+                   (let [~x (unsafe (u8vec-view-ref ~wa ~i))
+                         ~y (unsafe (u8vec-view-ref ~wb ~i))
+                         ~e ~expr]
+                     (unsafe (u8vec-view-set! ~wd ~i ~e)))
+                   (set! ~i (+ ~i 1)))))))))))
 ;;; u8vec-same-len__ -- internal: the common length of two arrays, or a panic.
 
 (defn u8vec-same-len__ [^borrow a : U8Vec ^borrow b : U8Vec]
@@ -4465,3 +5901,322 @@
   }
   return x->len;
   ```)
+;; ===== NumArray: one generic layer over the five types =====
+;;; NumArray -- the operations every typed numeric array has, as one class.
+;;;
+;;; Write a numeric algorithm once, over `[V] [(NumArray V)]`, and it runs on
+;;; F64Vec, F32Vec, I64Vec, I32Vec and U8Vec, each call going straight to that
+;;; type's own function (one specialization per type, no runtime dispatch).
+;;; The element type is the associated type `Elem` -- `(Elem V)` in a
+;;; signature -- so a method returns the honest `float32` or `uint8`, not a
+;;; carrier word.  `Sum` is what `na-sum` returns (`int` for the integer
+;;; types, the element type for the floats) and `View` the type of
+;;; `na-view`'s result.  Arithmetic on an element needs `(Num (Elem V))`, and
+;;; a conversion or a constant `(NumCast (Elem V))` (`stdlib/typeclass.tur`).
+;;; Constructors stay per type (`f64vec-new` ...): a length alone cannot pick
+;;; an instance.  The loops `na-for`, `na-fold` and `na-map!` below work
+;;; inside such a generic.
+;;;
+;;; Parameters:
+;;;   v -- the array type
+;;;
+;;; Methods:
+;;;   na-len -- the element count
+;;;   na-ref -- the element at i (bounds-checked)
+;;;   na-set! -- store x at i (bounds-checked)
+;;;   na-ref-unchecked -- the element at i, NOT bounds-checked (`#fx{Unsafe}`)
+;;;   na-set-unchecked! -- store x at i, NOT bounds-checked (`#fx{Unsafe}`)
+;;;   na-view -- a view of a's elements (see `-view`) (`#fx{Unsafe}`)
+;;;   na-view-ref -- the element at i of a's view w, NOT bounds-checked (`#fx{Unsafe}`)
+;;;   na-view-set! -- store x at i of a's view w, NOT bounds-checked (`#fx{Unsafe}`)
+;;;   na-fill! -- store x in every slot
+;;;   na-copy! -- copy src into dst (same length)
+;;;   na-add! -- dst[i] += src[i] (same length)
+;;;   na-sub! -- dst[i] -= src[i] (same length)
+;;;   na-add-scalar! -- add s to every element
+;;;   na-sum -- the sum (eight-lane order for floats; integers wrap)
+;;;   na-min -- the smallest element (an empty array panics)
+;;;   na-max -- the largest element (an empty array panics)
+;;;   na-copy -- a fresh copy, owned by the caller -- free it with `na-free` (a generic local is not dropped yet)
+;;;   na-free -- release an array now, consuming it
+;;;   na-show -- an owned "#P[a b c]" String
+;;;
+;;; Example:
+;;;   (defn mean [V] [(NumArray V) (NumCast (Sum V))] [^borrow a : V] : float
+;;;     {(to-float (na-sum a)) / (as float (na-len a))})
+;;;   (mean (f64vec-of 1.5 2.5))   ; => 2.0
+;;;
+;;; Since: Phase N2
+(defclass NumArray [v]
+  (type Elem : Type)
+  (type Sum : Type)
+  (type View : Type)
+  (na-len [^borrow a : v] : int)
+  (na-ref [^borrow a : v i : int] : Elem)
+  (na-set! [^borrow a : v i : int x : Elem] : nil)
+  (na-ref-unchecked [^borrow a : v i : int] #fx{Unsafe} : Elem)
+  (na-set-unchecked! [^borrow a : v i : int x : Elem] #fx{Unsafe} : nil)
+  (na-view [^borrow a : v] #fx{Unsafe} : View)
+  (na-view-ref [^borrow a : v w : View i : int] #fx{Unsafe} : Elem)
+  (na-view-set! [^borrow a : v w : View i : int x : Elem] #fx{Unsafe} : nil)
+  (na-fill! [^borrow a : v x : Elem] : nil)
+  (na-copy! [^borrow dst : v ^borrow src : v] : nil)
+  (na-add! [^borrow dst : v ^borrow src : v] : nil)
+  (na-sub! [^borrow dst : v ^borrow src : v] : nil)
+  (na-add-scalar! [^borrow a : v s : Elem] : nil)
+  (na-sum [^borrow a : v] : Sum)
+  (na-min [^borrow a : v] : Elem)
+  (na-max [^borrow a : v] : Elem)
+  (na-copy [^borrow a : v] : v)
+  (na-free [a : v] : nil)
+  (na-show [^borrow a : v] : String))
+;;; NumArray [F64Vec] -- delegates to the f64vec-* functions.
+
+(definstance NumArray [F64Vec]
+  (type Elem = float)
+  (type Sum = float)
+  (type View = F64View)
+  (na-len [a] (f64vec-len a))
+  (na-ref [a i] (f64vec-ref a i))
+  (na-set! [a i x] (f64vec-set! a i x))
+  (na-ref-unchecked [a i] (unsafe (f64vec-ref-unchecked a i)))
+  (na-set-unchecked! [a i x] (unsafe (f64vec-set-unchecked! a i x)))
+  (na-view [a] (unsafe (f64vec-view a)))
+  (na-view-ref [a w i] (unsafe (f64vec-view-ref w i)))
+  (na-view-set! [a w i x] (unsafe (f64vec-view-set! w i x)))
+  (na-fill! [a x] (f64vec-fill! a x))
+  (na-copy! [dst src] (f64vec-copy! dst src))
+  (na-add! [dst src] (f64vec-add! dst src))
+  (na-sub! [dst src] (f64vec-sub! dst src))
+  (na-add-scalar! [a s] (f64vec-add-scalar! a s))
+  (na-sum [a] (f64vec-sum a))
+  (na-min [a] (f64vec-min a))
+  (na-max [a] (f64vec-max a))
+  (na-copy [a] (f64vec-copy a))
+  (na-free [a] (f64vec-free a))
+  (na-show [a] (f64vec-show a)))
+;;; NumArray [F32Vec] -- delegates to the f32vec-* functions.
+
+(definstance NumArray [F32Vec]
+  (type Elem = float32)
+  (type Sum = float32)
+  (type View = F32View)
+  (na-len [a] (f32vec-len a))
+  (na-ref [a i] (f32vec-ref a i))
+  (na-set! [a i x] (f32vec-set! a i x))
+  (na-ref-unchecked [a i] (unsafe (f32vec-ref-unchecked a i)))
+  (na-set-unchecked! [a i x] (unsafe (f32vec-set-unchecked! a i x)))
+  (na-view [a] (unsafe (f32vec-view a)))
+  (na-view-ref [a w i] (unsafe (f32vec-view-ref w i)))
+  (na-view-set! [a w i x] (unsafe (f32vec-view-set! w i x)))
+  (na-fill! [a x] (f32vec-fill! a x))
+  (na-copy! [dst src] (f32vec-copy! dst src))
+  (na-add! [dst src] (f32vec-add! dst src))
+  (na-sub! [dst src] (f32vec-sub! dst src))
+  (na-add-scalar! [a s] (f32vec-add-scalar! a s))
+  (na-sum [a] (f32vec-sum a))
+  (na-min [a] (f32vec-min a))
+  (na-max [a] (f32vec-max a))
+  (na-copy [a] (f32vec-copy a))
+  (na-free [a] (f32vec-free a))
+  (na-show [a] (f32vec-show a)))
+;;; NumArray [I64Vec] -- delegates to the i64vec-* functions.
+
+(definstance NumArray [I64Vec]
+  (type Elem = int)
+  (type Sum = int)
+  (type View = I64View)
+  (na-len [a] (i64vec-len a))
+  (na-ref [a i] (i64vec-ref a i))
+  (na-set! [a i x] (i64vec-set! a i x))
+  (na-ref-unchecked [a i] (unsafe (i64vec-ref-unchecked a i)))
+  (na-set-unchecked! [a i x] (unsafe (i64vec-set-unchecked! a i x)))
+  (na-view [a] (unsafe (i64vec-view a)))
+  (na-view-ref [a w i] (unsafe (i64vec-view-ref w i)))
+  (na-view-set! [a w i x] (unsafe (i64vec-view-set! w i x)))
+  (na-fill! [a x] (i64vec-fill! a x))
+  (na-copy! [dst src] (i64vec-copy! dst src))
+  (na-add! [dst src] (i64vec-add! dst src))
+  (na-sub! [dst src] (i64vec-sub! dst src))
+  (na-add-scalar! [a s] (i64vec-add-scalar! a s))
+  (na-sum [a] (i64vec-sum a))
+  (na-min [a] (i64vec-min a))
+  (na-max [a] (i64vec-max a))
+  (na-copy [a] (i64vec-copy a))
+  (na-free [a] (i64vec-free a))
+  (na-show [a] (i64vec-show a)))
+;;; NumArray [I32Vec] -- delegates to the i32vec-* functions.
+
+(definstance NumArray [I32Vec]
+  (type Elem = int32)
+  (type Sum = int)
+  (type View = I32View)
+  (na-len [a] (i32vec-len a))
+  (na-ref [a i] (i32vec-ref a i))
+  (na-set! [a i x] (i32vec-set! a i x))
+  (na-ref-unchecked [a i] (unsafe (i32vec-ref-unchecked a i)))
+  (na-set-unchecked! [a i x] (unsafe (i32vec-set-unchecked! a i x)))
+  (na-view [a] (unsafe (i32vec-view a)))
+  (na-view-ref [a w i] (unsafe (i32vec-view-ref w i)))
+  (na-view-set! [a w i x] (unsafe (i32vec-view-set! w i x)))
+  (na-fill! [a x] (i32vec-fill! a x))
+  (na-copy! [dst src] (i32vec-copy! dst src))
+  (na-add! [dst src] (i32vec-add! dst src))
+  (na-sub! [dst src] (i32vec-sub! dst src))
+  (na-add-scalar! [a s] (i32vec-add-scalar! a s))
+  (na-sum [a] (i32vec-sum a))
+  (na-min [a] (i32vec-min a))
+  (na-max [a] (i32vec-max a))
+  (na-copy [a] (i32vec-copy a))
+  (na-free [a] (i32vec-free a))
+  (na-show [a] (i32vec-show a)))
+;;; NumArray [U8Vec] -- delegates to the u8vec-* functions.
+
+(definstance NumArray [U8Vec]
+  (type Elem = uint8)
+  (type Sum = int)
+  (type View = U8View)
+  (na-len [a] (u8vec-len a))
+  (na-ref [a i] (u8vec-ref a i))
+  (na-set! [a i x] (u8vec-set! a i x))
+  (na-ref-unchecked [a i] (unsafe (u8vec-ref-unchecked a i)))
+  (na-set-unchecked! [a i x] (unsafe (u8vec-set-unchecked! a i x)))
+  (na-view [a] (unsafe (u8vec-view a)))
+  (na-view-ref [a w i] (unsafe (u8vec-view-ref w i)))
+  (na-view-set! [a w i x] (unsafe (u8vec-view-set! w i x)))
+  (na-fill! [a x] (u8vec-fill! a x))
+  (na-copy! [dst src] (u8vec-copy! dst src))
+  (na-add! [dst src] (u8vec-add! dst src))
+  (na-sub! [dst src] (u8vec-sub! dst src))
+  (na-add-scalar! [a s] (u8vec-add-scalar! a s))
+  (na-sum [a] (u8vec-sum a))
+  (na-min [a] (u8vec-min a))
+  (na-max [a] (u8vec-max a))
+  (na-copy [a] (u8vec-copy a))
+  (na-free [a] (u8vec-free a))
+  (na-show [a] (u8vec-show a)))
+;;; na-same-len__ -- internal: the common length of two arrays, or a panic.
+
+(defn na-same-len__ [V] [(NumArray V)] [^borrow a : V ^borrow b : V] : int
+  (if (= (na-len a) (na-len b))
+    (na-len a)
+    (do (panic "na-for: length mismatch") 0)))
+;;; na-for -- run body once per element of one or two arrays, in a generic.
+;;;
+;;; `-for` over the class: `(na-for [x v] body...)`, or `(na-for [x v y w]
+;;; body...)` to walk two together (same length, or a panic first).  The
+;;; enclosing function needs `(NumArray V)`; x is an `(Elem V)`.
+;;;
+;;; Parameters:
+;;;   bindings -- `[x v]` or `[x v y w]`
+;;;   body     -- the forms to run per element
+;;;
+;;; Example:
+;;;   (defn count-pos [V] [(NumArray V) (Ord (Elem V)) (NumCast (Elem V))]
+;;;     [^borrow a : V] : int
+;;;     (let [^mut n 0]
+;;;       (na-for [x a] (when (> x (:: (from-int 0) (Elem V))) (set! n {n + 1})))
+;;;       n))
+;;;
+;;; Since: Phase N2
+
+(defmacro na-for [bv & body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        x    (first bv)
+        v    (second bv)
+        more (rest (rest bv))]
+    (if (empty? more)
+      `(let [^mut ~i 0
+             ~n      (na-len ~v)]
+         (while (< ~i ~n)
+           (let [~x (unsafe (na-ref-unchecked ~v ~i))] ~@body)
+           (set! ~i (+ ~i 1))))
+      (let [y (first more)
+            w (second more)]
+        `(let [^mut ~i 0
+               ~n      (na-same-len__ ~v ~w)]
+           (while (< ~i ~n)
+             (let [~x (unsafe (na-ref-unchecked ~v ~i))
+                   ~y (unsafe (na-ref-unchecked ~w ~i))]
+               ~@body)
+             (set! ~i (+ ~i 1))))))))
+;;; na-fold -- fold the elements of an array into an accumulator, in a generic.
+;;;
+;;; `-fold` over the class: `(na-fold [acc init x v] body)`.
+;;;
+;;; Parameters:
+;;;   bindings -- `[acc init x v]`
+;;;   body     -- the new accumulator
+;;;
+;;; Returns:
+;;;   The final accumulator.
+;;;
+;;; Example:
+;;;   (na-fold [n 0 x a] {n + 1})   ; => the length, in a generic over a
+;;;
+;;; Since: Phase N2
+
+(defmacro na-fold [bv body]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        acc  (first bv)
+        init (second bv)
+        x    (first (rest (rest bv)))
+        v    (second (rest (rest bv)))]
+    `(let [^mut ~i   0
+           ~n        (na-len ~v)
+           ^mut ~acc ~init]
+       (while (< ~i ~n)
+         (let [~x (unsafe (na-ref-unchecked ~v ~i))] (set! ~acc ~body))
+         (set! ~i (+ ~i 1)))
+       ~acc)))
+;;; na-map! -- store expr into dst[i] for every i, in a generic.
+;;;
+;;; `-map!` over the class: `(na-map! dst [x src] expr)` or `(na-map! dst
+;;; [x a y b] expr)`; dst may be a source.  Stores through views.
+;;;
+;;; Parameters:
+;;;   dst      -- the array stored into (borrowed)
+;;;   bindings -- `[x src]` or `[x a y b]`
+;;;   expr     -- the new element, an `(Elem V)`
+;;;
+;;; Example:
+;;;   (defn double! [V] [(NumArray V) (Num (Elem V))] [^borrow a : V] : nil
+;;;     (na-map! a [x a] {x + x}))
+;;;
+;;; Since: Phase N2
+
+(defmacro na-map! [dst bv expr]
+  (let [i    (gensym "i")
+        n    (gensym "n")
+        e    (gensym "e")
+        wd   (gensym "wd")
+        wa   (gensym "wa")
+        wb   (gensym "wb")
+        x    (first bv)
+        a    (second bv)
+        more (rest (rest bv))]
+    (if (empty? more)
+      `(let [~n      (na-same-len__ ~dst ~a)
+             ~wd     (unsafe (na-view ~dst))
+             ~wa     (unsafe (na-view ~a))
+             ^mut ~i 0]
+         (while (< ~i ~n)
+           (let [~x (unsafe (na-view-ref ~a ~wa ~i))
+                 ~e ~expr]
+             (unsafe (na-view-set! ~dst ~wd ~i ~e)))
+           (set! ~i (+ ~i 1))))
+      (let [y (first more)
+            b (second more)]
+        `(let [~n      (do (na-same-len__ ~a ~b) (na-same-len__ ~dst ~a))
+               ~wd     (unsafe (na-view ~dst))
+               ~wa     (unsafe (na-view ~a))
+               ~wb     (unsafe (na-view ~b))
+               ^mut ~i 0]
+           (while (< ~i ~n)
+             (let [~x (unsafe (na-view-ref ~a ~wa ~i))
+                   ~y (unsafe (na-view-ref ~b ~wb ~i))
+                   ~e ~expr]
+               (unsafe (na-view-set! ~dst ~wd ~i ~e)))
+             (set! ~i (+ ~i 1))))))))

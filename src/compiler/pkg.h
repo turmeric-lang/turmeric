@@ -116,6 +116,7 @@ typedef struct PkgWebOpts {
     long      heap;        /* -sINITIAL_MEMORY; 0 selects memory growth */
     long      stack;       /* -sSTACK_SIZE; default 16 MiB (emcc's is 64 KiB) */
     bool      tail_calls;  /* -mtail-call, so TUR_MUSTTAIL is real; default on */
+    bool      simd;        /* -msimd128, so loops vectorize; default on */
     char     *main_loop;   /* "callback" (default) | "asyncify" | "none" */
 } PkgWebOpts;
 

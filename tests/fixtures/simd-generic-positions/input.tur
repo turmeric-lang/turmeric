@@ -1,0 +1,24 @@
+;; simd-generic-positions: a vector type (simd-and-vectorization-plan S1,
+;; graduated) in each generic position, on every engine.  A generic
+;; function -- constrained or not -- and a generic ADT are specialized per
+;; type and take the vector by value; a Vec element is boxed, as every
+;; multi-word element is, and the Vec frees the boxes.  None is refused.
+(load "stdlib/simd.tur")
+(load "stdlib/vec.tur")
+
+(defn ident [T] [x : T] : T x)
+
+(defn twice [T] [(Num T)] [x : T] : T {x + x})
+
+(defn main [] : int
+  (let [v  (F64x2 7.1 3.25)
+        o  (some (twice v))
+        xs (vec-of v (F64x2 1.5 2.5))]
+    (println (.l1 (ident v)))
+    (match o
+      (Some w) (println (.l0 w))
+      (None) (println 0.0))
+    (println (.l0 (vec-get xs 1)))
+    (println (.l1 (twice (vec-get xs 0))))
+    (vec-free xs)
+    0))

@@ -16,6 +16,11 @@ with gcc and `-fopt-info-vec-optimized`, twice:
        vectorized").  BOTH must be vectorized here.
   -O3  `--release`, the loop vectorizer.  BOTH, O3_ONLY and the N2 probes.
 
+and, when clang is installed, once more with clang -O2 and
+`-Rpass=loop-vectorize` for the store probes of the plan's open question 7
+(`-map!`, `-build`, which store through a view): that is the build the views
+are for, and gcc's -O2 does not vectorize them at all.
+
 A report counts for a kernel only when its line falls inside the kernel's main
 loop -- from `for (; i + 8 <=` up to the scalar tail (`for (; i < n`, or
 `if (i < n)` where the tail is written out) -- so
@@ -44,19 +49,28 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 PROBE = os.path.join(ROOT, "tests", "vectorize", "numvec-probe.tur")
 
 # Vectorized at both -O2 and -O3.
-FLOAT_KERNELS = ["fill!", "scale!", "add!", "axpy!", "sum", "dot"]
+FLOAT_KERNELS = ["fill!", "scale!", "add!", "axpy!", "sum", "dot",
+                 "sub!", "mul!", "add-scalar!"]
 BOTH = (
     ["f64vec-" + k for k in FLOAT_KERNELS]
     + ["f32vec-" + k for k in FLOAT_KERNELS]
-    + ["i64vec-" + k for k in ["fill!", "add!", "sum"]]
-    + ["i32vec-" + k for k in ["fill!", "scale!", "add!", "axpy!", "sum", "min", "max"]]
-    + ["u8vec-add!"]
+    + ["i64vec-" + k for k in ["fill!", "add!", "sum", "sub!", "add-scalar!"]]
+    + ["i32vec-" + k for k in ["fill!", "scale!", "add!", "axpy!", "sum", "min", "max",
+                               "sub!", "mul!", "add-scalar!"]]
+    + ["u8vec-add!", "u8vec-sub!", "u8vec-add-scalar!"]
 )
 # -O2's basic-block vectorizer finds these unprofitable on SSE2: eight bytes
 # half-fill a register, and there is no 64-bit integer multiply.  The u8 sum
 # is still 2.4x faster at -O2 than a plain loop (its 32-bit lanes).
 O3_ONLY = ["i64vec-axpy!", "u8vec-sum", "u8vec-min", "u8vec-max"]
-PROBES = ["probe-int-fold", "probe-int-for", "probe-float-partials"]
+# simd plan Q7: store loops through a view.  gcc vectorizes them at -O3 only
+# (its -O2 cost model refuses a loop whose trip count it cannot see); clang,
+# checked below when it is installed, at -O2.
+STORE_PROBES = ["probe-map-view", "probe-map2", "probe-map-in-place", "probe-build"]
+# NumArray: a loop written once over the class.  Every specialization
+# (`probe_generic_map__spec__...`) must vectorize, at gcc -O3 and clang -O2.
+GENERIC_PROBES = ["probe-generic-map", "probe-generic-fold"]
+PROBES = ["probe-int-fold", "probe-int-for", "probe-float-partials"] + STORE_PROBES
 
 
 def mangle(name):
@@ -94,6 +108,17 @@ def main():
                 print("FAIL check-numvec-vectorized -- gcc %s failed:\n%s" % (level, r.stderr[-2000:]))
                 return 1
             reports[level] = r.stderr
+        # Q7's audience is clang (macOS) as much as `--release`: the store
+        # probes must vectorize at clang's -O2 too.
+        clang = shutil.which("clang")
+        if clang:
+            r = subprocess.run([clang, "-O2", "-std=c99", "-fno-strict-aliasing", "-w",
+                                "-c", c, "-o", os.devnull, "-Rpass=loop-vectorize"],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                print("FAIL check-numvec-vectorized -- clang -O2 failed:\n%s" % r.stderr[-2000:])
+                return 1
+            reports["clang -O2"] = r.stderr
         src = open(c).read().split("\n")
     # each static function's line range in the emitted C, and its main loop's
     spans, loops = {}, {}
@@ -117,8 +142,9 @@ def main():
         loop), or "head" (the main loop itself, at its `for` line)."""
         hit = set()
         for line in reports[level].split("\n"):
-            m = re.match(r".*probe\.c:(\d+):\d+: optimized: "
-                         r"(loop vectorized|basic block part vectorized)", line)
+            m = re.match(r".*probe\.c:(\d+):\d+: (optimized: "
+                         r"(loop vectorized|basic block part vectorized)"
+                         r"|remark: vectorized loop)", line)
             if not m:
                 continue
             ln = int(m.group(1))
@@ -132,14 +158,31 @@ def main():
     # old spelling -- is ALSO "loop vectorized" there, its trip count being
     # the constant 8, yet runs at a quarter of the speed; it is reported at
     # the inner loop's line, so it does not pass.
-    for level, names, where in (("-O2", BOTH, "head"),
-                                ("-O3", BOTH + O3_ONLY, "loop"),
-                                ("-O3", PROBES, "function")):
+    runs = [("-O2", BOTH, "head"),
+            ("-O3", BOTH + O3_ONLY, "loop"),
+            ("-O3", PROBES + GENERIC_PROBES, "function")]
+    if "clang -O2" in reports:
+        runs.append(("clang -O2", STORE_PROBES + GENERIC_PROBES, "function"))
+    else:
+        print("check-numvec-vectorized: no clang; its -O2 store probes are not checked")
+    for level, names, where in runs:
         got = vectorized(level, where)
         whole = where == "function"
         for name in names:
             total += 1
             cn = mangle(name)
+            if name in GENERIC_PROBES:
+                specs = [fn for fn in spans if fn.startswith(name.replace("-", "_") + "__spec__")]
+                missed = [fn for fn in specs if fn not in got]
+                if not specs:
+                    print("FAIL %s %s -- no specialization emitted" % (level, name))
+                    fails += 1
+                elif missed:
+                    print("FAIL %s %s -- not vectorized: %s" % (level, name, ", ".join(missed)))
+                    fails += 1
+                else:
+                    print("PASS %s %s (%d specializations)" % (level, name, len(specs)))
+                continue
             if cn not in spans:
                 print("FAIL %s %s -- not emitted (is it still called in %s?)" % (level, name, PROBE))
                 fails += 1

@@ -1229,6 +1229,7 @@ mkdir -p "$WASMDIR/bin" "$WASMDIR/lib"
 cat > "$WASMDIR/bin/emcc" <<'EOF'
 #!/usr/bin/env bash
 for a in "$@"; do case "$a" in *.c) cat "$a" >> "$(dirname "$0")/../seen.c";; esac; done
+echo "$*" > "$(dirname "$0")/../args.txt"
 exit 0
 EOF
 chmod +x "$WASMDIR/bin/emcc"
@@ -1243,6 +1244,32 @@ if [ $wasm_rc -eq 0 ] && [ -s "$WASMDIR/seen.c" ] &&
     pass "build-wasm-keeps-runtime-replica"
 else
     fail "build-wasm-keeps-runtime-replica" "rc=$wasm_rc out=$wasm_out"
+fi
+
+# simd-and-vectorization-plan Q5: wasm SIMD is on by default, and a
+# manifest's `:web #{:simd false}` turns it off.
+if [ $wasm_rc -eq 0 ] && grep -q -- '-msimd128' "$WASMDIR/args.txt"; then
+    pass "build-wasm-simd128-by-default"
+else
+    fail "build-wasm-simd128-by-default" "args=$(cat "$WASMDIR/args.txt" 2>/dev/null)"
+fi
+mkdir -p "$WASMDIR/nosimd/src"
+cat > "$WASMDIR/nosimd/build.tur" <<'EOF'
+(defpackage nosimd
+  :name    "nosimd"
+  :version "0.1.0"
+  :web     #{:simd false})
+EOF
+cp "$WASMDIR/hello.tur" "$WASMDIR/nosimd/src/main.tur"
+rm -f "$WASMDIR/args.txt"
+nosimd_out=$(cd "$WASMDIR/nosimd" && PATH="$WASMDIR/bin:$PATH" \
+             "$TUR" build --target wasm src/main.tur -o main.js 2>&1)
+nosimd_rc=$?
+if [ $nosimd_rc -eq 0 ] && [ -s "$WASMDIR/args.txt" ] &&
+   ! grep -q -- '-msimd128' "$WASMDIR/args.txt"; then
+    pass "build-wasm-simd-opt-out"
+else
+    fail "build-wasm-simd-opt-out" "rc=$nosimd_rc out=$nosimd_out args=$(cat "$WASMDIR/args.txt" 2>/dev/null)"
 fi
 
 echo

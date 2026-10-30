@@ -1,18 +1,18 @@
 # Follow-up Plan: tur-linalg v0.2, tur-linalg-sparse, and BLAS backend
 
-> **Status:** Implemented, awaiting merge. Every phase is built and tested on
-> turmeric-spices branch `claude/linalg-followups` (2026-10-29): `tur-linalg`
-> 0.2.0 (SVD, symmetric eigen, SVD solvers, mat2/mat3, `linalg/iter`, tiled
-> `mat-mul`, the BLAS/LAPACK backend), the new `tur-linalg-sparse` and
-> `tur-stats-multivariate` spices, and the guides. What is left is the tags,
-> which follow the merge: `linalg-v0.2.0`, `linalg-sparse-v0.1.0`,
-> `stats-multivariate-v0.1.0`. `linalg-blas-v0.1.0` is not needed -- the
-> backend ships inside linalg 0.2.0. Archive this plan once they are pushed.
+> **Status: DONE, archived 2026-10-29.** Every phase shipped in
+> turmeric-spices#128 (merge `86ec56f`, 2026-10-29): `tur-linalg` 0.2.0 (SVD,
+> symmetric eigen, SVD solvers, mat2/mat3, `linalg/iter`, tiled `mat-mul`, the
+> BLAS/LAPACK backend), the new `tur-linalg-sparse` and
+> `tur-stats-multivariate` spices, and the guides. The tags `linalg-v0.2.0`,
+> `linalg-sparse-v0.1.0` and `stats-multivariate-v0.1.0` are pushed, all on
+> `86ec56f`. `linalg-blas-v0.1.0` is not needed -- the backend ships inside
+> linalg 0.2.0.
 > Where the build differs from the text below, see
 > [Implementation notes](#implementation-notes-2026-10-29).
 > **Last Updated:** 2026-10-29
 > **Type:** Spice Follow-up
-> **Depends on:** [linalg-spice-plan.md](../../archive/linalg-spice-plan.md) (v0.1.0 complete, tagged `linalg-v0.1.0`)
+> **Depends on:** [linalg-spice-plan.md](linalg-spice-plan.md) (v0.1.0 complete, tagged `linalg-v0.1.0`)
 
 ---
 

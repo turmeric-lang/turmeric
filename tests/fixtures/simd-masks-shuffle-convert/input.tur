@@ -1,0 +1,151 @@
+;; simd-masks-shuffle-convert: the comparisons, masks, select, shuffle and
+;; conversions of stdlib/simd.tur (simd-and-vectorization-plan S1,
+;; graduated).  Floats print as bit patterns so cc (vector instructions),
+;; `tur jit` (lane loops) and turi (natives) must agree to the last bit; the
+;; inputs sit on the edges: NaN lanes, unsigned lanes above the signed range,
+;; float lanes outside int32's range, shuffle indices that wrap.
+(load "stdlib/simd.tur")
+(load "stdlib/bits.tur")
+
+(defn pf [x : float] : nil
+  (println (float->bits x)))
+
+(defn nan [] : float
+  (bits->float 9221120237041090560))
+
+(defn m2 [m : M64x2] : nil
+  (do (println (.l0 m)) (println (.l1 m))))
+
+(defn m4 [m : M32x4] : nil
+  (do (println (as int (.l0 m))) (println (as int (.l1 m))) (println (as int (.l2 m))) (println (as int (.l3 m)))))
+
+(defn m8 [m : M16x8] : nil
+  (do (println (as int (.l0 m))) (println (as int (.l1 m))) (println (as int (.l6 m))) (println (as int (.l7 m)))))
+
+(defn m16 [m : M8x16] : nil
+  (do (println (as int (.l0 m))) (println (as int (.l1 m))) (println (as int (.l14 m))) (println (as int (.l15 m)))))
+
+(defn yn [b : bool] : nil
+  (println (if b "yes" "no")))
+
+(defn f64s [] : nil
+  (let [a (F64x2 7.1 (nan))
+        b (F64x2 3.25 (nan))]
+    (m2 (f64x2-eq a a))
+    (m2 (f64x2-lt b a))
+    (m2 (f64x2-le a a))
+    (m2 (f64x2-gt a b))
+    (m2 (f64x2-ge b a))
+    (let [s (f64x2-select (f64x2-lt b a) (F64x2 -1.5 0.3) (F64x2 2.5 0.7))]
+      (pf (.l0 s))
+      (pf (.l1 s)))
+    (let [s (f64x2-shuffle (F64x2 7.1 3.25) (I64x2 -1 2))]
+      (pf (.l0 s))
+      (pf (.l1 s)))
+    (let [n (f64x2-narrow (F64x2 7.1 1e300) (F64x2 -1e300 3.25))]
+      (pf (as float (.l0 n)))
+      (pf (as float (.l1 n)))
+      (pf (as float (.l2 n)))
+      (pf (as float (.l3 n))))))
+
+(defn f32s [] : nil
+  (let [a (F32x4 (as float32 7.1) (as float32 -3.75) (as float32 (nan)) (as float32 3e9))
+        b (F32x4 (as float32 -3e9) (as float32 2147483520.0) (as float32 2147483648.0)
+                 (as float32 -2147483648.0))]
+    (m4 (f32x4-lt a b))
+    (m4 (f32x4-eq a a))
+    (let [i (f32x4->i32x4 a)
+          j (f32x4->i32x4 b)]
+      (do (println (as int (.l0 i))) (println (as int (.l1 i))) (println (as int (.l2 i))) (println (as int (.l3 i))))
+      (do (println (as int (.l0 j))) (println (as int (.l1 j))) (println (as int (.l2 j))) (println (as int (.l3 j)))))
+    (let [w (f32x4-widen-lo a)
+          h (f32x4-widen-hi b)]
+      (pf (.l0 w))
+      (pf (.l1 w))
+      (pf (.l0 h))
+      (pf (.l1 h)))
+    (let [s (f32x4-shuffle a (I32x4 (as int32 3) (as int32 -2) (as int32 5) (as int32 0)))]
+      (pf (as float (.l0 s)))
+      (pf (as float (.l1 s)))
+      (pf (as float (.l2 s)))
+      (pf (as float (.l3 s))))
+    (let [s (f32x4-select (M32x4 (as int32 0) (as int32 5) (as int32 0) (as int32 -1)) a b)]
+      (pf (as float (.l0 s)))
+      (pf (as float (.l1 s)))
+      (pf (as float (.l3 s))))))
+
+(defn ints [] : nil
+  (let [a (I64x2 9223372036854775807 -7)
+        b (I64x2 -9223372036854775807 -7)]
+    (m2 (i64x2-lt b a))
+    (m2 (i64x2-ge b a))
+    (let [s (i64x2-select (i64x2-gt a b) a b)]
+      (do (println (.l0 s)) (println (.l1 s))))
+    (let [s (i64x2-shuffle a (I64x2 1 1))]
+      (do (println (.l0 s)) (println (.l1 s)))))
+  (let [a (I32x4 (as int32 16777217) (as int32 -7) (as int32 2147483647) (as int32 -2147483647))
+        f (i32x4->f32x4 a)]
+    (pf (as float (.l0 f)))
+    (pf (as float (.l1 f)))
+    (pf (as float (.l2 f)))
+    (pf (as float (.l3 f)))
+    (m4 (i32x4-le a (i32x4-splat (as int32 -7))))
+    (let [s (i32x4-shuffle a (I32x4 (as int32 3) (as int32 2) (as int32 1) (as int32 0)))]
+      (do (println (as int (.l0 s))) (println (as int (.l3 s))))))
+  ;; unsigned lanes compare unsigned: 65535 > 1, 200 > 100
+  (let [a (U16x8 (as uint16 65535) (as uint16 1) (as uint16 2) (as uint16 3)
+                 (as uint16 4) (as uint16 5) (as uint16 6) (as uint16 7))
+        b (u16x8-splat (as uint16 1))]
+    (m8 (u16x8-gt a b))
+    (m8 (u16x8-eq a b))
+    (let [s (u16x8-shuffle a (U16x8 (as uint16 7) (as uint16 6) (as uint16 5) (as uint16 4)
+                                    (as uint16 3) (as uint16 2) (as uint16 9) (as uint16 8)))]
+      (do (println (as int (.l0 s))) (println (as int (.l6 s))) (println (as int (.l7 s)))))
+    (let [s (u16x8-select (u16x8-gt a b) a b)]
+      (do (println (as int (.l0 s))) (println (as int (.l1 s))) (println (as int (.l7 s))))))
+  (let [a (u8x16-splat (as uint8 200))
+        b (u8x16-splat (as uint8 100))
+        m (u8x16-lt b a)]
+    (m16 m)
+    (m16 (u8x16-ge b a))
+    (let [s (u8x16-shuffle (U8x16 (as uint8 0) (as uint8 1) (as uint8 2) (as uint8 3)
+                                  (as uint8 4) (as uint8 5) (as uint8 6) (as uint8 7)
+                                  (as uint8 8) (as uint8 9) (as uint8 10) (as uint8 11)
+                                  (as uint8 12) (as uint8 13) (as uint8 14) (as uint8 15))
+                           (u8x16-splat (as uint8 255)))]
+      (do (println (as int (.l0 s))) (println (as int (.l15 s)))))
+    (let [s (u8x16-select m (u8x16-splat (as uint8 9)) a)]
+      (println (as int (.l3 s))))))
+
+(defn masks [] : nil
+  (let [t (M64x2 -1 0)
+        u (M64x2 5 7)]
+    (m2 (m64x2-and t u))
+    (m2 (m64x2-or t (M64x2 0 0)))
+    (m2 (m64x2-not t))
+    (yn (m64x2-any t))
+    (yn (m64x2-all t))
+    (yn (m64x2-all u))
+    (yn (m64x2-any (M64x2 0 0))))
+  (let [t (i32x4-lt (I32x4 (as int32 1) (as int32 5) (as int32 1) (as int32 5)) (i32x4-splat (as int32 3)))]
+    (m4 (m32x4-not t))
+    (m4 (m32x4-and t (m32x4-not t)))
+    (yn (m32x4-any t))
+    (yn (m32x4-all (m32x4-or t (m32x4-not t)))))
+  (let [t (u16x8-lt (u16x8-splat (as uint16 1)) (u16x8-splat (as uint16 2)))]
+    (yn (m16x8-all t))
+    (yn (m16x8-any (m16x8-not t)))
+    (m8 (m16x8-or (m16x8-not t) t)))
+  (let [t (u8x16-eq (u8x16-splat (as uint8 4)) (u8x16-splat (as uint8 4)))]
+    (yn (m8x16-all t))
+    (yn (m8x16-any (m8x16-not t)))
+    (m16 (m8x16-and t (M8x16 (as int8 0) (as int8 3) (as int8 0) (as int8 0) (as int8 0) (as int8 0)
+                             (as int8 0) (as int8 0) (as int8 0) (as int8 0) (as int8 0) (as int8 0)
+                             (as int8 0) (as int8 0) (as int8 0) (as int8 -128))))))
+
+(defn main [] : int
+  (f64s)
+  (f32s)
+  (ints)
+  (masks)
+  0)

@@ -1283,6 +1283,8 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                 }
                 const Form *tcf = map_get_kw(vf, "tail-calls");
                 if (tcf) out->web.tail_calls = form_bool_val(tcf);
+                const Form *sif = map_get_kw(vf, "simd");
+                if (sif) out->web.simd = form_bool_val(sif);
                 const Form *mf = map_get_kw(vf, "main-loop");
                 if (mf && mf->tag == F_KEYWORD && mf->as.sym &&
                     mf->as.sym->name) {
@@ -1863,6 +1865,7 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
         if (m->web.stack != PKG_WEB_DEFAULT_STACK)
             fprintf(f, "    :stack %ld\n", m->web.stack);
         if (!m->web.tail_calls) fprintf(f, "    :tail-calls false\n");
+        if (!m->web.simd)       fprintf(f, "    :simd false\n");
         if (m->web.main_loop)
             fprintf(f, "    :main-loop :%s\n", m->web.main_loop);
         fprintf(f, "  }\n");
@@ -4466,7 +4469,13 @@ void pkg_web_opts_defaults(PkgWebOpts *w) {
      * without it a guaranteed tail call is an ordinary call: a mutual
      * tail-call cycle recurses into the JS engine's frame limit. */
     w->tail_calls = true;
-    w->threads   = false;   /* -pthread needs COOP/COEP, which GitHub Pages
+    /* Every evergreen browser ships wasm SIMD (Chrome 91 and Firefox 89 in
+     * 2021, Safari 16.4 in 2023), and with it the numvec kernels run 1.2-29x
+     * faster with bit-identical results (simd-and-vectorization-plan, open
+     * question 5).  An engine without it refuses the whole module, so
+     * `:simd false` is the way back for a page that must load there. */
+    w->simd       = true;
+    w->threads  = false;   /* -pthread needs COOP/COEP, which GitHub Pages
                              * cannot serve, and a droppable static site is
                              * the point of this target. */
     w->main_loop = NULL;    /* NULL reads as "callback" */
@@ -4500,6 +4509,10 @@ void pkg_web_compose_link_flags(const PkgWebOpts *w, Buf *out) {
         buf_printf(out, " -sSTACK_SIZE=%ld", w->stack);
     if (w->tail_calls)
         buf_printf(out, " -mtail-call");
+    /* A compile flag: it lets clang's vectorizer use 128-bit lanes in the
+     * stdlib kernels and any loop the program writes. */
+    if (w->simd)
+        buf_printf(out, " -msimd128");
 
     if (w->canvas) {
         /* raylib and the opengl spice both reach the canvas through the

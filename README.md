@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.72.0` -- Try Turmeric gains a Compile engine that runs inline C in the browser, and type-declaration flags move before the name as `^attrs` (a breaking change; `tur fmt` migrates).
+**Latest release:** `v0.73.0` -- SIMD vector types graduate: `(load "stdlib/simd.tur")` now works without `--enable=simd`.
 
 ## What
 

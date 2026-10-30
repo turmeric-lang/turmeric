@@ -1363,6 +1363,9 @@ struct FnDef {
      * thunk + call site and the arg is corrupted (SIGSEGV).  Closures dispatched
      * through `tur_poly_fn_t` (fmap etc.) or called directly keep b4box. */
     bool                 byval_fn_field_closure;
+    /* simd plan Q7: emit_fn_def_cannot_panic's memo -- 0 not yet asked, 1 being
+     * asked (a recursive call answers no), 2 cannot panic, 3 may. */
+    uint8_t              cannot_panic_memo;
 };
 
 /* Phase 2: ExternC represents an (extern-c ...) declaration. */
