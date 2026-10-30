@@ -19,7 +19,13 @@
 > owner chose its own repository** ([section 4](#4-where-it-lives)). Every
 > decision this plan asked for is made, and the repo exists:
 > **[turmeric-lang/turmeric-arcade](https://github.com/turmeric-lang/turmeric-arcade)**,
-> deployed to **play.turmeric-lang.com**. What remains before P0 is work
+> deployed to **play.turmeric-lang.com**. Its first commit (2026-10-30) is
+> the scaffold: Try's site shape (COOP/COEP, one CSP, the Worker), the
+> screen pane's shell of [5.2](#52-the-screen-pane) running a program in an
+> iframe on the JSPI module and streaming its lines, `scripts/fetch-engine.sh`
+> building that module from a pinned turmeric commit, and four Playwright
+> tests (run, streaming, Stop, stack overflow) green in Chromium 153. No
+> raylib in the module yet: that is P0. What remains before P0 is work
 > ([section 7](#prerequisites-before-p0)).
 > **Type:** Web platform / browser JIT module (`tools/wasm-jit/`,
 > `src/web/wasm_jit_glue.c`, `src/jit_engine.c`) / a new site. The interpreter
