@@ -24,9 +24,13 @@
 > screen pane's shell of [5.2](#52-the-screen-pane) running a program in an
 > iframe on the JSPI module and streaming its lines, `scripts/fetch-engine.sh`
 > building that module from a pinned turmeric commit, and four Playwright
-> tests (run, streaming, Stop, stack overflow) green in Chromium 153. No
-> raylib in the module yet: that is P0. What remains before P0 is work
-> ([section 7](#prerequisites-before-p0)).
+> tests (run, streaming, Stop, stack overflow) green in Chromium 153. **P0
+> began the same day and answered its first three questions yes** (the
+> [results](#p0-results-2026-10-30-day-one-go-on-j) under section 7): the
+> quick-start program draws on the arcade module, callback mode survives
+> `main`, and the blocking loop yields through raylib's own sleep under
+> JSPI. Of the prerequisites, 1-5, 8-10, 12 and 13 are closed or spiked; 11
+> is turmeric-spices work for the Spices menu.
 > **Type:** Web platform / browser JIT module (`tools/wasm-jit/`,
 > `src/web/wasm_jit_glue.c`, `src/jit_engine.c`) / a new site. The interpreter
 > side (`src/turi/`) and the build driver (`src/driver/cmd_build.c`) only if the
@@ -655,6 +659,61 @@ it nearer a week.) Record, in this order (each step gates the next):
 
 The spike's output is a short results section in this plan, as wasm-jit-plan
 did for P1, and a go / no-go on J.
+
+#### P0 results (2026-10-30, day one): **go on J**
+
+Measured on the arcade module -- `tools/wasm-jit-spike/arcade/build.sh`: the
+JSPI JIT build with raylib 5.5's web archive (`emcmake`, `PLATFORM=Web`,
+`GRAPHICS_API_OPENGL_ES3`, compiled `-pthread -fwasm-exceptions` to match the
+module), `rl_web_loop.c`, `raylib.h` in `/sysinclude`, and the raylib and math
+spices' `src/` embedded at `/spices/<name>/src` -- driven by the arcade's
+screen pane (`turmeric-arcade` `web/screen.js`, `web/tests/raylib.spec.js`)
+in Playwright's headless Chromium 153 on SwiftShader, in this container.
+
+1. **Struct by value: yes.** The quick-start program (wrapped in a
+   `defmodule`; a top-level `import` is "only allowed inside defmodule", so
+   section 1's bare snippet is not a program as written) draws
+   "Hello, Turmeric!" on a RAYWHITE 480x270 frame: `DrawText` with a `Color`
+   by value and `ClearBackground` through c2mir's wasm32 ABI into the
+   archive, read back from the frame's pixels. No fork change was needed:
+   the table rows and stubs come from the archive's members at their wasm
+   signatures (row 10), 2,290 of them.
+2. **Callback mode: yes.** `run-main-loop` with a closure: `main` unwinds
+   (the shell reports `compiled -- main loop running`, the statement after
+   the call never runs), the browser calls the interpreted closure every
+   frame, a `println` every 30th frame reaches the console (240 frames in
+   about 5 s, headless), the MIR context survives `main`. Stop removes the
+   iframe and the editor page is untouched.
+3. **Blocking mode under JSPI: yes.** `(while (not (window-should-close))
+   ...)` runs unchanged: raylib's own `emscripten_sleep` inside its frame
+   suspends the wasm stack and the loop resumes next tick -- 60 empty frames
+   in 0.80 s headless (about 75 a second; raylib sleeps 16 ms a frame when
+   it has nothing to wait for, so this is the sleep's granularity, not a
+   ceiling), the console lines streaming meanwhile. Not yet run with a
+   `call/cc` that also draws.
+4. **Cost.** Module: 6.98 MB wasm, 2.37 MB gzipped (the plain JSPI module is
+   5.54 / 1.89 MB; raylib adds 0.48 MB gzipped), plus the 4.5 MB
+   `stdlib.data` both share. A Run of a 30-frame raylib program, cold
+   iframe, from the click to raylib's "device initialized" line: 920 ms,
+   of which the engine boot is about 290 ms; the engine line says
+   `front 164 ms, c2mir 211 ms, run 46 ms` -- c2mir is up from 110-170 ms
+   because the raylib spice's inline C compiles with the program. Warm is
+   the same shape: every Run is a fresh iframe and a fresh instance (the
+   browser caches the fetch). Not measured yet: `life.tur`'s grid step as
+   an interpreted loop (section 8.5's budget).
+5. **Boot.** The iframe under COOP/COEP with `SharedArrayBuffer` boots and
+   raylib's GLFW port finds the canvas handed to the factory; a trap, a
+   stack overflow and the `set_main_loop` unwind are told apart by the
+   shell. Not done: a per-spice package mounted after startup (the spike
+   embeds the two spices in the module; packages are J2/P1), audio and
+   its click-to-start overlay (6.6), the glue's tree-walker fallback is
+   still on (J3 e), and no browser without JSPI has been tried.
+
+What P1 inherits: the `tur_wasm_arcade` target is the spike's build script
+made a CMake target and a CI job (raylib's archive cached by ref), the
+fallback switch (J3 e), spice packages instead of `--embed-file` (J2),
+`life.tur`'s number, and the examples moved from `tests/raylib.spec.js`
+into `examples/`.
 
 ### P1 -- The arcade module (this repo)
 
