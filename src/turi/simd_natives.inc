@@ -161,6 +161,66 @@ static TuriValue simdn_f64x2_hsum(TuriEnv *env, TuriValue *a, uint32_t n, void *
     double r = v0 + v1;
     return turi_float((double)r);
 }
+static TuriValue simdn_f64x2_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((double)lane_f(a[0], 0) == (double)lane_f(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((double)lane_f(a[0], 1) == (double)lane_f(a[1], 1) ? -1 : 0);
+    return mk(env, "M64x2", f, 2);
+}
+static TuriValue simdn_f64x2_lt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((double)lane_f(a[0], 0) < (double)lane_f(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((double)lane_f(a[0], 1) < (double)lane_f(a[1], 1) ? -1 : 0);
+    return mk(env, "M64x2", f, 2);
+}
+static TuriValue simdn_f64x2_le(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((double)lane_f(a[0], 0) <= (double)lane_f(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((double)lane_f(a[0], 1) <= (double)lane_f(a[1], 1) ? -1 : 0);
+    return mk(env, "M64x2", f, 2);
+}
+static TuriValue simdn_f64x2_gt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((double)lane_f(a[0], 0) > (double)lane_f(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((double)lane_f(a[0], 1) > (double)lane_f(a[1], 1) ? -1 : 0);
+    return mk(env, "M64x2", f, 2);
+}
+static TuriValue simdn_f64x2_ge(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((double)lane_f(a[0], 0) >= (double)lane_f(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((double)lane_f(a[0], 1) >= (double)lane_f(a[1], 1) ? -1 : 0);
+    return mk(env, "M64x2", f, 2);
+}
+static TuriValue simdn_f64x2_select(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 3) return turi_nil();
+    bool found;
+    f[0] = lane_i(a[0], 0) != 0 ? turi_struct_field(a[1], 0, &found) : turi_struct_field(a[2], 0, &found);
+    f[1] = lane_i(a[0], 1) != 0 ? turi_struct_field(a[1], 1, &found) : turi_struct_field(a[2], 1, &found);
+    return mk(env, "F64x2", f, 2);
+}
+static TuriValue simdn_f64x2_shuffle(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    bool found;
+    f[0] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 0) & 1), &found);
+    f[1] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 1) & 1), &found);
+    return mk(env, "F64x2", f, 2);
+}
+static TuriValue simdn_f64x2_narrow(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_float((double)(float)lane_f(a[0], 0));
+    f[1] = turi_float((double)(float)lane_f(a[0], 1));
+    f[2] = turi_float((double)(float)lane_f(a[1], 0));
+    f[3] = turi_float((double)(float)lane_f(a[1], 1));
+    return mk(env, "F32x4", f, 4);
+}
 static TuriValue simdn_f32x4_splat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud; TuriValue f[16]; (void)f;
     if (n < 1) return turi_nil();
@@ -332,6 +392,94 @@ static TuriValue simdn_f32x4_hsum(TuriEnv *env, TuriValue *a, uint32_t n, void *
     float r = (v0 + v1) + (v2 + v3);
     return turi_float((double)r);
 }
+static TuriValue simdn_f32x4_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((float)lane_f(a[0], 0) == (float)lane_f(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((float)lane_f(a[0], 1) == (float)lane_f(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((float)lane_f(a[0], 2) == (float)lane_f(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((float)lane_f(a[0], 3) == (float)lane_f(a[1], 3) ? -1 : 0);
+    return mk(env, "M32x4", f, 4);
+}
+static TuriValue simdn_f32x4_lt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((float)lane_f(a[0], 0) < (float)lane_f(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((float)lane_f(a[0], 1) < (float)lane_f(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((float)lane_f(a[0], 2) < (float)lane_f(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((float)lane_f(a[0], 3) < (float)lane_f(a[1], 3) ? -1 : 0);
+    return mk(env, "M32x4", f, 4);
+}
+static TuriValue simdn_f32x4_le(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((float)lane_f(a[0], 0) <= (float)lane_f(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((float)lane_f(a[0], 1) <= (float)lane_f(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((float)lane_f(a[0], 2) <= (float)lane_f(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((float)lane_f(a[0], 3) <= (float)lane_f(a[1], 3) ? -1 : 0);
+    return mk(env, "M32x4", f, 4);
+}
+static TuriValue simdn_f32x4_gt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((float)lane_f(a[0], 0) > (float)lane_f(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((float)lane_f(a[0], 1) > (float)lane_f(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((float)lane_f(a[0], 2) > (float)lane_f(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((float)lane_f(a[0], 3) > (float)lane_f(a[1], 3) ? -1 : 0);
+    return mk(env, "M32x4", f, 4);
+}
+static TuriValue simdn_f32x4_ge(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((float)lane_f(a[0], 0) >= (float)lane_f(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((float)lane_f(a[0], 1) >= (float)lane_f(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((float)lane_f(a[0], 2) >= (float)lane_f(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((float)lane_f(a[0], 3) >= (float)lane_f(a[1], 3) ? -1 : 0);
+    return mk(env, "M32x4", f, 4);
+}
+static TuriValue simdn_f32x4_select(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 3) return turi_nil();
+    bool found;
+    f[0] = lane_i(a[0], 0) != 0 ? turi_struct_field(a[1], 0, &found) : turi_struct_field(a[2], 0, &found);
+    f[1] = lane_i(a[0], 1) != 0 ? turi_struct_field(a[1], 1, &found) : turi_struct_field(a[2], 1, &found);
+    f[2] = lane_i(a[0], 2) != 0 ? turi_struct_field(a[1], 2, &found) : turi_struct_field(a[2], 2, &found);
+    f[3] = lane_i(a[0], 3) != 0 ? turi_struct_field(a[1], 3, &found) : turi_struct_field(a[2], 3, &found);
+    return mk(env, "F32x4", f, 4);
+}
+static TuriValue simdn_f32x4_shuffle(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    bool found;
+    f[0] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 0) & 3), &found);
+    f[1] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 1) & 3), &found);
+    f[2] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 2) & 3), &found);
+    f[3] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 3) & 3), &found);
+    return mk(env, "F32x4", f, 4);
+}
+static TuriValue simdn_f32x4_to_i32x4(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    { float x = (float)lane_f(a[0], 0); int32_t r = x != x ? 0 : x >= 2147483648.0f ? 2147483647 : x < -2147483648.0f ? (-2147483647 - 1) : (int32_t)x; f[0] = turi_int((int64_t)r); }
+    { float x = (float)lane_f(a[0], 1); int32_t r = x != x ? 0 : x >= 2147483648.0f ? 2147483647 : x < -2147483648.0f ? (-2147483647 - 1) : (int32_t)x; f[1] = turi_int((int64_t)r); }
+    { float x = (float)lane_f(a[0], 2); int32_t r = x != x ? 0 : x >= 2147483648.0f ? 2147483647 : x < -2147483648.0f ? (-2147483647 - 1) : (int32_t)x; f[2] = turi_int((int64_t)r); }
+    { float x = (float)lane_f(a[0], 3); int32_t r = x != x ? 0 : x >= 2147483648.0f ? 2147483647 : x < -2147483648.0f ? (-2147483647 - 1) : (int32_t)x; f[3] = turi_int((int64_t)r); }
+    return mk(env, "I32x4", f, 4);
+}
+static TuriValue simdn_f32x4_widen_lo(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    f[0] = turi_float((double)(float)lane_f(a[0], 0));
+    f[1] = turi_float((double)(float)lane_f(a[0], 1));
+    return mk(env, "F64x2", f, 2);
+}
+static TuriValue simdn_f32x4_widen_hi(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    f[0] = turi_float((double)(float)lane_f(a[0], 2));
+    f[1] = turi_float((double)(float)lane_f(a[0], 3));
+    return mk(env, "F64x2", f, 2);
+}
 static TuriValue simdn_i64x2_splat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud; TuriValue f[16]; (void)f;
     if (n < 1) return turi_nil();
@@ -464,6 +612,57 @@ static TuriValue simdn_i64x2_hsum(TuriEnv *env, TuriValue *a, uint32_t n, void *
     s += (uint64_t)(int64_t)(int64_t)lane_i(a[0], 0);
     s += (uint64_t)(int64_t)(int64_t)lane_i(a[0], 1);
     return turi_int((int64_t)s);
+}
+static TuriValue simdn_i64x2_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((int64_t)lane_i(a[0], 0) == (int64_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((int64_t)lane_i(a[0], 1) == (int64_t)lane_i(a[1], 1) ? -1 : 0);
+    return mk(env, "M64x2", f, 2);
+}
+static TuriValue simdn_i64x2_lt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((int64_t)lane_i(a[0], 0) < (int64_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((int64_t)lane_i(a[0], 1) < (int64_t)lane_i(a[1], 1) ? -1 : 0);
+    return mk(env, "M64x2", f, 2);
+}
+static TuriValue simdn_i64x2_le(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((int64_t)lane_i(a[0], 0) <= (int64_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((int64_t)lane_i(a[0], 1) <= (int64_t)lane_i(a[1], 1) ? -1 : 0);
+    return mk(env, "M64x2", f, 2);
+}
+static TuriValue simdn_i64x2_gt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((int64_t)lane_i(a[0], 0) > (int64_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((int64_t)lane_i(a[0], 1) > (int64_t)lane_i(a[1], 1) ? -1 : 0);
+    return mk(env, "M64x2", f, 2);
+}
+static TuriValue simdn_i64x2_ge(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((int64_t)lane_i(a[0], 0) >= (int64_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((int64_t)lane_i(a[0], 1) >= (int64_t)lane_i(a[1], 1) ? -1 : 0);
+    return mk(env, "M64x2", f, 2);
+}
+static TuriValue simdn_i64x2_select(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 3) return turi_nil();
+    bool found;
+    f[0] = lane_i(a[0], 0) != 0 ? turi_struct_field(a[1], 0, &found) : turi_struct_field(a[2], 0, &found);
+    f[1] = lane_i(a[0], 1) != 0 ? turi_struct_field(a[1], 1, &found) : turi_struct_field(a[2], 1, &found);
+    return mk(env, "I64x2", f, 2);
+}
+static TuriValue simdn_i64x2_shuffle(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    bool found;
+    f[0] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 0) & 1), &found);
+    f[1] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 1) & 1), &found);
+    return mk(env, "I64x2", f, 2);
 }
 static TuriValue simdn_i32x4_splat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud; TuriValue f[16]; (void)f;
@@ -629,6 +828,80 @@ static TuriValue simdn_i32x4_hsum(TuriEnv *env, TuriValue *a, uint32_t n, void *
     s += (uint64_t)(int64_t)(int32_t)lane_i(a[0], 2);
     s += (uint64_t)(int64_t)(int32_t)lane_i(a[0], 3);
     return turi_int((int64_t)s);
+}
+static TuriValue simdn_i32x4_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((int32_t)lane_i(a[0], 0) == (int32_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((int32_t)lane_i(a[0], 1) == (int32_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((int32_t)lane_i(a[0], 2) == (int32_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((int32_t)lane_i(a[0], 3) == (int32_t)lane_i(a[1], 3) ? -1 : 0);
+    return mk(env, "M32x4", f, 4);
+}
+static TuriValue simdn_i32x4_lt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((int32_t)lane_i(a[0], 0) < (int32_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((int32_t)lane_i(a[0], 1) < (int32_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((int32_t)lane_i(a[0], 2) < (int32_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((int32_t)lane_i(a[0], 3) < (int32_t)lane_i(a[1], 3) ? -1 : 0);
+    return mk(env, "M32x4", f, 4);
+}
+static TuriValue simdn_i32x4_le(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((int32_t)lane_i(a[0], 0) <= (int32_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((int32_t)lane_i(a[0], 1) <= (int32_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((int32_t)lane_i(a[0], 2) <= (int32_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((int32_t)lane_i(a[0], 3) <= (int32_t)lane_i(a[1], 3) ? -1 : 0);
+    return mk(env, "M32x4", f, 4);
+}
+static TuriValue simdn_i32x4_gt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((int32_t)lane_i(a[0], 0) > (int32_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((int32_t)lane_i(a[0], 1) > (int32_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((int32_t)lane_i(a[0], 2) > (int32_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((int32_t)lane_i(a[0], 3) > (int32_t)lane_i(a[1], 3) ? -1 : 0);
+    return mk(env, "M32x4", f, 4);
+}
+static TuriValue simdn_i32x4_ge(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((int32_t)lane_i(a[0], 0) >= (int32_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((int32_t)lane_i(a[0], 1) >= (int32_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((int32_t)lane_i(a[0], 2) >= (int32_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((int32_t)lane_i(a[0], 3) >= (int32_t)lane_i(a[1], 3) ? -1 : 0);
+    return mk(env, "M32x4", f, 4);
+}
+static TuriValue simdn_i32x4_select(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 3) return turi_nil();
+    bool found;
+    f[0] = lane_i(a[0], 0) != 0 ? turi_struct_field(a[1], 0, &found) : turi_struct_field(a[2], 0, &found);
+    f[1] = lane_i(a[0], 1) != 0 ? turi_struct_field(a[1], 1, &found) : turi_struct_field(a[2], 1, &found);
+    f[2] = lane_i(a[0], 2) != 0 ? turi_struct_field(a[1], 2, &found) : turi_struct_field(a[2], 2, &found);
+    f[3] = lane_i(a[0], 3) != 0 ? turi_struct_field(a[1], 3, &found) : turi_struct_field(a[2], 3, &found);
+    return mk(env, "I32x4", f, 4);
+}
+static TuriValue simdn_i32x4_shuffle(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    bool found;
+    f[0] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 0) & 3), &found);
+    f[1] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 1) & 3), &found);
+    f[2] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 2) & 3), &found);
+    f[3] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 3) & 3), &found);
+    return mk(env, "I32x4", f, 4);
+}
+static TuriValue simdn_i32x4_to_f32x4(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    f[0] = turi_float((double)(float)(int32_t)lane_i(a[0], 0));
+    f[1] = turi_float((double)(float)(int32_t)lane_i(a[0], 1));
+    f[2] = turi_float((double)(float)(int32_t)lane_i(a[0], 2));
+    f[3] = turi_float((double)(float)(int32_t)lane_i(a[0], 3));
+    return mk(env, "F32x4", f, 4);
 }
 static TuriValue simdn_u16x8_splat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud; TuriValue f[16]; (void)f;
@@ -816,6 +1089,99 @@ static TuriValue simdn_u16x8_shr(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     f[5] = turi_int(sh > 15 ? 0 : (int64_t)(uint16_t)((uint16_t)lane_i(a[0], 5) >> sh));
     f[6] = turi_int(sh > 15 ? 0 : (int64_t)(uint16_t)((uint16_t)lane_i(a[0], 6) >> sh));
     f[7] = turi_int(sh > 15 ? 0 : (int64_t)(uint16_t)((uint16_t)lane_i(a[0], 7) >> sh));
+    return mk(env, "U16x8", f, 8);
+}
+static TuriValue simdn_u16x8_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((uint16_t)lane_i(a[0], 0) == (uint16_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((uint16_t)lane_i(a[0], 1) == (uint16_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((uint16_t)lane_i(a[0], 2) == (uint16_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((uint16_t)lane_i(a[0], 3) == (uint16_t)lane_i(a[1], 3) ? -1 : 0);
+    f[4] = turi_int((uint16_t)lane_i(a[0], 4) == (uint16_t)lane_i(a[1], 4) ? -1 : 0);
+    f[5] = turi_int((uint16_t)lane_i(a[0], 5) == (uint16_t)lane_i(a[1], 5) ? -1 : 0);
+    f[6] = turi_int((uint16_t)lane_i(a[0], 6) == (uint16_t)lane_i(a[1], 6) ? -1 : 0);
+    f[7] = turi_int((uint16_t)lane_i(a[0], 7) == (uint16_t)lane_i(a[1], 7) ? -1 : 0);
+    return mk(env, "M16x8", f, 8);
+}
+static TuriValue simdn_u16x8_lt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((uint16_t)lane_i(a[0], 0) < (uint16_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((uint16_t)lane_i(a[0], 1) < (uint16_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((uint16_t)lane_i(a[0], 2) < (uint16_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((uint16_t)lane_i(a[0], 3) < (uint16_t)lane_i(a[1], 3) ? -1 : 0);
+    f[4] = turi_int((uint16_t)lane_i(a[0], 4) < (uint16_t)lane_i(a[1], 4) ? -1 : 0);
+    f[5] = turi_int((uint16_t)lane_i(a[0], 5) < (uint16_t)lane_i(a[1], 5) ? -1 : 0);
+    f[6] = turi_int((uint16_t)lane_i(a[0], 6) < (uint16_t)lane_i(a[1], 6) ? -1 : 0);
+    f[7] = turi_int((uint16_t)lane_i(a[0], 7) < (uint16_t)lane_i(a[1], 7) ? -1 : 0);
+    return mk(env, "M16x8", f, 8);
+}
+static TuriValue simdn_u16x8_le(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((uint16_t)lane_i(a[0], 0) <= (uint16_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((uint16_t)lane_i(a[0], 1) <= (uint16_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((uint16_t)lane_i(a[0], 2) <= (uint16_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((uint16_t)lane_i(a[0], 3) <= (uint16_t)lane_i(a[1], 3) ? -1 : 0);
+    f[4] = turi_int((uint16_t)lane_i(a[0], 4) <= (uint16_t)lane_i(a[1], 4) ? -1 : 0);
+    f[5] = turi_int((uint16_t)lane_i(a[0], 5) <= (uint16_t)lane_i(a[1], 5) ? -1 : 0);
+    f[6] = turi_int((uint16_t)lane_i(a[0], 6) <= (uint16_t)lane_i(a[1], 6) ? -1 : 0);
+    f[7] = turi_int((uint16_t)lane_i(a[0], 7) <= (uint16_t)lane_i(a[1], 7) ? -1 : 0);
+    return mk(env, "M16x8", f, 8);
+}
+static TuriValue simdn_u16x8_gt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((uint16_t)lane_i(a[0], 0) > (uint16_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((uint16_t)lane_i(a[0], 1) > (uint16_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((uint16_t)lane_i(a[0], 2) > (uint16_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((uint16_t)lane_i(a[0], 3) > (uint16_t)lane_i(a[1], 3) ? -1 : 0);
+    f[4] = turi_int((uint16_t)lane_i(a[0], 4) > (uint16_t)lane_i(a[1], 4) ? -1 : 0);
+    f[5] = turi_int((uint16_t)lane_i(a[0], 5) > (uint16_t)lane_i(a[1], 5) ? -1 : 0);
+    f[6] = turi_int((uint16_t)lane_i(a[0], 6) > (uint16_t)lane_i(a[1], 6) ? -1 : 0);
+    f[7] = turi_int((uint16_t)lane_i(a[0], 7) > (uint16_t)lane_i(a[1], 7) ? -1 : 0);
+    return mk(env, "M16x8", f, 8);
+}
+static TuriValue simdn_u16x8_ge(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((uint16_t)lane_i(a[0], 0) >= (uint16_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((uint16_t)lane_i(a[0], 1) >= (uint16_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((uint16_t)lane_i(a[0], 2) >= (uint16_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((uint16_t)lane_i(a[0], 3) >= (uint16_t)lane_i(a[1], 3) ? -1 : 0);
+    f[4] = turi_int((uint16_t)lane_i(a[0], 4) >= (uint16_t)lane_i(a[1], 4) ? -1 : 0);
+    f[5] = turi_int((uint16_t)lane_i(a[0], 5) >= (uint16_t)lane_i(a[1], 5) ? -1 : 0);
+    f[6] = turi_int((uint16_t)lane_i(a[0], 6) >= (uint16_t)lane_i(a[1], 6) ? -1 : 0);
+    f[7] = turi_int((uint16_t)lane_i(a[0], 7) >= (uint16_t)lane_i(a[1], 7) ? -1 : 0);
+    return mk(env, "M16x8", f, 8);
+}
+static TuriValue simdn_u16x8_select(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 3) return turi_nil();
+    bool found;
+    f[0] = lane_i(a[0], 0) != 0 ? turi_struct_field(a[1], 0, &found) : turi_struct_field(a[2], 0, &found);
+    f[1] = lane_i(a[0], 1) != 0 ? turi_struct_field(a[1], 1, &found) : turi_struct_field(a[2], 1, &found);
+    f[2] = lane_i(a[0], 2) != 0 ? turi_struct_field(a[1], 2, &found) : turi_struct_field(a[2], 2, &found);
+    f[3] = lane_i(a[0], 3) != 0 ? turi_struct_field(a[1], 3, &found) : turi_struct_field(a[2], 3, &found);
+    f[4] = lane_i(a[0], 4) != 0 ? turi_struct_field(a[1], 4, &found) : turi_struct_field(a[2], 4, &found);
+    f[5] = lane_i(a[0], 5) != 0 ? turi_struct_field(a[1], 5, &found) : turi_struct_field(a[2], 5, &found);
+    f[6] = lane_i(a[0], 6) != 0 ? turi_struct_field(a[1], 6, &found) : turi_struct_field(a[2], 6, &found);
+    f[7] = lane_i(a[0], 7) != 0 ? turi_struct_field(a[1], 7, &found) : turi_struct_field(a[2], 7, &found);
+    return mk(env, "U16x8", f, 8);
+}
+static TuriValue simdn_u16x8_shuffle(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    bool found;
+    f[0] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 0) & 7), &found);
+    f[1] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 1) & 7), &found);
+    f[2] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 2) & 7), &found);
+    f[3] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 3) & 7), &found);
+    f[4] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 4) & 7), &found);
+    f[5] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 5) & 7), &found);
+    f[6] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 6) & 7), &found);
+    f[7] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 7) & 7), &found);
     return mk(env, "U16x8", f, 8);
 }
 static TuriValue simdn_u8x16_splat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -1201,6 +1567,413 @@ static TuriValue simdn_u8x16_widen_hi(TuriEnv *env, TuriValue *a, uint32_t n, vo
     f[7] = turi_int((int64_t)(uint8_t)lane_i(a[0], 15));
     return mk(env, "U16x8", f, 8);
 }
+static TuriValue simdn_u8x16_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((uint8_t)lane_i(a[0], 0) == (uint8_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((uint8_t)lane_i(a[0], 1) == (uint8_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((uint8_t)lane_i(a[0], 2) == (uint8_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((uint8_t)lane_i(a[0], 3) == (uint8_t)lane_i(a[1], 3) ? -1 : 0);
+    f[4] = turi_int((uint8_t)lane_i(a[0], 4) == (uint8_t)lane_i(a[1], 4) ? -1 : 0);
+    f[5] = turi_int((uint8_t)lane_i(a[0], 5) == (uint8_t)lane_i(a[1], 5) ? -1 : 0);
+    f[6] = turi_int((uint8_t)lane_i(a[0], 6) == (uint8_t)lane_i(a[1], 6) ? -1 : 0);
+    f[7] = turi_int((uint8_t)lane_i(a[0], 7) == (uint8_t)lane_i(a[1], 7) ? -1 : 0);
+    f[8] = turi_int((uint8_t)lane_i(a[0], 8) == (uint8_t)lane_i(a[1], 8) ? -1 : 0);
+    f[9] = turi_int((uint8_t)lane_i(a[0], 9) == (uint8_t)lane_i(a[1], 9) ? -1 : 0);
+    f[10] = turi_int((uint8_t)lane_i(a[0], 10) == (uint8_t)lane_i(a[1], 10) ? -1 : 0);
+    f[11] = turi_int((uint8_t)lane_i(a[0], 11) == (uint8_t)lane_i(a[1], 11) ? -1 : 0);
+    f[12] = turi_int((uint8_t)lane_i(a[0], 12) == (uint8_t)lane_i(a[1], 12) ? -1 : 0);
+    f[13] = turi_int((uint8_t)lane_i(a[0], 13) == (uint8_t)lane_i(a[1], 13) ? -1 : 0);
+    f[14] = turi_int((uint8_t)lane_i(a[0], 14) == (uint8_t)lane_i(a[1], 14) ? -1 : 0);
+    f[15] = turi_int((uint8_t)lane_i(a[0], 15) == (uint8_t)lane_i(a[1], 15) ? -1 : 0);
+    return mk(env, "M8x16", f, 16);
+}
+static TuriValue simdn_u8x16_lt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((uint8_t)lane_i(a[0], 0) < (uint8_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((uint8_t)lane_i(a[0], 1) < (uint8_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((uint8_t)lane_i(a[0], 2) < (uint8_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((uint8_t)lane_i(a[0], 3) < (uint8_t)lane_i(a[1], 3) ? -1 : 0);
+    f[4] = turi_int((uint8_t)lane_i(a[0], 4) < (uint8_t)lane_i(a[1], 4) ? -1 : 0);
+    f[5] = turi_int((uint8_t)lane_i(a[0], 5) < (uint8_t)lane_i(a[1], 5) ? -1 : 0);
+    f[6] = turi_int((uint8_t)lane_i(a[0], 6) < (uint8_t)lane_i(a[1], 6) ? -1 : 0);
+    f[7] = turi_int((uint8_t)lane_i(a[0], 7) < (uint8_t)lane_i(a[1], 7) ? -1 : 0);
+    f[8] = turi_int((uint8_t)lane_i(a[0], 8) < (uint8_t)lane_i(a[1], 8) ? -1 : 0);
+    f[9] = turi_int((uint8_t)lane_i(a[0], 9) < (uint8_t)lane_i(a[1], 9) ? -1 : 0);
+    f[10] = turi_int((uint8_t)lane_i(a[0], 10) < (uint8_t)lane_i(a[1], 10) ? -1 : 0);
+    f[11] = turi_int((uint8_t)lane_i(a[0], 11) < (uint8_t)lane_i(a[1], 11) ? -1 : 0);
+    f[12] = turi_int((uint8_t)lane_i(a[0], 12) < (uint8_t)lane_i(a[1], 12) ? -1 : 0);
+    f[13] = turi_int((uint8_t)lane_i(a[0], 13) < (uint8_t)lane_i(a[1], 13) ? -1 : 0);
+    f[14] = turi_int((uint8_t)lane_i(a[0], 14) < (uint8_t)lane_i(a[1], 14) ? -1 : 0);
+    f[15] = turi_int((uint8_t)lane_i(a[0], 15) < (uint8_t)lane_i(a[1], 15) ? -1 : 0);
+    return mk(env, "M8x16", f, 16);
+}
+static TuriValue simdn_u8x16_le(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((uint8_t)lane_i(a[0], 0) <= (uint8_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((uint8_t)lane_i(a[0], 1) <= (uint8_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((uint8_t)lane_i(a[0], 2) <= (uint8_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((uint8_t)lane_i(a[0], 3) <= (uint8_t)lane_i(a[1], 3) ? -1 : 0);
+    f[4] = turi_int((uint8_t)lane_i(a[0], 4) <= (uint8_t)lane_i(a[1], 4) ? -1 : 0);
+    f[5] = turi_int((uint8_t)lane_i(a[0], 5) <= (uint8_t)lane_i(a[1], 5) ? -1 : 0);
+    f[6] = turi_int((uint8_t)lane_i(a[0], 6) <= (uint8_t)lane_i(a[1], 6) ? -1 : 0);
+    f[7] = turi_int((uint8_t)lane_i(a[0], 7) <= (uint8_t)lane_i(a[1], 7) ? -1 : 0);
+    f[8] = turi_int((uint8_t)lane_i(a[0], 8) <= (uint8_t)lane_i(a[1], 8) ? -1 : 0);
+    f[9] = turi_int((uint8_t)lane_i(a[0], 9) <= (uint8_t)lane_i(a[1], 9) ? -1 : 0);
+    f[10] = turi_int((uint8_t)lane_i(a[0], 10) <= (uint8_t)lane_i(a[1], 10) ? -1 : 0);
+    f[11] = turi_int((uint8_t)lane_i(a[0], 11) <= (uint8_t)lane_i(a[1], 11) ? -1 : 0);
+    f[12] = turi_int((uint8_t)lane_i(a[0], 12) <= (uint8_t)lane_i(a[1], 12) ? -1 : 0);
+    f[13] = turi_int((uint8_t)lane_i(a[0], 13) <= (uint8_t)lane_i(a[1], 13) ? -1 : 0);
+    f[14] = turi_int((uint8_t)lane_i(a[0], 14) <= (uint8_t)lane_i(a[1], 14) ? -1 : 0);
+    f[15] = turi_int((uint8_t)lane_i(a[0], 15) <= (uint8_t)lane_i(a[1], 15) ? -1 : 0);
+    return mk(env, "M8x16", f, 16);
+}
+static TuriValue simdn_u8x16_gt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((uint8_t)lane_i(a[0], 0) > (uint8_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((uint8_t)lane_i(a[0], 1) > (uint8_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((uint8_t)lane_i(a[0], 2) > (uint8_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((uint8_t)lane_i(a[0], 3) > (uint8_t)lane_i(a[1], 3) ? -1 : 0);
+    f[4] = turi_int((uint8_t)lane_i(a[0], 4) > (uint8_t)lane_i(a[1], 4) ? -1 : 0);
+    f[5] = turi_int((uint8_t)lane_i(a[0], 5) > (uint8_t)lane_i(a[1], 5) ? -1 : 0);
+    f[6] = turi_int((uint8_t)lane_i(a[0], 6) > (uint8_t)lane_i(a[1], 6) ? -1 : 0);
+    f[7] = turi_int((uint8_t)lane_i(a[0], 7) > (uint8_t)lane_i(a[1], 7) ? -1 : 0);
+    f[8] = turi_int((uint8_t)lane_i(a[0], 8) > (uint8_t)lane_i(a[1], 8) ? -1 : 0);
+    f[9] = turi_int((uint8_t)lane_i(a[0], 9) > (uint8_t)lane_i(a[1], 9) ? -1 : 0);
+    f[10] = turi_int((uint8_t)lane_i(a[0], 10) > (uint8_t)lane_i(a[1], 10) ? -1 : 0);
+    f[11] = turi_int((uint8_t)lane_i(a[0], 11) > (uint8_t)lane_i(a[1], 11) ? -1 : 0);
+    f[12] = turi_int((uint8_t)lane_i(a[0], 12) > (uint8_t)lane_i(a[1], 12) ? -1 : 0);
+    f[13] = turi_int((uint8_t)lane_i(a[0], 13) > (uint8_t)lane_i(a[1], 13) ? -1 : 0);
+    f[14] = turi_int((uint8_t)lane_i(a[0], 14) > (uint8_t)lane_i(a[1], 14) ? -1 : 0);
+    f[15] = turi_int((uint8_t)lane_i(a[0], 15) > (uint8_t)lane_i(a[1], 15) ? -1 : 0);
+    return mk(env, "M8x16", f, 16);
+}
+static TuriValue simdn_u8x16_ge(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((uint8_t)lane_i(a[0], 0) >= (uint8_t)lane_i(a[1], 0) ? -1 : 0);
+    f[1] = turi_int((uint8_t)lane_i(a[0], 1) >= (uint8_t)lane_i(a[1], 1) ? -1 : 0);
+    f[2] = turi_int((uint8_t)lane_i(a[0], 2) >= (uint8_t)lane_i(a[1], 2) ? -1 : 0);
+    f[3] = turi_int((uint8_t)lane_i(a[0], 3) >= (uint8_t)lane_i(a[1], 3) ? -1 : 0);
+    f[4] = turi_int((uint8_t)lane_i(a[0], 4) >= (uint8_t)lane_i(a[1], 4) ? -1 : 0);
+    f[5] = turi_int((uint8_t)lane_i(a[0], 5) >= (uint8_t)lane_i(a[1], 5) ? -1 : 0);
+    f[6] = turi_int((uint8_t)lane_i(a[0], 6) >= (uint8_t)lane_i(a[1], 6) ? -1 : 0);
+    f[7] = turi_int((uint8_t)lane_i(a[0], 7) >= (uint8_t)lane_i(a[1], 7) ? -1 : 0);
+    f[8] = turi_int((uint8_t)lane_i(a[0], 8) >= (uint8_t)lane_i(a[1], 8) ? -1 : 0);
+    f[9] = turi_int((uint8_t)lane_i(a[0], 9) >= (uint8_t)lane_i(a[1], 9) ? -1 : 0);
+    f[10] = turi_int((uint8_t)lane_i(a[0], 10) >= (uint8_t)lane_i(a[1], 10) ? -1 : 0);
+    f[11] = turi_int((uint8_t)lane_i(a[0], 11) >= (uint8_t)lane_i(a[1], 11) ? -1 : 0);
+    f[12] = turi_int((uint8_t)lane_i(a[0], 12) >= (uint8_t)lane_i(a[1], 12) ? -1 : 0);
+    f[13] = turi_int((uint8_t)lane_i(a[0], 13) >= (uint8_t)lane_i(a[1], 13) ? -1 : 0);
+    f[14] = turi_int((uint8_t)lane_i(a[0], 14) >= (uint8_t)lane_i(a[1], 14) ? -1 : 0);
+    f[15] = turi_int((uint8_t)lane_i(a[0], 15) >= (uint8_t)lane_i(a[1], 15) ? -1 : 0);
+    return mk(env, "M8x16", f, 16);
+}
+static TuriValue simdn_u8x16_select(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 3) return turi_nil();
+    bool found;
+    f[0] = lane_i(a[0], 0) != 0 ? turi_struct_field(a[1], 0, &found) : turi_struct_field(a[2], 0, &found);
+    f[1] = lane_i(a[0], 1) != 0 ? turi_struct_field(a[1], 1, &found) : turi_struct_field(a[2], 1, &found);
+    f[2] = lane_i(a[0], 2) != 0 ? turi_struct_field(a[1], 2, &found) : turi_struct_field(a[2], 2, &found);
+    f[3] = lane_i(a[0], 3) != 0 ? turi_struct_field(a[1], 3, &found) : turi_struct_field(a[2], 3, &found);
+    f[4] = lane_i(a[0], 4) != 0 ? turi_struct_field(a[1], 4, &found) : turi_struct_field(a[2], 4, &found);
+    f[5] = lane_i(a[0], 5) != 0 ? turi_struct_field(a[1], 5, &found) : turi_struct_field(a[2], 5, &found);
+    f[6] = lane_i(a[0], 6) != 0 ? turi_struct_field(a[1], 6, &found) : turi_struct_field(a[2], 6, &found);
+    f[7] = lane_i(a[0], 7) != 0 ? turi_struct_field(a[1], 7, &found) : turi_struct_field(a[2], 7, &found);
+    f[8] = lane_i(a[0], 8) != 0 ? turi_struct_field(a[1], 8, &found) : turi_struct_field(a[2], 8, &found);
+    f[9] = lane_i(a[0], 9) != 0 ? turi_struct_field(a[1], 9, &found) : turi_struct_field(a[2], 9, &found);
+    f[10] = lane_i(a[0], 10) != 0 ? turi_struct_field(a[1], 10, &found) : turi_struct_field(a[2], 10, &found);
+    f[11] = lane_i(a[0], 11) != 0 ? turi_struct_field(a[1], 11, &found) : turi_struct_field(a[2], 11, &found);
+    f[12] = lane_i(a[0], 12) != 0 ? turi_struct_field(a[1], 12, &found) : turi_struct_field(a[2], 12, &found);
+    f[13] = lane_i(a[0], 13) != 0 ? turi_struct_field(a[1], 13, &found) : turi_struct_field(a[2], 13, &found);
+    f[14] = lane_i(a[0], 14) != 0 ? turi_struct_field(a[1], 14, &found) : turi_struct_field(a[2], 14, &found);
+    f[15] = lane_i(a[0], 15) != 0 ? turi_struct_field(a[1], 15, &found) : turi_struct_field(a[2], 15, &found);
+    return mk(env, "U8x16", f, 16);
+}
+static TuriValue simdn_u8x16_shuffle(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    bool found;
+    f[0] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 0) & 15), &found);
+    f[1] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 1) & 15), &found);
+    f[2] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 2) & 15), &found);
+    f[3] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 3) & 15), &found);
+    f[4] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 4) & 15), &found);
+    f[5] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 5) & 15), &found);
+    f[6] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 6) & 15), &found);
+    f[7] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 7) & 15), &found);
+    f[8] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 8) & 15), &found);
+    f[9] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 9) & 15), &found);
+    f[10] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 10) & 15), &found);
+    f[11] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 11) & 15), &found);
+    f[12] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 12) & 15), &found);
+    f[13] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 13) & 15), &found);
+    f[14] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 14) & 15), &found);
+    f[15] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], 15) & 15), &found);
+    return mk(env, "U8x16", f, 16);
+}
+static TuriValue simdn_m64x2_and(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((lane_i(a[0], 0) != 0) & (lane_i(a[1], 0) != 0) ? -1 : 0);
+    f[1] = turi_int((lane_i(a[0], 1) != 0) & (lane_i(a[1], 1) != 0) ? -1 : 0);
+    return mk(env, "M64x2", f, 2);
+}
+static TuriValue simdn_m64x2_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((lane_i(a[0], 0) != 0) | (lane_i(a[1], 0) != 0) ? -1 : 0);
+    f[1] = turi_int((lane_i(a[0], 1) != 0) | (lane_i(a[1], 1) != 0) ? -1 : 0);
+    return mk(env, "M64x2", f, 2);
+}
+static TuriValue simdn_m64x2_not(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    f[0] = turi_int(lane_i(a[0], 0) == 0 ? -1 : 0);
+    f[1] = turi_int(lane_i(a[0], 1) == 0 ? -1 : 0);
+    return mk(env, "M64x2", f, 2);
+}
+static TuriValue simdn_m64x2_any(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    int64_t r = 0;
+    r |= lane_i(a[0], 0);
+    r |= lane_i(a[0], 1);
+    return turi_bool(r != 0);
+}
+static TuriValue simdn_m64x2_all(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    bool r = true;
+    r = r && lane_i(a[0], 0) != 0;
+    r = r && lane_i(a[0], 1) != 0;
+    return turi_bool(r);
+}
+static TuriValue simdn_m32x4_and(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((lane_i(a[0], 0) != 0) & (lane_i(a[1], 0) != 0) ? -1 : 0);
+    f[1] = turi_int((lane_i(a[0], 1) != 0) & (lane_i(a[1], 1) != 0) ? -1 : 0);
+    f[2] = turi_int((lane_i(a[0], 2) != 0) & (lane_i(a[1], 2) != 0) ? -1 : 0);
+    f[3] = turi_int((lane_i(a[0], 3) != 0) & (lane_i(a[1], 3) != 0) ? -1 : 0);
+    return mk(env, "M32x4", f, 4);
+}
+static TuriValue simdn_m32x4_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((lane_i(a[0], 0) != 0) | (lane_i(a[1], 0) != 0) ? -1 : 0);
+    f[1] = turi_int((lane_i(a[0], 1) != 0) | (lane_i(a[1], 1) != 0) ? -1 : 0);
+    f[2] = turi_int((lane_i(a[0], 2) != 0) | (lane_i(a[1], 2) != 0) ? -1 : 0);
+    f[3] = turi_int((lane_i(a[0], 3) != 0) | (lane_i(a[1], 3) != 0) ? -1 : 0);
+    return mk(env, "M32x4", f, 4);
+}
+static TuriValue simdn_m32x4_not(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    f[0] = turi_int(lane_i(a[0], 0) == 0 ? -1 : 0);
+    f[1] = turi_int(lane_i(a[0], 1) == 0 ? -1 : 0);
+    f[2] = turi_int(lane_i(a[0], 2) == 0 ? -1 : 0);
+    f[3] = turi_int(lane_i(a[0], 3) == 0 ? -1 : 0);
+    return mk(env, "M32x4", f, 4);
+}
+static TuriValue simdn_m32x4_any(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    int64_t r = 0;
+    r |= lane_i(a[0], 0);
+    r |= lane_i(a[0], 1);
+    r |= lane_i(a[0], 2);
+    r |= lane_i(a[0], 3);
+    return turi_bool(r != 0);
+}
+static TuriValue simdn_m32x4_all(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    bool r = true;
+    r = r && lane_i(a[0], 0) != 0;
+    r = r && lane_i(a[0], 1) != 0;
+    r = r && lane_i(a[0], 2) != 0;
+    r = r && lane_i(a[0], 3) != 0;
+    return turi_bool(r);
+}
+static TuriValue simdn_m16x8_and(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((lane_i(a[0], 0) != 0) & (lane_i(a[1], 0) != 0) ? -1 : 0);
+    f[1] = turi_int((lane_i(a[0], 1) != 0) & (lane_i(a[1], 1) != 0) ? -1 : 0);
+    f[2] = turi_int((lane_i(a[0], 2) != 0) & (lane_i(a[1], 2) != 0) ? -1 : 0);
+    f[3] = turi_int((lane_i(a[0], 3) != 0) & (lane_i(a[1], 3) != 0) ? -1 : 0);
+    f[4] = turi_int((lane_i(a[0], 4) != 0) & (lane_i(a[1], 4) != 0) ? -1 : 0);
+    f[5] = turi_int((lane_i(a[0], 5) != 0) & (lane_i(a[1], 5) != 0) ? -1 : 0);
+    f[6] = turi_int((lane_i(a[0], 6) != 0) & (lane_i(a[1], 6) != 0) ? -1 : 0);
+    f[7] = turi_int((lane_i(a[0], 7) != 0) & (lane_i(a[1], 7) != 0) ? -1 : 0);
+    return mk(env, "M16x8", f, 8);
+}
+static TuriValue simdn_m16x8_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((lane_i(a[0], 0) != 0) | (lane_i(a[1], 0) != 0) ? -1 : 0);
+    f[1] = turi_int((lane_i(a[0], 1) != 0) | (lane_i(a[1], 1) != 0) ? -1 : 0);
+    f[2] = turi_int((lane_i(a[0], 2) != 0) | (lane_i(a[1], 2) != 0) ? -1 : 0);
+    f[3] = turi_int((lane_i(a[0], 3) != 0) | (lane_i(a[1], 3) != 0) ? -1 : 0);
+    f[4] = turi_int((lane_i(a[0], 4) != 0) | (lane_i(a[1], 4) != 0) ? -1 : 0);
+    f[5] = turi_int((lane_i(a[0], 5) != 0) | (lane_i(a[1], 5) != 0) ? -1 : 0);
+    f[6] = turi_int((lane_i(a[0], 6) != 0) | (lane_i(a[1], 6) != 0) ? -1 : 0);
+    f[7] = turi_int((lane_i(a[0], 7) != 0) | (lane_i(a[1], 7) != 0) ? -1 : 0);
+    return mk(env, "M16x8", f, 8);
+}
+static TuriValue simdn_m16x8_not(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    f[0] = turi_int(lane_i(a[0], 0) == 0 ? -1 : 0);
+    f[1] = turi_int(lane_i(a[0], 1) == 0 ? -1 : 0);
+    f[2] = turi_int(lane_i(a[0], 2) == 0 ? -1 : 0);
+    f[3] = turi_int(lane_i(a[0], 3) == 0 ? -1 : 0);
+    f[4] = turi_int(lane_i(a[0], 4) == 0 ? -1 : 0);
+    f[5] = turi_int(lane_i(a[0], 5) == 0 ? -1 : 0);
+    f[6] = turi_int(lane_i(a[0], 6) == 0 ? -1 : 0);
+    f[7] = turi_int(lane_i(a[0], 7) == 0 ? -1 : 0);
+    return mk(env, "M16x8", f, 8);
+}
+static TuriValue simdn_m16x8_any(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    int64_t r = 0;
+    r |= lane_i(a[0], 0);
+    r |= lane_i(a[0], 1);
+    r |= lane_i(a[0], 2);
+    r |= lane_i(a[0], 3);
+    r |= lane_i(a[0], 4);
+    r |= lane_i(a[0], 5);
+    r |= lane_i(a[0], 6);
+    r |= lane_i(a[0], 7);
+    return turi_bool(r != 0);
+}
+static TuriValue simdn_m16x8_all(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    bool r = true;
+    r = r && lane_i(a[0], 0) != 0;
+    r = r && lane_i(a[0], 1) != 0;
+    r = r && lane_i(a[0], 2) != 0;
+    r = r && lane_i(a[0], 3) != 0;
+    r = r && lane_i(a[0], 4) != 0;
+    r = r && lane_i(a[0], 5) != 0;
+    r = r && lane_i(a[0], 6) != 0;
+    r = r && lane_i(a[0], 7) != 0;
+    return turi_bool(r);
+}
+static TuriValue simdn_m8x16_and(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((lane_i(a[0], 0) != 0) & (lane_i(a[1], 0) != 0) ? -1 : 0);
+    f[1] = turi_int((lane_i(a[0], 1) != 0) & (lane_i(a[1], 1) != 0) ? -1 : 0);
+    f[2] = turi_int((lane_i(a[0], 2) != 0) & (lane_i(a[1], 2) != 0) ? -1 : 0);
+    f[3] = turi_int((lane_i(a[0], 3) != 0) & (lane_i(a[1], 3) != 0) ? -1 : 0);
+    f[4] = turi_int((lane_i(a[0], 4) != 0) & (lane_i(a[1], 4) != 0) ? -1 : 0);
+    f[5] = turi_int((lane_i(a[0], 5) != 0) & (lane_i(a[1], 5) != 0) ? -1 : 0);
+    f[6] = turi_int((lane_i(a[0], 6) != 0) & (lane_i(a[1], 6) != 0) ? -1 : 0);
+    f[7] = turi_int((lane_i(a[0], 7) != 0) & (lane_i(a[1], 7) != 0) ? -1 : 0);
+    f[8] = turi_int((lane_i(a[0], 8) != 0) & (lane_i(a[1], 8) != 0) ? -1 : 0);
+    f[9] = turi_int((lane_i(a[0], 9) != 0) & (lane_i(a[1], 9) != 0) ? -1 : 0);
+    f[10] = turi_int((lane_i(a[0], 10) != 0) & (lane_i(a[1], 10) != 0) ? -1 : 0);
+    f[11] = turi_int((lane_i(a[0], 11) != 0) & (lane_i(a[1], 11) != 0) ? -1 : 0);
+    f[12] = turi_int((lane_i(a[0], 12) != 0) & (lane_i(a[1], 12) != 0) ? -1 : 0);
+    f[13] = turi_int((lane_i(a[0], 13) != 0) & (lane_i(a[1], 13) != 0) ? -1 : 0);
+    f[14] = turi_int((lane_i(a[0], 14) != 0) & (lane_i(a[1], 14) != 0) ? -1 : 0);
+    f[15] = turi_int((lane_i(a[0], 15) != 0) & (lane_i(a[1], 15) != 0) ? -1 : 0);
+    return mk(env, "M8x16", f, 16);
+}
+static TuriValue simdn_m8x16_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 2) return turi_nil();
+    f[0] = turi_int((lane_i(a[0], 0) != 0) | (lane_i(a[1], 0) != 0) ? -1 : 0);
+    f[1] = turi_int((lane_i(a[0], 1) != 0) | (lane_i(a[1], 1) != 0) ? -1 : 0);
+    f[2] = turi_int((lane_i(a[0], 2) != 0) | (lane_i(a[1], 2) != 0) ? -1 : 0);
+    f[3] = turi_int((lane_i(a[0], 3) != 0) | (lane_i(a[1], 3) != 0) ? -1 : 0);
+    f[4] = turi_int((lane_i(a[0], 4) != 0) | (lane_i(a[1], 4) != 0) ? -1 : 0);
+    f[5] = turi_int((lane_i(a[0], 5) != 0) | (lane_i(a[1], 5) != 0) ? -1 : 0);
+    f[6] = turi_int((lane_i(a[0], 6) != 0) | (lane_i(a[1], 6) != 0) ? -1 : 0);
+    f[7] = turi_int((lane_i(a[0], 7) != 0) | (lane_i(a[1], 7) != 0) ? -1 : 0);
+    f[8] = turi_int((lane_i(a[0], 8) != 0) | (lane_i(a[1], 8) != 0) ? -1 : 0);
+    f[9] = turi_int((lane_i(a[0], 9) != 0) | (lane_i(a[1], 9) != 0) ? -1 : 0);
+    f[10] = turi_int((lane_i(a[0], 10) != 0) | (lane_i(a[1], 10) != 0) ? -1 : 0);
+    f[11] = turi_int((lane_i(a[0], 11) != 0) | (lane_i(a[1], 11) != 0) ? -1 : 0);
+    f[12] = turi_int((lane_i(a[0], 12) != 0) | (lane_i(a[1], 12) != 0) ? -1 : 0);
+    f[13] = turi_int((lane_i(a[0], 13) != 0) | (lane_i(a[1], 13) != 0) ? -1 : 0);
+    f[14] = turi_int((lane_i(a[0], 14) != 0) | (lane_i(a[1], 14) != 0) ? -1 : 0);
+    f[15] = turi_int((lane_i(a[0], 15) != 0) | (lane_i(a[1], 15) != 0) ? -1 : 0);
+    return mk(env, "M8x16", f, 16);
+}
+static TuriValue simdn_m8x16_not(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    f[0] = turi_int(lane_i(a[0], 0) == 0 ? -1 : 0);
+    f[1] = turi_int(lane_i(a[0], 1) == 0 ? -1 : 0);
+    f[2] = turi_int(lane_i(a[0], 2) == 0 ? -1 : 0);
+    f[3] = turi_int(lane_i(a[0], 3) == 0 ? -1 : 0);
+    f[4] = turi_int(lane_i(a[0], 4) == 0 ? -1 : 0);
+    f[5] = turi_int(lane_i(a[0], 5) == 0 ? -1 : 0);
+    f[6] = turi_int(lane_i(a[0], 6) == 0 ? -1 : 0);
+    f[7] = turi_int(lane_i(a[0], 7) == 0 ? -1 : 0);
+    f[8] = turi_int(lane_i(a[0], 8) == 0 ? -1 : 0);
+    f[9] = turi_int(lane_i(a[0], 9) == 0 ? -1 : 0);
+    f[10] = turi_int(lane_i(a[0], 10) == 0 ? -1 : 0);
+    f[11] = turi_int(lane_i(a[0], 11) == 0 ? -1 : 0);
+    f[12] = turi_int(lane_i(a[0], 12) == 0 ? -1 : 0);
+    f[13] = turi_int(lane_i(a[0], 13) == 0 ? -1 : 0);
+    f[14] = turi_int(lane_i(a[0], 14) == 0 ? -1 : 0);
+    f[15] = turi_int(lane_i(a[0], 15) == 0 ? -1 : 0);
+    return mk(env, "M8x16", f, 16);
+}
+static TuriValue simdn_m8x16_any(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    int64_t r = 0;
+    r |= lane_i(a[0], 0);
+    r |= lane_i(a[0], 1);
+    r |= lane_i(a[0], 2);
+    r |= lane_i(a[0], 3);
+    r |= lane_i(a[0], 4);
+    r |= lane_i(a[0], 5);
+    r |= lane_i(a[0], 6);
+    r |= lane_i(a[0], 7);
+    r |= lane_i(a[0], 8);
+    r |= lane_i(a[0], 9);
+    r |= lane_i(a[0], 10);
+    r |= lane_i(a[0], 11);
+    r |= lane_i(a[0], 12);
+    r |= lane_i(a[0], 13);
+    r |= lane_i(a[0], 14);
+    r |= lane_i(a[0], 15);
+    return turi_bool(r != 0);
+}
+static TuriValue simdn_m8x16_all(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; TuriValue f[16]; (void)f;
+    if (n < 1) return turi_nil();
+    bool r = true;
+    r = r && lane_i(a[0], 0) != 0;
+    r = r && lane_i(a[0], 1) != 0;
+    r = r && lane_i(a[0], 2) != 0;
+    r = r && lane_i(a[0], 3) != 0;
+    r = r && lane_i(a[0], 4) != 0;
+    r = r && lane_i(a[0], 5) != 0;
+    r = r && lane_i(a[0], 6) != 0;
+    r = r && lane_i(a[0], 7) != 0;
+    r = r && lane_i(a[0], 8) != 0;
+    r = r && lane_i(a[0], 9) != 0;
+    r = r && lane_i(a[0], 10) != 0;
+    r = r && lane_i(a[0], 11) != 0;
+    r = r && lane_i(a[0], 12) != 0;
+    r = r && lane_i(a[0], 13) != 0;
+    r = r && lane_i(a[0], 14) != 0;
+    r = r && lane_i(a[0], 15) != 0;
+    return turi_bool(r);
+}
 
 static void simd_natives_register(TuriEnv *env) {
     turi_env_register_native(env, "f64x2-splat", simdn_f64x2_splat, NULL);
@@ -1219,6 +1992,14 @@ static void simd_natives_register(TuriEnv *env) {
     turi_env_register_native(env, "f64x2-sqrt", simdn_f64x2_sqrt, NULL);
     turi_env_register_native(env, "f64x2-abs", simdn_f64x2_abs, NULL);
     turi_env_register_native(env, "f64x2-hsum", simdn_f64x2_hsum, NULL);
+    turi_env_register_native(env, "f64x2-eq", simdn_f64x2_eq, NULL);
+    turi_env_register_native(env, "f64x2-lt", simdn_f64x2_lt, NULL);
+    turi_env_register_native(env, "f64x2-le", simdn_f64x2_le, NULL);
+    turi_env_register_native(env, "f64x2-gt", simdn_f64x2_gt, NULL);
+    turi_env_register_native(env, "f64x2-ge", simdn_f64x2_ge, NULL);
+    turi_env_register_native(env, "f64x2-select", simdn_f64x2_select, NULL);
+    turi_env_register_native(env, "f64x2-shuffle", simdn_f64x2_shuffle, NULL);
+    turi_env_register_native(env, "f64x2-narrow", simdn_f64x2_narrow, NULL);
     turi_env_register_native(env, "f32x4-splat", simdn_f32x4_splat, NULL);
     turi_env_register_native(env, "f32x4-lane", simdn_f32x4_lane, NULL);
     turi_env_register_native(env, "f32x4-load", simdn_f32x4_load, NULL);
@@ -1235,6 +2016,16 @@ static void simd_natives_register(TuriEnv *env) {
     turi_env_register_native(env, "f32x4-sqrt", simdn_f32x4_sqrt, NULL);
     turi_env_register_native(env, "f32x4-abs", simdn_f32x4_abs, NULL);
     turi_env_register_native(env, "f32x4-hsum", simdn_f32x4_hsum, NULL);
+    turi_env_register_native(env, "f32x4-eq", simdn_f32x4_eq, NULL);
+    turi_env_register_native(env, "f32x4-lt", simdn_f32x4_lt, NULL);
+    turi_env_register_native(env, "f32x4-le", simdn_f32x4_le, NULL);
+    turi_env_register_native(env, "f32x4-gt", simdn_f32x4_gt, NULL);
+    turi_env_register_native(env, "f32x4-ge", simdn_f32x4_ge, NULL);
+    turi_env_register_native(env, "f32x4-select", simdn_f32x4_select, NULL);
+    turi_env_register_native(env, "f32x4-shuffle", simdn_f32x4_shuffle, NULL);
+    turi_env_register_native(env, "f32x4->i32x4", simdn_f32x4_to_i32x4, NULL);
+    turi_env_register_native(env, "f32x4-widen-lo", simdn_f32x4_widen_lo, NULL);
+    turi_env_register_native(env, "f32x4-widen-hi", simdn_f32x4_widen_hi, NULL);
     turi_env_register_native(env, "i64x2-splat", simdn_i64x2_splat, NULL);
     turi_env_register_native(env, "i64x2-lane", simdn_i64x2_lane, NULL);
     turi_env_register_native(env, "i64x2-load", simdn_i64x2_load, NULL);
@@ -1249,6 +2040,13 @@ static void simd_natives_register(TuriEnv *env) {
     turi_env_register_native(env, "i64x2-min", simdn_i64x2_min, NULL);
     turi_env_register_native(env, "i64x2-max", simdn_i64x2_max, NULL);
     turi_env_register_native(env, "i64x2-hsum", simdn_i64x2_hsum, NULL);
+    turi_env_register_native(env, "i64x2-eq", simdn_i64x2_eq, NULL);
+    turi_env_register_native(env, "i64x2-lt", simdn_i64x2_lt, NULL);
+    turi_env_register_native(env, "i64x2-le", simdn_i64x2_le, NULL);
+    turi_env_register_native(env, "i64x2-gt", simdn_i64x2_gt, NULL);
+    turi_env_register_native(env, "i64x2-ge", simdn_i64x2_ge, NULL);
+    turi_env_register_native(env, "i64x2-select", simdn_i64x2_select, NULL);
+    turi_env_register_native(env, "i64x2-shuffle", simdn_i64x2_shuffle, NULL);
     turi_env_register_native(env, "i32x4-splat", simdn_i32x4_splat, NULL);
     turi_env_register_native(env, "i32x4-lane", simdn_i32x4_lane, NULL);
     turi_env_register_native(env, "i32x4-load", simdn_i32x4_load, NULL);
@@ -1263,6 +2061,14 @@ static void simd_natives_register(TuriEnv *env) {
     turi_env_register_native(env, "i32x4-min", simdn_i32x4_min, NULL);
     turi_env_register_native(env, "i32x4-max", simdn_i32x4_max, NULL);
     turi_env_register_native(env, "i32x4-hsum", simdn_i32x4_hsum, NULL);
+    turi_env_register_native(env, "i32x4-eq", simdn_i32x4_eq, NULL);
+    turi_env_register_native(env, "i32x4-lt", simdn_i32x4_lt, NULL);
+    turi_env_register_native(env, "i32x4-le", simdn_i32x4_le, NULL);
+    turi_env_register_native(env, "i32x4-gt", simdn_i32x4_gt, NULL);
+    turi_env_register_native(env, "i32x4-ge", simdn_i32x4_ge, NULL);
+    turi_env_register_native(env, "i32x4-select", simdn_i32x4_select, NULL);
+    turi_env_register_native(env, "i32x4-shuffle", simdn_i32x4_shuffle, NULL);
+    turi_env_register_native(env, "i32x4->f32x4", simdn_i32x4_to_f32x4, NULL);
     turi_env_register_native(env, "u16x8-splat", simdn_u16x8_splat, NULL);
     turi_env_register_native(env, "u16x8-lane", simdn_u16x8_lane, NULL);
     turi_env_register_native(env, "u16x8-add", simdn_u16x8_add, NULL);
@@ -1275,6 +2081,13 @@ static void simd_natives_register(TuriEnv *env) {
     turi_env_register_native(env, "u16x8-hsum", simdn_u16x8_hsum, NULL);
     turi_env_register_native(env, "u16x8-narrow", simdn_u16x8_narrow, NULL);
     turi_env_register_native(env, "u16x8-shr", simdn_u16x8_shr, NULL);
+    turi_env_register_native(env, "u16x8-eq", simdn_u16x8_eq, NULL);
+    turi_env_register_native(env, "u16x8-lt", simdn_u16x8_lt, NULL);
+    turi_env_register_native(env, "u16x8-le", simdn_u16x8_le, NULL);
+    turi_env_register_native(env, "u16x8-gt", simdn_u16x8_gt, NULL);
+    turi_env_register_native(env, "u16x8-ge", simdn_u16x8_ge, NULL);
+    turi_env_register_native(env, "u16x8-select", simdn_u16x8_select, NULL);
+    turi_env_register_native(env, "u16x8-shuffle", simdn_u16x8_shuffle, NULL);
     turi_env_register_native(env, "u8x16-splat", simdn_u8x16_splat, NULL);
     turi_env_register_native(env, "u8x16-lane", simdn_u8x16_lane, NULL);
     turi_env_register_native(env, "u8x16-load", simdn_u8x16_load, NULL);
@@ -1291,4 +2104,31 @@ static void simd_natives_register(TuriEnv *env) {
     turi_env_register_native(env, "u8x16-hsum", simdn_u8x16_hsum, NULL);
     turi_env_register_native(env, "u8x16-widen-lo", simdn_u8x16_widen_lo, NULL);
     turi_env_register_native(env, "u8x16-widen-hi", simdn_u8x16_widen_hi, NULL);
+    turi_env_register_native(env, "u8x16-eq", simdn_u8x16_eq, NULL);
+    turi_env_register_native(env, "u8x16-lt", simdn_u8x16_lt, NULL);
+    turi_env_register_native(env, "u8x16-le", simdn_u8x16_le, NULL);
+    turi_env_register_native(env, "u8x16-gt", simdn_u8x16_gt, NULL);
+    turi_env_register_native(env, "u8x16-ge", simdn_u8x16_ge, NULL);
+    turi_env_register_native(env, "u8x16-select", simdn_u8x16_select, NULL);
+    turi_env_register_native(env, "u8x16-shuffle", simdn_u8x16_shuffle, NULL);
+    turi_env_register_native(env, "m64x2-and", simdn_m64x2_and, NULL);
+    turi_env_register_native(env, "m64x2-or", simdn_m64x2_or, NULL);
+    turi_env_register_native(env, "m64x2-not", simdn_m64x2_not, NULL);
+    turi_env_register_native(env, "m64x2-any", simdn_m64x2_any, NULL);
+    turi_env_register_native(env, "m64x2-all", simdn_m64x2_all, NULL);
+    turi_env_register_native(env, "m32x4-and", simdn_m32x4_and, NULL);
+    turi_env_register_native(env, "m32x4-or", simdn_m32x4_or, NULL);
+    turi_env_register_native(env, "m32x4-not", simdn_m32x4_not, NULL);
+    turi_env_register_native(env, "m32x4-any", simdn_m32x4_any, NULL);
+    turi_env_register_native(env, "m32x4-all", simdn_m32x4_all, NULL);
+    turi_env_register_native(env, "m16x8-and", simdn_m16x8_and, NULL);
+    turi_env_register_native(env, "m16x8-or", simdn_m16x8_or, NULL);
+    turi_env_register_native(env, "m16x8-not", simdn_m16x8_not, NULL);
+    turi_env_register_native(env, "m16x8-any", simdn_m16x8_any, NULL);
+    turi_env_register_native(env, "m16x8-all", simdn_m16x8_all, NULL);
+    turi_env_register_native(env, "m8x16-and", simdn_m8x16_and, NULL);
+    turi_env_register_native(env, "m8x16-or", simdn_m8x16_or, NULL);
+    turi_env_register_native(env, "m8x16-not", simdn_m8x16_not, NULL);
+    turi_env_register_native(env, "m8x16-any", simdn_m8x16_any, NULL);
+    turi_env_register_native(env, "m8x16-all", simdn_m8x16_all, NULL);
 }

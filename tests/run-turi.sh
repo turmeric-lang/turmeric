@@ -257,6 +257,7 @@ inline-c-binop
 numvec-kernels
 numvec-store-loops
 simd-ops
+simd-masks-shuffle-convert
 map-multiword-struct-key
 set-multiword-struct-element
 clone-list

@@ -7,7 +7,9 @@
 > types, not a `(NumVec T)` rewrite (section 3.1, "2026-10-29") -- **built
 > 2026-10-29** (3.1, "As built: NumArray"). **S0 built 2026-10-29** as the
 > `tur-simd` spice (S0, "As built"; its findings reshape S1's type list).
-> **S1a built 2026-10-29** behind `--enable=simd` (S1, "As built: S1a"). N2
+> **S1a built 2026-10-29** behind `--enable=simd` (S1, "As built: S1a");
+> **S1b** (masks, comparisons, `select`, `shuffle`, conversions, no 32-byte
+> types) 2026-10-30 (S1, "As built: S1b"). N2
 > approaches D/E not started.
 > **Open questions reviewed 2026-10-29** (section 6): the class is `NumArray`
 > with `na-` methods (Q2, decided); D and E deferred (Q3); wasm `-msimd128`
@@ -856,12 +858,56 @@ first reaches a vector type; `errors/simd-needs-enable`); with it, TUR-W0060.
   accessor (fiber-tls-address-reuse), so every panic check after a checked
   `load` is a function call: 2.9x on the blend. That is why the unchecked
   forms exist; gcc reads the flag directly and pays 1.13x.
-- **Not done yet:** the generic-position refusal (a vector in generic code is
-  boxed like any wide struct; the module header says to keep them out),
-  comparisons / masks / `select` / `shuffle` (no S0 kernel needed them),
-  float/int conversions, the 32-byte types (AVX-only, if at all), and moving
-  the tur-simd spice onto these types (its CI builds turmeric `main`, which
-  does not have them until this lands).
+- **Left for S1b (below):** the generic-position refusal, comparisons /
+  masks / `select` / `shuffle`, float/int conversions and the 32-byte
+  decision. Moving the tur-simd spice onto these types waits for its CI,
+  which builds turmeric `main`.
+
+**As built: S1b (2026-10-30), behind the same flag.** The rest of S1's
+operation list, generated the same way and agreeing on all three engines
+(`simd-masks-shuffle-convert`: NaN lanes, unsigned lanes above the signed
+range, float lanes outside int32's range, shuffle indices that wrap -- cc,
+`tur jit` and turi print the same 120 lines, checked by hand; gcc and clang
+both).
+
+- **Masks are four more `^copy` structs**, `M64x2 M32x4 M16x8 M8x16`, integer
+  lanes as wide as the vector's (F64x2 and I64x2 share M64x2, F32x4 and I32x4
+  share M32x4). A comparison sets a lane to -1 where it held and 0 where not
+  -- what the vector compare instruction produces, so `P-lt` is one
+  `cmpltpd` / `pcmpgtd`. `P-select` and the mask operations (`M-and`,
+  `M-or`, `M-not`, `M-any`, `M-all`) take any **nonzero** lane as set, so a
+  mask built by hand (`(M64x2 5 0)`) means what it looks like rather than
+  mixing bits; after inlining, the `!= 0` folds away against a comparison's
+  -1 / 0. `select` is an and / andnot / or over the lanes' bits, never a
+  branch. Float comparisons are IEEE: a NaN lane fails all of `eq lt le gt
+  ge`. Unsigned lanes compare unsigned.
+- **`P-shuffle v idx`** takes lane `idx[k] mod L` of `v`; the index vector
+  is the integer type of the same width (I64x2 for F64x2, I32x4 for F32x4,
+  the integer types index themselves). Not restricted to constants, as the
+  original list said: with constant indices gcc and clang both fold it to
+  one `shufps` / `pshufd` (checked in the assembly), and a variable index is
+  a lane loop, since baseline x86-64 has no variable shuffle below SSSE3's
+  `pshufb`. The `mod L` means there is no out-of-range case and nothing to
+  panic.
+- **Conversions:** `i32x4->f32x4` (`cvtdq2ps`, round to nearest),
+  `f32x4->i32x4` (truncating and **saturating**: NaN gives 0, at or above
+  2^31 gives INT32_MAX, below -2^31 gives INT32_MIN -- a C cast is undefined
+  there and `cvttps2dq` alone gives INT32_MIN for all three; the vector
+  lowering zeroes those lanes before the conversion and patches them after),
+  `f32x4-widen-lo` / `-hi` to F64x2 (exact) and `f64x2-narrow lo hi` to
+  F32x4 (round to nearest, overflow to infinity). The plan said to spell them
+  with `TUR_AS`; they are inline-C bodies, which
+  `check-emitted-float-conversions.py` skips as reviewed code, so they are
+  plain casts and `__builtin_convertvector`.
+- **No 32-byte types -- decided.** S0 measured an `f64x4` without AVX
+  living in memory on gcc and losing to `F64x2`, and the portable target set
+  (x86-64 baseline, arm64, wasm simd128) has 16-byte registers only.
+  `F64x4` / `F32x8` would pay off only under `-march` with AVX, which the
+  performance guide does not make the default; a program that wants them
+  can write two 16-byte halves today. Revisit with function
+  multiversioning (Q6), if that is ever built.
+- **None of the new operations can panic**, so none carries a panic check
+  after the call.
 
 ## 4. Engine matrix after each phase
 
