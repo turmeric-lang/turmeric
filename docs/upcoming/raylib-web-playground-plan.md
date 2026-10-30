@@ -15,9 +15,11 @@
 > [section 7](#prerequisites-before-p0). **2026-10-30: the owner chose JSPI
 > for the blocking frame loop** (J4, prerequisite 3), which settles
 > [section 3](#3-the-central-decision-how-does-typed-code-reach-raylib)'s J
-> over A, since JSPI is a route only the JIT arm has. The one decision still
-> open before P0 is [section 4](#4-where-it-lives), the repo (its own --
-> recommended).
+> over A, since JSPI is a route only the JIT arm has. **The same day the
+> owner chose its own repository** ([section 4](#4-where-it-lives)). Every
+> decision this plan asked for is made; what remains before P0 is work
+> ([section 7](#prerequisites-before-p0)), and the repo's name and domain,
+> which the owner picks when it is created.
 > **Type:** Web platform / browser JIT module (`tools/wasm-jit/`,
 > `src/web/wasm_jit_glue.c`, `src/jit_engine.c`) / a new site. The interpreter
 > side (`src/turi/`) and the build driver (`src/driver/cmd_build.c`) only if the
@@ -265,7 +267,9 @@ eval watchdog.
 
 ## 4. Where it lives
 
-Three candidates were asked about. Recommendation: **its own repository**.
+Three candidates were asked about. Recommendation, and **the owner's decision
+on 2026-10-30: its own repository.** The working name below stands until the
+repo is created.
 
 | Option | For | Against |
 |---|---|---|
@@ -582,7 +586,7 @@ later, and where it is tracked. Nothing here needs the arcade repo to exist.
 
 | # | Prerequisite | Gates | Why this plan cares | Tracked in |
 |---|---|---|---|---|
-| 1 | **Decide J over A, and the repo.** The owner confirms section 3's flip and section 4's own-repo choice. **J is settled** by the JSPI decision of 2026-10-30 (JSPI is a J-only route); **the repo is still open.** | P0 | P0's scope is different under each: J tests struct-by-value calls and the main-thread boot, A tests `ffi_thunk` shims under Asyncify. | this plan |
+| 1 | **Decide J over A, and the repo.** The owner confirms section 3's flip and section 4's own-repo choice. **Both settled 2026-10-30:** J, by the JSPI decision (JSPI is a J-only route), and its own repository (section 4). | P0 | P0's scope is different under each: J tests struct-by-value calls and the main-thread boot, A tests `ffi_thunk` shims under Asyncify. | this plan |
 | 2 | **`-sSTACK_OVERFLOW_CHECK=2` on the JIT link.** One flag, one test. **Done 2026-10-29**: the module links with it (and `-sCHECK_NULL_WRITES=0`, see row 5), the page reports the abort as `stack overflow: recursion too deep`, and `jit-engine.spec.js` pins it. No measurable cost on the loop benchmark; +97 KB. | P0 | An iframe runs arbitrary user programs. Without the check a linear-stack overflow writes past the 16 MiB stack instead of stopping, and the spike's numbers (and the first user bug report) are of a corrupted module. | [wasm-linear-stack-overflow-unchecked](../reported/wasm-linear-stack-overflow-unchecked.md) |
 | 3 | **Decide how Asyncify gets measured on the MIR interpreter.** Neither wasm module is linked with it, and 49 corpus fixtures fail on `emscripten_fiber_swap`. Link a throwaway JIT module with `-sASYNCIFY` and run a compiled program that calls `emscripten_sleep`; that is P0 step 3 and the answer to whether the blocking style survives. The question is the `invoke_*` frames that `eval`'s own `setjmp` (mir#17) puts under every call it makes (section 3, J), not the stubs. **Done 2026-10-29** (`tools/wasm-jit-spike/asyncify/`, under node): it works. A compiled `while` loop sleeping 16 ms a frame from inline C yields to the event loop; +52% module size (2.63 MB gzipped), about 1.6x slower on a tight loop, no change in depth. 6 of the 49 fiber fixtures pass with it; the rest abort in the fiber switch's rewind. Found on the way: recursion depth is about 300, not 1,700 ([report](../reported/wasm-jit-recursion-depth-is-about-300.md)). **JSPI, 2026-10-30:** on a module built with wasm-native `setjmp` (`-fwasm-exceptions -sSUPPORT_LONGJMP=wasm`, no MIR change), `-sJSPI` makes the same blocking loop yield in Chromium 153, main thread and worker, with **no size cost** (the wasm is identical) and the depth doubled (700 in the worker, 1,100 on the main thread); it needs those objects, not today's. Chrome ships JSPI; Firefox has an Intent to Ship (153) and Safari 27 beta has it, per web sources. So the blocking style has two routes: Asyncify (every browser, +52% module, objects compiled without `-fwasm-exceptions`, which the default build no longer produces) or JSPI (Chrome-first, free, the default build's objects) -- two object sets, so one or the other per module. **Decided 2026-10-30: JSPI** (J4); the report has the measurements. | P0 | The whole examples section (8) is written in the blocking style. | wasm-jit-plan P5 (the family is "unowned"); J4 |
 | 4 | **Diagnose [wasm-jit-comparator-result-varies-between-runs](../archive/wasm-jit-comparator-result-varies-between-runs.md).** A list comparison gives a different answer on alternate runs of one module instance. **Done 2026-10-29**: not the MIR interpreter. `list-tail` read a `(Cons A)` cell's 4-byte tail and its padding as one `int64_t` (ILP32 shape 4), so what the allocator left in the padding decided the answer; fixed in `stdlib/list.tur`. | P1 | A frame loop is the longest-lived use the engine has had. A nondeterminism in the MIR interpreter's state on wasm is the kind of defect that shows up on frame 4,000, not in a 10-ms corpus run. Find out whether it is a MIR bug or a Turmeric one before building a site on it. | `docs/reported/` |
