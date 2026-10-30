@@ -1,11 +1,13 @@
 # Plan: a raylib playground in the browser ("Try Turmeric with a screen")
 
-> **Status:** P0 go on J (2026-10-30); **P1 in progress**
+> **Status:** P0 go on J and **P1 done** (2026-10-30); **P2 next**
+> ([section 7](#p2----the-page-arcade-repo)). P1
 > ([section 7](#p1----the-arcade-module-this-repo)): the arcade module is a
 > CMake target (`tur_wasm_arcade`) with a CI smoke test, the fallback
 > switch (J3 e) is in, spices are packages the page mounts (J2, `defscript`
-> headers included), and `life.tur`'s step is measured (64x36, not 96x54);
-> the examples' move into turmeric-arcade's `examples/` is left.
+> headers included), `life.tur`'s step is measured (64x36, not 96x54), and
+> turmeric-arcade builds the module, mounts the packages and runs its
+> `examples/` tree in CI.
 > Every decision this plan asked for is made: **J** -- the browser JIT engine
 > on the page with raylib linked in, compiling the raylib spice's inline C from
 > source ([section 3](#3-the-central-decision-how-does-typed-code-reach-raylib));
@@ -780,18 +782,29 @@ console line, Stop. If P0 said no-go, this phase is A1-A4 instead.
 - `build-raylib.sh` starts its CMake build over when pointed at another
   raylib checkout, rather than failing on CMake's source mismatch.
 
-**Left:** the examples moved from turmeric-arcade's `tests/raylib.spec.js`
-into its `examples/` (P1's last item; P3 writes the section 8 set), and the
-arcade's shell mounting packages through `spices.js` once its `engine.lock`
-pins a commit that has them -- until then its pinned module still embeds
-the two spices.
+**And last (2026-10-30, turmeric-arcade):** its `engine.lock` pins the J2
+merge, its screen mounts the program's spices through the engine's
+`spices.js`, and its Examples menu is an `examples/` tree (one program a
+file, titled by its `;;;` header) that `web/tests/raylib.spec.js` runs from
+the same files -- the quick start, the frame counter and the
+`run-main-loop` callback. P3 writes the section 8 set into that tree.
 
 ### P2 -- The page (arcade repo)
 
 Scaffold from Try's `web/`: Vite, Monaco, the LSP worker, `share-codec.js`,
 `csp.js`, the theme, the jit-client's protocol moved into the iframe shell.
 Build the screen pane to the section 5.2 contract. Spices menu (packages from
-5.3), examples menu, share. Deploy to its own Worker with COOP/COEP headers (the
+5.3), examples menu, share.
+
+**Already there from P0/P1 (turmeric-arcade, 2026-10-30):** Vite, the one
+CSP, the Worker with COOP/COEP, the screen pane's iframe shell and its
+postMessage contract (`web/screen.js`), streamed console lines, Stop, the
+refusal and stack-overflow reports, an Examples menu read from `examples/`,
+and spices mounted from packages. **Left for P2:** Monaco and the LSP
+worker in place of the textarea, the Spices menu (it reads
+`engine/spices/index.json` and edits a `defscript` header in place), share
+links (`share-codec.js`), the theme, and the no-JSPI path (the callback
+examples only, with a note). Deploy to its own Worker with COOP/COEP headers (the
 module is `-pthread`; keep that, the host serves the headers already).
 Playwright: the Try suite's shape (`web/tests/`) trimmed to the arcade's
 features. Prerequisites 6-7 should be closed or noted on the page first.
