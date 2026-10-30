@@ -18,6 +18,13 @@ OUT=$2
 command -v emcmake >/dev/null || { echo "build-raylib.sh: emcmake is not on PATH (source the emsdk environment)" >&2; exit 2; }
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
+SRC=$(cd "$SRC" && pwd)
+# A build directory configured from another checkout is CMake's hard error
+# ("does not match the source ... used to generate cache"): start it over.
+if [ -f "$OUT/build/CMakeCache.txt" ] &&
+   ! grep -qxF "CMAKE_HOME_DIRECTORY:INTERNAL=$SRC" "$OUT/build/CMakeCache.txt"; then
+  rm -rf "$OUT/build"
+fi
 emcmake cmake -S "$SRC" -B "$OUT/build" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_BUILD_TYPE=Release -DPLATFORM=Web -DGRAPHICS=GRAPHICS_API_OPENGL_ES3 \
   -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_GAMES=OFF \

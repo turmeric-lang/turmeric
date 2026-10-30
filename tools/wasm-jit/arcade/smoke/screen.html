@@ -7,13 +7,17 @@
 </head>
 <body>
 <canvas id="canvas" width="480" height="270" tabindex="0"></canvas>
-<script>
+<script type="module">
+import { loadIndex, spicesFor, mountSpices } from '/engine/spices.js';
+
 // One program's run on the arcade module, in this iframe's main thread --
 // the screen pane's shape (turmeric-arcade web/screen.js) cut to what the
 // smoke test asserts.  The parent sends {type:'run', src}; this frame posts
 // {type:'line', text} for every stdout/stderr line, {type:'boot', ...} and
-// {type:'result', answer}.  A run-main-loop program leaves main by `unwind`,
-// reported as {engine:'compiled', mainLoop:true}.
+// {type:'result', answer}.  The spices the program names are mounted from
+// their packages after the module has started (spices.js, J2).  A
+// run-main-loop program leaves main by `unwind`, reported as
+// {engine:'compiled', mainLoop:true}.
 const post = (m) => window.parent.postMessage(m, location.origin);
 const line = (text) => post({ type: 'line', text: String(text) });
 
@@ -27,7 +31,7 @@ function loadScript(src) {
   });
 }
 
-async function boot() {
+async function boot(src) {
   const t0 = performance.now();
   await loadScript('/engine/turmeric-jit.js');
   const m = await window.TurmericJitModule({
@@ -40,20 +44,21 @@ async function boot() {
   // The arcade's interpreter has no raylib: a refusal is the answer
   // (raylib-web-playground-plan J3 e).
   m._turi_wasm_jit_set_fallback(0);
-  const spices = [];
-  for (const name of m.FS.readdir('/spices')) {
-    if (name === '.' || name === '..') continue;
-    if (m.ccall('turi_wasm_add_include_dir', 'number', ['string'], ['/spices/' + name + '/src']) > 0)
-      spices.push(name);
-  }
-  return { m, info: { jspi: 'Suspending' in WebAssembly, spices, ms: performance.now() - t0 } };
+  const bootMs = performance.now() - t0;
+  const index = await loadIndex('/engine/spices');
+  const want = spicesFor(src, index);
+  // A defscript name the build does not carry is the engine's to refuse
+  // (wasm_jit_glue.c), so the answer names it.
+  const { mounted } = await mountSpices(m, '/engine/spices', want.names, index);
+  return { m, info: { jspi: 'Suspending' in WebAssembly, spices: mounted, offered: [...index.keys()],
+                      ms: bootMs, mountMs: performance.now() - t0 - bootMs } };
 }
 
 window.addEventListener('message', async (e) => {
   if (e.origin !== location.origin || !e.data || e.data.type !== 'run') return;
   let m;
   try {
-    const b = await boot();
+    const b = await boot(String(e.data.src));
     m = b.m;
     post({ type: 'boot', ok: true, ...b.info });
   } catch (err) {

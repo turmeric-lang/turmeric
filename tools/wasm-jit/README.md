@@ -76,8 +76,15 @@ does that), and drive it from a browser -- node 22's V8 has no JSPI.
 
 The raylib playground's engine (raylib-web-playground-plan P1): the JSPI
 build with raylib's web archive, the raylib spice's `rl_web_loop.c` and
-`raylib.h` linked and embedded, and the raylib and math spices' `src/`
-embedded at `/spices/<name>/src`. `arcade/build-raylib.sh` builds the archive
+`raylib.h` linked and embedded, and beside it a package per spice
+(`wasm-jit/spices/<name>.json` and `index.json`, from `arcade/pack-spices.py`;
+`TUR_ARCADE_SPICE_LIST`, default `raylib math`). A page mounts the ones a
+program names after the module has started with `arcade/spices.js`, copied
+beside the module: `spicesFor` reads the program's imports and `defscript`
+header, `mountSpices` writes the closure under `/spices/<name>/src` and adds
+each to the search path. A `defscript :spices` header is then satisfied from
+what is mounted, and a name that is not is refused ("not in this build"),
+never fetched. `arcade/build-raylib.sh` builds the archive
 (raylib's own CMake under `emcmake`, the spice's `:wasm-options`, the
 module's `-pthread -fwasm-exceptions`); `arcade/build.sh` builds the module
 into `OUT_DIR/wasm-jit`. The CMake target, off by default:
@@ -92,8 +99,9 @@ node tools/wasm-jit/arcade/smoke/smoke.mjs build-wasm/wasm-arcade/wasm-jit
 
 `-DTUR_ARCADE_RAYLIB_LIB=<libraylib.a>` uses a prebuilt archive (CI caches
 it by raylib ref). The smoke test (the `wasm-arcade` CI job) drives the
-module in Playwright's Chromium: first frame, a console line from a running
-frame loop, Stop, and a refusal. A page that embeds raylib calls
+module in Playwright's Chromium: spices mounted from their packages, first
+frame, a console line from a running frame loop, Stop, a refusal, and a
+`defscript` header satisfied and one refused. A page that embeds raylib calls
 `turi_wasm_jit_set_fallback(0)` after `turi_wasm_init`, so a program the
 engine refuses comes back as `{"engine":"refused", ...}` instead of going to
 the tree-walker, which has no raylib natives.

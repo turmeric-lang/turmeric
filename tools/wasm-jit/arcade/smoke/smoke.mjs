@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../../../..');
-const MOD = process.argv[2];
+const MOD = process.argv[2] && path.resolve(process.argv[2]);
 if (!MOD || !fs.existsSync(path.join(MOD, 'turmeric-jit.wasm'))) {
   console.error(`smoke.mjs: no turmeric-jit.wasm in ${MOD || '(no MODULE_DIR given)'}`);
   process.exit(2);
@@ -58,13 +58,17 @@ window.run = (src) => {
 window.stop = () => { document.getElementById('host').replaceChildren(); };
 </script>`;
 
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm',
+                '.json': 'application/json' };
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   let file = null, body = null;
   if (url.pathname === '/') body = HOST;
   else if (url.pathname === '/screen.html') file = path.join(HERE, 'screen.html');
-  else if (url.pathname.startsWith('/engine/')) file = path.join(MOD, path.basename(url.pathname));
+  else if (url.pathname.startsWith('/engine/')) {
+    file = path.join(MOD, path.normalize(url.pathname.slice('/engine/'.length)));
+    if (!file.startsWith(MOD + path.sep)) file = null;   // no ../ out of the module dir
+  }
   if (file && !fs.existsSync(file)) file = null;
   if (!file && body === null) { res.writeHead(404); res.end(); return; }
   res.writeHead(200, {
@@ -107,6 +111,19 @@ const THREADS = `(defn start [] : int
   (println "main ran")
   (start))`;
 
+// A defscript header is satisfied from the packages (J2): math is offered, so
+// the header compiles and its import resolves; nope is not, so the engine
+// says so.  7.1 + 3.25: a float that would show truncation.
+const HEADER = (name) => `(defscript :spices #map{"${name}" #map{:url "https://github.com/turmeric-lang/turmeric-spices"
+                                       :ref "math-v0.1.0"
+                                       :subdir "spices/math"}})
+(defmodule hdr
+  (export)
+  (import math/vec2 :refer [vec2 v2-add v2-x])
+  (defn main [] : int
+    (println (v2-x (v2-add (vec2 7.1 0.0) (vec2 3.25 1.0))))
+    0))`;
+
 let failed = 0;
 const check = (ok, what, detail) => {
   console.log(`${ok ? 'PASS' : 'FAIL'} ${what}${detail ? ` -- ${detail}` : ''}`);
@@ -133,8 +150,9 @@ try {
   await page.waitForFunction(() => window.boots.length > 0, null, { timeout: 60_000 });
   const boot = await page.evaluate(() => window.boots[0]);
   check(boot.ok && boot.jspi, 'the module boots in an iframe, with JSPI',
-        boot.ok ? `${Math.round(boot.ms)} ms, spices: ${boot.spices.join(', ')}` : boot.error);
-  check((boot.spices || []).includes('raylib'), 'the module carries the raylib spice');
+        boot.ok ? `${Math.round(boot.ms)} ms` : boot.error);
+  check(String(boot.spices) === 'math,raylib', 'the program\'s spices are mounted from packages, deps first',
+        boot.ok ? `mounted ${boot.spices.join(', ')} of ${boot.offered.join(', ')} in ${Math.round(boot.mountMs)} ms` : '');
 
   // The first frame: RAYWHITE, with the text's dark pixels in its box.
   const frame = page.frameLocator('#host iframe').locator('#canvas');
@@ -179,6 +197,20 @@ try {
   const out = await page.evaluate(() => window.lines);
   check(answer.engine === 'refused' && /starts threads/.test(answer.reason || '') && !out.includes('main ran'),
         'a program the engine refuses is reported as refused', JSON.stringify(answer));
+
+  // A defscript header naming an offered spice: mounted, and the program runs.
+  const runFor = async (src) => {
+    await page.evaluate((s) => window.run(s), src);
+    await page.waitForFunction(() => window.results.length > 0, null, { timeout: 60_000 });
+    return page.evaluate(() => ({ answer: window.results[0], lines: window.lines, boot: window.boots[0] }));
+  };
+  let r = await runFor(HEADER('math'));
+  check(r.answer.engine === 'compiled' && r.lines.includes('10.35') && String(r.boot.spices) === 'math',
+        'a defscript header is satisfied from the mounted packages',
+        `${JSON.stringify(r.answer)} out=${JSON.stringify(r.lines.slice(-2))}`);
+  r = await runFor(HEADER('nope'));
+  check(r.answer.engine === 'error' && /spice 'nope' is not in this build/.test(r.answer.reason || ''),
+        'a defscript header naming a spice the build lacks is refused by name', JSON.stringify(r.answer));
 } finally {
   await browser.close();
   server.close();
