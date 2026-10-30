@@ -211,6 +211,39 @@ try {
   r = await runFor(HEADER('nope'));
   check(r.answer.engine === 'error' && /spice 'nope' is not in this build/.test(r.answer.reason || ''),
         'a defscript header naming a spice the build lacks is refused by name', JSON.stringify(r.answer));
+
+  // The language server (P2): the stock module in lsp-worker.js, with every
+  // offered spice mounted, analyses the quick start clean and flags an import
+  // of a module no spice has.
+  const lsp = await page.evaluate(async (srcs) => {
+    const w = new Worker('/engine/lsp-worker.js');
+    const next = () => new Promise((res) => w.addEventListener('message', (e) => res(e.data), { once: true }));
+    w.postMessage({ type: 'init' });
+    const boot = await next();
+    if (boot.type !== 'ready') return { boot };
+    let id = 0;
+    const ask = async (request) => {
+      w.postMessage({ type: 'lsp', id: ++id, request: JSON.stringify({ jsonrpc: '2.0', ...request }) });
+      return (await next()).messages || [];
+    };
+    await ask({ id: 100, method: 'initialize', params: {} });
+    const diags = async (uri, text) => {
+      const out = await ask({ method: 'textDocument/didOpen',
+                              params: { textDocument: { uri, languageId: 'turmeric', version: 1, text } } });
+      const pub = out.find((m) => m.method === 'textDocument/publishDiagnostics' && m.params.uri === uri);
+      return pub ? pub.params.diagnostics.map((d) => d.severity + ' ' + d.message) : null;
+    };
+    const r = { boot, hello: await diags('file:///hello.tur', srcs[0]),
+                bad: await diags('file:///bad.tur', srcs[1]) };
+    w.terminate();
+    return r;
+  }, [HELLO, HELLO.replace('raylib/text ', 'raylib/nope ')]);
+  check(lsp.boot && lsp.boot.type === 'ready' && String(lsp.boot.spices) === 'raylib,math',
+        'the language server boots with every offered spice mounted', JSON.stringify(lsp.boot));
+  check(Array.isArray(lsp.hello) && lsp.hello.length === 0,
+        'the quick start analyses clean (raylib imports resolve)', JSON.stringify(lsp.hello));
+  check(Array.isArray(lsp.bad) && lsp.bad.some((d) => d.startsWith('1 ')),
+        'an import of a module no spice has is flagged', JSON.stringify(lsp.bad));
 } finally {
   await browser.close();
   server.close();
