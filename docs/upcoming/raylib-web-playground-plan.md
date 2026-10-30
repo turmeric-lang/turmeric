@@ -12,11 +12,12 @@
 > gated by a spike of about a week (P0); the interpreter-with-baked-images
 > architecture (A) is kept as the fallback if the spike fails.** What the spike
 > must answer, and the prerequisite work that should land before it, is
-> [section 7](#prerequisites-before-p0). The decision this plan needs from its
-> owner before P0 starts is in
-> [section 3](#3-the-central-decision-how-does-typed-code-reach-raylib) (J first,
-> A as the fallback -- recommended) and [section 4](#4-where-it-lives) (its own
-> repo -- recommended).
+> [section 7](#prerequisites-before-p0). **2026-10-30: the owner chose JSPI
+> for the blocking frame loop** (J4, prerequisite 3), which settles
+> [section 3](#3-the-central-decision-how-does-typed-code-reach-raylib)'s J
+> over A, since JSPI is a route only the JIT arm has. The one decision still
+> open before P0 is [section 4](#4-where-it-lives), the repo (its own --
+> recommended).
 > **Type:** Web platform / browser JIT module (`tools/wasm-jit/`,
 > `src/web/wasm_jit_glue.c`, `src/jit_engine.c`) / a new site. The interpreter
 > side (`src/turi/`) and the build driver (`src/driver/cmd_build.c`) only if the
@@ -199,9 +200,14 @@ is compiled into the module with emcc like raylib itself.
   (which also removes the JS wrappers and doubles the recursion depth, see
   the [depth report](../reported/wasm-jit-recursion-depth-is-about-300.md))
   and link `-sJSPI` instead of Asyncify. The same loop yields, the wasm does
-  not grow at all, and the interpreter is not slowed. Its cost is browser
-  support: Chrome today, Firefox and Safari arriving. Asyncify cannot be used
+  not grow at all, and the interpreter is not slowed. Asyncify cannot be used
   with that build (wasm exceptions), so the two routes are two object sets.
+  **Decided 2026-10-30: JSPI.** The arcade module is the default JIT build
+  (wasm-native `setjmp` since the same day) with `TUR_WASM_JIT_JSPI=1`;
+  Asyncify is not built. Its cost is browser support: the blocking examples
+  need a browser with JSPI (Chrome today; Firefox has an Intent to Ship,
+  Safari 27 beta has it), the page says so where it is missing, and the
+  callback examples (`with-web-game-loop`) run everywhere.
 
 ### A. Interpreter + a baked spice image (fallback)
 
@@ -250,6 +256,7 @@ console are identical, so the architecture can change under the page.
 Try Turmeric's Compile engine as built (the front half, c2mir, the shared
 package, the engine line), needs no server, and removes the interpreter-side
 work A needed. It trades a ~0.3 s Run for compiled semantics and inline C.
+The blocking frame loop runs under JSPI, not Asyncify (decided 2026-10-30).
 
 The honest limits of the chosen engine go on the page: a small "Compiled in
 your browser (MIR interpreter); recursion limit ~1,100 calls; threads are not
@@ -303,7 +310,10 @@ drag handle between them. On a narrow viewport the three stack
   boots the arcade module on the **iframe's main thread** (raylib needs the
   canvas; the Compile engine's worker has none), compiles and runs the program
   it receives by `postMessage`, and prints the engine line (front, c2mir, run
-  ms) to the console as Try's Compile engine does. Stop removes the iframe. A second Run replaces it. No module
+  ms) to the console as Try's Compile engine does. Under JSPI
+  `turi_wasm_jit_run` returns a Promise the shell awaits, and a `run-main-loop`
+  program leaves `main` by Emscripten's `unwind` exception, which the shell
+  takes as the normal end of `main`, not a trap. Stop removes the iframe. A second Run replaces it. No module
   teardown is ever attempted (wasm-spices-plan 6.9); the iframe is the
   teardown.
 - **Canvas size.** Default 480x270 (16:9, four times smaller than a 1080p
@@ -452,7 +462,8 @@ are cut down to what survives.
   already keeps contexts, `g_jit_keep_contexts`), (b) the unwind exception
   passing through MIR's `eval` frames must not be mistaken for a trap by the
   page's trap handler (`trapped` retires the instance, wasm-jit-plan P4) and
-  must leave the interpreter's frame state sound, (c) the frame function's
+  must leave the interpreter's frame state sound -- under JSPI it arrives as
+  the export's rejected Promise, (c) the frame function's
   thunk must be callable by host code (a table entry since mir#16), and (d) the
   whole thing runs on the iframe's main thread, so `tur_run_on_big_stack`-style
   create-then-join code must run on the caller's stack as it already does on
@@ -461,22 +472,22 @@ are cut down to what survives.
   (e) The glue's fallback to the tree-walker (`run_interpreted`) is switched
   off for the arcade, whose interpreter has no raylib: a refusal is reported
   with its reason instead.
-- **J4. Asyncify or JSPI (both work, prerequisite 3).** Link the arcade module with
-  `-sASYNCIFY` so `WindowShouldClose`'s sleep yields and the blocking `while`
-  runs unchanged. It needs Asyncify to unwind through the `invoke_*` frames
-  `eval`'s `setjmp` brings (section 3, J), and its cost is code size and a
-  slower interpreter (Asyncify instruments `eval`, the hottest function in the
-  module): measured at +52% module size and about 1.6x on a tight loop. The
-  49 fiber fixtures are not a side benefit: 6 of them pass with it, and the
-  rest abort with `unreachable` in the fiber switch's rewind (not traced).
-  Or build with wasm-native `setjmp` and link `-sJSPI` (`JSPI_EXPORTS` names
-  `turi_wasm_jit_run`, which then returns a Promise the shell awaits): no
-  size or speed cost, twice the depth, Chrome-first; a sleep must not sit
-  under a JS frame, so it is for the blocking style (sleeps from `main`), not
-  for a sleep inside a frame callback. If
-  P0 still says no (raylib's sleep path, fps), J4 is "document the callback
-  form and rewrite the examples", and
-  `with-web-game-loop` becomes the front door.
+- **J4. JSPI (decided 2026-10-30; prerequisite 3 measured both).** Build the
+  arcade module with `TUR_WASM_JIT_JSPI=1` (`tools/wasm-jit/build-module.sh`:
+  `-sJSPI -sJSPI_EXPORTS=turi_wasm_jit_run`, and `emscripten_sleep` in the
+  import table), so `WindowShouldClose`'s sleep suspends the wasm stack and
+  the blocking `while` runs unchanged: no size or speed cost, the depth of the
+  wasm-`setjmp` build. The constraints: a sleep must have only wasm frames
+  above it (the blocking style sleeps from `main`, entered with none; a sleep
+  inside a frame callback called through the table's JS closure fails with
+  `SuspendError`), and the browser must have JSPI (`'Suspending' in
+  WebAssembly`; Chrome 137+ today). Without it the page runs the callback
+  examples and tells the visitor the blocking ones need a browser with JSPI
+  for now. Asyncify was measured too (+52% module, about 1.6x slower, and it
+  needs objects compiled without `-fwasm-exceptions`, which the default build
+  no longer produces) and is not built. If P0 step 3 finds raylib's own
+  sleep path does not suspend, J4 falls back to "document the callback form
+  and rewrite the examples", and `with-web-game-loop` becomes the front door.
 - **J5. `*args*`.** `turi_wasm_jit_run(src, args)` already takes a
   newline-separated argument string (`split_args` in `wasm_jit_glue.c`);
   confirm it reaches `*args*` as `tur run` would, which retires the
@@ -571,9 +582,9 @@ later, and where it is tracked. Nothing here needs the arcade repo to exist.
 
 | # | Prerequisite | Gates | Why this plan cares | Tracked in |
 |---|---|---|---|---|
-| 1 | **Decide J over A, and the repo.** The owner confirms section 3's flip and section 4's own-repo choice. | P0 | P0's scope is different under each: J tests struct-by-value calls and the main-thread boot, A tests `ffi_thunk` shims under Asyncify. | this plan |
+| 1 | **Decide J over A, and the repo.** The owner confirms section 3's flip and section 4's own-repo choice. **J is settled** by the JSPI decision of 2026-10-30 (JSPI is a J-only route); **the repo is still open.** | P0 | P0's scope is different under each: J tests struct-by-value calls and the main-thread boot, A tests `ffi_thunk` shims under Asyncify. | this plan |
 | 2 | **`-sSTACK_OVERFLOW_CHECK=2` on the JIT link.** One flag, one test. **Done 2026-10-29**: the module links with it (and `-sCHECK_NULL_WRITES=0`, see row 5), the page reports the abort as `stack overflow: recursion too deep`, and `jit-engine.spec.js` pins it. No measurable cost on the loop benchmark; +97 KB. | P0 | An iframe runs arbitrary user programs. Without the check a linear-stack overflow writes past the 16 MiB stack instead of stopping, and the spike's numbers (and the first user bug report) are of a corrupted module. | [wasm-linear-stack-overflow-unchecked](../reported/wasm-linear-stack-overflow-unchecked.md) |
-| 3 | **Decide how Asyncify gets measured on the MIR interpreter.** Neither wasm module is linked with it, and 49 corpus fixtures fail on `emscripten_fiber_swap`. Link a throwaway JIT module with `-sASYNCIFY` and run a compiled program that calls `emscripten_sleep`; that is P0 step 3 and the answer to whether the blocking style survives. The question is the `invoke_*` frames that `eval`'s own `setjmp` (mir#17) puts under every call it makes (section 3, J), not the stubs. **Done 2026-10-29** (`tools/wasm-jit-spike/asyncify/`, under node): it works. A compiled `while` loop sleeping 16 ms a frame from inline C yields to the event loop; +52% module size (2.63 MB gzipped), about 1.6x slower on a tight loop, no change in depth. 6 of the 49 fiber fixtures pass with it; the rest abort in the fiber switch's rewind. Found on the way: recursion depth is about 300, not 1,700 ([report](../reported/wasm-jit-recursion-depth-is-about-300.md)). **JSPI, 2026-10-30:** on a module built with wasm-native `setjmp` (`-fwasm-exceptions -sSUPPORT_LONGJMP=wasm`, no MIR change), `-sJSPI` makes the same blocking loop yield in Chromium 153, main thread and worker, with **no size cost** (the wasm is identical) and the depth doubled (700 in the worker, 1,100 on the main thread); it needs those objects, not today's. Chrome ships JSPI; Firefox has an Intent to Ship (153) and Safari 27 beta has it, per web sources. So the blocking style has two routes: Asyncify (every browser, +52% module, objects compiled without `-fwasm-exceptions`, which the default build no longer produces) or JSPI (Chrome-first, free, the default build's objects) -- two object sets, so one or the other per module. The owner's call; the report has the measurements. | P0 | The whole examples section (8) is written in the blocking style. | wasm-jit-plan P5 (the family is "unowned"); J4 |
+| 3 | **Decide how Asyncify gets measured on the MIR interpreter.** Neither wasm module is linked with it, and 49 corpus fixtures fail on `emscripten_fiber_swap`. Link a throwaway JIT module with `-sASYNCIFY` and run a compiled program that calls `emscripten_sleep`; that is P0 step 3 and the answer to whether the blocking style survives. The question is the `invoke_*` frames that `eval`'s own `setjmp` (mir#17) puts under every call it makes (section 3, J), not the stubs. **Done 2026-10-29** (`tools/wasm-jit-spike/asyncify/`, under node): it works. A compiled `while` loop sleeping 16 ms a frame from inline C yields to the event loop; +52% module size (2.63 MB gzipped), about 1.6x slower on a tight loop, no change in depth. 6 of the 49 fiber fixtures pass with it; the rest abort in the fiber switch's rewind. Found on the way: recursion depth is about 300, not 1,700 ([report](../reported/wasm-jit-recursion-depth-is-about-300.md)). **JSPI, 2026-10-30:** on a module built with wasm-native `setjmp` (`-fwasm-exceptions -sSUPPORT_LONGJMP=wasm`, no MIR change), `-sJSPI` makes the same blocking loop yield in Chromium 153, main thread and worker, with **no size cost** (the wasm is identical) and the depth doubled (700 in the worker, 1,100 on the main thread); it needs those objects, not today's. Chrome ships JSPI; Firefox has an Intent to Ship (153) and Safari 27 beta has it, per web sources. So the blocking style has two routes: Asyncify (every browser, +52% module, objects compiled without `-fwasm-exceptions`, which the default build no longer produces) or JSPI (Chrome-first, free, the default build's objects) -- two object sets, so one or the other per module. **Decided 2026-10-30: JSPI** (J4); the report has the measurements. | P0 | The whole examples section (8) is written in the blocking style. | wasm-jit-plan P5 (the family is "unowned"); J4 |
 | 4 | **Diagnose [wasm-jit-comparator-result-varies-between-runs](../archive/wasm-jit-comparator-result-varies-between-runs.md).** A list comparison gives a different answer on alternate runs of one module instance. **Done 2026-10-29**: not the MIR interpreter. `list-tail` read a `(Cons A)` cell's 4-byte tail and its padding as one `int64_t` (ILP32 shape 4), so what the allocator left in the padding decided the answer; fixed in `stdlib/list.tur`. | P1 | A frame loop is the longest-lived use the engine has had. A nondeterminism in the MIR interpreter's state on wasm is the kind of defect that shows up on frame 4,000, not in a 10-ms corpus run. Find out whether it is a MIR bug or a Turmeric one before building a site on it. | `docs/reported/` |
 | 5 | **Close ILP32 shapes 2 and 3** ([ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md)): `tur_hamt_get`'s `void *` values (a double stored in a map comes back denormal) and `stdlib/hamt.tur`'s `tur_hamt_count` declared at the wrong width, plus the `typed/vec-*` fixtures; and shape 4, found 2026-10-29 while doing row 2: `stdlib/list.tur` reads a `(Cons A)` cell as `{int64_t head; int64_t tail}`, but on wasm32 its `tail` is a 4-byte pointer followed by padding, so a nil tail can read as non-nil and the walk reads address 0. Shape 1 (the DK word) is done; shape 4's stdlib half is fixed (2026-10-29), its emitter half (the erased `Cons` struct's carrier `tail`) is open. | P1 for correctness, P3 for the examples | `life.tur` is a `vec` of 0/1 ints, which survive; but any program that keeps a float (a position, a velocity) in a `vec` or a map is silently wrong on the page, and P3 has to audit each example for that shape. The same defect is in `tur build --target wasm`. | the report |
 | 6 | **Variadic calls inside a loop** ([c2mir-wasm-vararg-buffer-allocas-per-call](../reported/c2mir-wasm-vararg-buffer-allocas-per-call.md)): c2mir allocas a variadic call's buffer at the call site and keeps it until the function returns, 16 B an iteration. | P3 (examples); know it in P2 | Only a function that never returns accumulates, so the callback style (the frame function returns every frame) and any helper `defn` are safe. The exposure is the blocking style with a `println` written inline in `main`'s own loop: once a frame is 60 a second (a million takes over four hours), but inside an inline per-entity loop of 200 entities it is 12,000 a second and overflows 16 MiB in about 80 seconds, with signs of memory corruption. Fix in the fork, or have the emitter hoist the buffer. | the report |
@@ -614,13 +625,15 @@ it nearer a week.) Record, in this order (each step gates the next):
    interpreted frame function runs, the context survives, and a `println` per
    frame reaches the console. Also: Stop (iframe teardown) leaves the editor
    page alone.
-3. **Blocking mode under `-sASYNCIFY`.** The `while (not (window-should-close))`
-   form from section 1. Prerequisite 3 showed that a compiled sleep yields under
-   node and measured the size and speed; what is left is raylib's own
-   `emscripten_sleep` path inside `WindowShouldClose`/`EndDrawing`, in a
-   browser, and the fps. Run it with and without a
-   `call/cc` that also draws. If it does not work, record why (the JS frame
-   that blocks the unwind) and J4 becomes "teach the callback form".
+3. **Blocking mode under JSPI.** The `while (not (window-should-close))`
+   form from section 1 on the JSPI module (`TUR_WASM_JIT_JSPI=1`) with raylib
+   linked in: does raylib's own `emscripten_sleep` inside
+   `WindowShouldClose`/`EndDrawing` suspend and resume, in Chromium, and what
+   fps. Prerequisite 3 showed a sleep from compiled inline C does; raylib's is
+   the same import called from native code. Run it with and without a
+   `call/cc` that also draws. If it does not work, record why (a JS frame
+   under the sleep is the likely shape) and J4 becomes "teach the callback
+   form".
 4. **Cost.** Time-to-first-frame cold and warm; front and c2mir milliseconds
    for the program with the raylib spice's inline C compiled in; the module's
    gzipped size with and without Asyncify and with raylib; `life.tur`'s
@@ -668,13 +681,14 @@ section 8's T2 (a MIR-to-wasm generator), not a server.
 
 Six, chosen so each shows one more thing. All are written in the **blocking
 style** the native raylib README uses, because it is the form a visitor pastes
-from the README and the form a native twin runs. **Whether the blocking style
-runs on the page depends on P0 step 3** (Asyncify under the MIR interpreter,
-section 3): if it does, these are shown as written; if it does not, each
-example is shipped in the callback form of 8.2 and the blocking text appears
-only in the example's header comment as "the native version". A
-`with-web-game-loop` variant of the first one is included either way, to show
-the callback style a shipping game uses.
+from the README and the form a native twin runs. **The blocking style runs
+under JSPI** (decided 2026-10-30; P0 step 3 confirms raylib's own sleep path):
+in a browser with JSPI these are shown as written; in one without, the page
+says so and offers the callback twin. If P0 finds raylib's path does not
+suspend, each example is shipped in the callback form of 8.2 and the
+blocking text appears only in the example's header comment as "the native
+version". A `with-web-game-loop` variant of the first one is included either
+way, to show the callback style a shipping game uses.
 
 Key codes are raylib's: Left 263, Right 262, Up 265, Down 264, Space 32,
 W 87, S 83, R 82. The examples define them as `def`s rather than magic
@@ -810,15 +824,15 @@ against the spices' sources (under J they are compiled with the program), and
    per-pixel loop is the edge (the plasma example). P0 measures 8.5's grid step
    and the plasma inner loop. The lever past it is wasm-jit-plan section 8's
    T2, a MIR-to-wasm generator; the build service is not the lever any more.
-2. **Asyncify and the MIR interpreter together.** On wasm `eval` calls `setjmp`
-   itself, so its calls go through Emscripten's `invoke_*` JS wrappers, and
-   Asyncify must unwind through them (section 3, J). Prerequisite 3 showed it
-   does, for a sleep in compiled inline C under node; and JSPI on a
-   wasm-`setjmp` build does the same in Chromium with no size cost
-   (prerequisite 3). What is left is raylib's sleep path in a browser (P0 step
-   3) and the Asyncify-or-JSPI choice; if both fail, the playground is
-   callback-first, which changes the examples and the pitch ("paste the README
-   quick start") but not the architecture.
+2. **JSPI and the MIR interpreter together.** Prerequisite 3 showed a compiled
+   sleep suspends and resumes through `eval`'s frames in Chromium, main thread
+   and worker, with no size cost. What is left is raylib's own sleep path (P0
+   step 3) and the browsers: JSPI is Chrome today, Firefox (Intent to Ship,
+   153) and Safari (27 beta) later, so until they ship the blocking examples
+   are Chrome-only and the callback examples carry the other browsers. If
+   raylib's path fails, the playground is callback-first, which changes the
+   examples and the pitch ("paste the README quick start") but not the
+   architecture.
 3. **Struct-by-value calls from MIR on wasm32.** raylib passes `Color`,
    `Vector2`, `Rectangle`, `Texture2D` and `Camera3D` by value. Both c2mir's
    wasm32 ABI and `mir-wasm.c` pass aggregates by address, as clang does, so this

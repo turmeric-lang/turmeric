@@ -70,6 +70,22 @@ put_rsp() {   # put_rsp FILE FLAG...
 # a compiled program to yield uses JSPI on this build
 # (tools/wasm-jit-spike/jspi/).
 SJLJ_CFLAGS=(-fwasm-exceptions)
+# TUR_WASM_JIT_JSPI=1 builds the JSPI variant, the raylib playground's
+# (raylib-web-playground-plan J4): turi_wasm_jit_run returns a Promise, and a
+# compiled program's emscripten_sleep -- raylib's frame loop, or inline C,
+# which the import table then carries -- suspends the wasm stack until the
+# page's event loop has run, with no change to the wasm itself.  It needs this
+# build's wasm-native setjmp (a JS frame under eval breaks the suspension) and
+# a browser with JSPI (Chrome 137+ today), which is why it is not the default:
+# Try Turmeric's Compile engine has to load everywhere.  Only the import table
+# and the link differ, so flipping it relinks.
+JSPI=${TUR_WASM_JIT_JSPI:-0}
+JSPI_LINK=()
+SYMTAB_EXTRA=()
+if [ "$JSPI" = 1 ]; then
+  JSPI_LINK=(-sJSPI -sJSPI_EXPORTS=turi_wasm_jit_run)
+  SYMTAB_EXTRA=(--jspi)
+fi
 # shellcheck disable=SC2086
 BASE=($INCS "${SJLJ_CFLAGS[@]}" -O2 -std=c11 -Wall -Wextra -Wno-unused-parameter -D_DEFAULT_SOURCE -pthread
       "-DTUR_VERSION=\\\"$VERSION\\\"")
@@ -127,7 +143,7 @@ for _attempt in 1 2 3 4 5 6 7 8; do
     --header "runtime/hamt.h=$ROOT/src/runtime/hamt.h" \
     --accessors "$ROOT/src/runtime/tur_tls.c" \
     --wasm-objects "$OUT/runtime-objects.txt" "$OUT/tur_wasm_jit_symtab_rt.c" \
-    --stubs "$OUT/tur_wasm_jit_stubs.c"
+    --stubs "$OUT/tur_wasm_jit_stubs.c" ${SYMTAB_EXTRA[@]+"${SYMTAB_EXTRA[@]}"}
   # shellcheck disable=SC2086
   if emcc -c "$SYMTAB" -o "$OUT/symtab.o" $RT_FLAGS -w 2> "$OUT/symtab-cc.log" \
      && emcc -c "$OUT/tur_wasm_jit_symtab_rt.c" -o "$OUT/symtab_rt.o" "${SJLJ_CFLAGS[@]}" -O2 -w 2>> "$OUT/symtab-cc.log" \
@@ -186,6 +202,7 @@ emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" "$OUT/stubs.o" -o "$OUT/t
   -sSTACK_SIZE=16777216 -sDEFAULT_PTHREAD_STACK_SIZE=8388608 \
   -sSTACK_OVERFLOW_CHECK=2 -sCHECK_NULL_WRITES=0 \
   "${SJLJ_CFLAGS[@]}" -sSUPPORT_LONGJMP=wasm \
+  ${JSPI_LINK[@]+"${JSPI_LINK[@]}"} \
   -sINITIAL_MEMORY=134217728 \
   -sEXPORTED_FUNCTIONS="$EXPORTS" \
   -sEXPORTED_RUNTIME_METHODS="$METHODS" \
@@ -193,4 +210,4 @@ emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" "$OUT/stubs.o" -o "$OUT/t
 # The loader fetches stdlib.data beside the module's script: put a copy here
 # so node (run.js, tests/run-jit-wasm.sh) finds it as the page does.
 cp "$PKG/stdlib.data" "$OUT/stdlib.data"
-echo "turmeric-jit: $(wc -c < "$OUT/turmeric-jit.wasm") bytes ($(grep -c . "$OUT/headers.d" >/dev/null; tr ' \\' '\n\n' < "$OUT/headers.d" | grep -c "^$SYSINC/") headers embedded)"
+echo "turmeric-jit$([ "$JSPI" = 1 ] && echo " (JSPI)"): $(wc -c < "$OUT/turmeric-jit.wasm") bytes ($(grep -c . "$OUT/headers.d" >/dev/null; tr ' \\' '\n\n' < "$OUT/headers.d" | grep -c "^$SYSINC/") headers embedded)"

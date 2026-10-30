@@ -46,17 +46,18 @@ and the JSPI half of raylib-web-playground-plan's prerequisite 3. The spike
 measured the module compiled with `-fwasm-exceptions` and linked with
 `-sSUPPORT_LONGJMP=wasm` (so `eval`'s `setjmp` brings no JS `invoke_*`
 frames); since 2026-10-30 that is `tools/wasm-jit/build-module.sh`'s own link
-mode. `build.sh` derives a variant of it that adds `emscripten_sleep` to the
-import table and, with `jspi`, links `-sJSPI`, under which `turi_wasm_jit_run`
-returns a Promise and a compiled `emscripten_sleep` suspends the wasm stack
-instead of Asyncify unwinding it. `index.html`,
+mode, and the JSPI build is its `TUR_WASM_JIT_JSPI=1` switch (`emscripten_sleep`
+in the import table, `-sJSPI`, under which `turi_wasm_jit_run` returns a
+Promise and a compiled `emscripten_sleep` suspends the wasm stack instead of
+Asyncify unwinding it). `build.sh` runs that switch into a directory of its
+own. `index.html`,
 `harness.js` and `worker.js` boot such a module on a page's main thread or in a
 Web Worker and run one program; `jspi.spec.js` drives them from Playwright
 (node 22's V8 has no JSPI, so the browser is the only place to run the `jspi`
 build). The results are in the report.
 
 ```sh
-bash tools/wasm-jit-spike/jspi/build.sh /tmp/sjlj jspi       # the sleep, in Chromium
+bash tools/wasm-jit-spike/jspi/build.sh /tmp/sjlj            # the JSPI module, in Chromium
 mkdir -p web/public/jspi-harness/b && cp /tmp/sjlj/wasm-jit/{turmeric-jit.js,turmeric-jit.wasm,stdlib.data} web/public/jspi-harness/b/
 cp tools/wasm-jit-spike/jspi/{index.html,harness.js,worker.js} web/public/jspi-harness/
 cp tools/wasm-jit-spike/jspi/jspi.spec.js web/tests/zz-jspi.spec.js
