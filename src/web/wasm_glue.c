@@ -52,6 +52,58 @@
  * This is initialized once and reused across all eval calls. */
 static TuriEnv *g_env = NULL;
 
+/* Extra module search directories, process-wide (raylib-web-playground-plan
+ * prerequisite 9): the `src/` of each spice the page has mounted in this
+ * module's file system, added through turi_wasm_add_include_dir.  Every
+ * environment the glue creates borrows the list (as `tur --interpret -I`
+ * hands the interpreter its -I dirs), and the Compile engine's compile_to_c
+ * gets it as its include dirs, so `(import raylib/core)` resolves on both
+ * engines.  The list only grows until turi_wasm_clear_include_dirs; its
+ * strings outlive every env, which is what a borrowed list needs. */
+static char **g_wasm_include_dirs   = NULL;
+static int    g_wasm_n_include_dirs = 0;
+
+static void wasm_apply_include_dirs(TuriEnv *env) {
+    if (!env) return;
+    env->include_dirs       = (const char **)g_wasm_include_dirs;
+    env->n_include_dirs     = g_wasm_n_include_dirs;
+    env->include_dirs_owned = false;
+}
+
+const char *const *turi_wasm_include_dirs(int *out_n) {
+    if (out_n) *out_n = g_wasm_n_include_dirs;
+    return (const char *const *)g_wasm_include_dirs;
+}
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+int turi_wasm_add_include_dir(const char *dir) {
+    if (!dir || !*dir) return -1;
+    for (int i = 0; i < g_wasm_n_include_dirs; i++)
+        if (strcmp(g_wasm_include_dirs[i], dir) == 0) return g_wasm_n_include_dirs;
+    char **grown = realloc(g_wasm_include_dirs,
+                           (size_t)(g_wasm_n_include_dirs + 1) * sizeof *grown);
+    if (!grown) return -1;
+    g_wasm_include_dirs = grown;
+    char *copy = strdup(dir);
+    if (!copy) return -1;
+    g_wasm_include_dirs[g_wasm_n_include_dirs++] = copy;
+    if (g_env) wasm_apply_include_dirs(g_env);
+    return g_wasm_n_include_dirs;
+}
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+void turi_wasm_clear_include_dirs(void) {
+    /* The strings are not freed: an env created while they were on the list
+     * still borrows them, and a page clears the list a handful of times. */
+    g_wasm_include_dirs   = NULL;
+    g_wasm_n_include_dirs = 0;
+    if (g_env) wasm_apply_include_dirs(g_env);
+}
+
 static void wasm_diag_sink(struct TuriEnv *env, int level, const char *code,
                            const char *file, uint32_t line,
                            uint32_t col_start, uint32_t col_end,
@@ -218,6 +270,7 @@ int turi_wasm_init(void) {
      * native --interpret path -- without this, `#map{}`/`#set{}` and every
      * macro (when/cond/for/...) failed as "unknown function or operator". */
     wasm_preload_stdlib(g_env);
+    wasm_apply_include_dirs(g_env);
 
     g_boot_recording = false;
     return 0;
@@ -261,6 +314,7 @@ void turi_wasm_reset(void) {
             g_lang_prelude     = lang_traits(keep_lang)->prelude;
             /* Re-establish stdlib parity on the fresh env (matches init). */
             wasm_preload_stdlib(g_env);
+            wasm_apply_include_dirs(g_env);
         }
     }
 }
@@ -672,6 +726,7 @@ int turi_wasm_set_lang(const char *name) {
         g_env->reader_type = rt;
         g_lang_prelude     = lang_traits(dialect)->prelude;
         wasm_preload_stdlib(g_env);
+        wasm_apply_include_dirs(g_env);
         return 0;
     }
     /* Full switch (no-op when nothing changes): keeps the pinned stdlib

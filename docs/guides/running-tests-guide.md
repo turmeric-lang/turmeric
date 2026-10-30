@@ -37,6 +37,7 @@ Two rules hold for every command below:
 | `tests/run-turi.sh` | The same fixtures under `tur --interpret` | Interpreter changes |
 | `tests/run-jit.sh` | The same fixtures through `tur jit` (MIR) | JIT changes |
 | `tests/run-jit-wasm.sh` | The same fixtures through the browser JIT module (`turmeric-jit.wasm`, under node), checked against a baseline of which fall back | wasm JIT changes (wasm-jit-plan) |
+| `tests/check-wasm-jit-imports.sh` | The browser JIT module resolves an `import` through a directory added with `turi_wasm_add_include_dir` (`tools/wasm-jit/run.js -I`), and compiles it; the page's mounted spices (raylib-web-playground-plan prerequisite 9) | changes to the module's search path or `import` resolution |
 | `tests/check-*.sh` | One invariant each (a lint, a sync check, a ratchet) | Usually as named by a CI failure |
 | `tests/run-*.sh` (others) | One focused harness each (r7rs conformance, leak gates, debugger, ...) | Usually as named by a CI failure |
 | `ctest --test-dir build` | Every harness above, each registered as one ctest target | What CI actually runs |

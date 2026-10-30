@@ -151,7 +151,12 @@ char *turi_wasm_jit_run(const char *src, const char *args) {
     g_emit_for_wasm = false;   /* the runtime is resident in this module */
     Buf csrc;
     buf_init(&csrc);
-    int rc = compile_to_c(path, &csrc, NULL, 0, NULL, 0);
+    /* The spices the page mounted (turi_wasm_add_include_dir): the module
+     * search path `(import raylib/core)` resolves against, as `tur run -I`
+     * would give it (raylib-web-playground-plan prerequisite 9). */
+    int n_inc = 0;
+    const char *const *inc = turi_wasm_include_dirs(&n_inc);
+    int rc = compile_to_c(path, &csrc, (const char **)inc, n_inc, NULL, 0);
     g_interpret_mode = saved_interp;
     if (rc != 0) {
         buf_free(&csrc);

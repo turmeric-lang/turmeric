@@ -175,7 +175,7 @@ cp "$HERE/stdatomic.h" "$HDR/sysinclude/stdatomic.h"
 cp "$ROOT/src/turi/r7rs_embed.h" "$HDR/src/turi/r7rs_embed.h"
 
 # --- 4. link -----------------------------------------------------------------
-EXPORTS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_eval,_turi_wasm_set_compiled_repl,_turi_wasm_eval_ex,_turi_wasm_free_string,_turi_wasm_version,_turi_wasm_jit_run,_malloc,_free
+EXPORTS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_eval,_turi_wasm_set_compiled_repl,_turi_wasm_eval_ex,_turi_wasm_free_string,_turi_wasm_version,_turi_wasm_jit_run,_turi_wasm_add_include_dir,_turi_wasm_clear_include_dirs,_malloc,_free
 METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8,ccall,cwrap,FS,ENV,wasmTable,addFunction,stackAlloc,stackSave,stackRestore
 # STACK_OVERFLOW_CHECK=2 bounds-checks every write of the stack pointer.  At -O2
 # nothing else does, and a program can reach the bottom of the 16 MiB linear

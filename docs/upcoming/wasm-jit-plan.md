@@ -293,6 +293,13 @@ As built in P3 (2026-10-28). The design originally added the engine to the
 - `turi_wasm_jit_run(src, args)` (`src/web/wasm_jit_glue.c`) answers with the
   engine line as JSON:
   `{"engine":"compiled"|"interpreted"|"error","exit":N,"reason":...}`.
+  Its `import`s resolve against the stdlib and the directories the page has
+  added with `turi_wasm_add_include_dir(dir)` (`src/web/wasm_glue.c`, both
+  modules; since 2026-10-30, raylib-web-playground-plan prerequisite 9): a
+  spice's `src/` mounted in the module's file system, which both the compile
+  and the interpreter fallback then search as `tur run -I` would.
+  `tools/wasm-jit/run.js -I DIR` is the node spelling;
+  `tests/check-wasm-jit-imports.sh` checks it.
 - Size, measured: 9.54 MB (2.94 MB gzipped) at P3. Of that, 3.67 MB was code
   and 5.86 MB data, and 4.30 MB of the data was the embedded stdlib. Since P4
   the stdlib is a package both modules share (5.11), and the module is

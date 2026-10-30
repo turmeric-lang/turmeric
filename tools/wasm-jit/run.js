@@ -4,7 +4,7 @@
 //
 //   node tools/wasm-jit/run.js [--module DIR] [--result FILE] [--repeat N]
 //                              [--dump-c FILE] [--turns [--compiled-turns] [--time]]
-//                              program.tur [arg ...]
+//                              [-I DIR ...] program.tur [arg ...]
 //
 // The program's stdout and stderr bytes go to this process's stdout and
 // stderr unchanged; its stdin is this process's stdin.  The module's answer
@@ -29,6 +29,12 @@
 // --compiled-turns runs each turn as a compiled program instead
 // (aot-compiled-repl-plan C2, turi_wasm_set_compiled_repl), as the page does
 // with "Compile prompt turns too" ticked.
+//
+// -I DIR copies the host directory DIR into the module's file system (under
+// /include/) and adds it to the module search path with
+// turi_wasm_add_include_dir, as the page does for a mounted spice's src/
+// (raylib-web-playground-plan prerequisite 9): `(import foo/bar)` then finds
+// DIR/foo/bar.tur on either engine, as `tur run -I DIR` would.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -41,9 +47,12 @@ let dumpC = null;
 let turns = false;
 let compiledTurns = false;
 let timeTurns = false;
-while (argv.length && argv[0].startsWith('--')) {
+const includeDirs = [];
+while (argv.length && argv[0].startsWith('-')) {
   const flag = argv.shift();
-  if (flag === '--module') moduleDir = path.resolve(argv.shift());
+  if (flag === '-I') includeDirs.push(path.resolve(argv.shift()));
+  else if (flag.startsWith('-I')) includeDirs.push(path.resolve(flag.slice(2)));
+  else if (flag === '--module') moduleDir = path.resolve(argv.shift());
   else if (flag === '--result') resultFile = argv.shift();
   else if (flag === '--repeat') repeat = parseInt(argv.shift(), 10);
   else if (flag === '--dump-c') dumpC = argv.shift();
@@ -53,7 +62,7 @@ while (argv.length && argv[0].startsWith('--')) {
   else { console.error(`run.js: unknown flag ${flag}`); process.exit(2); }
 }
 if (!argv.length) {
-  console.error('usage: node run.js [--module DIR] [--result FILE] [--repeat N] [--dump-c FILE] [--turns [--compiled-turns] [--time]] program.tur [arg ...]');
+  console.error('usage: node run.js [--module DIR] [--result FILE] [--repeat N] [--dump-c FILE] [--turns [--compiled-turns] [--time]] [-I DIR ...] program.tur [arg ...]');
   process.exit(2);
 }
 const programPath = argv.shift();
@@ -101,6 +110,23 @@ factory({
       (c) => err.put(c));
   }],
 }).then((mod) => {
+  // -I: the host tree, copied file by file into the module's own file system
+  // (no NODEFS in this link), then put on the module search path.
+  function copyTree(src, dst) {
+    mod.FS.mkdirTree(dst);
+    for (const ent of fs.readdirSync(src, { withFileTypes: true })) {
+      const s = path.join(src, ent.name), d = dst + '/' + ent.name;
+      if (ent.isDirectory()) copyTree(s, d);
+      else if (ent.isFile()) mod.FS.writeFile(d, fs.readFileSync(s));
+    }
+  }
+  includeDirs.forEach((dir, i) => {
+    const mount = `/include/${i}`;
+    copyTree(dir, mount);
+    if (mod.ccall('turi_wasm_add_include_dir', 'number', ['string'], [mount]) < 0) {
+      console.error(`run.js: turi_wasm_add_include_dir(${mount}) failed`); process.exit(2);
+    }
+  });
   if (turns) {
     if (mod._turi_wasm_init() !== 0) { console.error('run.js: turi_wasm_init failed'); process.exit(1); }
     const evalTurn = mod.cwrap('turi_wasm_eval', 'number', ['string']);

@@ -1,0 +1,17 @@
+;;; arcade/greet -- a module a mounted spice would provide, for
+;;; tests/check-wasm-jit-imports.sh: the browser JIT module resolves
+;;; `(import arcade/greet)` through a directory added with
+;;; turi_wasm_add_include_dir (raylib-web-playground-plan prerequisite 9).
+(defmodule arcade/greet
+  (export greeting scaled)
+
+  ;;; greeting -- the line the test looks for.
+  (defn greeting [] : cstr
+    "hello from a mounted spice, arcade")
+
+  ;;; scaled -- inline C through the import, so the Compile engine's c2mir
+  ;;; compiles a body that came from an include dir, not the program.
+  (defn scaled [x : float] : float
+    ```c
+    return x * 2.0;
+    ```))
