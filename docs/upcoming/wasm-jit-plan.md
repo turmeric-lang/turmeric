@@ -1081,7 +1081,7 @@ What is left in the baseline, by reason (a fixture counts once):
 | Family | Fixtures | Owner |
 |---|---|---|
 | The program starts threads (refused by design) | 190 fell back right; 70 fell back and the interpreter got it wrong too | stays a fallback (risk 7) |
-| Wrong answer on the compiled path | 56 | shapes 2-3 of the ILP32 report (HAMT/vec `void *` values, wrong-width `extern-c`); P0's continuations family, wrong under `TUR_JIT_GEN=interp` natively too (`direct-shift-outside-lexical-reset`, `shift0-receiver-runs-outside-its-reset`); [wasm-jit-comparator-result-varies-between-runs](../reported/wasm-jit-comparator-result-varies-between-runs.md) |
+| Wrong answer on the compiled path | 56 | shapes 2-3 of the ILP32 report (HAMT/vec `void *` values, wrong-width `extern-c`); P0's continuations family, wrong under `TUR_JIT_GEN=interp` natively too (`direct-shift-outside-lexical-reset`, `shift0-receiver-runs-outside-its-reset`); [wasm-jit-comparator-result-varies-between-runs](../archive/wasm-jit-comparator-result-varies-between-runs.md) (resolved 2026-10-29: ILP32 shape 4, `list-tail` reading a cell's padding) |
 | Asyncify: `emscripten_fiber_swap` | 49 | unowned; the stubs remove one JS frame per runtime call, the trampoline's interp entries remain |
 | Other traps: `Aborted()` (26), signature mismatch (16), `exit` reaching JS (12), JS stack (8, deep recursion such as `escape-deep-capture`), out-of-bounds (2), `unwind` (2) | 66 | unsorted |
 | Imports with no host (`fork`, `socket`, `popen`, ...) | 13 | stay fallbacks |

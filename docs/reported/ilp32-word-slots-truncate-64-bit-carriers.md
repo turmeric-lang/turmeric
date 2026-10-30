@@ -52,7 +52,8 @@ Four shapes, all measured on the module:
 
 4. **A struct's pointer field read through a 64-bit cell view.** *Found
    2026-10-29* (raylib-web-playground-plan prerequisite 2), by Emscripten's
-   null-write canary. `stdlib/list.tur` declares
+   null-write canary. *The stdlib half is fixed the same day; the emitter half
+   (below) is open.* `stdlib/list.tur` declares
    `(defstruct ^heap Cons [A] (head A) (tail (Cons A)))`, which emits
    `struct { int64_t head; tur_adt_Cons__... *tail; }`, but `list-tail`,
    `list-head` and `list-length` read a cell as
@@ -76,15 +77,35 @@ Four shapes, all measured on the module:
        0))
    ```
 
-   The fix is the view, not the struct: read the tail as `void *` and widen it
-   (`(int64_t)(intptr_t)cell->tail`). That matches the `defstruct` layout on
+   The padding is whatever the allocator left there, so the answer also varied
+   from run to run in one module: this was
+   [wasm-jit-comparator-result-varies-between-runs](../archive/wasm-jit-comparator-result-varies-between-runs.md),
+   and, against the module built from `main` on 2026-10-29, seven corpus rows
+   (`generic-forward-nullary-arg-tyvar-name`, `list-basic`, `typed/list-basic`,
+   `list-byvalue-adt-elements`, `list-count-phantom-opaque-aggregate-element`,
+   `parsec-guide-step3-do-m`, and `typed/list-concat` alternating) printed a
+   wrong answer that the baseline recorded as `compiled`.
+
+   **Fixed in the stdlib:** `list-tail`, `list-head` and `list-length` read
+   the tail as `void *` and widen it (`(int64_t)(intptr_t)cell->tail`). That matches the `defstruct` layout on
    both targets, and still reads the carrier-built cells (`__tur_cons_of`, the
    `*args*` list) right: they store the pointer widened to 64 bits, and on
    little-endian wasm32 its low half, the part a `void *` read takes, is the
-   pointer. `tests/fixtures/generic-forward-nullary-arg-tyvar-name` is
-   the corpus row; the module linked today keeps the canary off
-   (`-sCHECK_NULL_WRITES=0`, `tools/wasm-jit/build-module.sh`), so the
-   baseline does not show it.
+   pointer. All of the rows above but one now print the right answer on every
+   run, and `typed/list-concat`, `typed/list-macro` and
+   `generic-hof-unannotated-fat-param-mixed` left the baseline.
+
+   **Open, in the emitter:** the erased instance of a parameterized struct
+   types a recursive link as a carrier, `struct tur_adt_Cons { int64_t head;
+   int64_t tail; }`, while each element instance types it as a pointer,
+   `struct tur_adt_Cons__int { int64_t head; tur_adt_Cons__int *tail; }`.
+   `tlength` walks through the erased one
+   (`((tur_adt_Cons *)(intptr_t)xs)->tail`) a list the element constructor
+   built, so it reads the padding too: `list-count-phantom-opaque-aggregate-element`
+   counts 6 for 5 and 4 for 3. Native layouts agree, so only wasm32 sees it.
+   The fix is to give the erased instance's link the pointer type the element
+   instances use (or the reverse); either changes native emitted C, so it
+   wants a fixture regen.
 
 The Option/Result boxes are probably the same family:
 `inline-c-result-builder` returns `47685760` (a heap address) where it expects

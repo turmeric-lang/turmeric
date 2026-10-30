@@ -79,7 +79,6 @@ g4b-thread-local-global fail  # stdout mismatch on the interpreted path: the pro
 gc-registry-growth fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 gde-generic-dict-eq-map fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 generic-hof-effectful-callback fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-generic-hof-unannotated-fat-param-mixed fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 generic-map-assoc-sig-tyvar-value fail  # stdout mismatch on the compiled path
 generic-spec-carrier-crossings-4 fail  # stdout mismatch on the compiled path
 generic-wrapper-over-return-dispatch-method fail  # stdout mismatch on the compiled path
@@ -143,7 +142,9 @@ io-read-line-stdin fail  # stdout mismatch on the compiled path
 jit-ffi-call-ptr fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 jit-ffi-call-ptr-struct fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 jit-ffi-callback-ptr fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
+jit-inline-c-thread-local fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 json-decode-hostile-input fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
+list-count-phantom-opaque-aggregate-element fail  # stdout mismatch on the compiled path
 list-helpers-wide-head-element interpreted  # the program starts threads (pthread_create), which this engine cannot run
 map-get-miss-on-any-value-is-nil interpreted  # the program starts threads (pthread_create), which this engine cannot run
 map-literal-frees-intermediates fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
@@ -442,8 +443,6 @@ time-dates-iso8601 fail  # stdout mismatch on the compiled path
 turi-option-result-map-deep-recursion fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 tvar-float-payload-value-converted fail  # stdout mismatch on the compiled path
 typeclass-unsafe-passbyptr-struct-arg fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-typed/list-concat fail  # stdout mismatch on the compiled path
-typed/list-macro fail  # stdout mismatch on the compiled path
 typed/vec-basic fail  # stdout mismatch on the compiled path
 vec-of-tvec-eq fail  # stdout mismatch on the compiled path
 vec-of-tvec-eq-manual fail  # stdout mismatch on the compiled path

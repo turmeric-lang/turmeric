@@ -70,7 +70,7 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [ilp32-word-slots-truncate-64-bit-carriers](ilp32-word-slots-truncate-64-bit-carriers.md) | high (wasm JIT, `tur build --target wasm`) | On wasm32, carriers kept in `intptr_t`/`void *` slots (`tur_hamt_get`'s values; the CPS backend's `DK` slots were fixed in P5) or declared at the wrong width (`tur_hamt_count`) lose their top 32 bits. Doubles and large ints come back wrong with no diagnostic: 44 corpus fixtures printed a wrong answer, and more once mir#16 let former traps run to the end. Shape 4 (2026-10-29): `stdlib/list.tur` reads a `(Cons A)` cell's 4-byte `tail` and its padding as one `int64_t`, so a nil tail can read as a cell and the walk reads address 0 |
-| [wasm-jit-comparator-result-varies-between-runs](wasm-jit-comparator-result-varies-between-runs.md) | medium (browser JIT) | `typed/list-concat` and `eq-carrier-capturing-comparator` print `false` for `true` on some runs of one module instance and not others (`run.js --repeat 4`); native is right. Present on `main` before P5; not the DK word, the call stubs, `setjmp` or the register fix |
+| ~~[wasm-jit-comparator-result-varies-between-runs](../archive/wasm-jit-comparator-result-varies-between-runs.md)~~ | medium (browser JIT) | **RESOLVED 2026-10-29** (archived): the runs differed because `list-tail` read a `(Cons A)` cell's 4-byte tail and its padding as one `int64_t` (ILP32 shape 4); it reads a pointer now, and `typed/list-concat` is right 8 of 8 runs. `eq-carrier-capturing-comparator` never varied: it is wrong in `vec-eq?` on every run, ILP32 shape 2 |
 
 ## Found adding the instance-variance warning (filed 2026-10-27)
 
