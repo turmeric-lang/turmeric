@@ -4,80 +4,94 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The vector types need no flag.** The `simd` experiment graduated:
+  `(load "stdlib/simd.tur")` gives `F64x2` ... `U8x16`, their masks, select,
+  shuffle and conversions without `--enable=simd`. A leftover
+  `--enable=simd`, or a spice's `:experiments ["simd"]`, is accepted with a
+  TUR-W0063 warning until the name ages out at 0.74.0.
+
+## [0.72.1] -- 2026-10-30
+
 ### Added
 
-- **16-byte vector types.** `(load "stdlib/simd.tur")` gives `F64x2`,
-  `F32x4`, `I64x2`, `I32x4`, `U16x8` and `U8x16`: by-value structs with one field per lane, with `splat`, `lane`,
-  `load` / `store!` from the typed numeric arrays (and unchecked forms),
-  lanewise `add` `sub` `mul` `div` `neg` `min` `max`, `sqrt` / `abs`, a
-  fixed-order `hsum`, byte widen / narrow and a sixteen-bit shift, plus a
-  `Num` instance so `{a + b}` is the lanewise sum. Compiled, each operation
-  is one GCC/Clang vector instruction; under `tur jit` a lane loop; under the
-  interpreter a native -- with the same bits on all three. A byte-image
-  blend written on them runs as fast as hand-written vector C. No flag: the
-  `simd` experiment they were built behind graduated before this release, and
-  a leftover `--enable=simd` is accepted with a TUR-W0063 warning.
-
-- **Vector comparisons, masks, select, shuffle and conversions.**
-  `P-eq` / `-lt` / `-le` / `-gt` / `-ge` return a mask (`M64x2`, `M32x4`,
-  `M16x8`, `M8x16`: -1 where the comparison held, 0 where not); `P-select`
-  picks each lane from one of two vectors by a mask without a branch; masks
-  combine with `M-and` / `-or` / `-not` and reduce with `M-any` / `-all`.
-  `P-shuffle` permutes lanes by an index vector (one instruction for
-  constant indices). `i32x4->f32x4`, `f32x4->i32x4` (truncating and
-  saturating, NaN to 0), `f32x4-widen-lo` / `-hi` and `f64x2-narrow` convert
-  between lane types, every lane defined.
-
-- **`NumArray`: generic numeric-array code.** One class over `F64Vec`,
-  `F32Vec`, `I64Vec`, `I32Vec` and `U8Vec` (`stdlib/numvec.tur`), with the
-  element type as the associated type `Elem` (`Sum` for `na-sum`, `View` for
-  views): `na-len`, `na-ref`, `na-set!`, `na-sum`, `na-min`, `na-max`,
-  `na-add!`, `na-fill!`, ... and the loops `na-for`, `na-fold`, `na-map!`.
-  A function written once over `[V] [(NumArray V)]` is specialized per type
-  and its loops vectorize like the per-type ones. A generic-typed local is
-  not dropped yet, so free `na-copy`'s result with `na-free`.
-
-- **Numvec store loops vectorize.** `P-map!` stores an expression into an
-  array element by element, from one source array or two, in place or into
-  another array: `(f64vec-map! v [x v] {x * 2.5})`. It and `P-build` now
-  store through a *view* (`P-view`, `P-view-ref`, `P-view-set!`, all
-  `#fx{Unsafe}`): the array's data pointer, read once, where a store
-  through the array re-reads its header every iteration and so kept the
-  loop scalar. On a 4096-element in-place map: 2.6x under clang `-O2`
-  (5.2x with `-march=native`), 1.26x under gcc `--release`; gcc's default
-  `-O2` still does not vectorize such a loop. New fixed-operation kernels,
-  vectorized at every level: `P-sub!`, `P-add-scalar!`, and except on
-  `U8Vec` `P-mul!` (element-wise).
-
-### Fixed
-
-- **A generic call whose receiver has the class's associated type** --
-  `(m w)` with `w : (View V)` -- called the representative instance's method
-  in every specialization instead of each type's own. It now dispatches on
-  `V`.
+- **16-byte vector types, behind `--enable=simd`.** `(load "stdlib/simd.tur")`
+  gives `F64x2`, `F32x4`, `I64x2`, `I32x4`, `U16x8` and `U8x16`: by-value
+  structs with one field per lane, with `splat`, `lane`, `load`/`store!` (and
+  unchecked forms), lanewise `add` `sub` `mul` `div` `neg` `min` `max`,
+  `sqrt`/`abs`, a fixed-order `hsum`, byte widen/narrow, a sixteen-bit shift,
+  and a `Num` instance so `{a + b}` is the lanewise sum. Compiled, each
+  operation is one GCC/Clang vector instruction; under `tur jit` a lane loop;
+  under the interpreter a native -- with the same bits on all three.
+- **Vector comparisons, masks, select, shuffle and conversions
+  (`--enable=simd`).** `P-eq`/`-lt`/`-le`/`-gt`/`-ge` return a mask (`M64x2`,
+  `M32x4`, `M16x8`, `M8x16`: -1 where the comparison held, 0 where not);
+  `P-select` picks each lane from one of two vectors by a mask without a branch;
+  masks combine with `M-and`/`-or`/`-not` and reduce with `M-any`/`-all`.
+  `P-shuffle` permutes lanes by an index vector (one instruction for constant
+  indices). `i32x4->f32x4`, `f32x4->i32x4` (truncating and saturating, NaN to
+  0), `f32x4-widen-lo`/`-hi` and `f64x2-narrow` convert between lane types,
+  every lane defined.
+- **`NumArray`: generic numeric-array code.** One class over `F64Vec`, `F32Vec`,
+  `I64Vec`, `I32Vec` and `U8Vec` (`stdlib/numvec.tur`), with the element type as
+  the associated type `Elem` (`Sum` for `na-sum`, `View` for views): `na-len`,
+  `na-ref`, `na-set!`, `na-sum`, `na-min`, `na-max`, `na-add!`, `na-fill!`, ...
+  and the loops `na-for`, `na-fold`, `na-map!`. A function written once over
+  `[V] [(NumArray V)]` is specialized per type and its loops vectorize like the
+  per-type ones. A generic-typed local is not dropped yet, so free `na-copy`'s
+  result with `na-free`.
+- **Compiled REPL turns, behind `--enable=compiled-repl`.** A `tur repl` turn is
+  compiled and run in process instead of interpreted: top-level defs persist
+  across turns in host slots, results print as the interpreter prints them, and
+  a panic or exit ends the turn, not the REPL. Try Turmeric gains a "Compile
+  prompt turns too" checkbox under Compile in the language menu.
+- **Numvec store loops vectorize.** `P-map!` stores an expression into an array
+  element by element, from one source array or two, in place or into another
+  array: `(f64vec-map! v [x v] {x * 2.5})`. It and `P-build` now store through a
+  *view* (`P-view`, `P-view-ref`, `P-view-set!`, all `#fx{Unsafe}`), so the loop
+  no longer re-reads the header each iteration. New fixed-operation kernels,
+  vectorized at every level: `P-sub!`, `P-add-scalar!`, and except on `U8Vec`
+  `P-mul!` (element-wise).
 
 ### Changed
 
-- **A method argument at an associated type is inferred from it**:
-  `(na-add-scalar! c (from-int 1))` in a generic no longer needs
-  `(:: (from-int 1) (Elem V))`.
-- **No panic check after a call that cannot panic.** The emitter used to
-  write `if (tur_panicking) ...` after every call; it now omits it after a
-  call to an inline-C function whose body makes no call, never names
-  `tur_panic` and evaluates no Turmeric sub-expression -- `list-head`,
-  `f64vec-set-unchecked!` and the like -- and after a Turmeric function
-  built only from such calls, arithmetic and `unsafe`, class-method
-  instances included. Besides the smaller C, that check
-  was what kept a store loop from vectorizing: a store might write the flag,
-  so the test could not leave the loop.
+- **No panic check after a call that cannot panic.** The emitter omits the `if
+  (tur_panicking)` test after a call to an inline-C function whose body makes no
+  call, never names `tur_panic` and evaluates no Turmeric sub-expression --
+  `list-head`, `f64vec-set-unchecked!` and the like -- and after a Turmeric
+  function built only from such calls. Besides the smaller C, that check was
+  what kept a store loop from vectorizing.
+- **wasm SIMD is on by default.** `tur build --target wasm` passes `-msimd128`,
+  and the Try Turmeric modules are built with it, so the numvec kernels
+  vectorize in the browser with bit-identical results. An engine without wasm
+  SIMD refuses such a module; `:web #{:simd false}` in `build.tur` builds one
+  without it.
 
-- **wasm SIMD is on by default.** `tur build --target wasm` passes
-  `-msimd128`, and the Try Turmeric modules are built with it, so the
-  numvec kernels vectorize in the browser: 1.2-29x faster on 15 of 16
-  measured kernels (the u8 sum gains nothing), with bit-identical
-  results. An engine without wasm SIMD (before Chrome 91, Firefox 89,
-  Safari 16.4) refuses such a module; `:web #{:simd false}` in `build.tur`
-  builds one without it.
+### Fixed
+
+- **A generic call whose receiver has the class's associated type dispatches per
+  specialization.** `(m w)` with `w : (View V)` called the representative
+  instance's method in every specialization instead of each type's own. It now
+  dispatches on `V`.
+- **A method argument at an associated type is inferred from it.**
+  `(na-add-scalar! c (from-int 1))` in a generic no longer needs `(:: (from-int
+  1) (Elem V))`.
+- **Modules may define types, constructors and exports of the same name.** Two
+  modules that each defined `Attr` could not both be loaded; a name something
+  else already holds is now renamed `<module>/<name>`, and importers reach it
+  qualified. Under turi, a module's exported defn is found under its own
+  module's key, so with two modules exporting `f`, lib/a's call to its own `f`
+  no longer runs lib/b's.
+- **A suspended fiber continuation resumed in a later REPL turn keeps its
+  frames.** A continuation stored in one turn and resumed in the next no longer
+  walks freed frames; the turn keeps its scratch while one lives.
+- **Smaller fixes across the compiler and interpreter.** `(ok nil)` and a bare
+  nullary constructor used as a value (`(let [c Red] ...)`) compile; turi shows
+  a `Vec` through each element's own type and prints a `def` turn's value; a
+  separately compiled library's `def` initializers run at `dlopen` and its
+  exported globals link under the header's name; and a `u8` string literal in
+  inline C gives the same bytes under `tur jit` and cc.
 
 ## [0.72.0] -- 2026-10-29
 
