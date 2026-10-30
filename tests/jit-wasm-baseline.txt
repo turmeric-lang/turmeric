@@ -20,7 +20,6 @@ async-timer-basic fail  # stdout mismatch on the interpreted path: the program s
 await-below-evicted-caller-or-nontail-resume fail  # stdout mismatch on the error path: the module threw: unreachable
 await-below-struct-capturing-lambda fail  # stdout mismatch on the error path: the module threw: unreachable
 await-in-generic-capturing-lambda fail  # stdout mismatch on the error path: the module threw: unreachable
-await-through-fn-value fail  # stdout mismatch on the error path: the module threw: unreachable
 barrier-rendezvous fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 byval-spine-drop-refused-nonscalar-param interpreted  # the program starts threads (pthread_create), which this engine cannot run
 callcc-in-fiber fail  # stdout mismatch on the error path: the module threw: unreachable
@@ -28,14 +27,7 @@ cancel-chan fail  # stdout mismatch on the interpreted path: the program starts 
 cancel-cooperative fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 cancel-select fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 childhandle-linear fail  # stdout mismatch on the interpreted path: import of undefined item fork
-class-var-applied-result-in-constrained-generic fail  # stdout mismatch on the compiled path
 classic-list-surface interpreted  # the program starts threads (pthread_create), which this engine cannot run
-constrained-defn-cons-return-monomorphize fail  # stdout mismatch on the compiled path
-constrained-instance-dispatch-nested-parametric-element fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
-constrained-instance-element-dispatch fail  # stdout mismatch on the compiled path
-conv-defstruct-option-hkt-instance-bodies fail  # stdout mismatch on the compiled path
-conv-defstruct-result-struct-field-typedef-order fail  # stdout mismatch on the compiled path
-conv-defstruct-return-bridge-inline-c fail  # stdout mismatch on the compiled path
 cps-effectful-callback-aggregate-args fail  # stdout mismatch on the error path: the module threw: unreachable
 cps-effectful-capturing-callback-scalar-kinds fail  # stdout mismatch on the error path: the module threw: unreachable
 cps-effectful-capturing-closure-callback fail  # stdout mismatch on the error path: the module threw: unreachable
@@ -59,7 +51,6 @@ dynvar-convey-isolation fail  # stdout mismatch on the interpreted path: the pro
 effect-capturing-closure-thin-param fail  # stdout mismatch on the error path: the module threw: unreachable
 effect-nontail-resume-once-in-place fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 effect-nontail-resume-under-outer fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
-eq-nested-binary-class-method-spec fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
 eqmap-cstr-content fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 escape-deep-capture fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 fiber-basic fail  # stdout mismatch on the error path: the module threw: unreachable
@@ -68,7 +59,6 @@ fiber-local fail  # stdout mismatch on the error path: the module threw: unreach
 fiber-scheduler fail  # stdout mismatch on the error path: the module threw: unreachable
 fiber-scheduler-mt-migration fail  # stdout mismatch on the interpreted path: the program starts threads (tur_scheduler_mt_new), which this engine cannot run
 fiber-yield fail  # stdout mismatch on the error path: the module threw: unreachable
-fmap-byvalue-struct-element fail  # stdout mismatch on the compiled path
 fn-arity-100-param fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
 fs-interp-basics interpreted  # import of undefined item fnmatch
 fs-process-typed-errors fail  # stdout mismatch on the interpreted path: import of undefined item popen
@@ -77,11 +67,8 @@ g4b-thread-local-global fail  # stdout mismatch on the interpreted path: the pro
 gc-registry-growth fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 gde-generic-dict-eq-map fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 generic-hof-effectful-callback fail  # stdout mismatch on the error path: the module threw: unreachable
-generic-wrapper-over-return-dispatch-method fail  # stdout mismatch on the compiled path
-generic-wrapper-tail-forwards-return-dispatch fail  # stdout mismatch on the compiled path
 ghe3-generic-map-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 gmk-map-literal-cstr-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-hkt-stdlib-option-result-instances fail  # stdout mismatch on the compiled path
 httpd-async-echo fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-async-limit fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-async-mw-attr fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
@@ -130,22 +117,16 @@ image-globals-roundtrip fail  # stdout mismatch on the compiled path
 image-hooks-tracked fail  # stdout mismatch on the compiled path
 image-reload-hook fail  # stdout mismatch on the compiled path
 image-roundtrip fail  # stdout mismatch on the compiled path
-inline-c-result-builder fail  # stdout mismatch on the compiled path
-inline-c-result-nested-sum fail  # stdout mismatch on the compiled path
-inline-c-typed-result-option fail  # stdout mismatch on the compiled path
 inline-c-variadic-definition fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
-io-read-line-stdin fail  # stdout mismatch on the compiled path
 jit-ffi-call-ptr fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 jit-ffi-call-ptr-struct fail  # stdout mismatch on the error path: the module threw: unreachable
 jit-ffi-callback-ptr fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 jit-inline-c-thread-local fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 json-decode-hostile-input fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
-list-count-phantom-opaque-aggregate-element fail  # stdout mismatch on the compiled path
 list-helpers-wide-head-element interpreted  # the program starts threads (pthread_create), which this engine cannot run
 map-get-miss-on-any-value-is-nil interpreted  # the program starts threads (pthread_create), which this engine cannot run
 map-literal-frees-intermediates fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 neoteric-ascription-sweet fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-nested-construct-byvalue-decode fail  # stdout mismatch on the compiled path
 net-blocking-tcp fail  # stdout mismatch on the interpreted path: import of undefined item socket
 niche-elem-comparator-conventions fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 os-misc-surface fail  # stdout mismatch on the interpreted path: import of undefined item getgid
@@ -280,8 +261,6 @@ reactor-fibers-park-fd fail  # stdout mismatch on the compiled path
 reactor-fibers-smoke fail  # stdout mismatch on the compiled path
 reactor-fibers-stop-mid-run fail  # stdout mismatch on the compiled path
 reactor-signal-process-directed fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-result-bridge-tail-call-to-inline-c fail  # stdout mismatch on the compiled path
-return-dispatched-sum-mint-constrained-instance fail  # stdout mismatch on the compiled path
 rwlock-basic fail  # stdout mismatch on the interpreted path: import of undefined item pthread_rwlock_tryrdlock
 saffron-any-div-mod-minus-one interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-any-key-into-typed-map interpreted  # the program starts threads (pthread_create), which this engine cannot run
@@ -422,8 +401,6 @@ signal-handle-poll fail  # stdout mismatch on the interpreted path: import of un
 stackless-catch-unwind-byref-aggregate-group-bail fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 stm-retry-wakeup fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 stm-stress fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-sum-payload-drop-dictionary-dispatch fail  # stdout mismatch on the compiled path
-tail-call-inline-c-carrier-bridge fail  # stdout mismatch on the compiled path
 tailcall-dyn-leak interpreted  # the program starts threads (pthread_create), which this engine cannot run
 taskgroup-async fail  # stdout mismatch on the error path: the module threw: unreachable
 taskgroup-timeout fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
@@ -435,6 +412,4 @@ time-dates-iso8601 fail  # stdout mismatch on the compiled path
 turi-option-result-map-deep-recursion fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 tvar-float-payload-value-converted fail  # stdout mismatch on the compiled path
 typeclass-unsafe-passbyptr-struct-arg fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-weak-upgrade-after-drop fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
-weak-upgrade-option fail  # stdout mismatch on the compiled path
 workstealing-balance fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run

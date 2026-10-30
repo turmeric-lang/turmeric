@@ -158,12 +158,18 @@ Four shapes, all measured on the module:
    8 bytes a slot) now describes wasm32 too. Both fixtures answer right on
    the module.
 
-   Still untraced: the Option/Result box line below.
+   The corpus against that module: 25 rows left the baseline (216 failures,
+   from 241), none joined it. Among them `inline-c-result-builder`,
+   `inline-c-typed-result-option` and `inline-c-result-nested-sum` -- the
+   Option/Result box line below, which was the same family after all (a
+   `Some` with a pointer payload is a padded, aligned monomorph now) -- and
+   `weak-upgrade-option`, `fmap-byvalue-struct-element`,
+   `io-read-line-stdin`, the `constrained-instance-*` dispatch rows.
 
-The Option/Result boxes are probably the same family:
-`inline-c-result-builder` returns `47685760` (a heap address) where it expects
-`2005` from `tur_some_ptr`, while the `tur_ok_ptr` path beside it is right.
-This one was not traced.
+The Option/Result boxes were the same family: `inline-c-result-builder`
+returned `47685760` (a heap address) where it expected `2005` from
+`tur_some_ptr`, while the `tur_ok_ptr` path beside it was right. Fixed by the
+shape 4 layout rule above (2026-10-30).
 
 ## Repro
 
