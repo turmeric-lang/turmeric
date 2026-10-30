@@ -1,7 +1,11 @@
 # On the browser JIT, a Turmeric recursion overflows about 300 calls deep, not 1,700
 
 **Severity:** medium (browser JIT, user-visible). **Cause confirmed
-2026-10-29** (below): `eval`'s own `setjmp` call, since mir#17. Try Turmeric's Compile
+2026-10-29** (below): `eval`'s own `setjmp` call, since mir#17. **Fix measured
+2026-10-30**: linking with wasm-native `setjmp` (`-fwasm-exceptions
+-sSUPPORT_LONGJMP=wasm`) removes the wrappers with no MIR change, 300 -> 700 in
+the worker; JSPI then stands in for Asyncify where the playground needs a
+blocking loop to yield. Try Turmeric's Compile
 engine said "recursion depth ~1,700"; a plain non-tail recursion overflows at
 about 310 calls in Chromium's worker and about 590 under node. A program that
 recurses over a 400-element list works under Interpret and stops with
@@ -83,23 +87,112 @@ never meets a wrapper.
 
 ## Fix directions
 
-### Why the `setjmp` cannot simply move to a helper
+### The link mode: wasm-native `setjmp` (measured 2026-10-30, recommended)
 
-Under Emscripten's SjLj a `longjmp` lands in the frame that called `setjmp`,
-so that frame has to be alive until the function that called it returns. A
-helper that does the `setjmp` and returns is gone by the time the `longjmp`
-comes (the experiment above is exactly that, and is only sound because a plain
-recursion never longjmps). A helper that does the `setjmp` and then *stays*
-on the stack, running the rest of the function by re-entering `eval` at the
-next instruction, keeps the semantics but nests one helper per `setjmp`
-executed in one activation: a loop installing an effect handler N times
-(`emit_effects.c`'s `TUR_SETJMP` per `handle`, `emit_dk_runtime.c`'s per
-bounce) would grow the stack N deep where today it stays flat. Not that.
+The wrappers exist because the module links with Emscripten's JS-based
+`setjmp` (`SUPPORT_LONGJMP=emscripten`, the default without
+`-fwasm-exceptions`). The other mode, `setjmp`/`longjmp` on wasm exception
+handling, has no JS frames at all, and it needs no change to MIR. Built as an
+experiment from a patched copy of `tools/wasm-jit/build-module.sh` --
+`-fwasm-exceptions` on every compile (the `rt`, `engine` and `mir` groups, the
+import table and the stubs) and `-fwasm-exceptions -sSUPPORT_LONGJMP=wasm` on
+the link, nothing else -- emcc 6.0.10, legacy wasm EH (its default), the same
+objects otherwise:
 
-### Two `eval`s (the fix; a fork change)
+| Depth, last that ran / first that overflowed | today (JS `setjmp`) | wasm `setjmp` |
+| --- | --- | --- |
+| node 22 | 575 / 600 | 1,500 / 1,800 |
+| Chromium 153, main thread | 575 / 600 | 1,100 / 1,200 |
+| Chromium 153, Web Worker (Try's `jit-worker.js`) | 300 / 325 | 700 / 800 |
 
-Only a function whose body calls `setjmp` needs its calls wrapped, and MIR can
-know which those are. On wasm, build the interpreter loop twice from the one
+- **Calls.** `fib 30` under node 22: 444-549 ms today, 335-398 ms with wasm
+  `setjmp` (about 1.4x; the `try` regions cost a little against the 1.7x of
+  the no-`setjmp` experiment). **Under Chromium 153 there is no measurable
+  difference** (337-450 against 350-412 ms, two instances each): that V8
+  makes a wasm-to-JS-to-wasm call cheap enough that the wrappers only cost
+  stack there. So the speed finding above is V8-version dependent; the depth
+  finding is not.
+- **Size.** 5.46 -> 5.54 MB (+1.5%).
+- **Correctness.** `tools/wasm-jit/smoke/eff.tur` prints 42 (the effect
+  landing is a wasm-EH `setjmp` now); `check-examples.sh`: all 19 Try examples
+  right; a 715-fixture slice of the corpus (effects, handlers, panics, the DK
+  entry, continuations, exits) through `tests/run-jit-wasm.sh`: 612 compiled,
+  10 fell back, 54 failed, **no row better or worse than the baseline**.
+- **One behaviour change.** The linear-stack check (`-sSTACK_OVERFLOW_CHECK=2`)
+  still fires and still prints `Aborted(stack overflow (Attempt to set SP ...`
+  on stderr, but the exception JavaScript sees is `RuntimeError: unreachable`,
+  not the `Aborted(...)` error. `web/public/jit-worker.js` classifies by the
+  exception's message, so it would read the stderr line instead (it already
+  intercepts that line).
+- **What it rules out.** Asyncify, which cannot be used with wasm exceptions
+  (`emcc.py:486`). Try Turmeric's Compile engine links no Asyncify today, so
+  for it this is a free change: worker depth 300 -> 700, and every call out of
+  `eval` a plain wasm call. The raylib playground's blocking frame loop
+  needed Asyncify; the next subsection is its replacement.
+
+### JSPI in place of Asyncify (measured 2026-10-30)
+
+JavaScript Promise Integration suspends the wasm stack at a suspending
+import and resumes it when the promise settles, with no instrumentation of
+the wasm. Emscripten's `-sJSPI -sJSPI_EXPORTS=turi_wasm_jit_run` makes that
+export return a Promise and marks `emscripten_sleep` suspending (`ASYNCIFY=2`
+in `src/lib/libasync.js`). On the wasm-`setjmp` build above, with
+`emscripten_sleep` added to the import table as the Asyncify spike did:
+
+- The `.wasm` is **byte-for-byte the same size** as without JSPI (5.54 MB;
+  only the JS differs). Asyncify made it 8.31 MB.
+- `tools/wasm-jit-spike/asyncify/while.tur` (a `while` over `^mut` state
+  sleeping 16 ms a frame from inline C) and `frames.tur` **run and yield**,
+  in Chromium 153 on the main thread and inside a Web Worker, printing the
+  right values; `eff.tur` still prints 42.
+- Depth and call speed are those of the wasm-`setjmp` build; JSPI adds
+  nothing (1,100 / 1,200 main thread, 700 / 800 worker, `fib 30` within noise).
+- **It needs the wasm-`setjmp` objects.** Today's objects relinked with
+  `-sJSPI` fail the first sleep with `SuspendError: trying to suspend without
+  WebAssembly.promising`: the `invoke_*` JS frame between `eval` and the sleep
+  breaks the chain JSPI suspends. The same rule means a sleep inside a
+  host-to-interpreted callback (a comparator, a frame function called through
+  the table's JS closure, `mir_wasm_set_interp_entry`) would fail the same
+  way; the blocking style sleeps from `main`, entered through
+  `MIR_interp_arr` with no JS frame, and is fine. So an Asyncify module and a
+  JSPI module are two object sets, not two links.
+- **Support, from web sources on 2026-10-30** (emscripten.org is not reachable
+  from this session's network, so its JSPI page was not read): Chrome ships
+  JSPI by default since 137 (May 2025); Firefox has it behind a flag since 131
+  and an Intent to Ship for 153; Safari 27 beta has it. node 22's V8 12.4 has
+  only the older `Suspender` API, so `tests/run-jit-wasm.sh` cannot drive a
+  JSPI module; Playwright's Chromium 153 can.
+  Sources: [The State of WebAssembly 2025-2026](https://platform.uno/blog/the-state-of-webassembly-2025-2026/),
+  [SQLite persistence on the web, May 2026](https://powersync.com/blog/sqlite-persistence-on-the-web),
+  [State of WebAssembly 2026](https://devnewsletter.com/p/state-of-webassembly-2026/),
+  [a project's Firefox and Safari support issue, October 2026](https://github.com/RichardAtCT/simgolf-web/issues/4).
+
+So for the playground: JSPI on the wasm-`setjmp` build gives the blocking
+style with no Asyncify cost, Chrome-first; other browsers need either the
+Asyncify build (a second module) or the callback style. That choice is
+raylib-web-playground-plan's, recorded there under prerequisite 3.
+
+### What to do, in order
+
+1. **Switch `tools/wasm-jit/build-module.sh` to wasm-native `setjmp`** (the
+   four flag sites above), re-run the corpus for a new baseline, and teach
+   `jit-worker.js` the `unreachable`-plus-stderr shape of the stack abort.
+   No fork change; Try's Compile engine gets 700 frames in the worker.
+2. The playground decides Asyncify (second object set) against JSPI
+   (Chrome-first) for the blocking style, or goes callback-first.
+3. The two-`eval` fork change below is then unnecessary. It stays recorded in
+   case a JS-`setjmp` link is ever needed again.
+4. Longer term, heap-allocated interpreter frames (wasm-jit-plan 5.8's third
+   response), since four wasm frames per interpreted call remain either way
+   (`eval` -> `call_insn_execute` -> the stub -> `wasm_ff_dispatch` -> `eval`;
+   recognising an interpreted thunk in `call()` before the foreign-call
+   interface would drop two, the small ones).
+
+### Two `eval`s (a fork change; needed only while the link keeps the JS `setjmp`)
+
+If the module had to stay on Emscripten's JS `setjmp`, this is the fix inside
+MIR. Only a function whose body calls `setjmp` needs its calls wrapped, and MIR
+can know which those are. On wasm, build the interpreter loop twice from the one
 source: `eval_sj`, today's, for those functions; `eval`, with no `setjmp` in
 it, for every other function, whose calls are then plain wasm calls. As read
 from `mir-interp.c`:
@@ -138,22 +231,17 @@ from `mir-interp.c`:
   checks, and the `setjmp`-using fixtures (effects, panics, the DK entry) are
   the ones the `eval_sj` copy must keep passing.
 
-### What that leaves
+### Why the `setjmp` cannot simply move to a helper
 
-- **Four wasm frames per interpreted call** stay: `eval` ->
-  `call_insn_execute` -> the exact-signature stub -> `wasm_ff_dispatch` (with
-  `MIR_interp_arr` inlined) -> `eval`. `call()` goes to the foreign-call
-  interface for every callee and only `wasm_ff_dispatch`, two frames later,
-  notices the thunk is an interpreted function (`mir-wasm.c:493-520`).
-  Recognising it in `call()` and entering `MIR_interp_arr` there drops the
-  stub and dispatch frames. Those are the small ones (`eval`'s spilled locals
-  are the bulk), so the gain is unmeasured; a second, smaller step.
-- **Wasm-native SjLj** (`-sSUPPORT_LONGJMP=wasm`) has no JS frames at all,
-  but it needs `-fwasm-exceptions`, and emcc 6.0.10 warns that `ASYNCIFY=1`
-  with wasm exceptions leaves "parts of the program that mix" them
-  uncompilable (`emcc.py:486`); `eval` under the playground's Asyncify is that
-  part. JSPI is the replacement for Asyncify that would allow it; its browser
-  support was not checked here.
-- Longer term, wasm-jit-plan 5.8's third response: heap-allocated interpreter
-  frames, so depth is bounded by memory.
-- Meanwhile the page says ~300 (`web/engine.js`).
+Under Emscripten's SjLj a `longjmp` lands in the frame that called `setjmp`,
+so that frame has to be alive until the function that called it returns. A
+helper that does the `setjmp` and returns is gone by the time the `longjmp`
+comes (the experiment above is exactly that, and is only sound because a plain
+recursion never longjmps). A helper that does the `setjmp` and then *stays*
+on the stack, running the rest of the function by re-entering `eval` at the
+next instruction, keeps the semantics but nests one helper per `setjmp`
+executed in one activation: a loop installing an effect handler N times
+(`emit_effects.c`'s `TUR_SETJMP` per `handle`, `emit_dk_runtime.c`'s per
+bounce) would grow the stack N deep where today it stays flat. Not that.
+
+Meanwhile the page says ~300 (`web/engine.js`).

@@ -484,7 +484,9 @@ overflows even on the JIT's 1 GiB entry thread (its frame is over 1 KiB).
 So switching the page's engine from Interpret to Compile trades
 memory-bounded depth for ~1,700 frames, which the toggle must say. (Measured
 again 2026-10-29 on Turmeric code since P5: about 300 calls in Chromium's
-worker, 590 under node --
+worker, 590 under node, because `eval`'s `setjmp` (mir#17) puts a JS
+`invoke_*` frame under every call; linking with wasm-native `setjmp`
+(`-fwasm-exceptions -sSUPPORT_LONGJMP=wasm`) gives 700 and 1,500 --
 [wasm-jit-recursion-depth-is-about-300](../reported/wasm-jit-recursion-depth-is-about-300.md).) Mutual
 tail calls the T5 fusion did not collapse do not count against it: the
 emitter's `TUR_MUSTTAIL` is a MIR tail call, which the interpreter runs in the

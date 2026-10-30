@@ -32,3 +32,29 @@ bash tools/wasm-jit-spike/asyncify/link.sh /tmp/async -sASYNCIFY
 node tools/wasm-jit-spike/asyncify/drive.js /tmp/async tools/wasm-jit-spike/asyncify/while.tur
 ```
 
+## `jspi/` -- wasm-native `setjmp`, and JSPI in place of Asyncify (2026-10-30)
+
+The measured fix of
+[wasm-jit-recursion-depth-is-about-300](../../docs/reported/wasm-jit-recursion-depth-is-about-300.md)
+and the JSPI half of raylib-web-playground-plan's prerequisite 3. `build.sh`
+derives a variant of `tools/wasm-jit/build-module.sh` that compiles with
+`-fwasm-exceptions` and links with `-sSUPPORT_LONGJMP=wasm` (so `eval`'s
+`setjmp` brings no JS `invoke_*` frames), and with `jspi` adds `-sJSPI`, under
+which `turi_wasm_jit_run` returns a Promise and a compiled `emscripten_sleep`
+suspends the wasm stack instead of Asyncify unwinding it. `index.html`,
+`harness.js` and `worker.js` boot such a module on a page's main thread or in a
+Web Worker and run one program; `jspi.spec.js` drives them from Playwright
+(node 22's V8 has no JSPI, so the browser is the only place to run the `jspi`
+build). The results are in the report.
+
+```sh
+bash tools/wasm-jit-spike/jspi/build.sh /tmp/sjlj            # depth, speed, the corpus under node
+bash tools/wasm-jit-spike/jspi/build.sh /tmp/sjlj jspi       # the sleep, in Chromium
+mkdir -p web/public/jspi-harness/b && cp /tmp/sjlj/wasm-jit/{turmeric-jit.js,turmeric-jit.wasm,stdlib.data} web/public/jspi-harness/b/
+cp tools/wasm-jit-spike/jspi/{index.html,harness.js,worker.js} web/public/jspi-harness/
+cp tools/wasm-jit-spike/jspi/jspi.spec.js web/tests/zz-jspi.spec.js
+(cd web && JSPI_MOD=b JSPI_PROGS=../tools/wasm-jit-spike/asyncify/while.tur npx playwright test zz-jspi.spec.js --project=desktop)
+```
+
+The copies under `web/` are scratch; do not commit them.
+

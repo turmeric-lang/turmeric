@@ -146,10 +146,11 @@ is compiled into the module with emcc like raylib itself.
   the way `stdlib.data` is. Only a spice with a native dep (raylib's
   `libraylib.a`, raygui's TU) needs a module relink.
 - **Honest limits.** (1) Recursion depth is about 300 Turmeric calls in
-  Chromium's worker (measured 2026-10-29,
-  [wasm-jit-recursion-depth-is-about-300](../reported/wasm-jit-recursion-depth-is-about-300.md);
-  wasm-jit-plan's 1,696 was a pre-P5 C spike), not the tree-walker's
-  heap-bounded depth; the engine toggle says so. (2) A program the engine refuses (threads,
+  Chromium's worker today, 1,100 on a main thread with the wasm-native
+  `setjmp` link the
+  [depth report](../reported/wasm-jit-recursion-depth-is-about-300.md)
+  recommends (wasm-jit-plan's 1,696 was a pre-P5 C spike), not the
+  tree-walker's heap-bounded depth; the engine toggle says so. (2) A program the engine refuses (threads,
   an autolink) falls back to the tree-walker, which in *this* module has no
   raylib, so for the arcade the fallback must be an error that names the reason,
   not a second engine. Today `turi_wasm_jit_run` falls back unconditionally
@@ -193,7 +194,14 @@ is compiled into the module with emcc like raylib itself.
   meanwhile. The cost: the module goes from 5.46 to 8.31 MB (1.89 to 2.63 MB
   gzipped), the 10-million-step loop runs about 1.6x slower, and recursion
   depth does not change. So the blocking examples can run unchanged; P0 still
-  has to show raylib's own sleep path and the fps in a browser.
+  has to show raylib's own sleep path and the fps in a browser. **A second
+  route, measured 2026-10-30:** build the module with wasm-native `setjmp`
+  (which also removes the JS wrappers and doubles the recursion depth, see
+  the [depth report](../reported/wasm-jit-recursion-depth-is-about-300.md))
+  and link `-sJSPI` instead of Asyncify. The same loop yields, the wasm does
+  not grow at all, and the interpreter is not slowed. Its cost is browser
+  support: Chrome today, Firefox and Safari arriving. Asyncify cannot be used
+  with that build (wasm exceptions), so the two routes are two object sets.
 
 ### A. Interpreter + a baked spice image (fallback)
 
@@ -453,14 +461,19 @@ are cut down to what survives.
   (e) The glue's fallback to the tree-walker (`run_interpreted`) is switched
   off for the arcade, whose interpreter has no raylib: a refusal is reported
   with its reason instead.
-- **J4. Asyncify (works, prerequisite 3).** Link the arcade module with
+- **J4. Asyncify or JSPI (both work, prerequisite 3).** Link the arcade module with
   `-sASYNCIFY` so `WindowShouldClose`'s sleep yields and the blocking `while`
   runs unchanged. It needs Asyncify to unwind through the `invoke_*` frames
   `eval`'s `setjmp` brings (section 3, J), and its cost is code size and a
   slower interpreter (Asyncify instruments `eval`, the hottest function in the
   module): measured at +52% module size and about 1.6x on a tight loop. The
   49 fiber fixtures are not a side benefit: 6 of them pass with it, and the
-  rest abort with `unreachable` in the fiber switch's rewind (not traced). If
+  rest abort with `unreachable` in the fiber switch's rewind (not traced).
+  Or build with wasm-native `setjmp` and link `-sJSPI` (`JSPI_EXPORTS` names
+  `turi_wasm_jit_run`, which then returns a Promise the shell awaits): no
+  size or speed cost, twice the depth, Chrome-first; a sleep must not sit
+  under a JS frame, so it is for the blocking style (sleeps from `main`), not
+  for a sleep inside a frame callback. If
   P0 still says no (raylib's sleep path, fps), J4 is "document the callback
   form and rewrite the examples", and
   `with-web-game-loop` becomes the front door.
@@ -560,7 +573,7 @@ later, and where it is tracked. Nothing here needs the arcade repo to exist.
 |---|---|---|---|---|
 | 1 | **Decide J over A, and the repo.** The owner confirms section 3's flip and section 4's own-repo choice. | P0 | P0's scope is different under each: J tests struct-by-value calls and the main-thread boot, A tests `ffi_thunk` shims under Asyncify. | this plan |
 | 2 | **`-sSTACK_OVERFLOW_CHECK=2` on the JIT link.** One flag, one test. **Done 2026-10-29**: the module links with it (and `-sCHECK_NULL_WRITES=0`, see row 5), the page reports the abort as `stack overflow: recursion too deep`, and `jit-engine.spec.js` pins it. No measurable cost on the loop benchmark; +97 KB. | P0 | An iframe runs arbitrary user programs. Without the check a linear-stack overflow writes past the 16 MiB stack instead of stopping, and the spike's numbers (and the first user bug report) are of a corrupted module. | [wasm-linear-stack-overflow-unchecked](../reported/wasm-linear-stack-overflow-unchecked.md) |
-| 3 | **Decide how Asyncify gets measured on the MIR interpreter.** Neither wasm module is linked with it, and 49 corpus fixtures fail on `emscripten_fiber_swap`. Link a throwaway JIT module with `-sASYNCIFY` and run a compiled program that calls `emscripten_sleep`; that is P0 step 3 and the answer to whether the blocking style survives. The question is the `invoke_*` frames that `eval`'s own `setjmp` (mir#17) puts under every call it makes (section 3, J), not the stubs. **Done 2026-10-29** (`tools/wasm-jit-spike/asyncify/`, under node): it works. A compiled `while` loop sleeping 16 ms a frame from inline C yields to the event loop; +52% module size (2.63 MB gzipped), about 1.6x slower on a tight loop, no change in depth. 6 of the 49 fiber fixtures pass with it; the rest abort in the fiber switch's rewind. Found on the way: recursion depth is about 300, not 1,700 ([report](../reported/wasm-jit-recursion-depth-is-about-300.md)). | P0 | The whole examples section (8) is written in the blocking style. | wasm-jit-plan P5 (the family is "unowned"); J4 |
+| 3 | **Decide how Asyncify gets measured on the MIR interpreter.** Neither wasm module is linked with it, and 49 corpus fixtures fail on `emscripten_fiber_swap`. Link a throwaway JIT module with `-sASYNCIFY` and run a compiled program that calls `emscripten_sleep`; that is P0 step 3 and the answer to whether the blocking style survives. The question is the `invoke_*` frames that `eval`'s own `setjmp` (mir#17) puts under every call it makes (section 3, J), not the stubs. **Done 2026-10-29** (`tools/wasm-jit-spike/asyncify/`, under node): it works. A compiled `while` loop sleeping 16 ms a frame from inline C yields to the event loop; +52% module size (2.63 MB gzipped), about 1.6x slower on a tight loop, no change in depth. 6 of the 49 fiber fixtures pass with it; the rest abort in the fiber switch's rewind. Found on the way: recursion depth is about 300, not 1,700 ([report](../reported/wasm-jit-recursion-depth-is-about-300.md)). **JSPI, 2026-10-30:** on a module built with wasm-native `setjmp` (`-fwasm-exceptions -sSUPPORT_LONGJMP=wasm`, no MIR change), `-sJSPI` makes the same blocking loop yield in Chromium 153, main thread and worker, with **no size cost** (the wasm is identical) and the depth doubled (700 in the worker, 1,100 on the main thread); it needs those objects, not today's. Chrome ships JSPI; Firefox has an Intent to Ship (153) and Safari 27 beta has it, per web sources. So the blocking style has two routes: Asyncify (every browser, +52% module, the JS-`setjmp` objects) or JSPI (Chrome-first, free, the wasm-`setjmp` objects) -- two object sets, so one or the other per module. The owner's call; the report has the measurements. | P0 | The whole examples section (8) is written in the blocking style. | wasm-jit-plan P5 (the family is "unowned"); J4 |
 | 4 | **Diagnose [wasm-jit-comparator-result-varies-between-runs](../archive/wasm-jit-comparator-result-varies-between-runs.md).** A list comparison gives a different answer on alternate runs of one module instance. **Done 2026-10-29**: not the MIR interpreter. `list-tail` read a `(Cons A)` cell's 4-byte tail and its padding as one `int64_t` (ILP32 shape 4), so what the allocator left in the padding decided the answer; fixed in `stdlib/list.tur`. | P1 | A frame loop is the longest-lived use the engine has had. A nondeterminism in the MIR interpreter's state on wasm is the kind of defect that shows up on frame 4,000, not in a 10-ms corpus run. Find out whether it is a MIR bug or a Turmeric one before building a site on it. | `docs/reported/` |
 | 5 | **Close ILP32 shapes 2 and 3** ([ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md)): `tur_hamt_get`'s `void *` values (a double stored in a map comes back denormal) and `stdlib/hamt.tur`'s `tur_hamt_count` declared at the wrong width, plus the `typed/vec-*` fixtures; and shape 4, found 2026-10-29 while doing row 2: `stdlib/list.tur` reads a `(Cons A)` cell as `{int64_t head; int64_t tail}`, but on wasm32 its `tail` is a 4-byte pointer followed by padding, so a nil tail can read as non-nil and the walk reads address 0. Shape 1 (the DK word) is done; shape 4's stdlib half is fixed (2026-10-29), its emitter half (the erased `Cons` struct's carrier `tail`) is open. | P1 for correctness, P3 for the examples | `life.tur` is a `vec` of 0/1 ints, which survive; but any program that keeps a float (a position, a velocity) in a `vec` or a map is silently wrong on the page, and P3 has to audit each example for that shape. The same defect is in `tur build --target wasm`. | the report |
 | 6 | **Variadic calls inside a loop** ([c2mir-wasm-vararg-buffer-allocas-per-call](../reported/c2mir-wasm-vararg-buffer-allocas-per-call.md)): c2mir allocas a variadic call's buffer at the call site and keeps it until the function returns, 16 B an iteration. | P3 (examples); know it in P2 | Only a function that never returns accumulates, so the callback style (the frame function returns every frame) and any helper `defn` are safe. The exposure is the blocking style with a `println` written inline in `main`'s own loop: once a frame is 60 a second (a million takes over four hours), but inside an inline per-entity loop of 200 entities it is 12,000 a second and overflows 16 MiB in about 80 seconds, with signs of memory corruption. Fix in the fork, or have the emitter hoist the buffer. | the report |
@@ -800,8 +813,10 @@ against the spices' sources (under J they are compiled with the program), and
 2. **Asyncify and the MIR interpreter together.** On wasm `eval` calls `setjmp`
    itself, so its calls go through Emscripten's `invoke_*` JS wrappers, and
    Asyncify must unwind through them (section 3, J). Prerequisite 3 showed it
-   does, for a sleep in compiled inline C under node. What is left is raylib's
-   sleep path in a browser (P0 step 3); if that fails, the playground is
+   does, for a sleep in compiled inline C under node; and JSPI on a
+   wasm-`setjmp` build does the same in Chromium with no size cost
+   (prerequisite 3). What is left is raylib's sleep path in a browser (P0 step
+   3) and the Asyncify-or-JSPI choice; if both fail, the playground is
    callback-first, which changes the examples and the pitch ("paste the README
    quick start") but not the architecture.
 3. **Struct-by-value calls from MIR on wasm32.** raylib passes `Color`,
@@ -823,7 +838,8 @@ against the spices' sources (under J they are compiled with the program), and
    tutorial ones), and the stdlib package is already shared (wasm-jit-plan
    5.11).
 6. **Recursion depth.** J trades the tree-walker's heap-bounded depth for
-   about 300 Turmeric calls in Chromium's worker
+   about 300 Turmeric calls in Chromium's worker today, about 1,100 on the
+   iframe's main thread once the module links with wasm-native `setjmp`
    ([wasm-jit-recursion-depth-is-about-300](../reported/wasm-jit-recursion-depth-is-about-300.md);
    the 1,700 quoted before was a C spike measured before P5). A game's frame
    loop is not deep; a user's recursive helper over a list of 400 is. The page
