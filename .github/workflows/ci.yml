@@ -2450,3 +2450,90 @@ jobs:
           path: web/playwright-report/
           if-no-files-found: ignore
           retention-days: 7
+
+  # raylib-web-playground-plan P1: the raylib playground's engine -- the JSPI
+  # browser JIT module with raylib's web archive and the raylib and math
+  # spices linked in (tur_wasm_arcade, tools/wasm-jit/arcade/) -- built and
+  # smoke-tested in Playwright's Chromium: the module boots in an iframe, a
+  # raylib program draws its first frame, a console line arrives while its
+  # frame loop runs, Stop leaves the page alone, and a program the engine
+  # refuses is reported as refused (no interpreter fallback).  turmeric-arcade
+  # (play.turmeric-lang.com) builds the same module from the commit its
+  # scripts/engine.lock pins; this job is what keeps that build green here.
+  wasm-arcade:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Arcade module (raylib, JSPI) smoke test
+    runs-on: ubuntu-latest
+    env:
+      # The raylib spice's :cmake-deps ref; the archive is cached by it.
+      RAYLIB_REF: '5.5'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Not SHA-pinned, for the reason the `test` job's copy of this step
+      # gives: turmeric-spices is inside this repo's trust boundary.
+      - name: Check out turmeric-spices (sibling)
+        run: |
+          git clone --depth 1 \
+            "https://github.com/${{ github.repository_owner }}/turmeric-spices" \
+            ../turmeric-spices
+
+      - name: Check out raylib
+        run: git clone --depth 1 --branch "$RAYLIB_REF" https://github.com/raysan5/raylib ../raylib
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
+        with:
+          # Keep in step with the web-smoke job's pin (and turmeric-arcade's
+          # scripts/engine.lock).
+          version: 6.0.10
+          actions-cache-folder: 'emsdk-cache'
+
+      # The archive depends on the raylib ref, the SDK and the flags
+      # build-raylib.sh compiles it with -- the key names all three.
+      - name: Restore raylib's web archive
+        id: raylib-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/raylib-web
+          key: raylib-web-${{ env.RAYLIB_REF }}-emsdk-6.0.10-${{ hashFiles('tools/wasm-jit/arcade/build-raylib.sh') }}
+
+      - name: Build raylib's web archive
+        if: steps.raylib-cache.outputs.cache-hit != 'true'
+        run: bash tools/wasm-jit/arcade/build-raylib.sh ../raylib "$GITHUB_WORKSPACE/raylib-web"
+
+      - name: Save raylib's web archive
+        if: steps.raylib-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/raylib-web
+          key: raylib-web-${{ env.RAYLIB_REF }}-emsdk-6.0.10-${{ hashFiles('tools/wasm-jit/arcade/build-raylib.sh') }}
+
+      - name: Configure + build the arcade module
+        run: |
+          cmake -S . -B build-wasm -DTUR_WASM=ON -DTUR_WASM_ARCADE=ON \
+                -DTUR_ARCADE_RAYLIB_SRC="$(cd ../raylib && pwd)" \
+                -DTUR_ARCADE_SPICES="$(cd ../turmeric-spices && pwd)" \
+                -DTUR_ARCADE_RAYLIB_LIB="$GITHUB_WORKSPACE/raylib-web/libraylib.a" \
+                -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build build-wasm -j --target tur_wasm_arcade
+          ls -l build-wasm/wasm-arcade/wasm-jit/turmeric-jit.wasm
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      # Playwright comes from web/'s lockfile, the version the web suites use.
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Arcade smoke test
+        timeout-minutes: 5
+        run: node tools/wasm-jit/arcade/smoke/smoke.mjs build-wasm/wasm-arcade/wasm-jit

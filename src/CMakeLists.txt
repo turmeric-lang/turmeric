@@ -2202,6 +2202,48 @@ if(TUR_WASM)
                     ${CMAKE_SOURCE_DIR}/web/public/stdlib.data
                 COMMENT "Copying the JIT module to web/public"
             )
+
+            # raylib-web-playground-plan P1: the arcade module -- the JSPI
+            # build of this module with raylib's web archive and the raylib
+            # and math spices linked and embedded (tools/wasm-jit/arcade/).
+            # Off by default: it needs a raylib checkout and a turmeric-spices
+            # checkout, and only the raylib playground (turmeric-arcade)
+            # serves it.  Into build-wasm/wasm-arcade/, never web/public:
+            # Try Turmeric's page does not await the JSPI module's Promise.
+            option(TUR_WASM_ARCADE "Build the raylib playground's module (tur_wasm_arcade)" OFF)
+            if(TUR_WASM_ARCADE)
+                set(TUR_ARCADE_RAYLIB_SRC "" CACHE PATH
+                    "raylib checkout for tur_wasm_arcade (the raylib spice pins 5.5)")
+                set(TUR_ARCADE_SPICES "${CMAKE_SOURCE_DIR}/../turmeric-spices" CACHE PATH
+                    "turmeric-spices checkout for tur_wasm_arcade")
+                # A prebuilt web libraylib.a (tools/wasm-jit/arcade/build-raylib.sh;
+                # CI caches it by raylib ref).  Empty: the target builds one.
+                set(TUR_ARCADE_RAYLIB_LIB "" CACHE FILEPATH
+                    "prebuilt web libraylib.a for tur_wasm_arcade (empty: build it)")
+                if(NOT EXISTS "${TUR_ARCADE_RAYLIB_SRC}/src/raylib.h")
+                    message(FATAL_ERROR "TUR_WASM_ARCADE: TUR_ARCADE_RAYLIB_SRC='${TUR_ARCADE_RAYLIB_SRC}' "
+                                        "is not a raylib checkout (no src/raylib.h)")
+                endif()
+                if(NOT EXISTS "${TUR_ARCADE_SPICES}/spices/raylib/build.tur")
+                    message(FATAL_ERROR "TUR_WASM_ARCADE: TUR_ARCADE_SPICES='${TUR_ARCADE_SPICES}' "
+                                        "is not a turmeric-spices checkout")
+                endif()
+                add_custom_target(tur_wasm_arcade
+                    COMMAND ${CMAKE_COMMAND} -E env
+                            RAYLIB_SRC=${TUR_ARCADE_RAYLIB_SRC}
+                            TUR_SPICES=${TUR_ARCADE_SPICES}
+                            RAYLIB_LIB=${TUR_ARCADE_RAYLIB_LIB}
+                            TUR_WASM_BUILD_DIR=${CMAKE_BINARY_DIR}
+                            TUR_MIR_SOURCE_DIR=${TUR_MIR_SOURCE_DIR}
+                            bash ${CMAKE_SOURCE_DIR}/tools/wasm-jit/arcade/build.sh
+                            ${CMAKE_BINARY_DIR}/wasm-arcade
+                    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                    DEPENDS ${TUR_REGION_EMBED_C} ${TUR_STDLIB_PKG_DIR}/stdlib.data.js
+                    COMMENT "Building the raylib playground's module (wasm-arcade/wasm-jit)"
+                    VERBATIM
+                )
+                add_dependencies(tur_wasm_arcade tur_stdlib_pkg)
+            endif()
         endif()
     endif()
 endif()
