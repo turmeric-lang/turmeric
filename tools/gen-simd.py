@@ -985,9 +985,11 @@ HDR = """;;; tur/simd -- 16-byte vector types and their lanewise operations.
 ;;; 16 bytes on purpose: a 32-byte vector lives in memory on gcc without AVX
 ;;; (the plan's S0 findings).
 ;;;
-;;; Keep a vector out of generic code: a 16-byte value crossing a generic
-;;; boundary is boxed on the heap, as every wide struct is, which costs more
-;;; than the vector saves.
+;;; Generic code takes a vector by value: a generic function (constrained or
+;;; not) and a generic ADT such as `(Option F64x2)` are specialized per type.
+;;; A `Vec` element is the exception -- each is boxed on the heap, as every
+;;; multi-word element is -- so keep bulk lane data in the numeric arrays and
+;;; load from them.
 ;;;
 ;;; Since: S1 (simd-and-vectorization-plan)
 (load "stdlib/typeclass.tur")

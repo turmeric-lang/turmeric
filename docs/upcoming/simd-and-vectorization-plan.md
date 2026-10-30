@@ -9,7 +9,8 @@
 > `tur-simd` spice (S0, "As built"; its findings reshape S1's type list).
 > **S1a built 2026-10-29** behind `--enable=simd` (S1, "As built: S1a");
 > **S1b** (masks, comparisons, `select`, `shuffle`, conversions, no 32-byte
-> types) 2026-10-30 (S1, "As built: S1b"). N2
+> types, the generic-position restriction lifted as measured unneeded)
+> 2026-10-30 (S1, "As built: S1b"). N2
 > approaches D/E not started.
 > **Open questions reviewed 2026-10-29** (section 6): the class is `NumArray`
 > with `na-` methods (Q2, decided); D and E deferred (Q3); wasm `-msimd128`
@@ -908,6 +909,20 @@ both).
   multiversioning (Q6), if that is ever built.
 - **None of the new operations can panic**, so none carries a panic check
   after the call.
+- **The generic-position refusal is not built -- its premise did not
+  hold.** S1 planned a compile error for a vector in generic code because a
+  wide aggregate crossing a generic boundary is boxed. Measured on the S1
+  types: a generic function, constrained (`[(Num T)]`) or not, is
+  specialized per type and takes the vector by value
+  (`ident__spec__tur_adt_F64x2`), and a generic ADT is too
+  (`tur_adt_Option__F64x2`). The one position that boxes is a carrier
+  container's element -- a `Vec` element is `malloc`ed at the push and freed
+  by `vec-free`, as for every multi-word element -- which is correct, only
+  slower than the numeric arrays the vectors load from. A refusal would
+  have forbidden working, unboxed code to guard one slow-but-correct case,
+  so the restriction is lifted rather than enforced (graduation's "lifted or
+  accepted" clause). `simd-generic-positions` pins all four positions on
+  cc, `tur jit` and turi; the module header now says which one boxes.
 
 ## 4. Engine matrix after each phase
 

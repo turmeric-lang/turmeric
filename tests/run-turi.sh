@@ -258,6 +258,7 @@ numvec-kernels
 numvec-store-loops
 simd-ops
 simd-masks-shuffle-convert
+simd-generic-positions
 map-multiword-struct-key
 set-multiword-struct-element
 clone-list
