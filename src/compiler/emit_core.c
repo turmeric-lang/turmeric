@@ -3561,6 +3561,13 @@ void emit_heap_ctor_body(Buf *out, const AdtDef *def, const CtorDef *ctor,
                          const bool *wide_box, const char *const *val_ctype) {
     buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                c_name, c_name, region_alloc_fn(), c_name);
+    /* ilp32 shape 4: on a 4-byte-pointer target a parametric ADT's monomorph
+     * pads its narrower members to the word (types.c adt_member_word_pad) so
+     * an erased reader's 8-byte slot read lands where the carrier layout has
+     * the member; that reader compares the whole word (`tail == 0`), so the
+     * pad must be zero, not whatever the allocator left. */
+    if (def && def->n_type_params > 0 && emit_target_ptr_bytes() < 8)
+        buf_printf(out, "    memset(__r, 0, sizeof(%s));\n", c_name);
     if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
         char *mp = adt_field_member_path(def, ctor, fi);

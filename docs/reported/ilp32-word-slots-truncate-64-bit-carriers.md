@@ -117,17 +117,48 @@ Four shapes, all measured on the module:
    run, and `typed/list-concat`, `typed/list-macro` and
    `generic-hof-unannotated-fat-param-mixed` left the baseline.
 
-   **Open, in the emitter:** the erased instance of a parameterized struct
-   types a recursive link as a carrier, `struct tur_adt_Cons { int64_t head;
-   int64_t tail; }`, while each element instance types it as a pointer,
-   `struct tur_adt_Cons__int { int64_t head; tur_adt_Cons__int *tail; }`.
-   `tlength` walks through the erased one
-   (`((tur_adt_Cons *)(intptr_t)xs)->tail`) a list the element constructor
-   built, so it reads the padding too: `list-count-phantom-opaque-aggregate-element`
-   counts 6 for 5 and 4 for 3. Native layouts agree, so only wasm32 sees it.
-   The fix is to give the erased instance's link the pointer type the element
-   instances use (or the reverse); either changes native emitted C, so it
-   wants a fixture regen.
+   **The emitter half, fixed 2026-10-30 (on the 32-bit target only):** the erased instance
+   of a parameterized struct types a recursive link as a carrier, `struct
+   tur_adt_Cons { int64_t head; int64_t tail; }`, while each element instance
+   types it as a pointer, `struct tur_adt_Cons__int { int64_t head;
+   tur_adt_Cons__int *tail; }` -- and a `(List cstr)` cell is `{ const char
+   *head; tur_adt_Cons__cstr *tail; }`, eight bytes with the tail at offset 4.
+   A phantom-typed helper (`list-count` -> `tlength`, over `(List A)`) walked
+   the erased layout for every "carrier-compatible" element, which is every
+   scalar and pointer element: on LP64 the layouts agree byte for byte, on
+   wasm32 the walk read the 4-byte pointer plus its padding, and
+   `list-count-phantom-opaque-aggregate-element` counted 6 for 5 and 4 for 3.
+
+   The first attempt, minting the per-element clone for every element on a
+   32-bit target so the walk used the instance layout, broke the other
+   direction: `list-of` builds its cells through the variadic rest list,
+   which is the carrier layout (`__tur_cons_of`, two 8-byte words), and the
+   clone for `(List Box)` then read a carrier cell through `Cons__Box`'s
+   8-byte layout (`list-of-heap-adt-elements` counted 1 for 2). The two
+   layouts have to agree, as they do on LP64.
+
+   So on a 4-byte-pointer target a parametric ADT's layouts keep **8-byte
+   slots**: every monomorph member narrower than the word (a pointer, a
+   `bool`, an `int32_t`, a `float`) is followed by padding up to it, a
+   tagged layout gets the `int64_t __tur_align` union member that keeps the
+   payload at offset 8, the erased base gets the same where it has a concrete
+   narrow member, and every constructor of such a cell zeroes it first so an
+   erased whole-word compare (`tail == 0`) sees the pointer and not stale
+   bytes. This is the rule the emitter already applied to one member -- a
+   type parameter instantiated at `float32` is padded on every target so
+   "the erased twin reads this slot as int64" -- made general for the target
+   where every pointer is that narrow (`adt_member_word_pad` and
+   `emit_target_ptr_bytes` in `types.c`; the typedef sites in `types.c` and
+   `emit_module.c`; the constructors in `types.c`, `emit_core.c`,
+   `emit_module.c`). `tur build --target wasm` says the target is 4 bytes
+   (`g_emit_target_ptr_bytes`, `cmd_build.c`); the browser JIT module
+   compiles on the target, so its own `sizeof(void *)` says so. A 64-bit
+   target emits exactly what it did (the fixture snapshots are unchanged),
+   and the compiler's size model (`int tag` padded to the union's 8 bytes,
+   8 bytes a slot) now describes wasm32 too. Both fixtures answer right on
+   the module.
+
+   Still untraced: the Option/Result box line below.
 
 The Option/Result boxes are probably the same family:
 `inline-c-result-builder` returns `47685760` (a heap address) where it expects

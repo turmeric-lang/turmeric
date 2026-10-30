@@ -5158,6 +5158,9 @@ void emit_flush_dead_base_ctor_traps(EmitCtx *ctx, Buf *out) {
                 "    %s __r = (%s)%s("
                 "sizeof(struct tur_adt_%s));\n", ptr_name, ptr_name,
                 region_alloc_fn(), sname);
+            /* ilp32 shape 4: zero the base layout's word pads. */
+            if (emit_target_ptr_bytes() < 8)
+                buf_printf(out, "    memset(__r, 0, sizeof(struct tur_adt_%s));\n", sname);
             /* The ctor this name is: a phantom heap SUM has several, and
              * the store below must be that one's (adt-gadt-unification:
              * `(defdata Cell [a] :heap (ICell [v : int] : (Cell int)))`). */
@@ -6299,7 +6302,13 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
  * `Cons__Option__int *`, NOT the carrier, so it already drives spec-minting via
  * `type_c_name` and is excluded here (its head is not opaque).  Scalar/pointer
  * elements (`(List int)`, `(List cstr)`) carry no aggregate, so they return
- * false and keep the existing zero-churn carrier emission. */
+ * false and keep the existing zero-churn carrier emission.
+ *
+ * ilp32-word-slots-truncate-64-bit-carriers, shape 4: that "scalar/pointer
+ * elements share the carrier layout" is a fact about 8-byte slots.  On wasm32
+ * the monomorph pads every narrower member to the word (types.c,
+ * adt_member_word_pad), so it holds there too and this predicate needs no
+ * target arm. */
 static bool type_phantom_hides_aggregate(const Type *t) {
     if (!t || t->kind != TY_APP) return false;
     AdtDef   *adef = NULL;
@@ -12188,6 +12197,32 @@ static void emit_byval_ctor_prologue(Buf *out, const char *adt_c_name,
     free(mctor);
 }
 
+/* ilp32 shape 4 (types.c adt_member_word_pad): does the erased base layout
+ * of parametric `def` carry a word pad anywhere -- a concrete member narrower
+ * than the word on a 4-byte-pointer target?  Then its union gets the
+ * `int64_t __tur_align` member the monomorphs get, so `as` sits at offset 8
+ * in both.  A non-parametric ADT has no monomorph twin and is never padded. */
+static bool adt_base_has_word_pad(const AdtDef *def, bool hdr_byval) {
+    if (!def || def->n_type_params == 0 || emit_target_ptr_bytes() >= 8) return false;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *ctor = def->ctors[ci];
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++)
+            if (adt_member_word_pad(adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval), false) > 0)
+                return true;
+    }
+    return false;
+}
+
+/* The pad after positional member `fi` of parametric `def`'s base layout
+ * (0 for a non-parametric ADT, see above). */
+static void adt_emit_base_member_pad(Buf *out, const AdtDef *def, const char *ctype,
+                                     uint32_t fi, const char *lead, const char *tail) {
+    if (!def || def->n_type_params == 0) return;
+    char pname[16];
+    snprintf(pname, sizeof pname, "%u", fi);
+    adt_emit_member_word_pad(out, adt_member_word_pad(ctype, false), lead, pname, tail);
+}
+
 /* Pass 0 helper: emit the tagged-union `typedef struct tur_adt_<Name> { ... }`
  * plus one `ctor_<Ctor>` allocator per constructor for an ADT (defdata/defgadt).
  *
@@ -12254,6 +12289,8 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     buf_printf(out, "typedef struct %s {\n", adt_c_name);
     if (!flat) buf_printf(out, "    int tag;\n");
     buf_printf(out, "    union {\n");
+    if (!flat && adt_base_has_word_pad(def, hdr_byval))
+        buf_printf(out, "        int64_t __tur_align;\n");
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
         char *mctor = mangle_adt_name(ctor->name);
@@ -12261,6 +12298,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
             buf_printf(out, " %s _%u;", ctype, fi);
+            adt_emit_base_member_pad(out, def, ctype, fi, " ", "");
         }
         buf_printf(out, " } %s;\n", mctor);
         free(mctor);
@@ -12297,6 +12335,8 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
                 const char *ctype = adt_ctor_field_c_type(&crec->fields[fi], false);
                 char *fname = mangle_field_name(crec->fields[fi].name);
                 buf_printf(out, "    %s %s;\n", ctype, fname);
+                adt_emit_member_word_pad(out, adt_member_word_pad(ctype, false),
+                                         "    ", fname, "\n");
                 free(fname);
             }
             buf_printf(out, "} %s;\n#endif\n\n", sname);
@@ -12395,6 +12435,9 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
                                     ? "tur_adt_alloc" : "malloc";
             buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                        adt_c_name, adt_c_name, __alloc, adt_c_name);
+            /* ilp32 shape 4: zero the base layout's word pads. */
+            if (def->n_type_params > 0 && emit_target_ptr_bytes() < 8)
+                buf_printf(out, "    memset(__r, 0, sizeof(%s));\n", adt_c_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
@@ -21647,6 +21690,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
             if (!flat) buf_printf(&early_file, "    int tag;\n");
             buf_printf(&early_file, "    union {\n");
+            if (!flat && adt_base_has_word_pad(def, hdr_byval))
+                buf_printf(&early_file, "        int64_t __tur_align;\n");
             for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
                 CtorDef *ctor = def->ctors[ci];
                 char *mctor = mangle_adt_name(ctor->name);
@@ -21654,6 +21699,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
                     buf_printf(&early_file, " %s _%u;", ctype, fi);
+                    adt_emit_base_member_pad(&early_file, def, ctype, fi, " ", "");
                 }
                 buf_printf(&early_file, " } %s;\n", mctor);
                 free(mctor);
@@ -21685,6 +21731,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                             adt_ctor_field_c_type(&crec->fields[fi], false);
                         char *fname = mangle_field_name(crec->fields[fi].name);
                         buf_printf(&early_file, "    %s %s;\n", ctype, fname);
+                        adt_emit_member_word_pad(&early_file, adt_member_word_pad(ctype, false),
+                                                 "    ", fname, "\n");
                         free(fname);
                     }
                     buf_printf(&early_file, "} %s;\n#endif\n\n", sname);
@@ -21773,6 +21821,9 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                                              ? "tur_adt_alloc" : "malloc";
                     buf_printf(&early_file, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                                adt_c_name, adt_c_name, __alloc2, adt_c_name);
+                    /* ilp32 shape 4: zero the base layout's word pads. */
+                    if (def->n_type_params > 0 && emit_target_ptr_bytes() < 8)
+                        buf_printf(&early_file, "    memset(__r, 0, sizeof(%s));\n", adt_c_name);
                     if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                         char *mp = adt_field_member_path(def, ctor, fi);
