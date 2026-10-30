@@ -40,7 +40,7 @@
   /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
-  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  struct { int64_t *data; int64_t len; int64_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0;
   const char *p = line;
   /* strip trailing CR/LF */
@@ -122,7 +122,7 @@
 (defn csv/row-free [v : int] : void
   ```c
   if (!v) return;
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   for (size_t i = 0; i < vec->len; i++) free((void*)(intptr_t)vec->data[i]);
   free(vec->data);
   free(vec);
@@ -163,7 +163,7 @@
     memcpy(line, p, llen);
     line[llen] = '\0';
     /* parse the row using delimiter-aware logic */
-    struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+    struct { int64_t *data; int64_t len; int64_t cap; } *v = malloc(sizeof(*v));
     v->data = NULL; v->len = 0; v->cap = 0;
     const char *rp = line;
     /* strip trailing CR */
@@ -238,7 +238,7 @@
     int64_t vptr  = cell[0];
     int64_t next  = cell[1];
     if (vptr) {
-      struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)vptr;
+      struct { int64_t *data; int64_t len; int64_t cap; } *v = (void*)(intptr_t)vptr;
       for (size_t i = 0; i < v->len; i++) free((void*)(intptr_t)v->data[i]);
       free(v->data);
       free(v);
@@ -273,7 +273,7 @@
   /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   size_t out_cap = 256, pos = 0;
   char *out = malloc(out_cap);
   for (size_t i = 0; i < vec->len; i++) {
@@ -359,7 +359,7 @@
     int64_t vptr = cell[0];
     /* emit this row using delimiter-aware logic inline */
     if (vptr) {
-      struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)vptr;
+      struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)vptr;
       for (size_t i = 0; i < vec->len; i++) {
         const char *f = (const char*)(intptr_t)vec->data[i];
         int needs_quote = 0;
@@ -453,7 +453,7 @@
     char *line = malloc(llen + 1);
     memcpy(line, p, llen);
     line[llen] = '\0';
-    struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+    struct { int64_t *data; int64_t len; int64_t cap; } *v = malloc(sizeof(*v));
     v->data = NULL; v->len = 0; v->cap = 0;
     const char *rp = line;
     size_t tlen = strlen(line);
@@ -530,7 +530,7 @@
     int64_t *cell = (int64_t*)(intptr_t)cur;
     int64_t vptr  = cell[0];
     if (vptr) {
-      struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)vptr;
+      struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)vptr;
       for (size_t i = 0; i < vec->len; i++) {
         const char *fd = (const char*)(intptr_t)vec->data[i];
         int nq = 0;

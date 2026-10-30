@@ -52,6 +52,26 @@ whose C declares a function at a different type than it has (an undeclared
 `sqrt`, implicitly `int sqrt()`) traps with `function signature mismatch`
 rather than computing garbage.  Natively the same program is already wrong.
 
+### The JSPI build (`TUR_WASM_JIT_JSPI=1`)
+
+The raylib playground's module (raylib-web-playground-plan, J4): the same
+script with `TUR_WASM_JIT_JSPI=1` in the environment links `-sJSPI
+-sJSPI_EXPORTS=turi_wasm_jit_run` and puts `emscripten_sleep` in the import
+table.  `turi_wasm_jit_run` then returns a Promise, and a compiled program
+that sleeps -- raylib's frame loop through `WindowShouldClose`, or inline C
+calling `emscripten_sleep` -- suspends the wasm stack and resumes when the
+timer fires, so a blocking `while` loop yields to the page between frames.
+The wasm is unchanged (JSPI instruments nothing; Asyncify would have grown
+it by half), and so are depth and speed.  Two constraints: the sleep must
+have only wasm frames above it (this build's wasm-native `setjmp` sees to
+that for calls out of `eval`; a sleep inside a comparator or a frame
+callback entered through the table's JS closure would fail with
+`SuspendError`), and the browser must have JSPI (`'Suspending' in
+WebAssembly`: Chrome 137+ today).  That is why it is not the default: the
+Compile engine must load in every browser.  Build it into a directory of
+its own, never over the default module's (`tools/wasm-jit-spike/jspi/build.sh`
+does that), and drive it from a browser -- node 22's V8 has no JSPI.
+
 ## Run a program
 
 ```sh

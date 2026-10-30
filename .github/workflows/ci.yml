@@ -2222,6 +2222,12 @@ jobs:
           cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           cmake --build build-wasm -j --target tur_wasm tur_wasm_jit
 
+      # The browser JIT module resolves an import through a directory the
+      # page adds (turi_wasm_add_include_dir; raylib-web-playground-plan
+      # prerequisite 9).  Two runs of the module under node, seconds.
+      - name: Browser JIT module resolves imports from an added directory
+        run: bash tests/check-wasm-jit-imports.sh
+
       - name: Install web deps
         working-directory: web
         run: npm ci

@@ -5,16 +5,16 @@
 
 (extern-c free [p :ptr] :void)
 
-(defn ptr= [a : ptr b : ptr] : bool
+(defn ptr= [a : int b : int] : bool
   ```c
   return a == b;
   ```)
 
-(defn alloc-key [x : int] : ptr
+(defn alloc-key [x : int] : int
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
-  return (void *)p;
+  return (int64_t)(intptr_t)p;
   ```)
 
 ;; Test: hamt/new creates empty map
@@ -29,12 +29,12 @@
   (let [k1 (alloc-key 42)]
     (let [v1 (alloc-key 100)]
       (let [m1 (hamt/new)]
-        (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
-          (let [result (hamt/get m2 (hamt/hash-ptr k1) k1)]
+        (let [m2 (hamt/set m1 (hamt/hash-ptr (:: k1 ptr<void>)) k1 v1)]
+          (let [result (hamt/get m2 (hamt/hash-ptr (:: k1 ptr<void>)) k1)]
             (hamt/free m1)
             (hamt/free m2)
-            (free k1)
-            (free v1)
+            (free (:: k1 :ptr))
+            (free (:: v1 :ptr))
             (if (ptr= result v1) 1 0)))))))
 
 ;; Test: hamt/has?
@@ -42,12 +42,12 @@
   (let [k1 (alloc-key 42)]
     (let [v1 (alloc-key 100)]
       (let [m1 (hamt/new)]
-        (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
-          (let [result (hamt/has? m2 (hamt/hash-ptr k1) k1)]
+        (let [m2 (hamt/set m1 (hamt/hash-ptr (:: k1 ptr<void>)) k1 v1)]
+          (let [result (hamt/has? m2 (hamt/hash-ptr (:: k1 ptr<void>)) k1)]
             (hamt/free m1)
             (hamt/free m2)
-            (free k1)
-            (free v1)
+            (free (:: k1 :ptr))
+            (free (:: v1 :ptr))
             (if result 1 0)))))))
 
 ;; Test: hamt/count
@@ -59,20 +59,20 @@
           (let [v2 (alloc-key 20)]
             (let [v3 (alloc-key 30)]
               (let [m1 (hamt/new)]
-                (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
-                  (let [m3 (hamt/set m2 (hamt/hash-ptr k2) k2 v2)]
-                    (let [m4 (hamt/set m3 (hamt/hash-ptr k3) k3 v3)]
+                (let [m2 (hamt/set m1 (hamt/hash-ptr (:: k1 ptr<void>)) k1 v1)]
+                  (let [m3 (hamt/set m2 (hamt/hash-ptr (:: k2 ptr<void>)) k2 v2)]
+                    (let [m4 (hamt/set m3 (hamt/hash-ptr (:: k3 ptr<void>)) k3 v3)]
                       (let [c (hamt/count m4)]
                         (hamt/free m1)
                         (hamt/free m2)
                         (hamt/free m3)
                         (hamt/free m4)
-                        (free k1)
-                        (free k2)
-                        (free k3)
-                        (free v1)
-                        (free v2)
-                        (free v3)
+                        (free (:: k1 :ptr))
+                        (free (:: k2 :ptr))
+                        (free (:: k3 :ptr))
+                        (free (:: v1 :ptr))
+                        (free (:: v2 :ptr))
+                        (free (:: v3 :ptr))
                         c))))))))))))
 
 ;; Test: hamt/del
@@ -80,15 +80,15 @@
   (let [k1 (alloc-key 42)]
     (let [v1 (alloc-key 100)]
       (let [m1 (hamt/new)]
-        (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
-          (let [m3 (hamt/del m2 (hamt/hash-ptr k1) k1)]
+        (let [m2 (hamt/set m1 (hamt/hash-ptr (:: k1 ptr<void>)) k1 v1)]
+          (let [m3 (hamt/del m2 (hamt/hash-ptr (:: k1 ptr<void>)) k1)]
             (let [c (hamt/count m3)]
-              (let [has (hamt/has? m3 (hamt/hash-ptr k1) k1)]
+              (let [has (hamt/has? m3 (hamt/hash-ptr (:: k1 ptr<void>)) k1)]
                 (hamt/free m1)
                 (hamt/free m2)
                 (hamt/free m3)
-                (free k1)
-                (free v1)
+                (free (:: k1 :ptr))
+                (free (:: v1 :ptr))
                 (if (and (= c 0) (not has)) 1 0)))))))))
 
 (println (test-new))

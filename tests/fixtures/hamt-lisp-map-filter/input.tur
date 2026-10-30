@@ -4,31 +4,31 @@
 
 (extern-c free [p :ptr] :void)
 
-(defn alloc-int [x :int] :ptr
+(defn alloc-int [x : int] : int
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
-  return (void *)p;
+  return (int64_t)(intptr_t)p;
   ```)
 
-(defn int-val [p :ptr] :int
+(defn int-val [p :int] :int
   ```c
-  return (int64_t)(*(int64_t *)p);
+  return (int64_t)(*(int64_t *)(intptr_t)p);
   ```)
 
 ;; C callback: double the value (val * 2), allocate new int
-(defn double-val [val :ptr ctx :ptr] :ptr
+(defn double-val [val :int ctx :ptr] :int
   ```c
-  int64_t v = *(int64_t *)val;
+  int64_t v = *(int64_t *)(intptr_t)val;
   int64_t *result = malloc(sizeof(int64_t));
   *result = v * 2;
-  return (void *)result;
+  return (int64_t)(intptr_t)result;
   ```)
 
 ;; C callback: keep only values > 50
-(defn keep-big [key :ptr val :ptr ctx :ptr] :bool
+(defn keep-big [key :int val :int ctx :ptr] :bool
   ```c
-  int64_t v = *(int64_t *)val;
+  int64_t v = *(int64_t *)(intptr_t)val;
   return v > 50;
   ```)
 
@@ -39,23 +39,23 @@
       (let [v1 (alloc-int 10)]
         (let [v2 (alloc-int 30)]
           (let [m1 (hamt/new)]
-            (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
-              (let [m3 (hamt/set m2 (hamt/hash-ptr k2) k2 v2)]
+            (let [m2 (hamt/set m1 (hamt/hash-ptr (:: k1 ptr<void>)) k1 v1)]
+              (let [m3 (hamt/set m2 (hamt/hash-ptr (:: k2 ptr<void>)) k2 v2)]
                 (let [m4 (hamt/map m3 double-val m3)]
-                  (let [r1 (hamt/get m4 (hamt/hash-ptr k1) k1)]
-                    (let [r2 (hamt/get m4 (hamt/hash-ptr k2) k2)]
+                  (let [r1 (hamt/get m4 (hamt/hash-ptr (:: k1 ptr<void>)) k1)]
+                    (let [r2 (hamt/get m4 (hamt/hash-ptr (:: k2 ptr<void>)) k2)]
                       (let [ok (and (= (int-val r1) 20)
                                     (= (int-val r2) 60))]
-                        (free r1)
-                        (free r2)
+                        (free (:: r1 :ptr))
+                        (free (:: r2 :ptr))
                         (hamt/free m1)
                         (hamt/free m2)
                         (hamt/free m3)
                         (hamt/free m4)
-                        (free k1)
-                        (free k2)
-                        (free v1)
-                        (free v2)
+                        (free (:: k1 :ptr))
+                        (free (:: k2 :ptr))
+                        (free (:: v1 :ptr))
+                        (free (:: v2 :ptr))
                         (if ok 1 0)))))))))))))
 
 ;; Test: hamt/filter keeps only big values
@@ -65,20 +65,20 @@
       (let [v1 (alloc-int 10)]
         (let [v2 (alloc-int 100)]
           (let [m1 (hamt/new)]
-            (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
-              (let [m3 (hamt/set m2 (hamt/hash-ptr k2) k2 v2)]
+            (let [m2 (hamt/set m1 (hamt/hash-ptr (:: k1 ptr<void>)) k1 v1)]
+              (let [m3 (hamt/set m2 (hamt/hash-ptr (:: k2 ptr<void>)) k2 v2)]
                 (let [m4 (hamt/filter m3 keep-big m3)]
                   (let [cnt (hamt/count m4)]
-                    (let [has-k1 (hamt/has? m4 (hamt/hash-ptr k1) k1)]
-                      (let [has-k2 (hamt/has? m4 (hamt/hash-ptr k2) k2)]
+                    (let [has-k1 (hamt/has? m4 (hamt/hash-ptr (:: k1 ptr<void>)) k1)]
+                      (let [has-k2 (hamt/has? m4 (hamt/hash-ptr (:: k2 ptr<void>)) k2)]
                         (hamt/free m1)
                         (hamt/free m2)
                         (hamt/free m3)
                         (hamt/free m4)
-                        (free k1)
-                        (free k2)
-                        (free v1)
-                        (free v2)
+                        (free (:: k1 :ptr))
+                        (free (:: k2 :ptr))
+                        (free (:: v1 :ptr))
+                        (free (:: v2 :ptr))
                         (if (and (= cnt 1) (not has-k1) has-k2) 1 0)))))))))))))
 
 (println (test-map))

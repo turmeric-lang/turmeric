@@ -297,13 +297,13 @@
   int64_t *k = malloc(8); *k = 42;
   int64_t *v = malloc(8); *v = 100;
   void *m1 = tur_hamt_new();
-  void *m2 = tur_hamt_set(m1, tur_hamt_hash_ptr(k), k, v);
+  void *m2 = tur_hamt_set(m1, tur_hamt_hash_ptr(k), (int64_t)(intptr_t)k, (int64_t)(intptr_t)v);
   void *m3 = tur_hamt_new();
-  void *m4 = tur_hamt_set(m3, tur_hamt_hash_ptr(k), k, v);
+  void *m4 = tur_hamt_set(m3, tur_hamt_hash_ptr(k), (int64_t)(intptr_t)k, (int64_t)(intptr_t)v);
   int result = 1;
   if (tur_hamt_count(m2) != tur_hamt_count(m4)) { result = 0; goto done; }
   {
-      void *got = tur_hamt_get(m4, tur_hamt_hash_ptr(k), k);
+      void *got = (void *)(intptr_t)tur_hamt_get(m4, tur_hamt_hash_ptr(k), (int64_t)(intptr_t)k);
       if (!got || *(int64_t*)got != *v) { result = 0; goto done; }
   }
   done:
@@ -320,10 +320,10 @@
   int64_t *k2 = malloc(8); *k2 = 2;
   int64_t *v  = malloc(8); *v  = 10;
   void *m1 = tur_hamt_new();
-  void *m2 = tur_hamt_set(m1, tur_hamt_hash_ptr(k1), k1, v);
+  void *m2 = tur_hamt_set(m1, tur_hamt_hash_ptr(k1), (int64_t)(intptr_t)k1, (int64_t)(intptr_t)v);
   void *m3 = tur_hamt_new();
-  void *m4 = tur_hamt_set(m3, tur_hamt_hash_ptr(k1), k1, v);
-  void *m5 = tur_hamt_set(m4, tur_hamt_hash_ptr(k2), k2, v);
+  void *m4 = tur_hamt_set(m3, tur_hamt_hash_ptr(k1), (int64_t)(intptr_t)k1, (int64_t)(intptr_t)v);
+  void *m5 = tur_hamt_set(m4, tur_hamt_hash_ptr(k2), (int64_t)(intptr_t)k2, (int64_t)(intptr_t)v);
   int result = (tur_hamt_count(m2) != tur_hamt_count(m5)) ? 1 : 0;
   tur_hamt_free(m1); tur_hamt_free(m2);
   tur_hamt_free(m3); tur_hamt_free(m4); tur_hamt_free(m5);

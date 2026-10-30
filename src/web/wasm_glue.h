@@ -84,6 +84,20 @@ int turi_wasm_eval_ex(const char *input, char **out_result, char **out_error);
  * (main's int result; 1 after an error, printed to stderr). */
 int turi_wasm_run_program(const char *path);
 
+/* Extra module search directories for `import` (raylib-web-playground-plan
+ * prerequisite 9): the `src/` of a spice the page has mounted in the module's
+ * file system, e.g. "/spices/raylib/src".  Added once, process-wide, and
+ * searched after the program's own directory and the stdlib by every
+ * interpreter environment this glue creates and by the Compile engine's
+ * compile (turi_wasm_jit_run) -- what `tur run -I <dir>` gives both engines
+ * natively.  A dir already on the list is not added twice.  Returns the
+ * list's length, or -1 (no dir, or out of memory). */
+int turi_wasm_add_include_dir(const char *dir);
+/* Empty the list; the next run resolves imports from the stdlib alone. */
+void turi_wasm_clear_include_dirs(void);
+/* The list as it stands (for the JIT glue); *out_n gets its length. */
+const char *const *turi_wasm_include_dirs(int *out_n);
+
 /* Evaluate multiple expressions in sequence.
  * 
  * Arguments:

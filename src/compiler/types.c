@@ -1843,6 +1843,63 @@ const char *region_alloc_fn(void) {
     return regions_enabled() ? "tur_region_alloc_or_malloc" : "malloc";
 }
 
+/* ilp32-word-slots-truncate-64-bit-carriers, shape 4 (the emitter half).
+ *
+ * A parametric ADT has two layouts that must agree byte for byte: the erased
+ * base (`struct tur_adt_Cons { int64_t head; int64_t tail; }`, every slot the
+ * int64 carrier) and each monomorph (`struct tur_adt_Cons__int { int64_t
+ * head; tur_adt_Cons__int *tail; }`).  Erased code -- a `(List A)` helper such
+ * as `list-count`, the stdlib's inline C, a carrier-built rest-list cell --
+ * reads a monomorph's cell through the base, and the monomorph's typed code
+ * reads a carrier-built cell through the monomorph.  On LP64 the two agree
+ * because every member is 8 bytes.  On wasm32 a pointer, a bool or an int32
+ * member is narrower, so the next member moves: `tail` sits at offset 4 in
+ * `Cons__cstr` and the base reads it at 8; `list-count` of five ints read
+ * the 4-byte tail plus its padding and answered 6.
+ *
+ * So on a 4-byte-pointer target every monomorph member narrower than the
+ * word is followed by padding up to it, the way the float32 instantiation
+ * already is on every target (the pad after a `float` type parameter, and
+ * the `int64_t __tur_align` union member that keeps the payload at offset
+ * 8), and a monomorph constructor zeroes the cell first so an erased
+ * whole-word compare (`tail == 0`) sees the pointer, not stale bytes.  A
+ * 64-bit target emits exactly what it did. */
+int g_emit_target_ptr_bytes = 0;
+
+int emit_target_ptr_bytes(void) {
+    return g_emit_target_ptr_bytes > 0 ? g_emit_target_ptr_bytes : (int)sizeof(void *);
+}
+
+int adt_member_word_pad(const char *ctype, bool is_f32_tyvar) {
+    if (!ctype) return 0;
+    /* The float32 residue: on every target, so the erased twin's 8-byte read
+     * of the slot stays inside the aggregate. */
+    if (is_f32_tyvar && strcmp(ctype, "float") == 0) return 4;
+    if (emit_target_ptr_bytes() >= 8) return 0;
+    size_t n = strlen(ctype);
+    if (n > 0 && ctype[n - 1] == '*') return 4;          /* every pointer */
+    if (strcmp(ctype, "bool") == 0 || strcmp(ctype, "int8_t") == 0 ||
+        strcmp(ctype, "uint8_t") == 0 || strcmp(ctype, "char") == 0)
+        return 7;
+    if (strcmp(ctype, "int16_t") == 0 || strcmp(ctype, "uint16_t") == 0) return 6;
+    if (strcmp(ctype, "int32_t") == 0 || strcmp(ctype, "uint32_t") == 0 ||
+        strcmp(ctype, "float") == 0 || strcmp(ctype, "int") == 0 ||
+        strcmp(ctype, "unsigned") == 0)
+        return 4;
+    return 0;   /* int64_t, double, a by-value aggregate, the two-word any box */
+}
+
+/* Write the word pad `adt_member_word_pad` asks for after member `name`:
+ * `int32_t __pad_<name>;` when it is one word, else `char __pad_<name>[K];`.
+ * `lead` is the text before it (indentation, or a space inside a one-line
+ * struct) and `tail` what follows (a newline, or nothing). */
+void adt_emit_member_word_pad(Buf *out, int pad, const char *lead,
+                              const char *name, const char *tail) {
+    if (pad <= 0) return;
+    if (pad == 4) buf_printf(out, "%sint32_t __pad_%s;%s", lead, name, tail);
+    else buf_printf(out, "%schar __pad_%s[%d];%s", lead, name, pad, tail);
+}
+
 static bool sr3_option_niche(void) {
     /* The niche is layered ON TOP of SR2: narrowing `(Option P)` to its payload
      * pointer only means anything if that Option is a by-value parametric sum in
@@ -2520,10 +2577,12 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
              * The erased twin reads this slot as int64 and recovers the float
              * with a 4-byte memcpy from the slot's FIRST bytes -- byte position,
              * not value -- which is exactly where the float sits; the pad only
-             * keeps that 8-byte read inside the aggregate on any endianness. */
-            if (fld->full_type && fld->full_type->kind == TY_TYVAR &&
-                ctype && strcmp(ctype, "float") == 0)
-                buf_printf(out, "    int32_t __pad_%s;\n", fname);
+             * keeps that 8-byte read inside the aggregate on any endianness.
+             * On a 4-byte-pointer target every narrower member gets the same
+             * pad (ilp32 shape 4, adt_member_word_pad). */
+            adt_emit_member_word_pad(out,
+                adt_member_word_pad(ctype, fld->full_type && fld->full_type->kind == TY_TYVAR),
+                "    ", fname, "\n");
             free(fname);
         }
         buf_printf(out, "};\n");
@@ -2540,19 +2599,24 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
      * production) landed on the pad and answered 0 for 3.25.  An int64 union
      * member aligns the union like the carrier's. */
     {
+        /* ... and on a 4-byte-pointer target the same for any padded member
+         * (ilp32 shape 4): a variant of pointers alone would align the union
+         * at 4. */
         bool has_f32_pad = false;
         for (uint32_t ci = 0; ci < def->n_ctors && !has_f32_pad; ci++) {
             CtorDef *ctor = def->ctors[ci];
             for (uint32_t fi = 0; fi < ctor->n_fields && !has_f32_pad; fi++) {
                 const CtorField *fld = &ctor->fields[fi];
-                if (!fld->full_type || fld->full_type->kind != TY_TYVAR) continue;
-                Type fres = def ? substitute_adt_app_type_owned(fld->full_type, def, args)
-                                : type_simple(TY_UNKNOWN, CK_COPY);
+                bool tyvar = fld->full_type && fld->full_type->kind == TY_TYVAR;
+                if (!tyvar && emit_target_ptr_bytes() >= 8) continue;
+                Type fres = (fld->full_type && def)
+                    ? substitute_adt_app_type_owned(fld->full_type, def, args)
+                    : type_simple(TY_UNKNOWN, CK_COPY);
                 const char *ctype = adt_field_is_wide_box(def, &fres)
                     ? "int64_t"
                     : adt_field_c_type(def, fld, args);
                 free_struct_app_type(fres);
-                if (ctype && strcmp(ctype, "float") == 0) has_f32_pad = true;
+                if (adt_member_word_pad(ctype, tyvar) > 0) has_f32_pad = true;
             }
         }
         if (has_f32_pad && !flat) buf_printf(out, "        int64_t __tur_align;\n");
@@ -2582,10 +2646,15 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 : adt_field_c_type(def, fld, args);
             free_struct_app_type(fres);
             buf_printf(out, " %s _%u;", ctype, fi);
-            /* float32 residue: same word pad as the named layout above. */
-            if (fld->full_type && fld->full_type->kind == TY_TYVAR &&
-                ctype && strcmp(ctype, "float") == 0)
-                buf_printf(out, " int32_t __pad_%u;", fi);
+            /* float32 residue (and ilp32 shape 4): same word pad as the named
+             * layout above. */
+            {
+                char pname[16];
+                snprintf(pname, sizeof pname, "%u", fi);
+                adt_emit_member_word_pad(out,
+                    adt_member_word_pad(ctype, fld->full_type && fld->full_type->kind == TY_TYVAR),
+                    " ", pname, "");
+            }
         }
         buf_printf(out, " } %s;\n", mctor);
         free(mctor);
@@ -2712,6 +2781,10 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             emit_heap_ctor_body(out, def, ctor, adt_inst_name, flat, wide_box, val_ctype);
         } else if (app_byval) {
             buf_printf(out, "    %s __r;\n", adt_inst_name);
+            /* ilp32 shape 4: the word pads after narrow members must be zero
+             * for an erased whole-word read (see adt_member_word_pad). */
+            if (emit_target_ptr_bytes() < 8)
+                buf_printf(out, "    memset(&__r, 0, sizeof(__r));\n");
             /* SR2: a by-value SUM monomorph stores its tag and makes the dead
              * bytes deterministic at the least possible cost -- the pad after
              * the tag and the union tail beyond this variant.  Mirrors
@@ -2756,6 +2829,9 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         } else {
             buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
                        adt_inst_name, adt_inst_name, adt_inst_name);
+            /* ilp32 shape 4: zero the word pads (adt_member_word_pad). */
+            if (emit_target_ptr_bytes() < 8)
+                buf_printf(out, "    memset(__r, 0, sizeof(%s));\n", adt_inst_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);

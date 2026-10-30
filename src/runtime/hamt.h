@@ -78,8 +78,13 @@ typedef enum {
 /* A key/value entry in collision nodes */
 typedef struct HamtEntry {
     uint64_t hash;        /* Full 64-bit hash of the key */
-    void *key;           /* Key pointer (owned by caller; HAMT does not free) */
-    void *val;           /* Value pointer (owned by caller; HAMT does not free) */
+    int64_t key;         /* Key word: a Turmeric carrier -- an int, a double's
+                            bits, or a pointer widened to 64 bits.  Not a
+                            `void *`: on wasm32 that is 4 bytes and dropped
+                            the top half of a double or a large int
+                            (ilp32-word-slots-truncate-64-bit-carriers, shape
+                            2).  Owned by the caller unless key_ops say so. */
+    int64_t val;         /* Value word, same representation and ownership. */
     struct HamtEntry *next; /* Next entry in collision chain */
 } HamtEntry;
 
@@ -135,25 +140,25 @@ Hamt *tur_hamt_retain(Hamt *m);
  * val: value pointer (HAMT stores this pointer; caller owns lifetime)
  * Returns: new Hamt with ref_count=1, or same Hamt if no change.
  * Note: If key already exists, value is updated (last writer wins). */
-Hamt *tur_hamt_set(Hamt *m, uint64_t hash, void *key, void *val);
+Hamt *tur_hamt_set(Hamt *m, uint64_t hash, int64_t key, int64_t val);
 
 /* Delete a key. Returns a new HAMT (structural sharing).
  * hash: full 64-bit hash of the key
  * key: key pointer to delete
  * Returns: new Hamt with ref_count=1, or same Hamt if key was not present. */
-Hamt *tur_hamt_del(Hamt *m, uint64_t hash, void *key);
+Hamt *tur_hamt_del(Hamt *m, uint64_t hash, int64_t key);
 
 /* Check if a key exists.
  * hash: full 64-bit hash of the key
  * key: key pointer to check
  * Returns: true if key exists in the map */
-bool tur_hamt_has(Hamt *m, uint64_t hash, void *key);
+bool tur_hamt_has(Hamt *m, uint64_t hash, int64_t key);
 
 /* Get the value for a key.
  * hash: full 64-bit hash of the key
  * key: key pointer to lookup
  * Returns: value pointer, or NULL if not found */
-void *tur_hamt_get(Hamt *m, uint64_t hash, void *key);
+int64_t tur_hamt_get(Hamt *m, uint64_t hash, int64_t key);
 
 /* Key-equality-aware variants (TCE4).
  *
@@ -164,10 +169,10 @@ void *tur_hamt_get(Hamt *m, uint64_t hash, void *key);
  * is identical to the plain entry point. Use these for content-typed keys
  * (e.g. strings) where equal text may live at distinct addresses. */
 /* tur_hamt_keyeq_fn is typedef'd early (before tur_hamt_key_ops) so no redecl needed. */
-Hamt *tur_hamt_set_eq(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq);
-Hamt *tur_hamt_del_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
-bool  tur_hamt_has_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
-void *tur_hamt_get_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
+Hamt *tur_hamt_set_eq(Hamt *m, uint64_t hash, int64_t key, int64_t val, tur_hamt_keyeq_fn eq);
+Hamt *tur_hamt_del_eq(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_fn eq);
+bool  tur_hamt_has_eq(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_fn eq);
+int64_t tur_hamt_get_eq(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_fn eq);
 
 /* Content-keyed cstr convenience entry points.
  *
@@ -179,10 +184,10 @@ void *tur_hamt_get_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
  * identical literals, which C11 6.4.5p7 leaves unspecified, and never works
  * for keys built at runtime.  The map stores the key POINTER (no copy);
  * caller owns its lifetime, exactly like tur_hamt_set. */
-Hamt *tur_hamt_set_cstr(Hamt *m, const char *key, void *val);
+Hamt *tur_hamt_set_cstr(Hamt *m, const char *key, int64_t val);
 Hamt *tur_hamt_del_cstr(Hamt *m, const char *key);
 bool  tur_hamt_has_cstr(Hamt *m, const char *key);
-void *tur_hamt_get_cstr(Hamt *m, const char *key);
+int64_t tur_hamt_get_cstr(Hamt *m, const char *key);
 
 /* Context-carrying key-equality comparator (prereq 2a -- turi-map-set-hamt-
  * interpreter-gap.md).  Same as tur_hamt_keyeq_fn but with a trailing `void *ctx`
@@ -198,10 +203,10 @@ typedef bool (*tur_hamt_keyeq_ctx_fn)(int64_t, int64_t, void *ctx);
  * require no codegen change and no fixture regen.  While a ctx op is in flight
  * the no-ctx comparator hook is cleared (and vice versa), so plain and ctx
  * operations nest correctly (e.g. a content-keyed map of int-keyed maps). */
-Hamt *tur_hamt_set_eq_ctx(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_ctx_fn eq, void *ctx);
-Hamt *tur_hamt_del_eq_ctx(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_ctx_fn eq, void *ctx);
-bool  tur_hamt_has_eq_ctx(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_ctx_fn eq, void *ctx);
-void *tur_hamt_get_eq_ctx(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_ctx_fn eq, void *ctx);
+Hamt *tur_hamt_set_eq_ctx(Hamt *m, uint64_t hash, int64_t key, int64_t val, tur_hamt_keyeq_ctx_fn eq, void *ctx);
+Hamt *tur_hamt_del_eq_ctx(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_ctx_fn eq, void *ctx);
+bool  tur_hamt_has_eq_ctx(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_ctx_fn eq, void *ctx);
+int64_t tur_hamt_get_eq_ctx(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_ctx_fn eq, void *ctx);
 
 /* Boxed-key ownership (WKC2 -- wide map-key carrier).
  *
@@ -249,10 +254,10 @@ bool tur_hamt_box_key_eq(int64_t a, int64_t b);
  *   - get / has / del: the passed key is a transient probe and is released
  *     before returning (del additionally releases the removed entry's key).
  * Passing ops == {NULL,NULL} is identical to the plain _eq entry point. */
-Hamt *tur_hamt_set_eq_owned(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
-Hamt *tur_hamt_del_eq_owned(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
-bool  tur_hamt_has_eq_owned(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
-void *tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
+Hamt *tur_hamt_set_eq_owned(Hamt *m, uint64_t hash, int64_t key, int64_t val, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
+Hamt *tur_hamt_del_eq_owned(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
+bool  tur_hamt_has_eq_owned(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
+int64_t tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
 
 /* Flag-driven convenience wrappers (WKC3 -- aggregate-key lowering).
  *
@@ -261,14 +266,14 @@ void *tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn
  * (keys not owned).  These have a flat scalar/pointer ABI so the generated
  * program can declare them via (extern-c ...) without a by-value ops struct.
  * `owned` is int64_t so the extern-c `:int` prototype matches exactly. */
-Hamt *tur_hamt_set_eq_o(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq, int64_t owned);
-Hamt *tur_hamt_set_eq_vo(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq, int64_t owned,
+Hamt *tur_hamt_set_eq_o(Hamt *m, uint64_t hash, int64_t key, int64_t val, tur_hamt_keyeq_fn eq, int64_t owned);
+Hamt *tur_hamt_set_eq_vo(Hamt *m, uint64_t hash, int64_t key, int64_t val, tur_hamt_keyeq_fn eq, int64_t owned,
                          void (*val_retain)(void *), void (*val_release)(void *));
-Hamt *tur_hamt_del_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned);
-Hamt *tur_hamt_del_eq_vo(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned,
+Hamt *tur_hamt_del_eq_o(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_fn eq, int64_t owned);
+Hamt *tur_hamt_del_eq_vo(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_fn eq, int64_t owned,
                          void (*val_retain)(void *), void (*val_release)(void *));
-bool  tur_hamt_has_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned);
-void *tur_hamt_get_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned);
+bool  tur_hamt_has_eq_o(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_fn eq, int64_t owned);
+int64_t tur_hamt_get_eq_o(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_fn eq, int64_t owned);
 
 /* GDE3: structural equality using each map's stamped key comparator.
  * a_handle and b_handle are opaque int64_t Map handles (as used by Turmeric).
@@ -279,7 +284,7 @@ void *tur_hamt_get_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq,
 bool tur_hamt_eq_dynamic(int64_t a_handle, int64_t b_handle, int64_t val_cmp);
 
 /* Get the number of key/value pairs in the map. O(1). */
-uint32_t tur_hamt_count(Hamt *m);
+int64_t tur_hamt_count(Hamt *m);
 
 /* Merge two HAMTs. b wins on collision.
  * Returns: new Hamt with ref_count=1 containing all entries from both maps.
@@ -311,7 +316,7 @@ void tur_hamt_iter_free(HamtIter *iter);
  *   - hash_out: receives the full 64-bit hash of the key
  *   - key_out: receives the key pointer
  *   - val_out: receives the value pointer */
-bool tur_hamt_iter_next(HamtIter *iter, uint64_t *hash_out, void **key_out, void **val_out);
+bool tur_hamt_iter_next(HamtIter *iter, uint64_t *hash_out, int64_t *key_out, int64_t *val_out);
 
 /* Iterator-box wrapper: heap-allocated HamtIter + current (hash, key, val)
  * slots.  Pure-Turmeric Eq[Map] / Eq[Set] drive the loop via these accessors
@@ -321,8 +326,8 @@ void *tur_hamt_iter_alloc(Hamt *m);
 void tur_hamt_iter_destroy(void *box);
 bool tur_hamt_iter_advance(void *box);
 int64_t tur_hamt_iter_cur_hash(void *box);
-void *tur_hamt_iter_cur_key(void *box);
-void *tur_hamt_iter_cur_val(void *box);
+int64_t tur_hamt_iter_cur_key(void *box);
+int64_t tur_hamt_iter_cur_val(void *box);
 
 /* Read the stamped key comparator off a HAMT root (NULL = identity).  The
  * pure-Turmeric Eq[Map] loop threads this into tur_hamt_get_dynamic for
@@ -331,10 +336,10 @@ void *tur_hamt_keyeq(Hamt *m);
 
 /* Lookup using the stamped key comparator when keyeq is non-NULL, else
  * identity.  Keeps the pure-Turmeric loop body free of a conditional. */
-void *tur_hamt_get_dynamic(Hamt *m, int64_t hash, void *key, void *keyeq);
+int64_t tur_hamt_get_dynamic(Hamt *m, int64_t hash, int64_t key, void *keyeq);
 
 /* has? variant of get_dynamic. */
-bool tur_hamt_has_dynamic(Hamt *m, int64_t hash, void *key, void *keyeq);
+bool tur_hamt_has_dynamic(Hamt *m, int64_t hash, int64_t key, void *keyeq);
 
 /* Public API - Debugging */
 
@@ -362,17 +367,17 @@ uint64_t tur_hamt_hash_ptr(void *ptr);
 /* Higher-order operations */
 
 /* Map: return a new HAMT with each value replaced by fn(val). */
-Hamt *tur_hamt_map(Hamt *m, void *(*fn)(void *val, void *ctx), void *ctx);
+Hamt *tur_hamt_map(Hamt *m, int64_t (*fn)(int64_t val, void *ctx), void *ctx);
 
 /* Filter: return a new HAMT with only entries where fn(key, val, ctx) is true. */
-Hamt *tur_hamt_filter(Hamt *m, bool (*fn)(void *key, void *val, void *ctx), void *ctx);
+Hamt *tur_hamt_filter(Hamt *m, bool (*fn)(int64_t key, int64_t val, void *ctx), void *ctx);
 
 /* Reduce: fold all entries (order unspecified). Returns final accumulator. */
-void *tur_hamt_reduce(Hamt *m, void *(*fn)(void *acc, void *key, void *val, void *ctx), void *init, void *ctx);
+int64_t tur_hamt_reduce(Hamt *m, int64_t (*fn)(int64_t acc, int64_t key, int64_t val, void *ctx), int64_t init, void *ctx);
 
 /* Merge-with: merge a and b; for duplicate keys call fn(val_a, val_b, ctx) to
  * resolve the conflict. Keys present in only one map keep their value. */
-Hamt *tur_hamt_merge_with(Hamt *a, Hamt *b, void *(*fn)(void *va, void *vb, void *ctx), void *ctx);
+Hamt *tur_hamt_merge_with(Hamt *a, Hamt *b, int64_t (*fn)(int64_t va, int64_t vb, void *ctx), void *ctx);
 
 /* Show: return heap-allocated string "{k->v, ...}" — caller must free. */
 char *tur_hamt_show(Hamt *m);
@@ -393,10 +398,10 @@ typedef struct HamtTransient {
 HamtTransient *tur_hamt_transient(Hamt *m);
 
 /* Mutate a transient: insert or update key with given hash. */
-void tur_hamt_transient_set(HamtTransient *t, uint64_t hash, void *key, void *val);
+void tur_hamt_transient_set(HamtTransient *t, uint64_t hash, int64_t key, int64_t val);
 
 /* Mutate a transient: delete key with given hash. */
-void tur_hamt_transient_del(HamtTransient *t, uint64_t hash, void *key);
+void tur_hamt_transient_del(HamtTransient *t, uint64_t hash, int64_t key);
 
 /* Seal transient into an immutable map.
  * Returns a new Hamt; the transient is freed and must not be used again. */

@@ -34,6 +34,8 @@
 
 #include "hamt.h"
 
+#define W(p) ((int64_t)(intptr_t)(p))   /* a pointer as the map's int64 word */
+
 static int g_retain;
 static int g_release;
 
@@ -55,7 +57,7 @@ static void test_distinct_hashes(void) {
         g_vals[i] = i * 10;
         Hamt *old = m;
         m = tur_hamt_set_eq_vo(m, (uint64_t)i * 0x9E3779B97F4A7C15ULL,
-                               (void *)(intptr_t)(i + 1), &g_vals[i],
+                               (int64_t)(i + 1), W(&g_vals[i]),
                                NULL, 2, counting_retain, counting_release);
         if (old && old != m) tur_hamt_free(old);
     }
@@ -79,8 +81,8 @@ static void test_collision_chain(void) {
     for (long i = 0; i < n; i++) {
         g_vals[i] = i * 10;
         Hamt *old = m;
-        m = tur_hamt_set_eq_vo(m, (uint64_t)0xC0FFEE, (void *)(intptr_t)(i + 1),
-                               &g_vals[i], NULL, 2,
+        m = tur_hamt_set_eq_vo(m, (uint64_t)0xC0FFEE, (int64_t)(i + 1),
+                               W(&g_vals[i]), NULL, 2,
                                counting_retain, counting_release);
         if (old && old != m) tur_hamt_free(old);
     }
@@ -105,13 +107,13 @@ static void test_ops_survive_derivation(void) {
     for (long i = 0; i < n; i++) {
         g_vals[i] = i * 10;
         m = tur_hamt_set_eq_vo(m, (uint64_t)0xBEEF + (uint64_t)(i % 2),
-                               (void *)(intptr_t)(i + 1), &g_vals[i],
+                               (int64_t)(i + 1), W(&g_vals[i]),
                                NULL, 2, counting_retain, counting_release);
         versions[i] = m;  /* keep every version alive simultaneously */
     }
 
     /* A delete off the newest version inherits the ops too. */
-    Hamt *deleted = tur_hamt_del_eq_vo(m, (uint64_t)0xBEEF, (void *)(intptr_t)1,
+    Hamt *deleted = tur_hamt_del_eq_vo(m, (uint64_t)0xBEEF, 1,
                                        NULL, 2, counting_retain, counting_release);
 
     /* Free the lineage oldest-first; then the derived map. */
@@ -133,8 +135,8 @@ static void test_unowned_values_untouched(void) {
     for (long i = 0; i < 6; i++) {
         g_vals[i] = i * 10;
         Hamt *old = m;
-        m = tur_hamt_set_eq_vo(m, (uint64_t)0xD00D, (void *)(intptr_t)(i + 1),
-                               &g_vals[i], NULL, 0,
+        m = tur_hamt_set_eq_vo(m, (uint64_t)0xD00D, (int64_t)(i + 1),
+                               W(&g_vals[i]), NULL, 0,
                                counting_retain, counting_release);
         if (old && old != m) tur_hamt_free(old);
     }
@@ -152,8 +154,8 @@ static void test_legacy_eq_o_still_boxes(void) {
     for (long i = 0; i < 6; i++) {
         void *boxed = tur_hamt_box_key(&i, sizeof i);
         Hamt *old = m;
-        m = tur_hamt_set_eq_o(m, (uint64_t)0xFEED, (void *)(intptr_t)(i + 1),
-                              boxed, NULL, 2);
+        m = tur_hamt_set_eq_o(m, (uint64_t)0xFEED, (int64_t)(i + 1),
+                              W(boxed), NULL, 2);
         if (old && old != m) tur_hamt_free(old);
     }
     assert(tur_hamt_count(m) == 6);

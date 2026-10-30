@@ -15,7 +15,7 @@
   void *m = tur_hamt_new();
   for (int i = 0; i < n; i++) {
     int64_t h = tur_hamt_hash_ptr(keys[i]);
-    void *m2 = tur_hamt_set(m, h, keys[i], vals[i]);
+    void *m2 = tur_hamt_set(m, h, (int64_t)(intptr_t)keys[i], (int64_t)(intptr_t)vals[i]);
     tur_hamt_free(m);
     m = m2;
   }
@@ -30,7 +30,7 @@
   for (int i = 0; i < 100; i++) {
     int idx = (i * 97) % n;
     int64_t h = tur_hamt_hash_ptr(keys[idx]);
-    void *r = tur_hamt_get(m, h, keys[idx]);
+    void *r = (void *)(intptr_t)tur_hamt_get(m, h, (int64_t)(intptr_t)keys[idx]);
     if (r != vals[idx]) { ok = 0; break; }
   }
   tur_hamt_free(m);

@@ -141,7 +141,7 @@
 ;;; tlength -- count the elements of a typed (Cons A) list.
 ;;;
 ;;; The element-aware sibling of `list-length`. Where `list-length` walks the
-;;; chain as a fixed carrier `struct { int64_t head; int64_t tail; }`, `tlength`
+;;; chain as a fixed carrier `struct { int64_t head; void *tail; }`, `tlength`
 ;;; reads `(.tail xs)` at the concrete `(Cons A)` layout, so it stays correct
 ;;; when A is a by-value aggregate (e.g. `(Option int)`) whose head pushes the
 ;;; tail link past offset 8 -- the carrier walk segfaults there, this does not.
@@ -164,7 +164,7 @@
 (defn tlength [A] [xs : (Cons A)] : int (tlength-acc__ xs 0))
 ;;; list-length -- count the number of elements in a typed list.
 ;;;
-;;; Walks the carrier cell `{ int64_t head; int64_t tail; }`. A `(Cons A)`
+;;; Walks the carrier cell `{ int64_t head; void *tail; }`. A `(Cons A)`
 ;;; whose head is wider than that word -- an `any` element (every Saffron
 ;;; list) or an inline by-value aggregate -- is counted by `tlength` instead:
 ;;; the call is elaborated as `(tlength l)`, and likewise `length`,
@@ -185,12 +185,12 @@
   #fx{}
   : int
   ```c
-  struct __tur_cell_t { int64_t head; int64_t tail; };
+  struct __tur_cell_t { int64_t head; void *tail; };
   struct __tur_cell_t *cell = (void*)(intptr_t)l;
   int64_t count = 0;
   while (cell) {
       count++;
-      cell = (void*)(intptr_t)cell->tail;
+      cell = cell->tail;
   }
   return count;
   ```)
@@ -380,15 +380,23 @@
 
 (defn list-head [l : int] : int
   ```c
-  struct __tur_cell_t { int64_t head; int64_t tail; };
+  struct __tur_cell_t { int64_t head; void *tail; };
   return ((struct __tur_cell_t *)(intptr_t)l)->head;
   ```)
 ;;; list-tail -- tail pointer of a non-empty carrier-level list.
+;;;
+;;; The cell's tail is read as a pointer and widened, not as an int64_t: a
+;;; (Cons A) cell's tail is the typed pointer (Cons A), 4 bytes on wasm32 with
+;;; 4 bytes of padding after it, and reading the padding into the carrier made
+;;; a nil tail read as a cell (ilp32-word-slots-truncate-64-bit-carriers,
+;;; shape 4).  Cells built at the carrier ({int64_t head; int64_t tail}, the
+;;; rest-parameter and *args* lists) read the same way: their pointer is the
+;;; low, little-endian half.
 
 (defn list-tail [l : int] : int
   ```c
-  struct __tur_cell_t { int64_t head; int64_t tail; };
-  return ((struct __tur_cell_t *)(intptr_t)l)->tail;
+  struct __tur_cell_t { int64_t head; void *tail; };
+  return (int64_t)(intptr_t)((struct __tur_cell_t *)(intptr_t)l)->tail;
   ```)
 ;;; list-concat -- concatenate two lists.
 ;;;

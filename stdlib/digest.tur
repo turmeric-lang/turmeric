@@ -123,7 +123,7 @@
   __TUR_CNAME_digest/sha256-transform!__((int64_t)(intptr_t)st, (int64_t)(intptr_t)blk);
   uint8_t digest[32];
   for (int j=0;j<8;j++) { digest[j*4]=(st[j]>>24)&0xff; digest[j*4+1]=(st[j]>>16)&0xff; digest[j*4+2]=(st[j]>>8)&0xff; digest[j*4+3]=st[j]&0xff; }
-  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  struct { int64_t *data; int64_t len; int64_t cap; } *v = malloc(sizeof(*v));
   v->data = malloc(32 * sizeof(int64_t));
   v->len = 32; v->cap = 32;
   for (int j=0;j<32;j++) v->data[j] = (int64_t)digest[j];
@@ -201,7 +201,7 @@
   __TUR_CNAME_digest/md5-transform!__((int64_t)(intptr_t)st, (int64_t)(intptr_t)blk);
   uint8_t digest[16];
   for (int j=0;j<4;j++) { digest[j*4]=(uint8_t)(st[j]&0xff); digest[j*4+1]=(uint8_t)((st[j]>>8)&0xff); digest[j*4+2]=(uint8_t)((st[j]>>16)&0xff); digest[j*4+3]=(uint8_t)((st[j]>>24)&0xff); }
-  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  struct { int64_t *data; int64_t len; int64_t cap; } *v = malloc(sizeof(*v));
   v->data = malloc(16 * sizeof(int64_t));
   v->len = 16; v->cap = 16;
   for (int j=0;j<16;j++) v->data[j] = (int64_t)digest[j];
@@ -259,7 +259,7 @@
 (defn digest/bytes-free [v : int] : void
   ```c
   if (!v) return;
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   free(vec->data);
   free(vec);
   ```)

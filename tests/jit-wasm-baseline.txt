@@ -12,65 +12,53 @@ any-widen-frame-box-past-dyn-call interpreted  # the program starts threads (pth
 any-widen-fresh-payload-aliases interpreted  # the program starts threads (pthread_create), which this engine cannot run
 any-widen-of-a-borrowed-local interpreted  # the program starts threads (pthread_create), which this engine cannot run
 args-option-implicit fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-async-await-channel fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+async-await-channel fail  # stdout mismatch on the error path: the module threw: unreachable
 async-echo-server fail  # stdout mismatch on the interpreted path: import of undefined item socket
 async-file fail  # stdout mismatch on the interpreted path: the program starts threads (tur_timer_wheel_new), which this engine cannot run
 async-on-thread-body-env-dropped fail  # stdout mismatch on the error path: the module threw: unwind
 async-timer-basic fail  # stdout mismatch on the interpreted path: the program starts threads (tur_timer_wheel_new), which this engine cannot run
-await-below-evicted-caller-or-nontail-resume fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-await-below-struct-capturing-lambda fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-await-in-generic-capturing-lambda fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-await-through-fn-value fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+await-below-evicted-caller-or-nontail-resume fail  # stdout mismatch on the error path: the module threw: unreachable
+await-below-struct-capturing-lambda fail  # stdout mismatch on the error path: the module threw: unreachable
+await-in-generic-capturing-lambda fail  # stdout mismatch on the error path: the module threw: unreachable
 barrier-rendezvous fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 byval-spine-drop-refused-nonscalar-param interpreted  # the program starts threads (pthread_create), which this engine cannot run
-callcc-in-fiber fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+callcc-in-fiber fail  # stdout mismatch on the error path: the module threw: unreachable
 cancel-chan fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 cancel-cooperative fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 cancel-select fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 childhandle-linear fail  # stdout mismatch on the interpreted path: import of undefined item fork
-class-var-applied-result-in-constrained-generic fail  # stdout mismatch on the compiled path
 classic-list-surface interpreted  # the program starts threads (pthread_create), which this engine cannot run
-comparator-float-elements-word-adapter fail  # stdout mismatch on the compiled path
-constrained-defn-cons-return-monomorphize fail  # stdout mismatch on the compiled path
-constrained-instance-dispatch-nested-parametric-element fail  # stdout mismatch on the compiled path
-constrained-instance-element-dispatch fail  # stdout mismatch on the compiled path
-conv-defstruct-option-hkt-instance-bodies fail  # stdout mismatch on the compiled path
-conv-defstruct-result-struct-field-typedef-order fail  # stdout mismatch on the compiled path
-conv-defstruct-return-bridge-inline-c fail  # stdout mismatch on the compiled path
-cps-effectful-callback-aggregate-args fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-cps-effectful-capturing-callback-scalar-kinds fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-cps-effectful-capturing-closure-callback fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-cps-effectful-closure-through-unannotated-param fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-cps-local-closure-value-and-call fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+cps-effectful-callback-aggregate-args fail  # stdout mismatch on the error path: the module threw: unreachable
+cps-effectful-capturing-callback-scalar-kinds fail  # stdout mismatch on the error path: the module threw: unreachable
+cps-effectful-capturing-closure-callback fail  # stdout mismatch on the error path: the module threw: unreachable
+cps-effectful-closure-through-unannotated-param fail  # stdout mismatch on the error path: the module threw: unreachable
+cps-local-closure-value-and-call fail  # stdout mismatch on the error path: the module threw: unreachable
 data-literal-typed-empty fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 defalias-composite interpreted  # the program starts threads (pthread_create), which this engine cannot run
 defdynamic-option-convey fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-defstruct-field-session fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-defstruct-field-session-project fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-defstruct-field-session-role fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+defstruct-field-session fail  # stdout mismatch on the error path: the module threw: unreachable
+defstruct-field-session-project fail  # stdout mismatch on the error path: the module threw: unreachable
+defstruct-field-session-role fail  # stdout mismatch on the error path: the module threw: unreachable
 direct-shift-outside-lexical-reset fail  # stdout mismatch on the compiled path
-docs-introducing-saffron-examples fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+docs-introducing-saffron-examples fail  # stdout mismatch on the error path: the module threw: unreachable
 docs-r7rs-guide-examples fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
 docs-saffron-guide-examples interpreted  # the program starts threads (pthread_create), which this engine cannot run
-docs-sicp-guide-examples fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+docs-sicp-guide-examples fail  # stdout mismatch on the error path: the module threw: unreachable
 docs-sicp-guide-no-import interpreted  # the program starts threads (pthread_create), which this engine cannot run
-dynvar-binding-moves-with-fiber fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+dynvar-binding-moves-with-fiber fail  # stdout mismatch on the error path: the module threw: unreachable
 dynvar-convey fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 dynvar-convey-isolation fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-effect-capturing-closure-thin-param fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+effect-capturing-closure-thin-param fail  # stdout mismatch on the error path: the module threw: unreachable
 effect-nontail-resume-once-in-place fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 effect-nontail-resume-under-outer fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
-eq-carrier-capturing-comparator fail  # stdout mismatch on the compiled path
-eq-nested-binary-class-method-spec fail  # stdout mismatch on the compiled path
 eqmap-cstr-content fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 escape-deep-capture fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
-fiber-basic fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-fiber-effect fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-fiber-local fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-fiber-scheduler fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+fiber-basic fail  # stdout mismatch on the error path: the module threw: unreachable
+fiber-effect fail  # stdout mismatch on the error path: the module threw: unreachable
+fiber-local fail  # stdout mismatch on the error path: the module threw: unreachable
+fiber-scheduler fail  # stdout mismatch on the error path: the module threw: unreachable
 fiber-scheduler-mt-migration fail  # stdout mismatch on the interpreted path: the program starts threads (tur_scheduler_mt_new), which this engine cannot run
-fiber-yield fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-fmap-byvalue-struct-element fail  # stdout mismatch on the compiled path
+fiber-yield fail  # stdout mismatch on the error path: the module threw: unreachable
 fn-arity-100-param fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
 fs-interp-basics interpreted  # import of undefined item fnmatch
 fs-process-typed-errors fail  # stdout mismatch on the interpreted path: import of undefined item popen
@@ -78,15 +66,9 @@ fs-symlink-perms fail  # stdout mismatch on the interpreted path: import of unde
 g4b-thread-local-global fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 gc-registry-growth fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 gde-generic-dict-eq-map fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-generic-hof-effectful-callback fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-generic-hof-unannotated-fat-param-mixed fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-generic-map-assoc-sig-tyvar-value fail  # stdout mismatch on the compiled path
-generic-spec-carrier-crossings-4 fail  # stdout mismatch on the compiled path
-generic-wrapper-over-return-dispatch-method fail  # stdout mismatch on the compiled path
-generic-wrapper-tail-forwards-return-dispatch fail  # stdout mismatch on the compiled path
+generic-hof-effectful-callback fail  # stdout mismatch on the error path: the module threw: unreachable
 ghe3-generic-map-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 gmk-map-literal-cstr-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-hkt-stdlib-option-result-instances fail  # stdout mismatch on the compiled path
 httpd-async-echo fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-async-limit fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 httpd-async-mw-attr fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
@@ -135,27 +117,20 @@ image-globals-roundtrip fail  # stdout mismatch on the compiled path
 image-hooks-tracked fail  # stdout mismatch on the compiled path
 image-reload-hook fail  # stdout mismatch on the compiled path
 image-roundtrip fail  # stdout mismatch on the compiled path
-inline-c-result-builder fail  # stdout mismatch on the compiled path
-inline-c-result-nested-sum fail  # stdout mismatch on the compiled path
-inline-c-typed-result-option fail  # stdout mismatch on the compiled path
 inline-c-variadic-definition fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
-io-read-line-stdin fail  # stdout mismatch on the compiled path
 jit-ffi-call-ptr fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-jit-ffi-call-ptr-struct fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+jit-ffi-call-ptr-struct fail  # stdout mismatch on the error path: the module threw: unreachable
 jit-ffi-callback-ptr fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
+jit-inline-c-thread-local fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 json-decode-hostile-input fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 list-helpers-wide-head-element interpreted  # the program starts threads (pthread_create), which this engine cannot run
 map-get-miss-on-any-value-is-nil interpreted  # the program starts threads (pthread_create), which this engine cannot run
 map-literal-frees-intermediates fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-map-typed-consumer fail  # stdout mismatch on the compiled path
-mut-map-reassign fail  # stdout mismatch on the compiled path
 neoteric-ascription-sweet fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-nested-construct-byvalue-decode fail  # stdout mismatch on the compiled path
 net-blocking-tcp fail  # stdout mismatch on the interpreted path: import of undefined item socket
 niche-elem-comparator-conventions fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-option-niche-vec-closure-cmp fail  # stdout mismatch on the compiled path
 os-misc-surface fail  # stdout mismatch on the interpreted path: import of undefined item getgid
-p19-8-fiber-effect-chain fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+p19-8-fiber-effect-chain fail  # stdout mismatch on the error path: the module threw: unreachable
 panic-catch-unwind-signal fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 panic-payload-accessors fail  # stdout mismatch on the compiled path
 panic-payload-forms fail  # stdout mismatch on the compiled path
@@ -228,9 +203,9 @@ r7rs-srfi-1 interpreted  # the program starts threads (pthread_create), which th
 r7rs-srfi-13 interpreted  # the program starts threads (pthread_create), which this engine cannot run
 r7rs-srfi-14 interpreted  # the program starts threads (pthread_create), which this engine cannot run
 r7rs-srfi-17 interpreted  # the program starts threads (pthread_create), which this engine cannot run
-r7rs-srfi-18 fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+r7rs-srfi-18 fail  # stdout mismatch on the error path: the module threw: unreachable
 r7rs-srfi-2-8-26-31 interpreted  # the program starts threads (pthread_create), which this engine cannot run
-r7rs-srfi-216 fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+r7rs-srfi-216 fail  # stdout mismatch on the error path: the module threw: unreachable
 r7rs-srfi-27 interpreted  # the program starts threads (pthread_create), which this engine cannot run
 r7rs-srfi-28 interpreted  # the program starts threads (pthread_create), which this engine cannot run
 r7rs-srfi-35 interpreted  # the program starts threads (pthread_create), which this engine cannot run
@@ -286,8 +261,6 @@ reactor-fibers-park-fd fail  # stdout mismatch on the compiled path
 reactor-fibers-smoke fail  # stdout mismatch on the compiled path
 reactor-fibers-stop-mid-run fail  # stdout mismatch on the compiled path
 reactor-signal-process-directed fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-result-bridge-tail-call-to-inline-c fail  # stdout mismatch on the compiled path
-return-dispatched-sum-mint-constrained-instance fail  # stdout mismatch on the compiled path
 rwlock-basic fail  # stdout mismatch on the interpreted path: import of undefined item pthread_rwlock_tryrdlock
 saffron-any-div-mod-minus-one interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-any-key-into-typed-map interpreted  # the program starts threads (pthread_create), which this engine cannot run
@@ -305,10 +278,10 @@ saffron-closure-sets-global interpreted  # the program starts threads (pthread_c
 saffron-cons-list interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-cons-list-walk-through-any interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-container-param-cast-shape interpreted  # the program starts threads (pthread_create), which this engine cannot run
-saffron-cps-vec-element-and-perform fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+saffron-cps-vec-element-and-perform fail  # stdout mismatch on the error path: the module threw: unreachable
 saffron-ctor-under-all-any-expectation interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-data-literal-lambda-values interpreted  # the program starts threads (pthread_create), which this engine cannot run
-saffron-defeffect-param-defaults-to-any fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+saffron-defeffect-param-defaults-to-any fail  # stdout mismatch on the error path: the module threw: unreachable
 saffron-defn-empty-params-literal-body interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-dyn-any-result-method interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-dyn-applied-class-var-result interpreted  # the program starts threads (pthread_create), which this engine cannot run
@@ -334,7 +307,7 @@ saffron-dyn-spelled-int-extra interpreted  # the program starts threads (pthread
 saffron-dyn-truthy interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-dyn-typeclass-dispatch interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-dynamic-body-concrete-return interpreted  # the program starts threads (pthread_create), which this engine cannot run
-saffron-effect-through-dyn-operand fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+saffron-effect-through-dyn-operand fail  # stdout mismatch on the error path: the module threw: unreachable
 saffron-eq-vec-any interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-forward-ref-any-and-variadic interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-forward-reference-defaults-any interpreted  # the program starts threads (pthread_create), which this engine cannot run
@@ -357,8 +330,8 @@ saffron-match-any-stdlib-sum interpreted  # the program starts threads (pthread_
 saffron-match-parametric-adt interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-nullary-parametric-ctor-any interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-open-generic-grounded interpreted  # the program starts threads (pthread_create), which this engine cannot run
-saffron-perform-any-argument-mismatch fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-saffron-perform-any-argument-seam fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+saffron-perform-any-argument-mismatch fail  # stdout mismatch on the error path: the module threw: unreachable
+saffron-perform-any-argument-seam fail  # stdout mismatch on the error path: the module threw: unreachable
 saffron-prelude interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-record-opaque-ptr-field fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 saffron-refinement-contract interpreted  # the program starts threads (pthread_create), which this engine cannot run
@@ -379,47 +352,47 @@ saffron-vector-literal interpreted  # the program starts threads (pthread_create
 saffron-vector-literal-homogeneous interpreted  # the program starts threads (pthread_create), which this engine cannot run
 saffron-while-any-condition interpreted  # the program starts threads (pthread_create), which this engine cannot run
 schan-worker-pool fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-scheduler-basic fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-scheduler-io-park fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+scheduler-basic fail  # stdout mismatch on the error path: the module threw: unreachable
+scheduler-io-park fail  # stdout mismatch on the error path: the module threw: unreachable
 schema-decode-union fail  # stdout mismatch on the compiled path
-schema-reader-json-file fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+schema-reader-json-file fail  # stdout mismatch on the error path: the module threw: unreachable
 session-async-peer-on-thread fail  # stdout mismatch on the error path: the module threw: unwind
-session-async-warn fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-calc-rpc fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-choose-left fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-choose-right fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-delegated-rpc fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-delegation fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-delegation-over-channel fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-echo-rpc fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-effects fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-mp-calc fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-mp-delegated fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-mp-effects fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-mp-handshake fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-mp-ping fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-mp-three-role fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-mp-timeout fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-offer fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-offer-right fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-pap-protocol-match fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-payload-cstr fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-payload-float fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-payload-float-timeout fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-payload-mp-float fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-project-basic fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-project-choice fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-project-loop fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-project-timeout fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-rec fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-recv fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-send fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-stdlib-echo fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-stdlib-pubsub fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-stdlib-rpc fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-stm fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-timeout-expired fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-session-timeout-ok fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
+session-async-warn fail  # stdout mismatch on the error path: the module threw: unreachable
+session-calc-rpc fail  # stdout mismatch on the error path: the module threw: unreachable
+session-choose-left fail  # stdout mismatch on the error path: the module threw: unreachable
+session-choose-right fail  # stdout mismatch on the error path: the module threw: unreachable
+session-delegated-rpc fail  # stdout mismatch on the error path: the module threw: unreachable
+session-delegation fail  # stdout mismatch on the error path: the module threw: unreachable
+session-delegation-over-channel fail  # stdout mismatch on the error path: the module threw: unreachable
+session-echo-rpc fail  # stdout mismatch on the error path: the module threw: unreachable
+session-effects fail  # stdout mismatch on the error path: the module threw: unreachable
+session-mp-calc fail  # stdout mismatch on the error path: the module threw: unreachable
+session-mp-delegated fail  # stdout mismatch on the error path: the module threw: unreachable
+session-mp-effects fail  # stdout mismatch on the error path: the module threw: unreachable
+session-mp-handshake fail  # stdout mismatch on the error path: the module threw: unreachable
+session-mp-ping fail  # stdout mismatch on the error path: the module threw: unreachable
+session-mp-three-role fail  # stdout mismatch on the error path: the module threw: unreachable
+session-mp-timeout fail  # stdout mismatch on the error path: the module threw: unreachable
+session-offer fail  # stdout mismatch on the error path: the module threw: unreachable
+session-offer-right fail  # stdout mismatch on the error path: the module threw: unreachable
+session-pap-protocol-match fail  # stdout mismatch on the error path: the module threw: unreachable
+session-payload-cstr fail  # stdout mismatch on the error path: the module threw: unreachable
+session-payload-float fail  # stdout mismatch on the error path: the module threw: unreachable
+session-payload-float-timeout fail  # stdout mismatch on the error path: the module threw: unreachable
+session-payload-mp-float fail  # stdout mismatch on the error path: the module threw: unreachable
+session-project-basic fail  # stdout mismatch on the error path: the module threw: unreachable
+session-project-choice fail  # stdout mismatch on the error path: the module threw: unreachable
+session-project-loop fail  # stdout mismatch on the error path: the module threw: unreachable
+session-project-timeout fail  # stdout mismatch on the error path: the module threw: unreachable
+session-rec fail  # stdout mismatch on the error path: the module threw: unreachable
+session-recv fail  # stdout mismatch on the error path: the module threw: unreachable
+session-send fail  # stdout mismatch on the error path: the module threw: unreachable
+session-stdlib-echo fail  # stdout mismatch on the error path: the module threw: unreachable
+session-stdlib-pubsub fail  # stdout mismatch on the error path: the module threw: unreachable
+session-stdlib-rpc fail  # stdout mismatch on the error path: the module threw: unreachable
+session-stm fail  # stdout mismatch on the error path: the module threw: unreachable
+session-timeout-expired fail  # stdout mismatch on the error path: the module threw: unreachable
+session-timeout-ok fail  # stdout mismatch on the error path: the module threw: unreachable
 set-add-elem-typed-member fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 set-cstr-content fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 set-of-any-elements fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
@@ -428,12 +401,9 @@ signal-handle-poll fail  # stdout mismatch on the interpreted path: import of un
 stackless-catch-unwind-byref-aggregate-group-bail fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 stm-retry-wakeup fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 stm-stress fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-sum-payload-drop-dictionary-dispatch fail  # stdout mismatch on the compiled path
-tail-call-inline-c-carrier-bridge fail  # stdout mismatch on the compiled path
 tailcall-dyn-leak interpreted  # the program starts threads (pthread_create), which this engine cannot run
-taskgroup-async fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
+taskgroup-async fail  # stdout mismatch on the error path: the module threw: unreachable
 taskgroup-timeout fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-tce3-map-cstr-val fail  # stdout mismatch on the compiled path
 tce4-map-cstr-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 term-raw-cooked-roundtrip fail  # stdout mismatch on the interpreted path: import of undefined item fork
 thread-local-basic fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
@@ -442,11 +412,4 @@ time-dates-iso8601 fail  # stdout mismatch on the compiled path
 turi-option-result-map-deep-recursion fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 tvar-float-payload-value-converted fail  # stdout mismatch on the compiled path
 typeclass-unsafe-passbyptr-struct-arg fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-typed/list-concat fail  # stdout mismatch on the compiled path
-typed/list-macro fail  # stdout mismatch on the compiled path
-typed/vec-basic fail  # stdout mismatch on the compiled path
-vec-of-tvec-eq fail  # stdout mismatch on the compiled path
-vec-of-tvec-eq-manual fail  # stdout mismatch on the compiled path
-weak-upgrade-after-drop fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
-weak-upgrade-option fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
 workstealing-balance fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run

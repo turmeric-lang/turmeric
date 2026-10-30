@@ -26,6 +26,8 @@
 
 #include "hamt.h"
 
+#define W(p) ((int64_t)(intptr_t)(p))   /* a pointer as the map's int64 word */
+
 /* Stand-in for the interpreter's {env, closure} bundle. */
 typedef struct {
     int   tag;        /* identity marker the trampoline asserts it received */
@@ -58,7 +60,7 @@ static bool cstr_eq_ctx_nesting(int64_t a, int64_t b, void *vctx) {
      * would call cstr_eq_ctx_nesting recursively (and re-enter with our ctx);
      * with correct mutual exclusion it uses int_identity_eq instead. */
     int two = 2;
-    (void)tur_hamt_has_eq(ctx->inner, 2, (void *)(intptr_t)&two, int_identity_eq);
+    (void)tur_hamt_has_eq(ctx->inner, 2, W(&two), int_identity_eq);
     const char *sa = (const char *)(intptr_t)a;
     const char *sb = (const char *)(intptr_t)b;
     return strcmp(sa, sb) == 0;
@@ -80,23 +82,23 @@ static void test_ctx_threaded_and_content_keyed(void) {
     char pear[]   = "pear";
 
     Hamt *m0 = tur_hamt_new();
-    Hamt *m1 = tur_hamt_set_eq_ctx(m0, COLLIDE, apple1, &g_vals[0], cstr_eq_ctx, &ctx);
-    Hamt *m2 = tur_hamt_set_eq_ctx(m1, COLLIDE, pear,   &g_vals[1], cstr_eq_ctx, &ctx);
+    Hamt *m1 = tur_hamt_set_eq_ctx(m0, COLLIDE, W(apple1), W(&g_vals[0]), cstr_eq_ctx, &ctx);
+    Hamt *m2 = tur_hamt_set_eq_ctx(m1, COLLIDE, W(pear),   W(&g_vals[1]), cstr_eq_ctx, &ctx);
 
     /* Re-set with a *different pointer* but equal text: content key => update,
      * not insert. Count must stay 2. */
-    Hamt *m3 = tur_hamt_set_eq_ctx(m2, COLLIDE, apple2, &g_vals[2], cstr_eq_ctx, &ctx);
+    Hamt *m3 = tur_hamt_set_eq_ctx(m2, COLLIDE, W(apple2), W(&g_vals[2]), cstr_eq_ctx, &ctx);
     assert(tur_hamt_count(m3) == 2 && "content-keyed re-set must update, not grow");
 
     /* get/has by content through a fresh probe pointer. */
     char probe[] = "apple";
-    void *got = tur_hamt_get_eq_ctx(m3, COLLIDE, probe, cstr_eq_ctx, &ctx);
-    assert(got == &g_vals[2] && "get must find the updated value by content");
-    assert(tur_hamt_has_eq_ctx(m3, COLLIDE, probe, cstr_eq_ctx, &ctx));
+    int64_t got = tur_hamt_get_eq_ctx(m3, COLLIDE, W(probe), cstr_eq_ctx, &ctx);
+    assert(got == W(&g_vals[2]) && "get must find the updated value by content");
+    assert(tur_hamt_has_eq_ctx(m3, COLLIDE, W(probe), cstr_eq_ctx, &ctx));
 
-    Hamt *m4 = tur_hamt_del_eq_ctx(m3, COLLIDE, probe, cstr_eq_ctx, &ctx);
+    Hamt *m4 = tur_hamt_del_eq_ctx(m3, COLLIDE, W(probe), cstr_eq_ctx, &ctx);
     assert(tur_hamt_count(m4) == 1 && "del by content must remove the entry");
-    assert(!tur_hamt_has_eq_ctx(m4, COLLIDE, probe, cstr_eq_ctx, &ctx));
+    assert(!tur_hamt_has_eq_ctx(m4, COLLIDE, W(probe), cstr_eq_ctx, &ctx));
 
     assert(ctx.call_count > 0 && "ctx comparator must actually have run");
 
@@ -110,7 +112,7 @@ static void test_nesting_mutual_exclusion(void) {
     int v = 7;
     int key2 = 2;
     Hamt *inner0 = tur_hamt_new();
-    Hamt *inner1 = tur_hamt_set_eq(inner0, 2, (void *)(intptr_t)&key2, &v, int_identity_eq);
+    Hamt *inner1 = tur_hamt_set_eq(inner0, 2, W(&key2), W(&v), int_identity_eq);
 
     EqCtx ctx = { 0xC0FFEE, 0, inner1 };
 
@@ -118,11 +120,11 @@ static void test_nesting_mutual_exclusion(void) {
     char a2[] = "xyz";
 
     Hamt *m0 = tur_hamt_new();
-    Hamt *m1 = tur_hamt_set_eq_ctx(m0, COLLIDE, a1, &g_vals[0], cstr_eq_ctx_nesting, &ctx);
+    Hamt *m1 = tur_hamt_set_eq_ctx(m0, COLLIDE, W(a1), W(&g_vals[0]), cstr_eq_ctx_nesting, &ctx);
     /* This probe drives cstr_eq_ctx_nesting, which performs a plain inner op
      * mid-compare. Correct mutual exclusion => no infinite recursion / crash,
      * and the content match still resolves. */
-    Hamt *m2 = tur_hamt_set_eq_ctx(m1, COLLIDE, a2, &g_vals[1], cstr_eq_ctx_nesting, &ctx);
+    Hamt *m2 = tur_hamt_set_eq_ctx(m1, COLLIDE, W(a2), W(&g_vals[1]), cstr_eq_ctx_nesting, &ctx);
     assert(tur_hamt_count(m2) == 1 && "nested-op compare must still content-match");
 
     tur_hamt_free(m0); tur_hamt_free(m1); tur_hamt_free(m2);
@@ -141,10 +143,10 @@ static void test_null_ctx(void) {
     int ka = 5, kb = 5;
     int va = 1;
     Hamt *m0 = tur_hamt_new();
-    Hamt *m1 = tur_hamt_set_eq_ctx(m0, 9, (void *)(intptr_t)&ka, &va, int_eq_ctx_nullok, NULL);
+    Hamt *m1 = tur_hamt_set_eq_ctx(m0, 9, W(&ka), W(&va), int_eq_ctx_nullok, NULL);
     /* identity keys: same word matches; a different word with == value also
      * matches via the comparator. */
-    assert(tur_hamt_has_eq_ctx(m1, 9, (void *)(intptr_t)&ka, int_eq_ctx_nullok, NULL));
+    assert(tur_hamt_has_eq_ctx(m1, 9, W(&ka), int_eq_ctx_nullok, NULL));
     (void)kb;
     tur_hamt_free(m0); tur_hamt_free(m1);
     printf("  ctx==NULL passthrough: OK\n");

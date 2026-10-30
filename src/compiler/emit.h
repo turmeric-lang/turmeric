@@ -77,6 +77,24 @@ bool emit_split_refused_on_sigs(void);
  * single-file TU.  Set only by the REPL's in-process spice build; leave
  * false everywhere else so ordinary emission stays byte-identical. */
 extern bool g_emit_ffi_export_shims;
+/* The pointer width of the target the C is emitted for, in bytes, or 0 for
+ * the host's own: `tur build --target wasm` sets 4 around its compile.  A
+ * compiler running on the target -- the browser JIT module -- leaves it 0.
+ * emit_target_ptr_bytes() resolves it.  What reads it: the word padding a
+ * parametric ADT's monomorph members get on a 4-byte target
+ * (ilp32-word-slots-truncate-64-bit-carriers shape 4; types.c
+ * adt_member_word_pad). */
+extern int  g_emit_target_ptr_bytes;
+int emit_target_ptr_bytes(void);
+/* ilp32 shape 4: the bytes of word padding a monomorph member of C type
+ * `ctype` gets after it, so an 8-byte-slot reader (the erased twin, a carrier
+ * cell) finds the next member where the carrier layout has it: 0 on a 64-bit
+ * target (except the float32 pad, which every target carries), 8 - sizeof on
+ * a 4-byte-pointer one.  `is_f32_tyvar` says the member is a type parameter
+ * instantiated at float32. */
+int adt_member_word_pad(const char *ctype, bool is_f32_tyvar);
+void adt_emit_member_word_pad(Buf *out, int pad, const char *lead,
+                              const char *name, const char *tail);
 
 /* aot-compiled-repl-plan C2 step 2: emit each of the program's own top-level
  * `def`s as a pointer into a host slot (tur_repl_slot) instead of storage of

@@ -3,16 +3,16 @@
 
 (extern-c free [p :ptr] :void)
 
-(defn ptr= [a : ptr b : ptr] : bool
+(defn ptr= [a : int b : int] : bool
   ```c
   return a == b;
   ```)
 
-(defn alloc-int [x : int] : ptr
+(defn alloc-int [x : int] : int
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
-  return (void *)p;
+  return (int64_t)(intptr_t)p;
   ```)
 
 ;; Test: insert multiple keys with the same hash; all retrievable
@@ -36,12 +36,12 @@
                                 (hamt/free m2)
                                 (hamt/free m3)
                                 (hamt/free m4)
-                                (free k1)
-                                (free k2)
-                                (free k3)
-                                (free v1)
-                                (free v2)
-                                (free v3)
+                                (free (:: k1 :ptr))
+                                (free (:: k2 :ptr))
+                                (free (:: k3 :ptr))
+                                (free (:: v1 :ptr))
+                                (free (:: v2 :ptr))
+                                (free (:: v3 :ptr))
                                 (if (and (= c 3)
                                          (ptr= r1 v1)
                                          (ptr= r2 v2)

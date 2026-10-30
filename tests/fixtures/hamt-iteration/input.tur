@@ -9,9 +9,9 @@
   int64_t h2 = tur_hamt_hash_ptr(k2);
   int64_t h3 = tur_hamt_hash_ptr(k3);
   void *m1 = tur_hamt_new();
-  void *ma = tur_hamt_set(m1, h1, k1, v1);
-  void *mb = tur_hamt_set(ma, h2, k2, v2);
-  void *m2 = tur_hamt_set(mb, h3, k3, v3);
+  void *ma = tur_hamt_set(m1, h1, (int64_t)(intptr_t)k1, (int64_t)(intptr_t)v1);
+  void *mb = tur_hamt_set(ma, h2, (int64_t)(intptr_t)k2, (int64_t)(intptr_t)v2);
+  void *m2 = tur_hamt_set(mb, h3, (int64_t)(intptr_t)k3, (int64_t)(intptr_t)v3);
   int64_t c = tur_hamt_count(m2);
   uint64_t iter_buf[32];
   memset(iter_buf, 0, sizeof(iter_buf));
@@ -22,7 +22,7 @@
   int n = 0;
   int found_k1 = 0, found_k2 = 0, found_k3 = 0;
   while (tur_hamt_iter_next(iter_buf, hash_buf, key_buf, val_buf)) {
-    void *k = *(void **)key_buf;
+    void *k = (void *)(intptr_t)*(int64_t *)key_buf;
     n++;
     if (k == k1) found_k1 = 1;
     if (k == k2) found_k2 = 1;

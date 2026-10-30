@@ -5,16 +5,16 @@
 
 (extern-c free [p :ptr] :void)
 
-(defn alloc-key [x :int] :ptr
+(defn alloc-key [x : int] : int
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
-  return (void *)p;
+  return (int64_t)(intptr_t)p;
   ```)
 
-(defn int-val [p :ptr] :int
+(defn int-val [p :int] :int
   ```c
-  return (int64_t)(*(int64_t *)p);
+  return (int64_t)(*(int64_t *)(intptr_t)p);
   ```)
 
 ;; Test: two maps built with same content return same values
@@ -22,11 +22,11 @@
   (let [k1 (alloc-key 1)]
     (let [v1 (alloc-key 100)]
       (let [m1 (hamt/new)]
-        (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
+        (let [m2 (hamt/set m1 (hamt/hash-ptr (:: k1 ptr<void>)) k1 v1)]
           (let [m3 (hamt/new)]
-            (let [m4 (hamt/set m3 (hamt/hash-ptr k1) k1 v1)]
-              (let [v-from-m2 (hamt/get m2 (hamt/hash-ptr k1) k1)]
-                (let [v-from-m4 (hamt/get m4 (hamt/hash-ptr k1) k1)]
+            (let [m4 (hamt/set m3 (hamt/hash-ptr (:: k1 ptr<void>)) k1 v1)]
+              (let [v-from-m2 (hamt/get m2 (hamt/hash-ptr (:: k1 ptr<void>)) k1)]
+                (let [v-from-m4 (hamt/get m4 (hamt/hash-ptr (:: k1 ptr<void>)) k1)]
                   (let [cnt2 (hamt/count m2)]
                     (let [cnt4 (hamt/count m4)]
                       (hamt/free m1)
@@ -39,8 +39,8 @@
                       ;; (ASan: heap-use-after-free in int-val; the corpus leak
                       ;; sweep of 2026-09-02 found it).
                       (let [same (= (int-val v-from-m2) (int-val v-from-m4))]
-                        (free k1)
-                        (free v1)
+                        (free (:: k1 :ptr))
+                        (free (:: v1 :ptr))
                         (if (and (= cnt2 1)
                                  (= cnt4 1)
                                  same)
@@ -53,13 +53,13 @@
     (let [k2 (alloc-key 2)]
       (let [v1 (alloc-key 100)]
         (let [m1 (hamt/new)]
-          (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
-            (let [has-k2 (hamt/has? m2 (hamt/hash-ptr k2) k2)]
+          (let [m2 (hamt/set m1 (hamt/hash-ptr (:: k1 ptr<void>)) k1 v1)]
+            (let [has-k2 (hamt/has? m2 (hamt/hash-ptr (:: k2 ptr<void>)) k2)]
               (hamt/free m1)
               (hamt/free m2)
-              (free k1)
-              (free k2)
-              (free v1)
+              (free (:: k1 :ptr))
+              (free (:: k2 :ptr))
+              (free (:: v1 :ptr))
               (if (not has-k2) 1 0))))))))
 
 (println (test-eq-content))

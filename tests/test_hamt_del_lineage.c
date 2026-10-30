@@ -24,7 +24,7 @@
 
 /* Keys/values are plain integer words carried through the void* slots, exactly
  * as stdlib set-add/set-remove do (h == x, val == 1). */
-static void *w(int64_t x) { return (void *)(intptr_t)x; }
+static int64_t w(int64_t x) { return x; }
 
 /* The report's minimal repro: add 1, add 2, remove 2, free all four maps.
  * `2` lands in its own level-0 slot as a sibling of `1`; deleting it collapses

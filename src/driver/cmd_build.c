@@ -82,6 +82,9 @@ static int cmd_build_once(const char *input, const char *out_path,
      * from the archive rather than being replicated into the preamble. */
     g_emit_for_link = true;
     g_emit_for_wasm = target && strcmp(target, "wasm") == 0;
+    /* wasm32: 4-byte pointers, which the emitter's layout decisions read
+     * (emit.h, g_emit_target_ptr_bytes). */
+    g_emit_target_ptr_bytes = g_emit_for_wasm ? 4 : 0;
     Buf csrc;
     buf_init(&csrc);
     /* used-attr-whole-program: this single-file/whole-program path inlines only
@@ -112,6 +115,7 @@ static int cmd_build_once(const char *input, const char *out_path,
     int rc = compile_to_c(input, &csrc, include_dirs, n_include_dirs,
                           reader_macro_paths, n_reader_macro_paths);
     g_emit_for_wasm = false;
+    g_emit_target_ptr_bytes = 0;
     g_split_lib_sink = NULL;
     g_split_imp_sink = NULL;
     if (n_used_mods > 0) used_modules_ctx_set(NULL);

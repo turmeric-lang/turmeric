@@ -60,7 +60,7 @@
 ;;; (from MapKey[A].mk-owned?), delegating to the ownership-aware HAMT ops.
 ;;; They are the thin C layer the public Hash/MapKey-dispatched set-add /
 ;;; set-remove / set-member? below delegate to.  The value slot is always the
-;;; sentinel (void*)1 (a Set is a Map to unit).  Element content-equality is
+;;; sentinel (int64_t)1 (a Set is a Map to unit).  Element content-equality is
 ;;; resolved by `keyeq` when two elements share a hash, so distinct pointers
 ;;; with equal content (e.g. two "hi" strings) are one member; the comparator
 ;;; is stamped on the resulting HAMT root so structural Eq[Set] recovers it.
@@ -71,8 +71,8 @@
 (defn set-add-eq-o [A] [s (Set A) h :int x :int keyeq owned :int] : (Set A)
   ```c
   struct { void *hamt; } *set = (void*)(intptr_t)s;
-  void *new_hamt = tur_hamt_set_eq_o(set->hamt, (uint64_t)h, (void*)(intptr_t)x,
-                                     (void*)1, (void*)(intptr_t)keyeq, (int64_t)owned);
+  void *new_hamt = tur_hamt_set_eq_o(set->hamt, (uint64_t)h, x,
+                                     (int64_t)1, (void*)(intptr_t)keyeq, (int64_t)owned);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
   return (__TUR_RET__)(intptr_t)r;
@@ -82,7 +82,7 @@
 (defn set-has-eq-o? [A] [s (Set A) h :int x :int keyeq owned :int] : bool
   ```c
   struct { void *hamt; } *set = (void*)(intptr_t)s;
-  return tur_hamt_has_eq_o(set->hamt, (uint64_t)h, (void*)(intptr_t)x,
+  return tur_hamt_has_eq_o(set->hamt, (uint64_t)h, x,
                            (void*)(intptr_t)keyeq, (int64_t)owned);
   ```)
 ;;; set-del-eq-o -- raw removal: explicit hash, boxed carrier element.
@@ -90,7 +90,7 @@
 (defn set-del-eq-o [A] [s (Set A) h :int x :int keyeq owned :int] : (Set A)
   ```c
   struct { void *hamt; } *set = (void*)(intptr_t)s;
-  void *new_hamt = tur_hamt_del_eq_o(set->hamt, (uint64_t)h, (void*)(intptr_t)x,
+  void *new_hamt = tur_hamt_del_eq_o(set->hamt, (uint64_t)h, x,
                                      (void*)(intptr_t)keyeq, (int64_t)owned);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
@@ -235,9 +235,9 @@
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
   tur_hamt_iter_init((void*)iter_buf, sb->hamt);
   uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
+  int64_t key_out = 0, val_out = 0;
   while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
-      result = tur_hamt_set_eq_o(result, hash_out, key_out, (void*)1,
+      result = tur_hamt_set_eq_o(result, hash_out, key_out, (int64_t)1,
                                  keyeq, (int64_t)0);
   }
   tur_hamt_iter_free((void*)iter_buf);
@@ -272,10 +272,10 @@
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
   tur_hamt_iter_init((void*)iter_buf, sa->hamt);
   uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
+  int64_t key_out = 0, val_out = 0;
   while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       if (tur_hamt_has_dynamic(sb->hamt, (int64_t)hash_out, key_out, keyeq)) {
-          result = tur_hamt_set_eq_o(result, hash_out, key_out, (void*)1,
+          result = tur_hamt_set_eq_o(result, hash_out, key_out, (int64_t)1,
                                      keyeq, (int64_t)0);
       }
   }
@@ -311,10 +311,10 @@
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
   tur_hamt_iter_init((void*)iter_buf, sa->hamt);
   uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
+  int64_t key_out = 0, val_out = 0;
   while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       if (!tur_hamt_has_dynamic(sb->hamt, (int64_t)hash_out, key_out, keyeq)) {
-          result = tur_hamt_set_eq_o(result, hash_out, key_out, (void*)1,
+          result = tur_hamt_set_eq_o(result, hash_out, key_out, (int64_t)1,
                                      keyeq, (int64_t)0);
       }
   }
@@ -352,7 +352,7 @@
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
   tur_hamt_iter_init((void*)iter_buf, sa->hamt);
   uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
+  int64_t key_out = 0, val_out = 0;
   while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       if (!tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
           tur_hamt_iter_free((void*)iter_buf);
@@ -394,17 +394,17 @@
   for (int __i = 0; __i < 32; __i++) iter_a[__i] = 0;
   tur_hamt_iter_init((void*)iter_a, sa->hamt);
   uint64_t hash_a;
-  void *key_a = NULL, *val_a = NULL;
+  int64_t key_a = 0, val_a = 0;
   while (tur_hamt_iter_next((void*)iter_a, &hash_a, &key_a, &val_a)) {
       bool found = false;
       uint64_t iter_b[32];
       for (int __j = 0; __j < 32; __j++) iter_b[__j] = 0;
       tur_hamt_iter_init((void*)iter_b, sb->hamt);
       uint64_t hash_b;
-      void *key_b = NULL, *val_b = NULL;
+      int64_t key_b = 0, val_b = 0;
       while (tur_hamt_iter_next((void*)iter_b, &hash_b, &key_b, &val_b)) {
           if (((int64_t(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)cmp_fn)[0])(
-                (void*)(intptr_t)cmp_fn, (int64_t)(intptr_t)key_a, (int64_t)(intptr_t)key_b)) {
+                (void*)(intptr_t)cmp_fn, key_a, key_b)) {
               found = true;
               break;
           }

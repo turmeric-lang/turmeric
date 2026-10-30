@@ -278,6 +278,13 @@ As built in P3 (2026-10-28). The design originally added the engine to the
   `MIR_gen*`, and Emscripten declares ucontext without defining it, so
   `src/web/wasm_jit_stubs.c` stubbed both to abort loudly. The fork defines
   the `MIR_gen*` ones since mir#16 (section 6); ucontext stays here.
+- Since 2026-10-30 the module compiles with `-fwasm-exceptions` and links
+  `-sSUPPORT_LONGJMP=wasm`: `setjmp`/`longjmp` on wasm exception handling,
+  not Emscripten's JS-based default, because `eval`'s own `setjmp` (P5,
+  mir#17) otherwise puts a JS `invoke_*` frame under every interpreted call
+  ([wasm-jit-recursion-depth-is-about-300](../reported/wasm-jit-recursion-depth-is-about-300.md)).
+  Asyncify cannot be added to this module; JSPI can
+  (`tools/wasm-jit-spike/jspi/`).
 - `jit_engine.c`'s `__EMSCRIPTEN__` arm stays small. It has no `dlopen`
   autolink (a marker is a link error that names the library), runs `main` on
   the calling thread, refuses thread creation (`JIT_WASM_REFUSED`), owns the
@@ -286,6 +293,13 @@ As built in P3 (2026-10-28). The design originally added the engine to the
 - `turi_wasm_jit_run(src, args)` (`src/web/wasm_jit_glue.c`) answers with the
   engine line as JSON:
   `{"engine":"compiled"|"interpreted"|"error","exit":N,"reason":...}`.
+  Its `import`s resolve against the stdlib and the directories the page has
+  added with `turi_wasm_add_include_dir(dir)` (`src/web/wasm_glue.c`, both
+  modules; since 2026-10-30, raylib-web-playground-plan prerequisite 9): a
+  spice's `src/` mounted in the module's file system, which both the compile
+  and the interpreter fallback then search as `tur run -I` would.
+  `tools/wasm-jit/run.js -I DIR` is the node spelling;
+  `tests/check-wasm-jit-imports.sh` checks it.
 - Size, measured: 9.54 MB (2.94 MB gzipped) at P3. Of that, 3.67 MB was code
   and 5.86 MB data, and 4.30 MB of the data was the embedded stdlib. Since P4
   the stdlib is a package both modules share (5.11), and the module is
@@ -482,7 +496,12 @@ interpreter recursion folds onto a heap work-stack, and `tur interpret`
 runs a million-deep non-tail recursion natively where the MIR interpreter
 overflows even on the JIT's 1 GiB entry thread (its frame is over 1 KiB).
 So switching the page's engine from Interpret to Compile trades
-memory-bounded depth for ~1,700 frames, which the toggle must say. Mutual
+memory-bounded depth for ~1,700 frames, which the toggle must say. (Measured
+again 2026-10-29 on Turmeric code since P5: about 300 calls in Chromium's
+worker, 590 under node, because `eval`'s `setjmp` (mir#17) puts a JS
+`invoke_*` frame under every call; linking with wasm-native `setjmp`
+(`-fwasm-exceptions -sSUPPORT_LONGJMP=wasm`, the link since 2026-10-30) gives 700 and 1,500 --
+[wasm-jit-recursion-depth-is-about-300](../reported/wasm-jit-recursion-depth-is-about-300.md).) Mutual
 tail calls the T5 fusion did not collapse do not count against it: the
 emitter's `TUR_MUSTTAIL` is a MIR tail call, which the interpreter runs in the
 caller's activation
@@ -1081,7 +1100,7 @@ What is left in the baseline, by reason (a fixture counts once):
 | Family | Fixtures | Owner |
 |---|---|---|
 | The program starts threads (refused by design) | 190 fell back right; 70 fell back and the interpreter got it wrong too | stays a fallback (risk 7) |
-| Wrong answer on the compiled path | 56 | shapes 2-3 of the ILP32 report (HAMT/vec `void *` values, wrong-width `extern-c`); P0's continuations family, wrong under `TUR_JIT_GEN=interp` natively too (`direct-shift-outside-lexical-reset`, `shift0-receiver-runs-outside-its-reset`); [wasm-jit-comparator-result-varies-between-runs](../reported/wasm-jit-comparator-result-varies-between-runs.md) |
+| Wrong answer on the compiled path | 56 | shapes 2-3 of the ILP32 report (HAMT/vec `void *` values, wrong-width `extern-c`); P0's continuations family, wrong under `TUR_JIT_GEN=interp` natively too (`direct-shift-outside-lexical-reset`, `shift0-receiver-runs-outside-its-reset`); [wasm-jit-comparator-result-varies-between-runs](../archive/wasm-jit-comparator-result-varies-between-runs.md) (resolved 2026-10-29: ILP32 shape 4, `list-tail` reading a cell's padding) |
 | Asyncify: `emscripten_fiber_swap` | 49 | unowned; the stubs remove one JS frame per runtime call, the trampoline's interp entries remain |
 | Other traps: `Aborted()` (26), signature mismatch (16), `exit` reaching JS (12), JS stack (8, deep recursion such as `escape-deep-capture`), out-of-bounds (2), `unwind` (2) | 66 | unsorted |
 | Imports with no host (`fork`, `socket`, `popen`, ...) | 13 | stay fallbacks |

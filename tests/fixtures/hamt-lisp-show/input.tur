@@ -10,11 +10,11 @@
   free((void *)s);
   ```)
 
-(defn alloc-key [x : int] : ptr
+(defn alloc-key [x : int] : int
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
-  return (void *)p;
+  return (int64_t)(intptr_t)p;
   ```)
 
 ;; Test: show empty map
@@ -31,13 +31,13 @@
   (let [k1  (alloc-key 1)
         v1  (alloc-key 100)
         m1  (hamt/new)
-        m2  (hamt/set m1 (hamt/hash-ptr k1) k1 v1)
+        m2  (hamt/set m1 (hamt/hash-ptr (:: k1 ptr<void>)) k1 v1)
         s   (hamt/show m2)
         len (strlen s)]
     (hamt/free m1)
     (hamt/free m2)
-    (free k1)
-    (free v1)
+    (free (:: k1 :ptr))
+    (free (:: v1 :ptr))
     (cstr-free s)
     (if (> len 2) 1 0)))
 

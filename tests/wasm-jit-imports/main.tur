@@ -1,0 +1,9 @@
+;; The program tests/check-wasm-jit-imports.sh runs: imports a module that is
+;; not beside it and not in the stdlib, only under the -I directory.
+(defmodule main-mod
+  (import arcade/greet :refer [greeting scaled])
+
+  (defn main [] : int
+    (println (greeting))
+    (println (scaled 7.1))
+    0))

@@ -28,7 +28,7 @@
 
 #define K 3000                 /* key universe: keys are 1..K */
 
-static void *w(int64_t x) { return (void *)(intptr_t)x; }
+static int64_t w(int64_t x) { return x; }
 
 static int failures = 0;
 #define CHECK(cond, ...) do { if (!(cond)) { fprintf(stderr, "FAIL: " __VA_ARGS__); fputc('\n', stderr); failures++; } } while (0)
@@ -55,9 +55,9 @@ static void check_map(const char *what, Hamt *h, const Model *m, hash_fn hf) {
         bool has = tur_hamt_has(h, hf(k), w(k));
         CHECK(has == (m->v[k] != 0), "%s: has(%lld) = %d, model %lld", what, (long long)k, has, (long long)m->v[k]);
         if (has) {
-            void *got = tur_hamt_get(h, hf(k), w(k));
+            int64_t got = tur_hamt_get(h, hf(k), w(k));
             CHECK(got == w(m->v[k]), "%s: get(%lld) = %lld, model %lld", what, (long long)k,
-                  (long long)(intptr_t)got, (long long)m->v[k]);
+                  (long long)got, (long long)m->v[k]);
         }
         if (failures > 20) { fprintf(stderr, "too many failures\n"); exit(1); }
     }

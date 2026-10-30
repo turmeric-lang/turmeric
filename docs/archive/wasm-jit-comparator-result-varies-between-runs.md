@@ -1,5 +1,19 @@
 # On the browser JIT, a list comparison's answer varies between runs in one module
 
+> **RESOLVED 2026-10-29.** The runs differed because the cells did. A
+> `(Cons A)` cell's `tail` is a 4-byte pointer on wasm32 followed by 4 bytes of
+> padding, and `stdlib/list.tur`'s `list-tail` read both into one `int64_t`;
+> whatever a reused region or malloc block left in the padding decided whether
+> a nil tail read as nil. That is shape 4 of
+> [ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md).
+> `list-tail` now reads the tail as a pointer and widens it, and
+> `typed/list-concat` prints `true true true 5` on 8 of 8 runs in one module
+> (`run.js --repeat 8`), where it alternated before.
+> `eq-carrier-capturing-comparator` never varied: it is wrong on every run, in
+> `vec-eq?` (`true` expected, `false` printed), which is shape 2 of the same
+> report (vector values are `void *`). It stays in `tests/jit-wasm-baseline.txt`
+> under that report.
+
 **Severity:** medium (browser JIT only). Two corpus fixtures print `false`
 where they expect `true`, on some runs and not others, with no diagnostic.
 Native `tur jit` (generator and `TUR_JIT_GEN=interp`) is right every time.
