@@ -648,7 +648,7 @@ def k_mask_logic(op):
         else:
             c = "&" if op == "and" else "|"
             vexpr = "(tsm)((ua.v != 0) %s (ub.v != 0))" % c
-            lexpr = "(a.l%%d != 0) %s (b.l%%d != 0)" % c
+            lexpr = "(a.l%%d != 0 %s b.l%%d != 0)" % (c * 2)
             params = "ua = {a}, ub = {b}, ur"
         vec = [mask_typedef(m), "union { %s s; tsm v; } %s;" % (cstruct(m), params),
                "ur.v = %s;" % vexpr, "return ur.s;"]
@@ -666,8 +666,8 @@ def n_mask_logic(op):
             if op == "not":
                 e = "lane_i(a[0], %d) == 0" % k
             else:
-                e = "(lane_i(a[0], %d) != 0) %s (lane_i(a[1], %d) != 0)" % (
-                    k, "&" if op == "and" else "|", k)
+                e = "(lane_i(a[0], %d) != 0 %s lane_i(a[1], %d) != 0)" % (
+                    k, "&&" if op == "and" else "||", k)
             out.append("f[%d] = turi_int(%s ? -1 : 0);" % (k, e))
         return out + [mk_ret(m)]
     return body
@@ -677,7 +677,7 @@ def k_mask_reduce(op):
     def body(m):
         if op == "any":
             return "return (" + " | ".join("a.l%d" % k for k in lanes(m)) + ") != 0;"
-        return "return " + " & ".join("(a.l%d != 0)" % k for k in lanes(m)) + ";"
+        return "return " + " && ".join("a.l%d != 0" % k for k in lanes(m)) + ";"
     return body
 
 
