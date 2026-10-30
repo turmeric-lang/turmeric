@@ -2,15 +2,15 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.73.0] -- 2026-10-30
 
 ### Changed
 
-- **The vector types need no flag.** The `simd` experiment graduated:
-  `(load "stdlib/simd.tur")` gives `F64x2` ... `U8x16`, their masks, select,
-  shuffle and conversions without `--enable=simd`. A leftover
-  `--enable=simd`, or a spice's `:experiments ["simd"]`, is accepted with a
-  TUR-W0063 warning until the name ages out at 0.74.0.
+- **The vector types need no flag.** The `simd` experiment graduated: `(load
+  "stdlib/simd.tur")` gives `F64x2` ... `U8x16`, their masks, select, shuffle
+  and conversions without `--enable=simd`. A leftover `--enable=simd`, or a
+  spice's `:experiments ["simd"]`, is accepted with a TUR-W0063 warning until
+  the name ages out at 0.74.0.
 
 ## [0.72.1] -- 2026-10-30
 
