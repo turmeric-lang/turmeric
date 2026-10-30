@@ -427,7 +427,6 @@ extern bool g_opt_script_deps;  /* script-spice-deps-plan: --enable=script-deps 
 extern bool g_opt_quote_data;   /* quote-list-data-plan: --enable=quote-data */
 extern bool g_opt_refined_fn_types; /* refined-function-types-plan: --enable=refined-fn-types */
 extern bool g_opt_compiled_repl;    /* aot-compiled-repl-plan C2: --enable=compiled-repl */
-extern bool g_opt_simd;            /* simd-and-vectorization-plan S1: --enable=simd */
 /* quote-list-data-plan: load stdlib/datum.tur in THIS compile -- the flag is on
  * and the entry program quotes a list (tur_quote_data_wanted_forms / _source),
  * or the entry point loads it eagerly (project mode, the REPL).  Recomputed per

@@ -6,18 +6,19 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
-- **16-byte vector types, behind `--enable=simd`.** `(load
-  "stdlib/simd.tur")` gives `F64x2`, `F32x4`, `I64x2`, `I32x4`, `U16x8` and
-  `U8x16`: by-value structs with one field per lane, with `splat`, `lane`,
+- **16-byte vector types.** `(load "stdlib/simd.tur")` gives `F64x2`,
+  `F32x4`, `I64x2`, `I32x4`, `U16x8` and `U8x16`: by-value structs with one field per lane, with `splat`, `lane`,
   `load` / `store!` from the typed numeric arrays (and unchecked forms),
   lanewise `add` `sub` `mul` `div` `neg` `min` `max`, `sqrt` / `abs`, a
   fixed-order `hsum`, byte widen / narrow and a sixteen-bit shift, plus a
   `Num` instance so `{a + b}` is the lanewise sum. Compiled, each operation
   is one GCC/Clang vector instruction; under `tur jit` a lane loop; under the
   interpreter a native -- with the same bits on all three. A byte-image
-  blend written on them runs as fast as hand-written vector C.
+  blend written on them runs as fast as hand-written vector C. No flag: the
+  `simd` experiment they were built behind graduated before this release, and
+  a leftover `--enable=simd` is accepted with a TUR-W0063 warning.
 
-- **Vector comparisons, masks, select, shuffle and conversions (`--enable=simd`).**
+- **Vector comparisons, masks, select, shuffle and conversions.**
   `P-eq` / `-lt` / `-le` / `-gt` / `-ge` return a mask (`M64x2`, `M32x4`,
   `M16x8`, `M8x16`: -1 where the comparison held, 0 where not); `P-select`
   picks each lane from one of two vectors by a mask without a branch; masks

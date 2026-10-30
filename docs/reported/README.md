@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found graduating simd-and-vectorization-plan S1 (filed 2026-10-30)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [simd-loop-carried-vector-split-by-clang](simd-loop-carried-vector-split-by-clang.md) | low (performance) | Under clang a `stdlib/simd.tur` vector carried across loop iterations is kept as the two halves the x86-64 ABI passes a 16-byte float struct in, joined and split every iteration; a latency-bound recurrence (tur-simd's `F32x4` biquad) runs 1.35x slower than its vector C, gcc is unaffected |
+
 ## Found building the tur-simd spice, plan phase S0 (filed 2026-10-29)
 
 | Report | Severity | One line |

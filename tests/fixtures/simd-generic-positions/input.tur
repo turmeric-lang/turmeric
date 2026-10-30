@@ -1,5 +1,5 @@
 ;; simd-generic-positions: a vector type (simd-and-vectorization-plan S1,
-;; --enable=simd) in each generic position, on every engine.  A generic
+;; graduated) in each generic position, on every engine.  A generic
 ;; function -- constrained or not -- and a generic ADT are specialized per
 ;; type and take the vector by value; a Vec element is boxed, as every
 ;; multi-word element is, and the Vec frees the boxes.  None is refused.

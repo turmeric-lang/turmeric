@@ -18,18 +18,18 @@ Unlike `-X`, which conflated "in development", "stable but opt-in", and
 every flag carries a hard expiry by which it must graduate or be removed.
 
 > **The registry is small by design.** Run `tur experiments` for the
-> authoritative current set (at the time of writing it holds seven rows:
+> authoritative current set (at the time of writing it holds six rows:
 > `reflected-measures` -- `^reflect` on a defn admits a total measure's
 > defining equation to the refinement solver, see
 > [reflected-measures-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/reflected-measures-plan.md)
 > and the refinement guide's "Reflected measures" section -- plus
 > `discontinue`, `quote-data`, `script-deps`, `refined-fn-types`, which
 > lets a `(fn ...)` type carry refinements, `compiled-repl`, which runs
-> each `tur repl` turn as a compiled program (aot-compiled-repl-plan C2), and
-> `simd`, which allows `(load "stdlib/simd.tur")` and its 16-byte vector types
-> (simd-and-vectorization-plan S1).
+> each `tur repl` turn as a compiled program (aot-compiled-repl-plan C2).
 > `r7rs-segmented-stack` graduated on 2026-10-25 and is always on, see the
-> r7rs guide's "Recursion depth" notes); this guide describes how the
+> r7rs guide's "Recursion depth" notes; `simd` graduated on 2026-10-30, so
+> `(load "stdlib/simd.tur")` needs no flag, see
+> simd-and-vectorization-plan S1); this guide describes how the
 > mechanism behaves for whatever rows are present.
 
 ## Opting in
@@ -92,8 +92,9 @@ after graduation the name ages out of `GRADUATED[]` and goes back to being a
 hard `TUR-E0310` -- so treat `TUR-W0063` as a deprecation notice with a
 deadline and delete the flag when you see it. Twelve names aged out this way at
 0.37.0 and 0.38.0, and ten more (`jit-ffi` through `repl-jit-inline-c`) at
-0.71.0. The one shim live now is `r7rs-segmented-stack`, which graduated in
-the 0.71 line and becomes eligible at 0.72.0. The same rule and the same
+0.71.0. Two shims are live now: `r7rs-segmented-stack`, which graduated in
+the 0.71 line and becomes eligible at 0.72.0, and `simd`, which graduated in
+the 0.72 line and becomes eligible at 0.74.0. The same rule and the same
 one-line window apply to a graduated `#lang` layer token (`TUR-W0064`, then
 `TUR-E0330`).
 

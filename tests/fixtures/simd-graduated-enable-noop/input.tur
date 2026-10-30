@@ -1,0 +1,15 @@
+;; simd-graduated-enable-noop: `simd` graduated 2026-10-30, so
+;; (load "stdlib/simd.tur") needs no flag (the other simd-* fixtures carry
+;; none), and the name moved to GRADUATED[]: a lingering `--enable=simd` --
+;; from a build.tur, an experiments.tur or the command line, as here -- is
+;; accepted as a no-op with TUR-W0063 instead of the hard TUR-E0310 an
+;; unknown name gets.  This pins that migration window; when "simd" ages out
+;; of GRADUATED[] (eligible at 0.74.0) this fixture moves to errors/ and
+;; expects TUR-E0310, as errors/experiment-retired-name does.
+(load "stdlib/simd.tur")
+
+(defn main [] : int
+  (let [v {(F64x2 7.1 3.25) + (f64x2-splat 1.5)}]
+    (println (.l0 v))
+    (println (f64x2-hsum v))
+    0))

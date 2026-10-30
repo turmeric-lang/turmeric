@@ -1,6 +1,6 @@
 ;; simd-masks-shuffle-convert: the comparisons, masks, select, shuffle and
 ;; conversions of stdlib/simd.tur (simd-and-vectorization-plan S1,
-;; --enable=simd).  Floats print as bit patterns so cc (vector instructions),
+;; graduated).  Floats print as bit patterns so cc (vector instructions),
 ;; `tur jit` (lane loops) and turi (natives) must agree to the last bit; the
 ;; inputs sit on the edges: NaN lanes, unsigned lanes above the signed range,
 ;; float lanes outside int32's range, shuffle indices that wrap.
