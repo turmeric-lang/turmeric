@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>arcade smoke screen</title>
+<style>html, body { margin: 0; background: #000; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="canvas" width="480" height="270" tabindex="0"></canvas>
+<script>
+// One program's run on the arcade module, in this iframe's main thread --
+// the screen pane's shape (turmeric-arcade web/screen.js) cut to what the
+// smoke test asserts.  The parent sends {type:'run', src}; this frame posts
+// {type:'line', text} for every stdout/stderr line, {type:'boot', ...} and
+// {type:'result', answer}.  A run-main-loop program leaves main by `unwind`,
+// reported as {engine:'compiled', mainLoop:true}.
+const post = (m) => window.parent.postMessage(m, location.origin);
+const line = (text) => post({ type: 'line', text: String(text) });
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('could not load ' + src));
+    document.head.appendChild(s);
+  });
+}
+
+async function boot() {
+  const t0 = performance.now();
+  await loadScript('/engine/turmeric-jit.js');
+  const m = await window.TurmericJitModule({
+    canvas: document.getElementById('canvas'),
+    locateFile: (p) => '/engine/' + p,
+    print: line,
+    printErr: line,
+  });
+  if (m._turi_wasm_init() !== 0) throw new Error('turi_wasm_init failed');
+  // The arcade's interpreter has no raylib: a refusal is the answer
+  // (raylib-web-playground-plan J3 e).
+  m._turi_wasm_jit_set_fallback(0);
+  const spices = [];
+  for (const name of m.FS.readdir('/spices')) {
+    if (name === '.' || name === '..') continue;
+    if (m.ccall('turi_wasm_add_include_dir', 'number', ['string'], ['/spices/' + name + '/src']) > 0)
+      spices.push(name);
+  }
+  return { m, info: { jspi: 'Suspending' in WebAssembly, spices, ms: performance.now() - t0 } };
+}
+
+window.addEventListener('message', async (e) => {
+  if (e.origin !== location.origin || !e.data || e.data.type !== 'run') return;
+  let m;
+  try {
+    const b = await boot();
+    m = b.m;
+    post({ type: 'boot', ok: true, ...b.info });
+  } catch (err) {
+    post({ type: 'boot', ok: false, error: String(err && err.message || err) });
+    return;
+  }
+  const put = (s) => { const n = m.lengthBytesUTF8(s) + 1, p = m._malloc(n); m.stringToUTF8(s, p, n); return p; };
+  const src = put(String(e.data.src)), args = put('');
+  let answer;
+  try {
+    const r = await m._turi_wasm_jit_run(src, args);
+    answer = JSON.parse(m.UTF8ToString(r));
+    m._turi_wasm_free_string(r);
+  } catch (err) {
+    answer = (err === 'unwind' || (err && err.message === 'unwind'))
+      ? { engine: 'compiled', exit: 0, mainLoop: true }
+      : { engine: 'error', exit: 1, trapped: true, reason: String(err && err.message || err) };
+  }
+  post({ type: 'result', answer });
+});
+post({ type: 'ready' });
+</script>
+</body>
+</html>

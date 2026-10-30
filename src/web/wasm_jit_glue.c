@@ -20,6 +20,9 @@
  *   {"engine":"error","exit":1,"reason":"..."}
  *       the program does not compile; the diagnostics went to stderr, and
  *       the interpreter is not tried, since it would report the same thing
+ *   {"engine":"refused","exit":1,"reason":"..."}
+ *       the engine could not take the program and the fallback is off
+ *       (turi_wasm_jit_set_fallback(0)), so nothing ran; reason says why
  *
  * The program's own output goes where every other run's does: stdout and
  * stderr, which the page receives through Module.print / printErr.
@@ -96,9 +99,30 @@ static char *result_json(const char *engine, int exit_code, const char *reason,
     return b.data;   /* malloc'd; the caller frees with turi_wasm_free_string */
 }
 
+/* Whether an engine refusal falls back to the interpreter.  On by default,
+ * for Try Turmeric's Compile engine.  The raylib playground turns it off
+ * (raylib-web-playground-plan J3 e): its programs call into the raylib the
+ * module links, which the tree-walker has no natives for, so a fallback
+ * would fail later and further from the reason than the refusal does. */
+static bool g_jit_fallback = true;
+
+/* turi_wasm_jit_set_fallback: on (nonzero) or off; returns the old setting. */
+TUR_WASM_EXPORT
+int turi_wasm_jit_set_fallback(int on) {
+    bool was = g_jit_fallback;
+    g_jit_fallback = on != 0;
+    return was ? 1 : 0;
+}
+
 /* The fallback: the interpreter runs the program, as `tur --interpret`
- * would (main included), on a fresh environment. */
+ * would (main included), on a fresh environment.  With the fallback off,
+ * the refusal is the answer. */
 static char *run_interpreted(const char *path, const char *reason) {
+    if (!g_jit_fallback) {
+        fprintf(stderr, "tur: the page's compiler cannot run this program (%s)\n", reason);
+        fflush(stderr);
+        return result_json("refused", 1, reason, 0, 0, 0);
+    }
     fprintf(stderr, "tur: the page's compiler cannot run this program (%s); "
                     "running it on the interpreter instead\n", reason);
     fflush(stderr);

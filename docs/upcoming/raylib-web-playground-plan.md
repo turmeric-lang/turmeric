@@ -1,7 +1,10 @@
 # Plan: a raylib playground in the browser ("Try Turmeric with a screen")
 
-> **Status:** P0 go on J (2026-10-30); **P1 next** (the arcade module as a
-> CMake target and a CI job, [section 7](#p1----the-arcade-module-this-repo)).
+> **Status:** P0 go on J (2026-10-30); **P1 in progress**
+> ([section 7](#p1----the-arcade-module-this-repo)): the arcade module is a
+> CMake target (`tur_wasm_arcade`) with a CI smoke test, and the fallback
+> switch (J3 e) is in; spice packages (J2), `life.tur`'s number and the
+> examples' move are left.
 > Every decision this plan asked for is made: **J** -- the browser JIT engine
 > on the page with raylib linked in, compiling the raylib spice's inline C from
 > source ([section 3](#3-the-central-decision-how-does-typed-code-reach-raylib));
@@ -19,8 +22,10 @@
 >   [results](#p0-results-2026-10-30-day-one-go-on-j)): the quick-start
 >   program draws through struct-by-value calls, callback mode survives
 >   `main`, and the blocking loop yields through raylib's own sleep under
->   JSPI. The arcade module is still a spike script,
->   `tools/wasm-jit-spike/arcade/build.sh`, which P1 makes a target.
+>   JSPI;
+> - P1's first part (2026-10-30): `tools/wasm-jit/arcade/` (the raylib web
+>   archive, the module, a smoke test), the `tur_wasm_arcade` target and the
+>   `wasm-arcade` CI job, and `turi_wasm_jit_set_fallback`.
 >
 > Of the [prerequisites](#prerequisites-before-p0), 1-5, 8-10, 12 and 13 are
 > closed or spiked; 6 and 7 (c2mir's per-call vararg buffer, a tail call
@@ -603,9 +608,9 @@ later, and where it is tracked. Nothing here needs the arcade repo to exist.
 | 5 | **Close ILP32 shapes 2 and 3** ([ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md)): `tur_hamt_get`'s `void *` values (a double stored in a map comes back denormal) and `stdlib/hamt.tur`'s `tur_hamt_count` declared at the wrong width, plus the `typed/vec-*` fixtures; and shape 4, found 2026-10-29 while doing row 2: `stdlib/list.tur` reads a `(Cons A)` cell as `{int64_t head; int64_t tail}`, but on wasm32 its `tail` is a 4-byte pointer followed by padding, so a nil tail can read as non-nil and the walk reads address 0. Shape 1 (the DK word) is done; shape 3 is done (2026-10-30: `tur_hamt_count`, the `size_t` vector-header views, and `check-extern-c-widths.py` to keep declarations honest -- `vec-eq?` is right on wasm now); shape 2 is done (2026-10-30: the HAMT's keys and values are `int64_t` words end to end, so a map of floats is right on wasm, on both engines); shape 4's stdlib half is fixed (2026-10-29) and its emitter half too (2026-10-30: on a 4-byte-pointer target a parametric ADT's layouts keep 8-byte slots -- narrow members padded to the word, cells zeroed at construction -- so the erased base, each monomorph and a carrier-built rest-list cell agree as they do on LP64; `list-count` of five ints is 5 on the module and `list-of` of heap ADTs counts right too; native emission unchanged). What is left in the report is the untraced Option/Result box line. | P1 for correctness, P3 for the examples | `life.tur` is a `vec` of 0/1 ints, which survive; but any program that keeps a float (a position, a velocity) in a `vec` or a map is silently wrong on the page, and P3 has to audit each example for that shape. The same defect is in `tur build --target wasm`. | the report |
 | 6 | **Variadic calls inside a loop** ([c2mir-wasm-vararg-buffer-allocas-per-call](../reported/c2mir-wasm-vararg-buffer-allocas-per-call.md)): c2mir allocas a variadic call's buffer at the call site and keeps it until the function returns, 16 B an iteration. | P3 (examples); know it in P2 | Only a function that never returns accumulates, so the callback style (the frame function returns every frame) and any helper `defn` are safe. The exposure is the blocking style with a `println` written inline in `main`'s own loop: once a frame is 60 a second (a million takes over four hours), but inside an inline per-entity loop of 200 entities it is 12,000 a second and overflows 16 MiB in about 80 seconds, with signs of memory corruption. Fix in the fork, or have the emitter hoist the buffer. | the report |
 | 7 | **Tail calls through a frame that allocated** ([wasm-mir-interp-tail-call-keeps-allocas](../reported/wasm-mir-interp-tail-call-keeps-allocas.md)): ~350 B per call, a trap after about 24,000 calls, counting only tail calls from a function with an address-taken or aggregate local. Self tail calls are loops and unaffected. | P3 (examples) | Only a chain that never returns accumulates, so it is the blocking style written as mutual tail recursion *per frame* (`tick` -> `render` -> `tick`, two calls a frame: a trap after about 3 minutes at 60 fps). State changes alone (menu -> play) are too rare to matter, and the callback style returns to the browser every frame. Keep the examples off the shape until it is fixed. | the report |
-| 8 | **A main-thread entry for the JIT module.** `jit-worker.js` and `web/jit-client.js` assume a worker; the glue's `main` runs to completion on the calling thread; the module instance is retired on a trap. The iframe needs: instantiate on the main thread, keep the context after `main` returns (J3), and a trap handler that tells a `set_main_loop` unwind from a real trap. **Spiked 2026-10-30 (P0):** the arcade's `screen.js` boots the module on the iframe's main thread with the canvas, awaits the JSPI Promise, and takes Emscripten's `unwind` as "main loop running" -- a `run-main-loop` program's closure is then called every frame by the browser with the MIR context intact, and a stack overflow or a trap is still reported as one. What is left for P1 (J3 e): the glue still falls back to the tree-walker when the engine refuses a program, and that interpreter has no raylib, so the arcade needs the refusal reported instead. | P0 (spike), P1 | raylib's GLFW port needs the canvas. | J3 |
+| 8 | **A main-thread entry for the JIT module.** `jit-worker.js` and `web/jit-client.js` assume a worker; the glue's `main` runs to completion on the calling thread; the module instance is retired on a trap. The iframe needs: instantiate on the main thread, keep the context after `main` returns (J3), and a trap handler that tells a `set_main_loop` unwind from a real trap. **Spiked 2026-10-30 (P0):** the arcade's `screen.js` boots the module on the iframe's main thread with the canvas, awaits the JSPI Promise, and takes Emscripten's `unwind` as "main loop running" -- a `run-main-loop` program's closure is then called every frame by the browser with the MIR context intact, and a stack overflow or a trap is still reported as one. J3 e is done too (2026-10-30, P1): `turi_wasm_jit_set_fallback(0)` makes a refusal the answer (`{"engine":"refused", ...}`, its reason on stderr) instead of a tree-walker run without raylib; the arcade module's smoke test checks it. | P0 (spike), P1 | raylib's GLFW port needs the canvas. | J3 |
 | 9 | **Spice roots on the compile path.** `turi_wasm_jit_run` compiled with no include or spice directories. **Done 2026-10-30:** `turi_wasm_add_include_dir(dir)` / `turi_wasm_clear_include_dirs()` (`src/web/wasm_glue.c`, exported from both modules) hold a process-wide list of module search directories -- the `src/` of each spice the page has mounted, e.g. `/spices/raylib/src` -- that every interpreter environment the glue creates borrows and that `turi_wasm_jit_run` hands `compile_to_c`, so `(import raylib/core)` resolves on both engines as it does under `tur run -I`. `tools/wasm-jit/run.js -I DIR` copies a host tree in and adds it; `tests/check-wasm-jit-imports.sh` (in the web CI job) runs a program whose module lives only under `-I` and checks the engine compiled it, inline C included. The page's part -- mounting a spice's package and calling the export -- is J2's; the `defscript` header resolving against the mounted set is still open there. | P1 | `(import raylib/core)` cannot resolve without it; this is also what `defscript` needs. | J2 |
-| 10 | **The import table for a non-runtime library**, including struct-by-value prototypes and `raylib.h` in `/sysinclude`. **Done 2026-10-30 (P0, J0/J1):** `build-module.sh` takes `TUR_WASM_JIT_EXTRA_OBJECTS` (objects and archives; every archive member joins the `--wasm-objects` list, so its functions get rows at their wasm signatures and exact-signature stubs -- no header parsing, and struct by value needs nothing special because an aggregate is an i32 address on both sides), `TUR_WASM_JIT_EXTRA_HEADERS` (into `/sysinclude`) and `TUR_WASM_JIT_EXTRA_LINK`. `tools/wasm-jit-spike/arcade/build.sh` is the arcade module. raylib's whole surface is 2,290 typed rows; `DrawText` with a `Color` by value draws; a program compiles with no `-l` marker because there is no `build.tur` on the page, and the library in the module is simply found. | P0 (spike by hand), P1 | The first import set that is not the runtime or libc. | J1 |
+| 10 | **The import table for a non-runtime library**, including struct-by-value prototypes and `raylib.h` in `/sysinclude`. **Done 2026-10-30 (P0, J0/J1):** `build-module.sh` takes `TUR_WASM_JIT_EXTRA_OBJECTS` (objects and archives; every archive member joins the `--wasm-objects` list, so its functions get rows at their wasm signatures and exact-signature stubs -- no header parsing, and struct by value needs nothing special because an aggregate is an i32 address on both sides), `TUR_WASM_JIT_EXTRA_HEADERS` (into `/sysinclude`) and `TUR_WASM_JIT_EXTRA_LINK`. The spike's arcade build is `tools/wasm-jit/arcade/build.sh` since P1. raylib's whole surface is 2,290 typed rows; `DrawText` with a `Color` by value draws; a program compiles with no `-l` marker because there is no `build.tur` on the page, and the library in the module is simply found. | P0 (spike by hand), P1 | The first import set that is not the runtime or libc. | J1 |
 | 11 | **`:web :supported` stubs** in turmeric-spices (wasm-spices-plan W0) for the Spices menu, and a decision about assets (shapes and text only, or a small package). | P2 / P3 | The picker reads them. | B0 |
 | 12 | **Emscripten pin.** CI's "Set up Emscripten" step pins 6.0.10; wasm-jit-plan's corpus numbers were measured with 6.0.13. **Settled 2026-10-30:** everything current is 6.0.10 -- CI, the arcade repo's `scripts/engine.lock`, and the emsdk the JSPI measurements (prerequisite 3) and the arcade scaffold were built with -- so a P0 number is comparable to CI as it stands. Only the older corpus figures are 6.0.13; a bump to a newer SDK is a separate decision, taken in `ci.yml` and `engine.lock` together. | nothing (comparability only) | wasm-jit-plan risk 6. | `.github/workflows/ci.yml` |
 | 13 | **Headless WebGL2 in CI.** Confirm the Playwright Chromium CI uses gives the arcade module a WebGL2 context (software GL is fine); the smoke test and every example's "first frame drawn" check depend on it. **Confirmed 2026-10-30:** Playwright's headless Chromium 153 (Chrome for Testing, as `npx playwright install chromium` provides it) returns a `WebGL 2.0 (OpenGL ES 3.0 Chromium)` context on SwiftShader (ANGLE over Vulkan, `MAX_TEXTURE_SIZE` 8192) with no flags at all, and the same with `--use-gl=angle --use-angle=swiftshader`; WebGL 1 is not offered, which raylib's GLES2 path would want, so the module is built for GLES3/WebGL2. Measured in this container, not on a GitHub runner; the arcade's first-frame test is what confirms it there. | P1 | wasm-spices-plan section 12 measured 60 fps in Chromium, not necessarily headless-on-CI. | P1's smoke test |
@@ -661,7 +666,7 @@ did for P1, and a go / no-go on J.
 
 #### P0 results (2026-10-30, day one): **go on J**
 
-Measured on the arcade module -- `tools/wasm-jit-spike/arcade/build.sh`: the
+Measured on the arcade module -- the spike's `arcade/build.sh`, since P1 `tools/wasm-jit/arcade/build.sh`: the
 JSPI JIT build with raylib 5.5's web archive (`emcmake`, `PLATFORM=Web`,
 `GRAPHICS_API_OPENGL_ES3`, compiled `-pthread -fwasm-exceptions` to match the
 module), `rl_web_loop.c`, `raylib.h` in `/sysinclude`, and the raylib and math
@@ -720,6 +725,38 @@ J0-J5, a `tur_wasm_arcade` target, a CI job that builds it (the existing
 `Set up Emscripten` step in `ci.yml` plus the raylib web archive, cached by
 raylib ref), and a smoke test through Playwright's Chromium: first frame,
 console line, Stop. If P0 said no-go, this phase is A1-A4 instead.
+
+**Done (2026-10-30):**
+
+- `tools/wasm-jit/arcade/build-raylib.sh` builds raylib's web archive (the
+  spice's `:wasm-options`, the module's `-pthread -fwasm-exceptions`; 9 s),
+  and `tools/wasm-jit/arcade/build.sh` -- the spike's script, promoted --
+  builds the module, calling `build-module.sh` with `TUR_WASM_JIT_JSPI=1` and
+  the extras directly rather than through the JSPI spike.
+- `tur_wasm_arcade` (`-DTUR_WASM_ARCADE=ON`, off by default;
+  `TUR_ARCADE_RAYLIB_SRC`, `TUR_ARCADE_SPICES`, optional
+  `TUR_ARCADE_RAYLIB_LIB`) builds it into `build-wasm/wasm-arcade/wasm-jit/`,
+  never `web/public`. 45 s from a configured tree in this container.
+- J3 e: `turi_wasm_jit_set_fallback(int)`, exported from both JIT modules.
+  Off, a refusal answers `{"engine":"refused","exit":1,"reason":...}`; on
+  (the default, Try's Compile engine) nothing changes.
+- The `wasm-arcade` CI job: raylib at the spice's ref, its archive cached by
+  ref, SDK and script hash, the module built, then
+  `tools/wasm-jit/arcade/smoke/smoke.mjs` in Playwright's Chromium on a
+  COOP/COEP page: the module boots in an iframe with JSPI and the two spices
+  mounted (367 ms), the quick-start program's first frame is RAYWHITE with
+  its text drawn (1.5 s from Run), a line printed on frame 30 arrives while
+  the loop runs, Stop removes the iframe and the page stays live, and a
+  `pthread_create` program comes back `refused` without `main` running.
+
+**Left:** spice packages mounted after startup instead of `--embed-file`
+(J2; also what `defscript :spices` resolves against), `life.tur`'s grid
+step as an interpreted loop (8.5's budget), the examples moved from
+turmeric-arcade's `tests/raylib.spec.js` into `examples/`, and the arcade
+repo's CI building this target (its `scripts/fetch-engine.sh` builds the
+plain JSPI module, so its raylib tests skip there) and its shell calling
+`turi_wasm_jit_set_fallback(0)` -- both once `engine.lock` pins a commit
+that has them.
 
 ### P2 -- The page (arcade repo)
 
