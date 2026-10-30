@@ -6723,26 +6723,26 @@ extern void * tur_hamt_new(void);
 extern void tur_hamt_free(void *);
 extern void * tur_hamt_retain(void *);
 extern int64_t tur_hamt_count(void *);
-extern void * tur_hamt_set(void *, int64_t, void *, void *);
-extern void * tur_hamt_del(void *, int64_t, void *);
-extern bool tur_hamt_has(void *, int64_t, void *);
-extern void * tur_hamt_get(void *, int64_t, void *);
-extern void * tur_hamt_set_eq(void *, int64_t, void *, void *, void *);
-extern void * tur_hamt_del_eq(void *, int64_t, void *, void *);
-extern bool tur_hamt_has_eq(void *, int64_t, void *, void *);
-extern void * tur_hamt_get_eq(void *, int64_t, void *, void *);
-extern void * tur_hamt_set_cstr(void *, const char *, void *);
+extern void * tur_hamt_set(void *, int64_t, int64_t, int64_t);
+extern void * tur_hamt_del(void *, int64_t, int64_t);
+extern bool tur_hamt_has(void *, int64_t, int64_t);
+extern int64_t tur_hamt_get(void *, int64_t, int64_t);
+extern void * tur_hamt_set_eq(void *, int64_t, int64_t, int64_t, void *);
+extern void * tur_hamt_del_eq(void *, int64_t, int64_t, void *);
+extern bool tur_hamt_has_eq(void *, int64_t, int64_t, void *);
+extern int64_t tur_hamt_get_eq(void *, int64_t, int64_t, void *);
+extern void * tur_hamt_set_cstr(void *, const char *, int64_t);
 extern void * tur_hamt_del_cstr(void *, const char *);
 extern bool tur_hamt_has_cstr(void *, const char *);
-extern void * tur_hamt_get_cstr(void *, const char *);
+extern int64_t tur_hamt_get_cstr(void *, const char *);
 extern void * tur_hamt_box_key(void *, int64_t);
 extern bool tur_hamt_box_key_eq(int64_t, int64_t);
-extern void * tur_hamt_set_eq_o(void *, int64_t, void *, void *, void *, int64_t);
-extern void * tur_hamt_del_eq_o(void *, int64_t, void *, void *, int64_t);
-extern void * tur_hamt_set_eq_vo(void *, int64_t, void *, void *, void *, int64_t, void *, void *);
-extern void * tur_hamt_del_eq_vo(void *, int64_t, void *, void *, int64_t, void *, void *);
-extern bool tur_hamt_has_eq_o(void *, int64_t, void *, void *, int64_t);
-extern void * tur_hamt_get_eq_o(void *, int64_t, void *, void *, int64_t);
+extern void * tur_hamt_set_eq_o(void *, int64_t, int64_t, int64_t, void *, int64_t);
+extern void * tur_hamt_del_eq_o(void *, int64_t, int64_t, void *, int64_t);
+extern void * tur_hamt_set_eq_vo(void *, int64_t, int64_t, int64_t, void *, int64_t, void *, void *);
+extern void * tur_hamt_del_eq_vo(void *, int64_t, int64_t, void *, int64_t, void *, void *);
+extern bool tur_hamt_has_eq_o(void *, int64_t, int64_t, void *, int64_t);
+extern int64_t tur_hamt_get_eq_o(void *, int64_t, int64_t, void *, int64_t);
 extern void * tur_hamt_merge(void *, void *);
 extern bool tur_hamt_eq_dynamic(int64_t, int64_t, int64_t);
 extern int64_t tur_hamt_hash_str(const char *);
@@ -6754,21 +6754,21 @@ extern void * tur_hamt_iter_alloc(void *);
 extern void tur_hamt_iter_destroy(void *);
 extern bool tur_hamt_iter_advance(void *);
 extern int64_t tur_hamt_iter_cur_hash(void *);
-extern void * tur_hamt_iter_cur_key(void *);
-extern void * tur_hamt_iter_cur_val(void *);
+extern int64_t tur_hamt_iter_cur_key(void *);
+extern int64_t tur_hamt_iter_cur_val(void *);
 extern void * tur_hamt_keyeq(void *);
-extern void * tur_hamt_get_dynamic(void *, int64_t, void *, void *);
-extern bool tur_hamt_has_dynamic(void *, int64_t, void *, void *);
+extern int64_t tur_hamt_get_dynamic(void *, int64_t, int64_t, void *);
+extern bool tur_hamt_has_dynamic(void *, int64_t, int64_t, void *);
 extern void * tur_hamt_map(void *, void *, void *);
 extern void * tur_hamt_filter(void *, void *, void *);
-extern void * tur_hamt_reduce(void *, void *, void *, void *);
+extern int64_t tur_hamt_reduce(void *, void *, int64_t, void *);
 extern void * tur_hamt_merge_with(void *, void *, void *, void *);
 extern const char * tur_hamt_show(void *);
 extern void tur_hamt_dump_dot(void *, void *);
 extern void tur_hamt_dump_dot_stderr(void *);
 extern void * tur_hamt_transient(void *);
-extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
-extern void tur_hamt_transient_del(void *, int64_t, void *);
+extern void tur_hamt_transient_set(void *, int64_t, int64_t, int64_t);
+extern void tur_hamt_transient_del(void *, int64_t, int64_t);
 extern void * tur_hamt_persistent(void *);
 extern int64_t tur_trail_mark_packed(void);
 extern bool tur_trail_undo_to_packed(int64_t);
@@ -6906,13 +6906,13 @@ static int64_t with_hycontract_hyhandler(int64_t, int64_t);
 static void * hamt_slnew(void);
 static void hamt_slfree(void *);
 static void * hamt_slretain(void *);
-static void * hamt_slset(void *, int64_t, void *, void *);
-static void * hamt_sldel(void *, int64_t, void *);
-static void * hamt_slget(void *, int64_t, void *);
-static bool hamt_slhas_qu(void *, int64_t, void *);
-static void * hamt_slset_hycstr(void *, const char *, void *);
+static void * hamt_slset(void *, int64_t, int64_t, int64_t);
+static void * hamt_sldel(void *, int64_t, int64_t);
+static int64_t hamt_slget(void *, int64_t, int64_t);
+static bool hamt_slhas_qu(void *, int64_t, int64_t);
+static void * hamt_slset_hycstr(void *, const char *, int64_t);
 static void * hamt_sldel_hycstr(void *, const char *);
-static void * hamt_slget_hycstr(void *, const char *);
+static int64_t hamt_slget_hycstr(void *, const char *);
 static bool hamt_slhas_hycstr_qu(void *, const char *);
 static int64_t hamt_slcount(void *);
 static void * hamt_slmerge(void *, void *);
@@ -6925,20 +6925,20 @@ static void * hamt_sliter_hyalloc(void *);
 static void hamt_sliter_hydestroy_ex(void *);
 static bool hamt_sliter_hyadvance_ex(void *);
 static int64_t hamt_sliter_hycur_hyhash(void *);
-static void * hamt_sliter_hycur_hykey(void *);
-static void * hamt_sliter_hycur_hyval(void *);
+static int64_t hamt_sliter_hycur_hykey(void *);
+static int64_t hamt_sliter_hycur_hyval(void *);
 static void * hamt_slkeyeq(void *);
-static void * hamt_slget_hydynamic(void *, int64_t, void *, void *);
-static bool hamt_slhas_hydynamic_qu(void *, int64_t, void *, void *);
+static int64_t hamt_slget_hydynamic(void *, int64_t, int64_t, void *);
+static bool hamt_slhas_hydynamic_qu(void *, int64_t, int64_t, void *);
 static void * hamt_slmap(void *, void *, void *);
 static void * hamt_slfilter(void *, void *, void *);
-static void * hamt_slreduce(void *, void *, void *, void *);
+static int64_t hamt_slreduce(void *, void *, int64_t, void *);
 static void * hamt_slmerge_hywith(void *, void *, void *, void *);
 static const char * hamt_slshow(void *);
 static void hamt_sldump(void *);
 static void * hamt_sltransient(void *);
-static void hamt_sltransient_hyset_ex(void *, int64_t, void *, void *);
-static void hamt_sltransient_hydel_ex(void *, int64_t, void *);
+static void hamt_sltransient_hyset_ex(void *, int64_t, int64_t, int64_t);
+static void hamt_sltransient_hydel_ex(void *, int64_t, int64_t);
 static void * hamt_slpersistent_ex(void *);
 static int64_t hamt_slautolink_hyhint(void);
 static int64_t cstr_hycompare_un_un(const char *, const char *);
@@ -6974,7 +6974,7 @@ static bool map_hyeq_hyraw_qu(int64_t, int64_t, int64_t);
 static bool map_hyeq_hyraw_hyk_qu(int64_t, int64_t, int64_t, int64_t);
 static bool map_hyeq_hydynamic(int64_t, int64_t, int64_t);
 static int64_t map_hyiter_hycur_hyval_hyas(void *);
-static int64_t map_hyget_hydynamic_hyas(void *, int64_t, void *, void *);
+static int64_t map_hyget_hydynamic_hyas(void *, int64_t, int64_t, void *);
 static bool map_hyeq_hyloop(void *, void *, void *, int64_t);
 static bool map_hyeq_hydriver(int64_t, int64_t, int64_t);
 static void tur_hymap_hyhomog_un_un(int64_t, int64_t);
@@ -8268,31 +8268,31 @@ static void * hamt_slretain(void * m) {
         return tur_hamt_retain((void *)(intptr_t)(m));
 }
 
-static void * hamt_slset(void * m, int64_t hash, void * key, void * val) {
-        return tur_hamt_set((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(val));
+static void * hamt_slset(void * m, int64_t hash, int64_t key, int64_t val) {
+        return tur_hamt_set((void *)(intptr_t)(m), hash, key, val);
 }
 
-static void * hamt_sldel(void * m, int64_t hash, void * key) {
-        return tur_hamt_del((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key));
+static void * hamt_sldel(void * m, int64_t hash, int64_t key) {
+        return tur_hamt_del((void *)(intptr_t)(m), hash, key);
 }
 
-static void * hamt_slget(void * m, int64_t hash, void * key) {
-        return tur_hamt_get((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key));
+static int64_t hamt_slget(void * m, int64_t hash, int64_t key) {
+        return tur_hamt_get((void *)(intptr_t)(m), hash, key);
 }
 
-static bool hamt_slhas_qu(void * m, int64_t hash, void * key) {
-        return tur_hamt_has((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key));
+static bool hamt_slhas_qu(void * m, int64_t hash, int64_t key) {
+        return tur_hamt_has((void *)(intptr_t)(m), hash, key);
 }
 
-static void * hamt_slset_hycstr(void * m, const char * key, void * val) {
-        return tur_hamt_set_cstr((void *)(intptr_t)(m), key, (void *)(intptr_t)(val));
+static void * hamt_slset_hycstr(void * m, const char * key, int64_t val) {
+        return tur_hamt_set_cstr((void *)(intptr_t)(m), key, val);
 }
 
 static void * hamt_sldel_hycstr(void * m, const char * key) {
         return tur_hamt_del_cstr((void *)(intptr_t)(m), key);
 }
 
-static void * hamt_slget_hycstr(void * m, const char * key) {
+static int64_t hamt_slget_hycstr(void * m, const char * key) {
         return tur_hamt_get_cstr((void *)(intptr_t)(m), key);
 }
 
@@ -8347,11 +8347,11 @@ static int64_t hamt_sliter_hycur_hyhash(void * box) {
         return tur_hamt_iter_cur_hash((void *)(intptr_t)(box));
 }
 
-static void * hamt_sliter_hycur_hykey(void * box) {
+static int64_t hamt_sliter_hycur_hykey(void * box) {
         return tur_hamt_iter_cur_key((void *)(intptr_t)(box));
 }
 
-static void * hamt_sliter_hycur_hyval(void * box) {
+static int64_t hamt_sliter_hycur_hyval(void * box) {
         return tur_hamt_iter_cur_val((void *)(intptr_t)(box));
 }
 
@@ -8359,12 +8359,12 @@ static void * hamt_slkeyeq(void * m) {
         return tur_hamt_keyeq((void *)(intptr_t)(m));
 }
 
-static void * hamt_slget_hydynamic(void * m, int64_t hash, void * key, void * keyeq) {
-        return tur_hamt_get_dynamic((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(keyeq));
+static int64_t hamt_slget_hydynamic(void * m, int64_t hash, int64_t key, void * keyeq) {
+        return tur_hamt_get_dynamic((void *)(intptr_t)(m), hash, key, (void *)(intptr_t)(keyeq));
 }
 
-static bool hamt_slhas_hydynamic_qu(void * m, int64_t hash, void * key, void * keyeq) {
-        return tur_hamt_has_dynamic((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(keyeq));
+static bool hamt_slhas_hydynamic_qu(void * m, int64_t hash, int64_t key, void * keyeq) {
+        return tur_hamt_has_dynamic((void *)(intptr_t)(m), hash, key, (void *)(intptr_t)(keyeq));
 }
 
 static void * hamt_slmap(void * m, void * fn, void * ctx) {
@@ -8375,8 +8375,8 @@ static void * hamt_slfilter(void * m, void * fn, void * ctx) {
         return tur_hamt_filter((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx));
 }
 
-static void * hamt_slreduce(void * m, void * fn, void * init, void * ctx) {
-        return tur_hamt_reduce((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(init), (void *)(intptr_t)(ctx));
+static int64_t hamt_slreduce(void * m, void * fn, int64_t init, void * ctx) {
+        return tur_hamt_reduce((void *)(intptr_t)(m), (void *)(intptr_t)(fn), init, (void *)(intptr_t)(ctx));
 }
 
 static void * hamt_slmerge_hywith(void * a, void * b, void * fn, void * ctx) {
@@ -8396,13 +8396,13 @@ static void * hamt_sltransient(void * m) {
         return tur_hamt_transient((void *)(intptr_t)(m));
 }
 
-static void hamt_sltransient_hyset_ex(void * t, int64_t hash, void * key, void * val) {
-        tur_hamt_transient_set((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(val));
+static void hamt_sltransient_hyset_ex(void * t, int64_t hash, int64_t key, int64_t val) {
+        tur_hamt_transient_set((void *)(intptr_t)(t), hash, key, val);
         if (tur_panicking) return;
 }
 
-static void hamt_sltransient_hydel_ex(void * t, int64_t hash, void * key) {
-        tur_hamt_transient_del((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key));
+static void hamt_sltransient_hydel_ex(void * t, int64_t hash, int64_t key) {
+        tur_hamt_transient_del((void *)(intptr_t)(t), hash, key);
         if (tur_panicking) return;
 }
 
@@ -8653,13 +8653,13 @@ static bool map_hyeq_hyraw_qu(int64_t m1, int64_t m2, int64_t val_cmp) {
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
   tur_hamt_iter_init((void*)iter_buf, map1->hamt);
   uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
+  int64_t key_out = 0, val_out = 0;
   while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
-      void *val_in_b = tur_hamt_get(map2->hamt, (int64_t)hash_out, key_out);
+      int64_t val_in_b = tur_hamt_get(map2->hamt, (int64_t)hash_out, key_out);
       if (!val_in_b) { tur_hamt_iter_free((void*)iter_buf); return false; }
       /* CRU B-3: val-cmp is a fat closure box; fat-dispatch via slot 0. */
       bool vals_eq = ((int64_t(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)val_cmp)[0])(
-          (void*)(intptr_t)val_cmp, (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+          (void*)(intptr_t)val_cmp, val_out, val_in_b);
       if (!vals_eq) { tur_hamt_iter_free((void*)iter_buf); return false; }
   }
   tur_hamt_iter_free((void*)iter_buf);
@@ -8675,15 +8675,15 @@ static bool map_hyeq_hyraw_hyk_qu(int64_t m1, int64_t m2, int64_t keyeq, int64_t
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
   tur_hamt_iter_init((void*)iter_buf, map1->hamt);
   uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
+  int64_t key_out = 0, val_out = 0;
   while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
-      void *val_in_b = tur_hamt_get_eq(map2->hamt, (int64_t)hash_out, key_out,
+      int64_t val_in_b = tur_hamt_get_eq(map2->hamt, (int64_t)hash_out, key_out,
                                        (void *)(intptr_t)keyeq);
       if (!val_in_b) { tur_hamt_iter_free((void*)iter_buf); return false; }
       /* CRU B-3: val-cmp is a fat closure box; fat-dispatch via slot 0.
          keyeq stays a thin MapKey carrier (not a user closure). */
       bool vals_eq = ((int64_t(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)val_cmp)[0])(
-          (void*)(intptr_t)val_cmp, (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+          (void*)(intptr_t)val_cmp, val_out, val_in_b);
       if (!vals_eq) { tur_hamt_iter_free((void*)iter_buf); return false; }
   }
   tur_hamt_iter_free((void*)iter_buf);
@@ -8696,11 +8696,11 @@ static bool map_hyeq_hydynamic(int64_t m1, int64_t m2, int64_t val_cmp) {
 }
 
 static int64_t map_hyiter_hycur_hyval_hyas(void * iter) {
-        return (int64_t)(intptr_t)tur_hamt_iter_cur_val((void*)(intptr_t)iter); 
+        return tur_hamt_iter_cur_val((void*)(intptr_t)iter); 
 }
 
-static int64_t map_hyget_hydynamic_hyas(void * m, int64_t hash, void * key, void * keyeq) {
-        return (int64_t)(intptr_t)tur_hamt_get_dynamic((void*)(intptr_t)m, hash, (void*)(intptr_t)key, (void*)(intptr_t)keyeq); 
+static int64_t map_hyget_hydynamic_hyas(void * m, int64_t hash, int64_t key, void * keyeq) {
+        return tur_hamt_get_dynamic((void*)(intptr_t)m, hash, key, (void*)(intptr_t)keyeq); 
 }
 
 static int64_t map_hyeq_hyloop__cps(void * iter_1001047, void * m2_hyhamt_1001048, void * keyeq_1001049, int64_t val_cmp, DK *__kont);
@@ -8709,7 +8709,7 @@ static int64_t _un_uncons_hyfmap__cps(int64_t cell_1001355, void * f_1001356, DK
 static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, int64_t val_cmp, DK *__kont) {
     bool __t0;
     int64_t h_1001051;
-    void * k_1001052;
+    int64_t k_1001052;
     bool __t1;
     bool __t2;
 __tur_cps_self:;
@@ -8726,13 +8726,13 @@ __tur_cps_self:;
             return ((int64_t)0);
         }
         h_1001051 = __ps_98;
-        void * __ps_99 = (hamt_sliter_hycur_hykey((void *)(intptr_t)(iter)));
+        int64_t __ps_99 = (hamt_sliter_hycur_hykey((void *)(intptr_t)(iter)));
         if (tur_panicking) {
             { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
             return ((int64_t)0);
         }
         k_1001052 = __ps_99;
-        bool __ps_100 = (hamt_slhas_hydynamic_qu((void *)(intptr_t)(m2_hamt), h_1001051, (void *)(intptr_t)(k_1001052), (void *)(intptr_t)(keyeq)));
+        bool __ps_100 = (hamt_slhas_hydynamic_qu((void *)(intptr_t)(m2_hamt), h_1001051, k_1001052, (void *)(intptr_t)(keyeq)));
         if (tur_panicking) {
             { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
             return ((int64_t)0);
@@ -8744,7 +8744,7 @@ __tur_cps_self:;
                 { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
                 return ((int64_t)0);
             }
-            int64_t __ps_102 = (map_hyget_hydynamic_hyas((void *)(intptr_t)(m2_hamt), h_1001051, (void *)(intptr_t)(k_1001052), (void *)(intptr_t)(keyeq)));
+            int64_t __ps_102 = (map_hyget_hydynamic_hyas((void *)(intptr_t)(m2_hamt), h_1001051, k_1001052, (void *)(intptr_t)(keyeq)));
             if (tur_panicking) {
                 { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
                 return ((int64_t)0);
@@ -9525,7 +9525,7 @@ static bool set_hyeq_qu(int64_t a, int64_t b) {
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
   tur_hamt_iter_init((void*)iter_buf, sa->hamt);
   uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
+  int64_t key_out = 0, val_out = 0;
   while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       if (!tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
           tur_hamt_iter_free((void*)iter_buf);
@@ -9549,17 +9549,17 @@ static bool set_hyeq_hycmp_qu(int64_t a, int64_t b, int64_t cmp_fn) {
   for (int __i = 0; __i < 32; __i++) iter_a[__i] = 0;
   tur_hamt_iter_init((void*)iter_a, sa->hamt);
   uint64_t hash_a;
-  void *key_a = NULL, *val_a = NULL;
+  int64_t key_a = 0, val_a = 0;
   while (tur_hamt_iter_next((void*)iter_a, &hash_a, &key_a, &val_a)) {
       bool found = false;
       uint64_t iter_b[32];
       for (int __j = 0; __j < 32; __j++) iter_b[__j] = 0;
       tur_hamt_iter_init((void*)iter_b, sb->hamt);
       uint64_t hash_b;
-      void *key_b = NULL, *val_b = NULL;
+      int64_t key_b = 0, val_b = 0;
       while (tur_hamt_iter_next((void*)iter_b, &hash_b, &key_b, &val_b)) {
           if (((int64_t(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)cmp_fn)[0])(
-                (void*)(intptr_t)cmp_fn, (int64_t)(intptr_t)key_a, (int64_t)(intptr_t)key_b)) {
+                (void*)(intptr_t)cmp_fn, key_a, key_b)) {
               found = true;
               break;
           }
@@ -9589,11 +9589,11 @@ static bool set_hyeq_hyloop(void * iter, void * s2_hamt, void * keyeq) {
                 if (tur_panicking) return ((bool)0);
                 int64_t h_1001435 = __ps_149;
                 (void)h_1001435;
-                void * __ps_150 = (hamt_sliter_hycur_hykey((void *)(intptr_t)(iter)));
+                int64_t __ps_150 = (hamt_sliter_hycur_hykey((void *)(intptr_t)(iter)));
                 if (tur_panicking) return ((bool)0);
-                void * k_1001436 = __ps_150;
+                int64_t k_1001436 = __ps_150;
                 (void)k_1001436;
-                bool __ps_151 = (hamt_slhas_hydynamic_qu((void *)(intptr_t)(s2_hamt), h_1001435, (void *)(intptr_t)(k_1001436), (void *)(intptr_t)(keyeq)));
+                bool __ps_151 = (hamt_slhas_hydynamic_qu((void *)(intptr_t)(s2_hamt), h_1001435, k_1001436, (void *)(intptr_t)(keyeq)));
                 if (tur_panicking) return ((bool)0);
                 if (__ps_151) {
                     void * __t152 = iter;

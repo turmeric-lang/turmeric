@@ -77,8 +77,6 @@ g4b-thread-local-global fail  # stdout mismatch on the interpreted path: the pro
 gc-registry-growth fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 gde-generic-dict-eq-map fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 generic-hof-effectful-callback fail  # stdout mismatch on the error path: the module threw: unreachable
-generic-map-assoc-sig-tyvar-value fail  # stdout mismatch on the compiled path
-generic-spec-carrier-crossings-4 fail  # stdout mismatch on the compiled path
 generic-wrapper-over-return-dispatch-method fail  # stdout mismatch on the compiled path
 generic-wrapper-tail-forwards-return-dispatch fail  # stdout mismatch on the compiled path
 ghe3-generic-map-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
@@ -146,8 +144,6 @@ list-count-phantom-opaque-aggregate-element fail  # stdout mismatch on the compi
 list-helpers-wide-head-element interpreted  # the program starts threads (pthread_create), which this engine cannot run
 map-get-miss-on-any-value-is-nil interpreted  # the program starts threads (pthread_create), which this engine cannot run
 map-literal-frees-intermediates fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-map-typed-consumer fail  # stdout mismatch on the compiled path
-mut-map-reassign fail  # stdout mismatch on the compiled path
 neoteric-ascription-sweet fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 nested-construct-byvalue-decode fail  # stdout mismatch on the compiled path
 net-blocking-tcp fail  # stdout mismatch on the interpreted path: import of undefined item socket
@@ -431,7 +427,6 @@ tail-call-inline-c-carrier-bridge fail  # stdout mismatch on the compiled path
 tailcall-dyn-leak interpreted  # the program starts threads (pthread_create), which this engine cannot run
 taskgroup-async fail  # stdout mismatch on the error path: the module threw: unreachable
 taskgroup-timeout fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-tce3-map-cstr-val fail  # stdout mismatch on the compiled path
 tce4-map-cstr-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 term-raw-cooked-roundtrip fail  # stdout mismatch on the interpreted path: import of undefined item fork
 thread-local-basic fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run

@@ -3,16 +3,16 @@
 
 (extern-c free [p :ptr] :void)
 
-(defn ptr= [a : ptr b : ptr] : bool
+(defn ptr= [a : int b : int] : bool
   ```c
   return a == b;
   ```)
 
-(defn alloc-int [x : int] : ptr
+(defn alloc-int [x : int] : int
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
-  return (void *)p;
+  return (int64_t)(intptr_t)p;
   ```)
 
 (defn test-empty [] : int
@@ -25,26 +25,26 @@
   (let [k (alloc-int 42)]
     (let [v (alloc-int 100)]
       (let [m1 (hamt/new)]
-        (let [h (hamt/hash-ptr k)]
+        (let [h (hamt/hash-ptr (:: k ptr<void>))]
           (let [m2 (hamt/set m1 h k v)]
             (let [r (hamt/get m2 h k)]
               (hamt/free m1)
               (hamt/free m2)
-              (free k)
-              (free v)
+              (free (:: k :ptr))
+              (free (:: v :ptr))
               (if (ptr= r v) 1 0))))))))
 
 (defn test-has [] : int
   (let [k (alloc-int 42)]
     (let [v (alloc-int 100)]
       (let [m1 (hamt/new)]
-        (let [h (hamt/hash-ptr k)]
+        (let [h (hamt/hash-ptr (:: k ptr<void>))]
           (let [m2 (hamt/set m1 h k v)]
             (let [found (hamt/has? m2 h k)]
               (hamt/free m1)
               (hamt/free m2)
-              (free k)
-              (free v)
+              (free (:: k :ptr))
+              (free (:: v :ptr))
               (if found 1 0))))))))
 
 (defn test-count [] : int
@@ -52,8 +52,8 @@
     (let [k2 (alloc-int 2)]
       (let [v1 (alloc-int 10)]
         (let [v2 (alloc-int 20)]
-          (let [h1 (hamt/hash-ptr k1)]
-            (let [h2 (hamt/hash-ptr k2)]
+          (let [h1 (hamt/hash-ptr (:: k1 ptr<void>))]
+            (let [h2 (hamt/hash-ptr (:: k2 ptr<void>))]
               (let [m1 (hamt/new)]
                 (let [m2 (hamt/set m1 h1 k1 v1)]
                   (let [m3 (hamt/set m2 h2 k2 v2)]
@@ -61,10 +61,10 @@
                       (hamt/free m1)
                       (hamt/free m2)
                       (hamt/free m3)
-                      (free k1)
-                      (free k2)
-                      (free v1)
-                      (free v2)
+                      (free (:: k1 :ptr))
+                      (free (:: k2 :ptr))
+                      (free (:: v1 :ptr))
+                      (free (:: v2 :ptr))
                       c)))))))))))
 
 (println (test-empty))

@@ -257,7 +257,7 @@ static HamtNode *array_node_create(void) {
 }
 
 static HamtNode *collision_node_create(uint32_t hash_prefix,
-                                       uint64_t hash, void *key, void *val) {
+                                       uint64_t hash, int64_t key, int64_t val) {
     HamtNode *n = tur_hamt_node_alloc(HAMT_COLLISION_NODE_SIZE);
     n->type = HAMT_NODE_COLLISION;
     n->as.collision.hash_prefix = hash_prefix;
@@ -308,13 +308,12 @@ static _Thread_local bool (*g_hamt_key_eq)(int64_t, int64_t) = NULL;
 static _Thread_local bool (*g_hamt_key_eq_ctx_fn)(int64_t, int64_t, void *) = NULL;
 static _Thread_local void *g_hamt_key_eq_ctx = NULL;
 
-static inline bool keys_equal(void *a, void *b) {
+static inline bool keys_equal(int64_t a, int64_t b) {
     if (g_hamt_key_eq_ctx_fn) {
-        return g_hamt_key_eq_ctx_fn((int64_t)(intptr_t)a, (int64_t)(intptr_t)b,
-                                    g_hamt_key_eq_ctx);
+        return g_hamt_key_eq_ctx_fn(a, b, g_hamt_key_eq_ctx);
     }
     if (g_hamt_key_eq) {
-        return g_hamt_key_eq((int64_t)(intptr_t)a, (int64_t)(intptr_t)b);
+        return g_hamt_key_eq(a, b);
     }
     return a == b;
 }
@@ -407,11 +406,11 @@ bool tur_hamt_box_key_eq(int64_t a, int64_t b) {
 static _Thread_local void (*g_hamt_key_retain)(void *) = NULL;
 static _Thread_local void (*g_hamt_key_release)(void *) = NULL;
 
-static inline void key_retain_hook(void *k) {
-    if (g_hamt_key_retain && k) g_hamt_key_retain(k);
+static inline void key_retain_hook(int64_t k) {
+    if (g_hamt_key_retain && k) g_hamt_key_retain((void *)(intptr_t)k);
 }
-static inline void key_release_hook(void *k) {
-    if (g_hamt_key_release && k) g_hamt_key_release(k);
+static inline void key_release_hook(int64_t k) {
+    if (g_hamt_key_release && k) g_hamt_key_release((void *)(intptr_t)k);
 }
 
 /* Multi-word-value boxing: value-box ownership hooks, exact mirror of the key
@@ -421,11 +420,11 @@ static inline void key_release_hook(void *k) {
 static _Thread_local void (*g_hamt_val_retain)(void *) = NULL;
 static _Thread_local void (*g_hamt_val_release)(void *) = NULL;
 
-static inline void val_retain_hook(void *v) {
-    if (g_hamt_val_retain && v) g_hamt_val_retain(v);
+static inline void val_retain_hook(int64_t v) {
+    if (g_hamt_val_retain && v) g_hamt_val_retain((void *)(intptr_t)v);
 }
-static inline void val_release_hook(void *v) {
-    if (g_hamt_val_release && v) g_hamt_val_release(v);
+static inline void val_release_hook(int64_t v) {
+    if (g_hamt_val_release && v) g_hamt_val_release((void *)(intptr_t)v);
 }
 
 /* ============================================================================
@@ -433,22 +432,22 @@ static inline void val_release_hook(void *v) {
  * ============================================================================
  */
 
-static HamtEntry *find_entry(HamtEntry *entries, uint64_t hash, void *key) {
+static HamtEntry *find_entry(HamtEntry *entries, uint64_t hash, int64_t key) {
     for (HamtEntry *e = entries; e; e = e->next) {
         if (e->hash == hash && keys_equal(e->key, key)) {
             return e;
         }
     }
-    return NULL;
+    return 0;
 }
 
-static bool collision_has(HamtEntry *entries, uint64_t hash, void *key) {
+static bool collision_has(HamtEntry *entries, uint64_t hash, int64_t key) {
     return find_entry(entries, hash, key) != NULL;
 }
 
-static void *collision_get(HamtEntry *entries, uint64_t hash, void *key) {
+static int64_t collision_get(HamtEntry *entries, uint64_t hash, int64_t key) {
     HamtEntry *e = find_entry(entries, hash, key);
-    return e ? e->val : NULL;
+    return e ? e->val : 0;
 }
 
 /* ============================================================================
@@ -565,10 +564,10 @@ static HamtNode *collision_node_copy(HamtNode *src) {
  * ============================================================================
  */
 
-static HamtNode *node_insert(HamtNode *n, uint64_t hash, void *key, void *val,
+static HamtNode *node_insert(HamtNode *n, uint64_t hash, int64_t key, int64_t val,
                              uint32_t level);
 
-static HamtNode *node_insert(HamtNode *n, uint64_t hash, void *key, void *val,
+static HamtNode *node_insert(HamtNode *n, uint64_t hash, int64_t key, int64_t val,
                              uint32_t level) {
     uint32_t chunk = hash_chunk(hash, level);
 
@@ -756,7 +755,7 @@ static HamtNode *node_own(HamtNode *n) {
     return c;
 }
 
-static HamtNode *node_insert_mut(HamtNode *n, uint64_t hash, void *key, void *val,
+static HamtNode *node_insert_mut(HamtNode *n, uint64_t hash, int64_t key, int64_t val,
                                  uint32_t level, bool *added) {
     uint32_t chunk = hash_chunk(hash, level);
 
@@ -873,11 +872,11 @@ static HamtNode *node_insert_mut(HamtNode *n, uint64_t hash, void *key, void *va
  * ============================================================================
  */
 
-static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t level) {
+static HamtNode *node_delete(HamtNode *n, uint64_t hash, int64_t key, uint32_t level) {
     uint32_t chunk = hash_chunk(hash, level);
 
     if (!n) {
-        return NULL;
+        return 0;
     }
 
     switch (n->type) {
@@ -912,7 +911,7 @@ static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t lev
                 uint32_t new_child_count = popcount32(new_bitmap);
 
                 if (new_child_count == 0) {
-                    return NULL;
+                    return 0;
                 }
 
                 HamtNode *new_node = bitmap_node_create(new_bitmap);
@@ -1000,7 +999,7 @@ static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t lev
 
                     if (new_node->as.collision.entries == NULL) {
                         free(new_node);
-                        return NULL;
+                        return 0;
                     }
 
                     return new_node;
@@ -1019,11 +1018,11 @@ static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t lev
  * ============================================================================
  */
 
-static void *node_get(HamtNode *n, uint64_t hash, void *key, uint32_t level) {
+static int64_t node_get(HamtNode *n, uint64_t hash, int64_t key, uint32_t level) {
     uint32_t chunk = hash_chunk(hash, level);
 
     if (!n) {
-        return NULL;
+        return 0;
     }
 
     switch (n->type) {
@@ -1031,7 +1030,7 @@ static void *node_get(HamtNode *n, uint64_t hash, void *key, uint32_t level) {
             uint32_t bitmap = n->as.bitmap.bitmap;
 
             if (!(bitmap & (UINT32_C(1) << chunk))) {
-                return NULL;
+                return 0;
             }
 
             uint32_t idx = 0;
@@ -1052,7 +1051,7 @@ static void *node_get(HamtNode *n, uint64_t hash, void *key, uint32_t level) {
         }
     }
 
-    return NULL;
+    return 0;
 }
 
 /* ============================================================================
@@ -1060,7 +1059,7 @@ static void *node_get(HamtNode *n, uint64_t hash, void *key, uint32_t level) {
  * ============================================================================
  */
 
-static bool node_has(HamtNode *n, uint64_t hash, void *key, uint32_t level) {
+static bool node_has(HamtNode *n, uint64_t hash, int64_t key, uint32_t level) {
     uint32_t chunk = hash_chunk(hash, level);
 
     if (!n) {
@@ -1139,7 +1138,7 @@ int64_t tur_hamt_count(Hamt *m) {
     return m->count;
 }
 
-Hamt *tur_hamt_set(Hamt *m, uint64_t hash, void *key, void *val) {
+Hamt *tur_hamt_set(Hamt *m, uint64_t hash, int64_t key, int64_t val) {
     /* region-lock-hardening: the store-side region note (src/runtime/region.h).
      * hamt.c is host runtime, never pasted into a program, so it cannot spell
      * the emitted TUR_REGION_NOTE macro; it calls the runtime directly --
@@ -1153,8 +1152,8 @@ Hamt *tur_hamt_set(Hamt *m, uint64_t hash, void *key, void *val) {
      * (tur_hamt_transient_set) reaches node_insert on its own and carries the
      * same two notes.  Those are the places a key or value word enters HAMT
      * memory -- malloc'd, and outliving any bracket the insert ran inside. */
-    hamt_region_note(key);
-    hamt_region_note(val);
+    hamt_region_note((void *)(intptr_t)key);
+    hamt_region_note((void *)(intptr_t)val);
     /* A NULL base means "the empty map".  We need a real one to read count /
      * key_ops / val_ops off, but it is OURS, not the caller's -- so it has to
      * be freed again before returning the derived map, or every insert into a
@@ -1202,7 +1201,7 @@ Hamt *tur_hamt_set(Hamt *m, uint64_t hash, void *key, void *val) {
     return new_map;
 }
 
-Hamt *tur_hamt_del(Hamt *m, uint64_t hash, void *key) {
+Hamt *tur_hamt_del(Hamt *m, uint64_t hash, int64_t key) {
     if (!m) {
         return m;
     }
@@ -1236,13 +1235,13 @@ Hamt *tur_hamt_del(Hamt *m, uint64_t hash, void *key) {
     return new_map;
 }
 
-bool tur_hamt_has(Hamt *m, uint64_t hash, void *key) {
+bool tur_hamt_has(Hamt *m, uint64_t hash, int64_t key) {
     if (!m) return false;
     return node_has(m->root, hash, key, 0);
 }
 
-void *tur_hamt_get(Hamt *m, uint64_t hash, void *key) {
-    if (!m) return NULL;
+int64_t tur_hamt_get(Hamt *m, uint64_t hash, int64_t key) {
+    if (!m) return 0;
     return node_get(m->root, hash, key, 0);
 }
 
@@ -1255,7 +1254,7 @@ void *tur_hamt_get(Hamt *m, uint64_t hash, void *key) {
  * identical to the plain entry point (pointer identity).
  * --------------------------------------------------------------------------*/
 
-Hamt *tur_hamt_set_eq(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq) {
+Hamt *tur_hamt_set_eq(Hamt *m, uint64_t hash, int64_t key, int64_t val, tur_hamt_keyeq_fn eq) {
     hamt_eq_hook_save save = hamt_save_eq_hooks();
     g_hamt_key_eq = eq; g_hamt_key_eq_ctx_fn = NULL; g_hamt_key_eq_ctx = NULL;
     Hamt *r = tur_hamt_set(m, hash, key, val);
@@ -1265,7 +1264,7 @@ Hamt *tur_hamt_set_eq(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_key
     return r;
 }
 
-Hamt *tur_hamt_del_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
+Hamt *tur_hamt_del_eq(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_fn eq) {
     hamt_eq_hook_save save = hamt_save_eq_hooks();
     g_hamt_key_eq = eq; g_hamt_key_eq_ctx_fn = NULL; g_hamt_key_eq_ctx = NULL;
     Hamt *r = tur_hamt_del(m, hash, key);
@@ -1275,7 +1274,7 @@ Hamt *tur_hamt_del_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
     return r;
 }
 
-bool tur_hamt_has_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
+bool tur_hamt_has_eq(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_fn eq) {
     hamt_eq_hook_save save = hamt_save_eq_hooks();
     g_hamt_key_eq = eq; g_hamt_key_eq_ctx_fn = NULL; g_hamt_key_eq_ctx = NULL;
     bool r = tur_hamt_has(m, hash, key);
@@ -1283,10 +1282,10 @@ bool tur_hamt_has_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
     return r;
 }
 
-void *tur_hamt_get_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
+int64_t tur_hamt_get_eq(Hamt *m, uint64_t hash, int64_t key, tur_hamt_keyeq_fn eq) {
     hamt_eq_hook_save save = hamt_save_eq_hooks();
     g_hamt_key_eq = eq; g_hamt_key_eq_ctx_fn = NULL; g_hamt_key_eq_ctx = NULL;
-    void *r = tur_hamt_get(m, hash, key);
+    int64_t r = tur_hamt_get(m, hash, key);
     hamt_restore_eq_hooks(save);
     return r;
 }
@@ -1312,23 +1311,23 @@ static bool hamt_cstr_key_eq(int64_t a, int64_t b) {
     return strcmp(p, q) == 0;
 }
 
-Hamt *tur_hamt_set_cstr(Hamt *m, const char *key, void *val) {
-    return tur_hamt_set_eq(m, tur_hamt_hash_str(key), (void *)key, val,
+Hamt *tur_hamt_set_cstr(Hamt *m, const char *key, int64_t val) {
+    return tur_hamt_set_eq(m, tur_hamt_hash_str(key), (int64_t)(intptr_t)key, val,
                            hamt_cstr_key_eq);
 }
 
 Hamt *tur_hamt_del_cstr(Hamt *m, const char *key) {
-    return tur_hamt_del_eq(m, tur_hamt_hash_str(key), (void *)key,
+    return tur_hamt_del_eq(m, tur_hamt_hash_str(key), (int64_t)(intptr_t)key,
                            hamt_cstr_key_eq);
 }
 
 bool tur_hamt_has_cstr(Hamt *m, const char *key) {
-    return tur_hamt_has_eq(m, tur_hamt_hash_str(key), (void *)key,
+    return tur_hamt_has_eq(m, tur_hamt_hash_str(key), (int64_t)(intptr_t)key,
                            hamt_cstr_key_eq);
 }
 
-void *tur_hamt_get_cstr(Hamt *m, const char *key) {
-    return tur_hamt_get_eq(m, tur_hamt_hash_str(key), (void *)key,
+int64_t tur_hamt_get_cstr(Hamt *m, const char *key) {
+    return tur_hamt_get_eq(m, tur_hamt_hash_str(key), (int64_t)(intptr_t)key,
                            hamt_cstr_key_eq);
 }
 
@@ -1345,7 +1344,7 @@ void *tur_hamt_get_cstr(Hamt *m, const char *key) {
  * regen.  Each entry clears the no-ctx hook for its scope (see hamt_save_eq_hooks).
  * --------------------------------------------------------------------------*/
 
-Hamt *tur_hamt_set_eq_ctx(Hamt *m, uint64_t hash, void *key, void *val,
+Hamt *tur_hamt_set_eq_ctx(Hamt *m, uint64_t hash, int64_t key, int64_t val,
                           tur_hamt_keyeq_ctx_fn eq, void *ctx) {
     hamt_eq_hook_save save = hamt_save_eq_hooks();
     g_hamt_key_eq = NULL; g_hamt_key_eq_ctx_fn = eq; g_hamt_key_eq_ctx = ctx;
@@ -1354,7 +1353,7 @@ Hamt *tur_hamt_set_eq_ctx(Hamt *m, uint64_t hash, void *key, void *val,
     return r;
 }
 
-Hamt *tur_hamt_del_eq_ctx(Hamt *m, uint64_t hash, void *key,
+Hamt *tur_hamt_del_eq_ctx(Hamt *m, uint64_t hash, int64_t key,
                           tur_hamt_keyeq_ctx_fn eq, void *ctx) {
     hamt_eq_hook_save save = hamt_save_eq_hooks();
     g_hamt_key_eq = NULL; g_hamt_key_eq_ctx_fn = eq; g_hamt_key_eq_ctx = ctx;
@@ -1363,7 +1362,7 @@ Hamt *tur_hamt_del_eq_ctx(Hamt *m, uint64_t hash, void *key,
     return r;
 }
 
-bool tur_hamt_has_eq_ctx(Hamt *m, uint64_t hash, void *key,
+bool tur_hamt_has_eq_ctx(Hamt *m, uint64_t hash, int64_t key,
                          tur_hamt_keyeq_ctx_fn eq, void *ctx) {
     hamt_eq_hook_save save = hamt_save_eq_hooks();
     g_hamt_key_eq = NULL; g_hamt_key_eq_ctx_fn = eq; g_hamt_key_eq_ctx = ctx;
@@ -1372,11 +1371,11 @@ bool tur_hamt_has_eq_ctx(Hamt *m, uint64_t hash, void *key,
     return r;
 }
 
-void *tur_hamt_get_eq_ctx(Hamt *m, uint64_t hash, void *key,
+int64_t tur_hamt_get_eq_ctx(Hamt *m, uint64_t hash, int64_t key,
                           tur_hamt_keyeq_ctx_fn eq, void *ctx) {
     hamt_eq_hook_save save = hamt_save_eq_hooks();
     g_hamt_key_eq = NULL; g_hamt_key_eq_ctx_fn = eq; g_hamt_key_eq_ctx = ctx;
-    void *r = tur_hamt_get(m, hash, key);
+    int64_t r = tur_hamt_get(m, hash, key);
     hamt_restore_eq_hooks(save);
     return r;
 }
@@ -1420,7 +1419,7 @@ static void hamt_restore_key_hooks(hamt_key_hook_save s) {
     g_hamt_key_release   = s.release;
 }
 
-Hamt *tur_hamt_set_eq_owned(Hamt *m, uint64_t hash, void *key, void *val,
+Hamt *tur_hamt_set_eq_owned(Hamt *m, uint64_t hash, int64_t key, int64_t val,
                             tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops) {
     hamt_key_hook_save s = hamt_install_key_hooks(eq, ops);
     /* On update the passed key is not stored (the existing entry's key is
@@ -1428,38 +1427,38 @@ Hamt *tur_hamt_set_eq_owned(Hamt *m, uint64_t hash, void *key, void *val,
      * front while the eq hook is installed. */
     bool existed = m ? tur_hamt_has(m, hash, key) : false;
     Hamt *r = tur_hamt_set(m, hash, key, val);
-    if (existed && ops.release) ops.release(key);
+    if (existed && ops.release) ops.release((void *)(intptr_t)key);
     if (r) { r->key_ops = ops; r->key_ops.eq = eq; }  /* GDE3: stamp comparator */
     hamt_restore_key_hooks(s);
     return r;
 }
 
-Hamt *tur_hamt_del_eq_owned(Hamt *m, uint64_t hash, void *key,
+Hamt *tur_hamt_del_eq_owned(Hamt *m, uint64_t hash, int64_t key,
                             tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops) {
     hamt_key_hook_save s = hamt_install_key_hooks(eq, ops);
     Hamt *r = tur_hamt_del(m, hash, key);
     if (r) { r->key_ops = ops; r->key_ops.eq = eq; }  /* GDE3: stamp comparator */
     /* The probe key is never stored; release the caller's reference.  (The
      * removed entry's own key reference was released inside node_delete.) */
-    if (ops.release) ops.release(key);
+    if (ops.release) ops.release((void *)(intptr_t)key);
     hamt_restore_key_hooks(s);
     return r;
 }
 
-bool tur_hamt_has_eq_owned(Hamt *m, uint64_t hash, void *key,
+bool tur_hamt_has_eq_owned(Hamt *m, uint64_t hash, int64_t key,
                            tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops) {
     hamt_key_hook_save s = hamt_install_key_hooks(eq, ops);
     bool r = tur_hamt_has(m, hash, key);
-    if (ops.release) ops.release(key);  /* transient probe */
+    if (ops.release) ops.release((void *)(intptr_t)key);  /* transient probe */
     hamt_restore_key_hooks(s);
     return r;
 }
 
-void *tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, void *key,
+int64_t tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, int64_t key,
                             tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops) {
     hamt_key_hook_save s = hamt_install_key_hooks(eq, ops);
-    void *r = tur_hamt_get(m, hash, key);
-    if (ops.release) ops.release(key);  /* transient probe */
+    int64_t r = tur_hamt_get(m, hash, key);
+    if (ops.release) ops.release((void *)(intptr_t)key);  /* transient probe */
     hamt_restore_key_hooks(s);
     return r;
 }
@@ -1485,7 +1484,7 @@ void *tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, void *key,
  *
  * The _eq_o wrappers hardcode the box refcount and so must only ever be handed
  * bit 1; a bit-2 caller goes through _vo with its own ops. */
-Hamt *tur_hamt_set_eq_vo(Hamt *m, uint64_t hash, void *key, void *val,
+Hamt *tur_hamt_set_eq_vo(Hamt *m, uint64_t hash, int64_t key, int64_t val,
                          tur_hamt_keyeq_fn eq, int64_t owned,
                          void (*val_retain)(void *), void (*val_release)(void *)) {
     tur_hamt_val_ops vops = { val_retain, val_release };
@@ -1503,13 +1502,13 @@ Hamt *tur_hamt_set_eq_vo(Hamt *m, uint64_t hash, void *key, void *val,
     return r;
 }
 
-Hamt *tur_hamt_set_eq_o(Hamt *m, uint64_t hash, void *key, void *val,
+Hamt *tur_hamt_set_eq_o(Hamt *m, uint64_t hash, int64_t key, int64_t val,
                         tur_hamt_keyeq_fn eq, int64_t owned) {
     return tur_hamt_set_eq_vo(m, hash, key, val, eq, owned,
                               tur_hamt_box_retain, tur_hamt_box_release);
 }
 
-Hamt *tur_hamt_del_eq_vo(Hamt *m, uint64_t hash, void *key,
+Hamt *tur_hamt_del_eq_vo(Hamt *m, uint64_t hash, int64_t key,
                          tur_hamt_keyeq_fn eq, int64_t owned,
                          void (*val_retain)(void *), void (*val_release)(void *)) {
     tur_hamt_val_ops vops = { val_retain, val_release };
@@ -1527,20 +1526,20 @@ Hamt *tur_hamt_del_eq_vo(Hamt *m, uint64_t hash, void *key,
     return r;
 }
 
-Hamt *tur_hamt_del_eq_o(Hamt *m, uint64_t hash, void *key,
+Hamt *tur_hamt_del_eq_o(Hamt *m, uint64_t hash, int64_t key,
                         tur_hamt_keyeq_fn eq, int64_t owned) {
     return tur_hamt_del_eq_vo(m, hash, key, eq, owned,
                               tur_hamt_box_retain, tur_hamt_box_release);
 }
 
-bool tur_hamt_has_eq_o(Hamt *m, uint64_t hash, void *key,
+bool tur_hamt_has_eq_o(Hamt *m, uint64_t hash, int64_t key,
                        tur_hamt_keyeq_fn eq, int64_t owned) {
     if (owned & 1)
         return tur_hamt_has_eq_owned(m, hash, key, eq, tur_hamt_box_key_ops());
     return tur_hamt_has_eq(m, hash, key, eq);
 }
 
-void *tur_hamt_get_eq_o(Hamt *m, uint64_t hash, void *key,
+int64_t tur_hamt_get_eq_o(Hamt *m, uint64_t hash, int64_t key,
                         tur_hamt_keyeq_fn eq, int64_t owned) {
     if (owned & 1)
         return tur_hamt_get_eq_owned(m, hash, key, eq, tur_hamt_box_key_ops());
@@ -1563,9 +1562,9 @@ bool tur_hamt_eq_dynamic(int64_t a_handle, int64_t b_handle, int64_t val_cmp) {
     HamtIter iter_buf;
     tur_hamt_iter_init(&iter_buf, a);
     uint64_t hash_out;
-    void *key_out = NULL, *val_out = NULL;
+    int64_t key_out = 0, val_out = 0;
     while (tur_hamt_iter_next(&iter_buf, &hash_out, &key_out, &val_out)) {
-        void *val_in_b = keyeq
+        int64_t val_in_b = keyeq
             ? tur_hamt_get_eq(b, hash_out, key_out, keyeq)
             : tur_hamt_get(b, hash_out, key_out);
         if (!val_in_b) { tur_hamt_iter_free(&iter_buf); return false; }
@@ -1574,8 +1573,7 @@ bool tur_hamt_eq_dynamic(int64_t a_handle, int64_t b_handle, int64_t val_cmp) {
          * and the dispatcher both box the comparator now). */
         bool vals_eq = ((bool (*)(void *, int64_t, int64_t))(intptr_t)
                             ((int64_t *)(intptr_t)val_cmp)[0])(
-            (void *)(intptr_t)val_cmp,
-            (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+            (void *)(intptr_t)val_cmp, val_out, val_in_b);
         if (!vals_eq) { tur_hamt_iter_free(&iter_buf); return false; }
     }
     tur_hamt_iter_free(&iter_buf);
@@ -1592,7 +1590,7 @@ Hamt *tur_hamt_merge(Hamt *a, Hamt *b) {
     tur_hamt_iter_init(&iter, b);
 
     uint64_t hash;
-    void *key, *val;
+    int64_t key, val;
     while (tur_hamt_iter_next(&iter, &hash, &key, &val)) {
         Hamt *old = result;
         result = tur_hamt_set(result, hash, key, val);
@@ -1605,16 +1603,16 @@ Hamt *tur_hamt_merge(Hamt *a, Hamt *b) {
     return result;
 }
 
-Hamt *tur_hamt_map(Hamt *m, void *(*fn)(void *val, void *ctx), void *ctx) {
+Hamt *tur_hamt_map(Hamt *m, int64_t (*fn)(int64_t val, void *ctx), void *ctx) {
     Hamt *result = tur_hamt_new();
 
     HamtIter iter;
     tur_hamt_iter_init(&iter, m);
 
     uint64_t hash;
-    void *key, *val;
+    int64_t key, val;
     while (tur_hamt_iter_next(&iter, &hash, &key, &val)) {
-        void *new_val = fn(val, ctx);
+        int64_t new_val = fn(val, ctx);
         Hamt *old = result;
         result = tur_hamt_set(result, hash, key, new_val);
         if (old != result) tur_hamt_free(old);
@@ -1624,14 +1622,14 @@ Hamt *tur_hamt_map(Hamt *m, void *(*fn)(void *val, void *ctx), void *ctx) {
     return result;
 }
 
-Hamt *tur_hamt_filter(Hamt *m, bool (*fn)(void *key, void *val, void *ctx), void *ctx) {
+Hamt *tur_hamt_filter(Hamt *m, bool (*fn)(int64_t key, int64_t val, void *ctx), void *ctx) {
     Hamt *result = tur_hamt_new();
 
     HamtIter iter;
     tur_hamt_iter_init(&iter, m);
 
     uint64_t hash;
-    void *key, *val;
+    int64_t key, val;
     while (tur_hamt_iter_next(&iter, &hash, &key, &val)) {
         if (fn(key, val, ctx)) {
             Hamt *old = result;
@@ -1644,14 +1642,14 @@ Hamt *tur_hamt_filter(Hamt *m, bool (*fn)(void *key, void *val, void *ctx), void
     return result;
 }
 
-void *tur_hamt_reduce(Hamt *m, void *(*fn)(void *acc, void *key, void *val, void *ctx), void *init, void *ctx) {
-    void *acc = init;
+int64_t tur_hamt_reduce(Hamt *m, int64_t (*fn)(int64_t acc, int64_t key, int64_t val, void *ctx), int64_t init, void *ctx) {
+    int64_t acc = init;
 
     HamtIter iter;
     tur_hamt_iter_init(&iter, m);
 
     uint64_t hash;
-    void *key, *val;
+    int64_t key, val;
     while (tur_hamt_iter_next(&iter, &hash, &key, &val)) {
         acc = fn(acc, key, val, ctx);
     }
@@ -1660,7 +1658,7 @@ void *tur_hamt_reduce(Hamt *m, void *(*fn)(void *acc, void *key, void *val, void
     return acc;
 }
 
-Hamt *tur_hamt_merge_with(Hamt *a, Hamt *b, void *(*fn)(void *va, void *vb, void *ctx), void *ctx) {
+Hamt *tur_hamt_merge_with(Hamt *a, Hamt *b, int64_t (*fn)(int64_t va, int64_t vb, void *ctx), void *ctx) {
     if (!a) return tur_hamt_retain(b);
     if (!b) return tur_hamt_retain(a);
 
@@ -1670,10 +1668,10 @@ Hamt *tur_hamt_merge_with(Hamt *a, Hamt *b, void *(*fn)(void *va, void *vb, void
     tur_hamt_iter_init(&iter, b);
 
     uint64_t hash;
-    void *key, *val_b;
+    int64_t key, val_b;
     while (tur_hamt_iter_next(&iter, &hash, &key, &val_b)) {
-        void *val_a = tur_hamt_get(result, hash, key);
-        void *new_val = (val_a != NULL) ? fn(val_a, val_b, ctx) : val_b;
+        int64_t val_a = tur_hamt_get(result, hash, key);
+        int64_t new_val = (val_a != 0) ? fn(val_a, val_b, ctx) : val_b;
         Hamt *old = result;
         result = tur_hamt_set(result, hash, key, new_val);
         if (old != result) tur_hamt_free(old);
@@ -1722,7 +1720,7 @@ void tur_hamt_iter_free(HamtIter *iter) {
     iter->done = true;
 }
 
-bool tur_hamt_iter_next(HamtIter *iter, uint64_t *hash_out, void **key_out, void **val_out) {
+bool tur_hamt_iter_next(HamtIter *iter, uint64_t *hash_out, int64_t *key_out, int64_t *val_out) {
     while (!iter->done) {
         /* Resume a collision chain from a previous call. */
         if (iter->coll_entry) {
@@ -1816,8 +1814,8 @@ bool tur_hamt_iter_next(HamtIter *iter, uint64_t *hash_out, void **key_out, void
 typedef struct {
     HamtIter iter;
     uint64_t cur_hash;
-    void *cur_key;
-    void *cur_val;
+    int64_t cur_key;
+    int64_t cur_val;
 } TurHamtIterBox;
 
 void *tur_hamt_iter_alloc(Hamt *m) {
@@ -1842,11 +1840,11 @@ int64_t tur_hamt_iter_cur_hash(void *box_) {
     return (int64_t)((TurHamtIterBox *)box_)->cur_hash;
 }
 
-void *tur_hamt_iter_cur_key(void *box_) {
+int64_t tur_hamt_iter_cur_key(void *box_) {
     return ((TurHamtIterBox *)box_)->cur_key;
 }
 
-void *tur_hamt_iter_cur_val(void *box_) {
+int64_t tur_hamt_iter_cur_val(void *box_) {
     return ((TurHamtIterBox *)box_)->cur_val;
 }
 
@@ -1860,13 +1858,13 @@ void *tur_hamt_keyeq(Hamt *m) {
 /* Identity-or-eq lookup: when keyeq is NULL falls back to tur_hamt_get,
  * else delegates to tur_hamt_get_eq.  Exists so the Turmeric loop body
  * stays a straight-line expression (no conditional around the lookup). */
-void *tur_hamt_get_dynamic(Hamt *m, int64_t hash, void *key, void *keyeq) {
+int64_t tur_hamt_get_dynamic(Hamt *m, int64_t hash, int64_t key, void *keyeq) {
     if (keyeq)
         return tur_hamt_get_eq(m, (uint64_t)hash, key, (tur_hamt_keyeq_fn)(intptr_t)keyeq);
     return tur_hamt_get(m, (uint64_t)hash, key);
 }
 
-bool tur_hamt_has_dynamic(Hamt *m, int64_t hash, void *key, void *keyeq) {
+bool tur_hamt_has_dynamic(Hamt *m, int64_t hash, int64_t key, void *keyeq) {
     if (keyeq)
         return tur_hamt_has_eq(m, (uint64_t)hash, key, (tur_hamt_keyeq_fn)(intptr_t)keyeq);
     return tur_hamt_has(m, (uint64_t)hash, key);
@@ -1919,7 +1917,7 @@ static void dump_node(HamtNode *n, FILE *out, int indent) {
             for (HamtEntry *e = n->as.collision.entries; e; e = e->next) {
                 for (int j = 0; j < indent + 1; j++) fprintf(out, "  ");
                 fprintf(out, "  {hash=0x%016llX, key=%p, val=%p}\n",
-                        (unsigned long long)e->hash, e->key, e->val);
+                        (unsigned long long)e->hash, (void *)(intptr_t)e->key, (void *)(intptr_t)e->val);
             }
             break;
         }
@@ -1931,7 +1929,7 @@ static void dump_node(HamtNode *n, FILE *out, int indent) {
 char *tur_hamt_show(Hamt *m) {
     if (!m || m->count == 0) {
         char *s = (char *)malloc(3);
-        if (!s) return NULL;
+        if (!s) return 0;
         s[0] = '{'; s[1] = '}'; s[2] = '\0';
         return s;
     }
@@ -1941,7 +1939,7 @@ char *tur_hamt_show(Hamt *m) {
      * overran (security audit WP5, M-5). */
     size_t cap = (size_t)m->count * 48 + 4;
     char *buf = (char *)malloc(cap);
-    if (!buf) return NULL;
+    if (!buf) return 0;
     size_t pos = 0;
     buf[pos++] = '{';
     bool first = true;
@@ -1949,11 +1947,11 @@ char *tur_hamt_show(Hamt *m) {
     HamtIter iter;
     tur_hamt_iter_init(&iter, m);
     uint64_t hash;
-    void *key, *val;
+    int64_t key, val;
     while (tur_hamt_iter_next(&iter, &hash, &key, &val)) {
         if (!first) { buf[pos++] = ','; buf[pos++] = ' '; }
         first = false;
-        int written = snprintf(buf + pos, cap - pos, "%p->%p", key, val);
+        int written = snprintf(buf + pos, cap - pos, "%p->%p", (void *)(intptr_t)key, (void *)(intptr_t)val);
         pos += (size_t)written;
     }
     tur_hamt_iter_free(&iter);
@@ -2022,10 +2020,10 @@ void tur_hamt_dump_dot(Hamt *m, FILE *out) {
     HamtIter iter;
     tur_hamt_iter_init(&iter, m);
     uint64_t hash;
-    void *key, *val;
+    int64_t key, val;
     while (tur_hamt_iter_next(&iter, &hash, &key, &val)) {
         fprintf(out, "  e%016llx [label=\"{hash=0x%016llx|key=%p|val=%p}\" shape=box];\n",
-                (unsigned long long)hash, (unsigned long long)hash, key, val);
+                (unsigned long long)hash, (unsigned long long)hash, (void *)(intptr_t)key, (void *)(intptr_t)val);
         fprintf(out, "  n%p -> e%016llx;\n", (void *)m->root, (unsigned long long)hash);
     }
     tur_hamt_iter_free(&iter);
@@ -2054,7 +2052,7 @@ static uint64_t g_transient_token = 1;  /* monotonically increasing */
 
 HamtTransient *tur_hamt_transient(Hamt *m) {
     HamtTransient *t = (HamtTransient *)malloc(sizeof(HamtTransient));
-    if (!t) return NULL;
+    if (!t) return 0;
 
     if (m && m->root) {
         t->root = m->root;
@@ -2068,7 +2066,7 @@ HamtTransient *tur_hamt_transient(Hamt *m) {
     return t;
 }
 
-void tur_hamt_transient_set(HamtTransient *t, uint64_t hash, void *key, void *val) {
+void tur_hamt_transient_set(HamtTransient *t, uint64_t hash, int64_t key, int64_t val) {
     if (!t) return;
     if (t->token == 0) {
         fprintf(stderr, "tur: transient used after persistent! (invalidated)\n");
@@ -2080,8 +2078,8 @@ void tur_hamt_transient_set(HamtTransient *t, uint64_t hash, void *key, void *va
      * entry takes `ptr<void>` words, so a node reached here through an
      * explicit erasure that was already noted -- this is the host-runtime
      * half, for a caller that did not come through one (security-audit WP5). */
-    hamt_region_note(key);
-    hamt_region_note(val);
+    hamt_region_note((void *)(intptr_t)key);
+    hamt_region_note((void *)(intptr_t)val);
 
     /* In place: t owns its root, so node_insert_mut takes that reference and
      * hands back the root to keep, copying only nodes still shared with the
@@ -2093,7 +2091,7 @@ void tur_hamt_transient_set(HamtTransient *t, uint64_t hash, void *key, void *va
     }
 }
 
-void tur_hamt_transient_del(HamtTransient *t, uint64_t hash, void *key) {
+void tur_hamt_transient_del(HamtTransient *t, uint64_t hash, int64_t key) {
     if (!t) return;
     if (t->token == 0) {
         fprintf(stderr, "tur: transient used after persistent! (invalidated)\n");

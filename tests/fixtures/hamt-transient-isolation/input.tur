@@ -1,11 +1,11 @@
 ; P4: Transient isolation — original map unchanged after transient mutations
 
-(defn alloc-str [s : cstr] : ptr<void>
+(defn alloc-str [s : cstr] : int
   ```c
   #include <string.h>
   char *p = (char *)malloc(strlen(s) + 1);
   memcpy(p, s, strlen(s) + 1);
-  return (void *)p;
+  return (int64_t)(intptr_t)p;
   ```)
 
 (defn build-base [] : ptr<void>

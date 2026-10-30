@@ -15,34 +15,34 @@
 
 (extern-c tur_hamt_count [m :ptr] :int)
 
-(extern-c tur_hamt_set [m :ptr hash :int key :ptr val :ptr] :ptr)
+(extern-c tur_hamt_set [m :ptr hash :int key :int val :int] :ptr)
 
-(extern-c tur_hamt_del [m :ptr hash :int key :ptr] :ptr)
+(extern-c tur_hamt_del [m :ptr hash :int key :int] :ptr)
 
-(extern-c tur_hamt_has [m :ptr hash :int key :ptr] :bool)
+(extern-c tur_hamt_has [m :ptr hash :int key :int] :bool)
 
-(extern-c tur_hamt_get [m :ptr hash :int key :ptr] :ptr)
+(extern-c tur_hamt_get [m :ptr hash :int key :int] :int)
 ; TCE4: key-equality-aware variants -- eq is an opaque closure handle
 ; (bool(*)(int64_t,int64_t)) consulted when two keys share a hash.
 
-(extern-c tur_hamt_set_eq [m :ptr hash :int key :ptr val :ptr eq :ptr] :ptr)
+(extern-c tur_hamt_set_eq [m :ptr hash :int key :int val :int eq :ptr] :ptr)
 
-(extern-c tur_hamt_del_eq [m :ptr hash :int key :ptr eq :ptr] :ptr)
+(extern-c tur_hamt_del_eq [m :ptr hash :int key :int eq :ptr] :ptr)
 
-(extern-c tur_hamt_has_eq [m :ptr hash :int key :ptr eq :ptr] :bool)
+(extern-c tur_hamt_has_eq [m :ptr hash :int key :int eq :ptr] :bool)
 
-(extern-c tur_hamt_get_eq [m :ptr hash :int key :ptr eq :ptr] :ptr)
+(extern-c tur_hamt_get_eq [m :ptr hash :int key :int eq :ptr] :int)
 ; Content-keyed cstr convenience entry points: hash by content, compare by
 ; content on collision.  The P3 ^persistent lowering routes :cstr keys here
 ; (hash-ptr + identity compare only "worked" via unspecified literal merging).
 
-(extern-c tur_hamt_set_cstr [m :ptr key :cstr val :ptr] :ptr)
+(extern-c tur_hamt_set_cstr [m :ptr key :cstr val :int] :ptr)
 
 (extern-c tur_hamt_del_cstr [m :ptr key :cstr] :ptr)
 
 (extern-c tur_hamt_has_cstr [m :ptr key :cstr] :bool)
 
-(extern-c tur_hamt_get_cstr [m :ptr key :cstr] :ptr)
+(extern-c tur_hamt_get_cstr [m :ptr key :cstr] :int)
 ; WKC2/WKC3: boxed-key carrier + ownership-aware operations.  tur_hamt_box_key
 ; heap-copies `n` key bytes behind a refcount header and returns the payload
 ; pointer; the *_eq_o variants take an `owned` flag selecting the standard
@@ -57,10 +57,10 @@
 (extern-c tur_hamt_box_key_eq [a :int b :int] :bool)
 
 (extern-c tur_hamt_set_eq_o
-  [m :ptr hash :int key :ptr val :ptr eq :ptr owned :int]
+  [m :ptr hash :int key :int val :int eq :ptr owned :int]
   :ptr)
 
-(extern-c tur_hamt_del_eq_o [m :ptr hash :int key :ptr eq :ptr owned :int] :ptr)
+(extern-c tur_hamt_del_eq_o [m :ptr hash :int key :int eq :ptr owned :int] :ptr)
 ; collections-cannot-hold-rc-values (map side, step c): the _vo variants take
 ; the value retain/release ops explicitly instead of hardcoding the boxed-value
 ; refcount, so a map can own rc<T> values.  The ops must be EMITTED functions
@@ -79,9 +79,9 @@
    hash
    :int
    key
-   :ptr
+   :int
    val
-   :ptr
+   :int
    eq
    :ptr
    owned
@@ -98,7 +98,7 @@
    hash
    :int
    key
-   :ptr
+   :int
    eq
    :ptr
    owned
@@ -110,10 +110,10 @@
   :ptr)
 
 (extern-c tur_hamt_has_eq_o
-  [m :ptr hash :int key :ptr eq :ptr owned :int]
+  [m :ptr hash :int key :int eq :ptr owned :int]
   :bool)
 
-(extern-c tur_hamt_get_eq_o [m :ptr hash :int key :ptr eq :ptr owned :int] :ptr)
+(extern-c tur_hamt_get_eq_o [m :ptr hash :int key :int eq :ptr owned :int] :int)
 
 (extern-c tur_hamt_merge [a :ptr b :ptr] :ptr)
 
@@ -195,7 +195,7 @@
 ;; hash: 64-bit hash of the key (passed as int = int64_t)
 
 
-(defn hamt/set [m : ptr<void> hash : int key : ptr<void> val : ptr<void>]
+(defn hamt/set [m : ptr<void> hash : int key : int val : int]
   #fx{}
   : ptr<void>
   (tur_hamt_set m hash key val))
@@ -215,7 +215,7 @@
 ;;; Since: Phase P1
 ;; Delete a key. Returns a new HAMT.
 
-(defn hamt/del [m : ptr<void> hash : int key : ptr<void>]
+(defn hamt/del [m : ptr<void> hash : int key : int]
   #fx{}
   : ptr<void>
   (tur_hamt_del m hash key))
@@ -235,9 +235,9 @@
 ;;; Since: Phase P1
 ;; Get the value for a key. Returns NULL if not found.
 
-(defn hamt/get [m : ptr<void> hash : int key : ptr<void>]
+(defn hamt/get [m : ptr<void> hash : int key : int]
   #fx{}
-  : ptr<void>
+  : int
   (tur_hamt_get m hash key))
 ;;; hamt/has? -- check whether a key exists in the HAMT.
 ;;;
@@ -255,7 +255,7 @@
 ;;; Since: Phase P1
 ;; Check if a key exists in the HAMT.
 
-(defn hamt/has? [m : ptr<void> hash : int key : ptr<void>]
+(defn hamt/has? [m : ptr<void> hash : int key : int]
   #fx{}
   : bool
   (tur_hamt_has m hash key))
@@ -279,7 +279,7 @@
 ;;;
 ;;; Since: Phase P3
 
-(defn hamt/set-cstr [m : ptr<void> key : cstr val : ptr<void>]
+(defn hamt/set-cstr [m : ptr<void> key : cstr val : int]
   #fx{}
   : ptr<void>
   (tur_hamt_set_cstr m key val))
@@ -317,7 +317,7 @@
 
 (defn hamt/get-cstr [m : ptr<void> key : cstr]
   #fx{}
-  : ptr<void>
+  : int
   (tur_hamt_get_cstr m key))
 ;;; hamt/has-cstr? -- check whether a string key exists, compared by content.
 ;;;
@@ -481,15 +481,15 @@
 
 (extern-c tur_hamt_iter_cur_hash [box :ptr] :int)
 
-(extern-c tur_hamt_iter_cur_key [box :ptr] :ptr)
+(extern-c tur_hamt_iter_cur_key [box :ptr] :int)
 
-(extern-c tur_hamt_iter_cur_val [box :ptr] :ptr)
+(extern-c tur_hamt_iter_cur_val [box :ptr] :int)
 
 (extern-c tur_hamt_keyeq [m :ptr] :ptr)
 
-(extern-c tur_hamt_get_dynamic [m :ptr hash :int key :ptr keyeq :ptr] :ptr)
+(extern-c tur_hamt_get_dynamic [m :ptr hash :int key :int keyeq :ptr] :int)
 
-(extern-c tur_hamt_has_dynamic [m :ptr hash :int key :ptr keyeq :ptr] :bool)
+(extern-c tur_hamt_has_dynamic [m :ptr hash :int key :int keyeq :ptr] :bool)
 ;;; hamt/iter-alloc -- allocate an iterator box for HAMT m.
 ;;;
 ;;; Returns an opaque handle that owns a HamtIter plus cached current
@@ -528,14 +528,14 @@
 
 (defn hamt/iter-cur-key [box : ptr<void>]
   #fx{}
-  : ptr<void>
+  : int
   (tur_hamt_iter_cur_key box))
 ;;; hamt/iter-cur-val -- current entry's value pointer.
 
 
 (defn hamt/iter-cur-val [box : ptr<void>]
   #fx{}
-  : ptr<void>
+  : int
   (tur_hamt_iter_cur_val box))
 ;;; hamt/keyeq -- read the stamped key comparator off a HAMT (NULL = identity).
 
@@ -548,17 +548,17 @@
 
 (defn hamt/get-dynamic [m : ptr<void>
                         hash : int
-                        key : ptr<void>
+                        key : int
                         keyeq : ptr<void>]
   #fx{}
-  : ptr<void>
+  : int
   (tur_hamt_get_dynamic m hash key keyeq))
 ;;; hamt/has-dynamic? -- presence check matching hamt/get-dynamic's semantics.
 
 
 (defn hamt/has-dynamic? [m : ptr<void>
                          hash : int
-                         key : ptr<void>
+                         key : int
                          keyeq : ptr<void>]
   #fx{}
   : bool
@@ -572,14 +572,14 @@
 
 (extern-c tur_hamt_filter [m :ptr fn :ptr ctx :ptr] :ptr)
 
-(extern-c tur_hamt_reduce [m :ptr fn :ptr init :ptr ctx :ptr] :ptr)
+(extern-c tur_hamt_reduce [m :ptr fn :ptr init :int ctx :ptr] :int)
 
 (extern-c tur_hamt_merge_with [a :ptr b :ptr fn :ptr ctx :ptr] :ptr)
 ;;; hamt/map -- return a new HAMT with each value replaced by fn(val, ctx).
 ;;;
 ;;; Parameters:
 ;;;   m   -- source HAMT pointer
-;;;   fn  -- C function pointer (val :ptr, ctx :ptr) -> :ptr
+;;;   fn  -- C function pointer (val :int, ctx :ptr) -> :ptr
 ;;;   ctx -- caller-supplied context passed to fn
 ;;;
 ;;; Returns:
@@ -599,7 +599,7 @@
 ;;;
 ;;; Parameters:
 ;;;   m   -- source HAMT pointer
-;;;   fn  -- C predicate pointer (key :ptr, val :ptr, ctx :ptr) -> bool
+;;;   fn  -- C predicate pointer (key :int, val :int, ctx :ptr) -> bool
 ;;;   ctx -- caller-supplied context passed to fn
 ;;;
 ;;; Returns:
@@ -619,7 +619,7 @@
 ;;;
 ;;; Parameters:
 ;;;   m    -- source HAMT pointer
-;;;   fn   -- C function pointer (acc :ptr, key :ptr, val :ptr, ctx :ptr) -> :ptr
+;;;   fn   -- C function pointer (acc :ptr, key :int, val :int, ctx :ptr) -> :ptr
 ;;;   init -- initial accumulator pointer
 ;;;   ctx  -- caller-supplied context passed to fn
 ;;;
@@ -634,10 +634,10 @@
 
 (defn hamt/reduce [m : ptr<void>
                    fn : ptr<void>
-                   init : ptr<void>
+                   init : int
                    ctx : ptr<void>]
   #fx{}
-  : ptr<void>
+  : int
   (tur_hamt_reduce m fn init ctx))
 ;;; hamt/merge-with -- merge two HAMTs, resolving key conflicts with fn(val_a, val_b, ctx).
 ;;;
@@ -703,9 +703,9 @@
 
 (extern-c tur_hamt_transient [m :ptr] :ptr)
 
-(extern-c tur_hamt_transient_set [t :ptr hash :int key :ptr val :ptr] :void)
+(extern-c tur_hamt_transient_set [t :ptr hash :int key :int val :int] :void)
 
-(extern-c tur_hamt_transient_del [t :ptr hash :int key :ptr] :void)
+(extern-c tur_hamt_transient_del [t :ptr hash :int key :int] :void)
 
 (extern-c tur_hamt_persistent [t :ptr] :ptr)
 ;;; hamt/transient -- fork a mutable transient from an immutable HAMT.
@@ -739,8 +739,8 @@
 
 (defn hamt/transient-set! [t : ptr<void>
                            hash : int
-                           key : ptr<void>
-                           val : ptr<void>]
+                           key : int
+                           val : int]
   #fx{}
   : void
   (tur_hamt_transient_set t hash key val))
@@ -757,7 +757,7 @@
 ;;; Since: Phase P1
 ;; Mutate a transient: delete key (hash, key).
 
-(defn hamt/transient-del! [t : ptr<void> hash : int key : ptr<void>]
+(defn hamt/transient-del! [t : ptr<void> hash : int key : int]
   #fx{}
   : void
   (tur_hamt_transient_del t hash key))

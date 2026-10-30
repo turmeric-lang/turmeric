@@ -3,11 +3,11 @@
 
 (extern-c free [p :ptr] :void)
 
-(defn alloc-int [x : int] : ptr
+(defn alloc-int [x : int] : int
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
-  return (void *)p;
+  return (int64_t)(intptr_t)p;
   ```)
 
 (defn test-memory [] : int
@@ -16,8 +16,8 @@
       (let [v1 (alloc-int 10)]
         (let [v2 (alloc-int 20)]
           (let [m1 (hamt/new)]
-            (let [h1 (hamt/hash-ptr k1)]
-              (let [h2 (hamt/hash-ptr k2)]
+            (let [h1 (hamt/hash-ptr (:: k1 ptr<void>))]
+              (let [h2 (hamt/hash-ptr (:: k2 ptr<void>))]
                 (let [m2 (hamt/set m1 h1 k1 v1)]
                   (let [m1-count (hamt/count m1)]
                     (let [m2-count (hamt/count m2)]
@@ -27,10 +27,10 @@
                             (hamt/free m1)
                             (hamt/free m2)
                             (hamt/free m3)
-                            (free k1)
-                            (free k2)
-                            (free v1)
-                            (free v2)
+                            (free (:: k1 :ptr))
+                            (free (:: k2 :ptr))
+                            (free (:: v1 :ptr))
+                            (free (:: v2 :ptr))
                             (if (and (= m1-count 0)
                                      (= m2-count 1)
                                      (= m2-count2 1)

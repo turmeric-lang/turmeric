@@ -116,13 +116,13 @@
        exactly as it does for vec-push! -- so this stores it without retaining
        again.  The ops must be the EMITTED shims so they bind to THIS program's
        copy of the collector (see the preamble note on __tur_rc_val_retain). */
-    new_hamt = tur_hamt_set_eq_vo(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
-                                  (void *)(intptr_t)val, (void *)(intptr_t)keyeq,
+    new_hamt = tur_hamt_set_eq_vo(map->hamt, (uint64_t)h, key,
+                                  val, (void *)(intptr_t)keyeq,
                                   (int64_t)owned,
                                   __tur_rc_val_retain, __tur_rc_val_release);
   } else {
-    new_hamt = tur_hamt_set_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
-                                 (void *)(intptr_t)val, (void *)(intptr_t)keyeq,
+    new_hamt = tur_hamt_set_eq_o(map->hamt, (uint64_t)h, key,
+                                 val, (void *)(intptr_t)keyeq,
                                  (int64_t)owned);
   }
   struct { void *hamt; } *r = malloc(sizeof(*r));
@@ -134,8 +134,8 @@
 (defn map-get-eq-o [K V] [m (Map K V) h :int key :int keyeq owned :int] :V
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
-  return (int64_t)(intptr_t)tur_hamt_get_eq_o(map->hamt, (uint64_t)h,
-                                              (void *)(intptr_t)key,
+  return tur_hamt_get_eq_o(map->hamt, (uint64_t)h,
+                                              key,
                                               (void *)(intptr_t)keyeq, (int64_t)owned);
   ```)
 ;;; map-has-eq-o? -- raw existence test: explicit hash, boxed carrier key.
@@ -143,7 +143,7 @@
 (defn map-has-eq-o? [K V] [m (Map K V) h :int key :int keyeq owned :int] :bool
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
-  return tur_hamt_has_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
+  return tur_hamt_has_eq_o(map->hamt, (uint64_t)h, key,
                            (void *)(intptr_t)keyeq, (int64_t)owned);
   ```)
 ;;; map-dissoc-eq-o -- raw removal: explicit hash, boxed carrier key, comparator.
@@ -152,7 +152,7 @@
                                                                                V)
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
-  void *new_hamt = tur_hamt_del_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
+  void *new_hamt = tur_hamt_del_eq_o(map->hamt, (uint64_t)h, key,
                                      (void *)(intptr_t)keyeq, (int64_t)owned);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
@@ -197,8 +197,8 @@
                           keyeq : (c-fn [K K] bool)] : (Map K V)
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
-  void *new_hamt = tur_hamt_set_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
-                                   (void *)(intptr_t)val,
+  void *new_hamt = tur_hamt_set_eq(map->hamt, (uint64_t)h, key,
+                                   val,
                                    (void *)(intptr_t)keyeq);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
@@ -223,8 +223,8 @@
 (defn map-get-eq [K V] [m (Map K V) h :int key :K keyeq : (c-fn [K K] bool)] :V
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
-  return (int64_t)(intptr_t)tur_hamt_get_eq(map->hamt, (uint64_t)h,
-                                            (void *)(intptr_t)key,
+  return tur_hamt_get_eq(map->hamt, (uint64_t)h,
+                                            key,
                                             (void *)(intptr_t)keyeq);
   ```)
 ;;; map-has-eq? -- key-existence test using an explicit hash and equality fn.
@@ -246,7 +246,7 @@
 (defn map-has-eq? [K V] [m (Map K V) h :int key :K keyeq : (c-fn [K K] bool)] :bool
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
-  return tur_hamt_has_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
+  return tur_hamt_has_eq(map->hamt, (uint64_t)h, key,
                          (void *)(intptr_t)keyeq);
   ```)
 ;;; map-dissoc-eq -- remove a key using an explicit hash and equality fn.
@@ -269,7 +269,7 @@
                                                                                     V)
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
-  void *new_hamt = tur_hamt_del_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
+  void *new_hamt = tur_hamt_del_eq(map->hamt, (uint64_t)h, key,
                                    (void *)(intptr_t)keyeq);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
@@ -760,13 +760,13 @@
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
   tur_hamt_iter_init((void*)iter_buf, map1->hamt);
   uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
+  int64_t key_out = 0, val_out = 0;
   while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
-      void *val_in_b = tur_hamt_get(map2->hamt, (int64_t)hash_out, key_out);
+      int64_t val_in_b = tur_hamt_get(map2->hamt, (int64_t)hash_out, key_out);
       if (!val_in_b) { tur_hamt_iter_free((void*)iter_buf); return false; }
       /* CRU B-3: val-cmp is a fat closure box; fat-dispatch via slot 0. */
       bool vals_eq = ((int64_t(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)val_cmp)[0])(
-          (void*)(intptr_t)val_cmp, (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+          (void*)(intptr_t)val_cmp, val_out, val_in_b);
       if (!vals_eq) { tur_hamt_iter_free((void*)iter_buf); return false; }
   }
   tur_hamt_iter_free((void*)iter_buf);
@@ -805,15 +805,15 @@
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
   tur_hamt_iter_init((void*)iter_buf, map1->hamt);
   uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
+  int64_t key_out = 0, val_out = 0;
   while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
-      void *val_in_b = tur_hamt_get_eq(map2->hamt, (int64_t)hash_out, key_out,
+      int64_t val_in_b = tur_hamt_get_eq(map2->hamt, (int64_t)hash_out, key_out,
                                        (void *)(intptr_t)keyeq);
       if (!val_in_b) { tur_hamt_iter_free((void*)iter_buf); return false; }
       /* CRU B-3: val-cmp is a fat closure box; fat-dispatch via slot 0.
          keyeq stays a thin MapKey carrier (not a user closure). */
       bool vals_eq = ((int64_t(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)val_cmp)[0])(
-          (void*)(intptr_t)val_cmp, (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+          (void*)(intptr_t)val_cmp, val_out, val_in_b);
       if (!vals_eq) { tur_hamt_iter_free((void*)iter_buf); return false; }
   }
   tur_hamt_iter_free((void*)iter_buf);
@@ -864,7 +864,7 @@
 (defn map-iter-cur-val-as [V] [iter : ptr<void>]
   #fx{}
   : V
-  ```c return (int64_t)(intptr_t)tur_hamt_iter_cur_val((void*)(intptr_t)iter); ```)
+  ```c return tur_hamt_iter_cur_val((void*)(intptr_t)iter); ```)
 ;;; map-get-dynamic-as -- typed lookup against m2's hamt, threading m1's
 ;;; stamped key comparator so content-keyed maps (e.g. cstr keys) stay
 ;;; content-correct.  Returns V (cast at the carrier level).  The
@@ -874,11 +874,11 @@
 
 (defn map-get-dynamic-as [V] [m : ptr<void>
                               hash : int
-                              key : ptr<void>
+                              key : int
                               keyeq : ptr<void>]
   #fx{}
   : V
-  ```c return (int64_t)(intptr_t)tur_hamt_get_dynamic((void*)(intptr_t)m, hash, (void*)(intptr_t)key, (void*)(intptr_t)keyeq); ```)
+  ```c return tur_hamt_get_dynamic((void*)(intptr_t)m, hash, key, (void*)(intptr_t)keyeq); ```)
 ;;; map-eq-loop -- pure-Turmeric structural-equality walk over m1's HAMT.
 ;;;
 ;;; Path A specializes this per (K V) at the `Eq [Map]` dispatch site; the

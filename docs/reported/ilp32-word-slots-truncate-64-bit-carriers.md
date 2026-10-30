@@ -36,11 +36,22 @@ Four shapes, all measured on the module:
    `(intptr_t)((union { double d; int64_t i; }){ .d = x }).i`. On wasm32 that
    keeps the low 32 bits of 7.75's pattern, which are zero. Every
    `cps-backend-*float*` and `direct-fiber-effect-float-*` row is this.
-2. **HAMT and vector values are `void *`.** `tur_hamt_get` returns `void *`
-   (`src/runtime/hamt.h:156`), so a double stored as a map value comes back as
-   a denormal (7.1 reads as 8.48798e-315). `tce3-map-cstr-val`,
-   `mut-map-reassign`, `generic-map-assoc-sig-tyvar-value` and the `typed/vec-*`
-   rows are this.
+2. **HAMT and vector values are `void *`.** *Fixed 2026-10-30.* `tur_hamt_get`
+   returned `void *` (`src/runtime/hamt.h:156`), so a double stored as a map
+   value came back as a denormal (7.1 read as 8.48798e-315):
+   `tce3-map-cstr-val`, `mut-map-reassign`,
+   `generic-map-assoc-sig-tyvar-value`, `map-typed-consumer`,
+   `generic-spec-carrier-crossings-4`; all five left the baseline. The HAMT's
+   stored key and value are `int64_t` words now, through the whole
+   `tur_hamt_*` API (`set`/`get`/`has`/`del`, the `_eq`, `_eq_o`, `_eq_vo`,
+   `_owned`, `_ctx`, `_cstr` and `_dynamic` families, the iterators, and the
+   `map`/`filter`/`reduce`/`merge_with` callbacks); only the boxed-key
+   helpers and the retain/release ops keep pointers, since those are
+   pointers. The stdlib's `extern-c` rows and `hamt/*` wrappers say `:int`
+   for keys and values (so `hamt/get` returns `int`, not `ptr<void>`), and
+   the interpreter's natives pass the word through, which fixes the same
+   defect on the Interpret engine. Natively the layouts and values are
+   unchanged (LP64). The `typed/vec-*` rows were shape 3 (below), not this.
 3. **Declarations at the wrong width.** *Fixed 2026-10-30.*
    `stdlib/hamt.tur:16` declares `(extern-c tur_hamt_count [m :ptr] :int)`,
    which emits `extern int64_t tur_hamt_count(void *)` against the runtime's
