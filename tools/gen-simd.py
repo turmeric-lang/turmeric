@@ -30,28 +30,42 @@ import tempfile
 # U: unsigned C type the scalar lowering wraps in (wide enough that a product
 # of two lanes cannot overflow it), VU: the unsigned C lane type the vector
 # lowering wraps in, A/ap: the numvec array a vector loads from (or None),
-# SUM: what -hsum returns, e0/e1/e2: literal elements for examples.
+# SUM: what -hsum returns, e0/e1/e2: literal elements for examples (e1 < e0),
+# M: the mask type a comparison returns, IX: the index vector -shuffle takes.
 TYPES = [
-    dict(T="F64x2", p="f64x2", E="float", C="double", L=2, F=True,
+    dict(T="F64x2", M="m64x2", IX="i64x2", p="f64x2", E="float", C="double", L=2, F=True,
          A="F64Vec", ap="f64vec", SUM="float",
          e0="7.1", e1="3.25", e2="-1.5"),
-    dict(T="F32x4", p="f32x4", E="float32", C="float", L=4, F=True,
+    dict(T="F32x4", M="m32x4", IX="i32x4", p="f32x4", E="float32", C="float", L=4, F=True,
          A="F32Vec", ap="f32vec", SUM="float32",
          e0="(as float32 7.1)", e1="(as float32 3.25)", e2="(as float32 -1.5)"),
-    dict(T="I64x2", p="i64x2", E="int", C="int64_t", L=2, F=False,
+    dict(T="I64x2", M="m64x2", IX="i64x2", p="i64x2", E="int", C="int64_t", L=2, F=False,
          U="uint64_t", VU="uint64_t", A="I64Vec", ap="i64vec", SUM="int",
          e0="7", e1="3", e2="-2"),
-    dict(T="I32x4", p="i32x4", E="int32", C="int32_t", L=4, F=False,
+    dict(T="I32x4", M="m32x4", IX="i32x4", p="i32x4", E="int32", C="int32_t", L=4, F=False,
          U="uint32_t", VU="uint32_t", A="I32Vec", ap="i32vec", SUM="int",
          e0="(as int32 7)", e1="(as int32 3)", e2="(as int32 -2)"),
-    dict(T="U16x8", p="u16x8", E="uint16", C="uint16_t", L=8, F=False,
+    dict(T="U16x8", M="m16x8", IX="u16x8", p="u16x8", E="uint16", C="uint16_t", L=8, F=False,
          U="uint32_t", VU="uint16_t", A=None, ap=None, SUM="int",
          e0="(as uint16 7)", e1="(as uint16 3)", e2="(as uint16 65535)"),
-    dict(T="U8x16", p="u8x16", E="uint8", C="uint8_t", L=16, F=False,
+    dict(T="U8x16", M="m8x16", IX="u8x16", p="u8x16", E="uint8", C="uint8_t", L=16, F=False,
          U="uint32_t", VU="uint8_t", A="U8Vec", ap="u8vec", SUM="int",
          e0="(as uint8 7)", e1="(as uint8 3)", e2="(as uint8 255)"),
 ]
-BY_P = {t["p"]: t for t in TYPES}
+# The mask types: integer lanes as wide as the vector's, -1 where a comparison
+# held and 0 where it did not.  src: a vector type of the same lane width, for
+# the examples.
+MASKS = [
+    dict(T="M64x2", p="m64x2", E="int", C="int64_t", L=2, src="f64x2"),
+    dict(T="M32x4", p="m32x4", E="int32", C="int32_t", L=4, src="i32x4"),
+    dict(T="M16x8", p="m16x8", E="int16", C="int16_t", L=8, src="u16x8"),
+    dict(T="M8x16", p="m8x16", E="int8", C="int8_t", L=16, src="u8x16"),
+]
+BY_P = {t["p"]: t for t in TYPES + MASKS}
+for _m in MASKS:
+    _s = BY_P[_m["src"]]
+    _m["set"] = "(%s-lt (%s-splat %s) (%s-splat %s))" % (_s["p"], _s["p"], _s["e1"], _s["p"],
+                                                       _s["e0"])
 
 
 def cstruct(t):
@@ -452,6 +466,231 @@ def k_store_unchecked(t):
                         ["d[%d] = v.l%d;" % (k, k) for k in lanes(t)]))
 
 
+def mask_typedef(m):
+    return "typedef %s tsm __attribute__((vector_size(16)));" % m["C"]
+
+
+def mk_ret(t):
+    return "return mk(env, \"%s\", f, %d);" % (t["T"], t["L"])
+
+
+def k_cmp(op):
+    def body(t):
+        m = BY_P[t["M"]]
+        # a vector comparison is already -1 / 0 per lane, as wide as the lane
+        vec = (vec_typedefs(t) + [mask_typedef(m),
+               "union { %s s; tsv v; } ua = {a}, ub = {b};" % cstruct(t),
+               "union { %s s; tsm v; } ur;" % cstruct(m),
+               "ur.v = (tsm)(ua.v %s ub.v);" % op, "return ur.s;"])
+        lane = (["%s r;" % cstruct(m)]
+                + ["r.l%d = a.l%d %s b.l%d ? -1 : 0;" % (k, k, op, k) for k in lanes(t)]
+                + ["return r;"])
+        return "\n".join(two_lowerings(vec, lane))
+    return body
+
+
+def n_cmp(op):
+    def body(t):
+        m = BY_P[t["M"]]
+        get = "lane_f" if t["F"] else "lane_i"
+        return (["f[%d] = turi_int((%s)%s(a[0], %d) %s (%s)%s(a[1], %d) ? -1 : 0);"
+                 % (k, t["C"], get, k, op, t["C"], get, k) for k in lanes(t)] + [mk_ret(m)])
+    return body
+
+
+def k_select(t):
+    m = BY_P[t["M"]]
+    # the vector's bits viewed as mask-width integers: one and / andnot / or
+    vec = [mask_typedef(m),
+           "union { %s s; tsm v; } um = {m};" % cstruct(m),
+           "union { %s s; tsm v; } ua = {a}, ub = {b}, ur;" % cstruct(t),
+           "tsm mm = (tsm)(um.v != 0);",
+           "ur.v = (ua.v & mm) | (ub.v & ~mm);",
+           "return ur.s;"]
+    lane = (["%s r;" % cstruct(t)]
+            + ["r.l%d = m.l%d ? a.l%d : b.l%d;" % (k, k, k, k) for k in lanes(t)]
+            + ["return r;"])
+    return "\n".join(two_lowerings(vec, lane))
+
+
+def n_select(t):
+    return (["bool found;"]
+            + ["f[%d] = lane_i(a[0], %d) != 0 ? turi_struct_field(a[1], %d, &found) "
+               ": turi_struct_field(a[2], %d, &found);" % (k, k, k, k) for k in lanes(t)]
+            + [mk_ret(t)])
+
+
+def k_shuffle(t):
+    # One text for both lowerings: with constant indices clang and gcc fold the
+    # lane reads into one shufps / pshufd; with variable ones it is a lane loop
+    # (baseline x86-64 has no variable shuffle below SSSE3's pshufb).
+    return "\n".join(["union { %s s; %s a[%d]; } u = {v};" % (cstruct(t), t["C"], t["L"]),
+                      "%s r;" % cstruct(t)]
+                     + ["r.l%d = u.a[idx.l%d & %d];" % (k, k, t["L"] - 1) for k in lanes(t)]
+                     + ["return r;"])
+
+
+def n_shuffle(t):
+    return (["bool found;"]
+            + ["f[%d] = turi_struct_field(a[0], (uint32_t)(lane_i(a[1], %d) & %d), &found);"
+               % (k, k, t["L"] - 1) for k in lanes(t)]
+            + [mk_ret(t)])
+
+
+def k_i32_to_f32(t):
+    f = BY_P["f32x4"]
+    vec = ["typedef int32_t tsi __attribute__((vector_size(16)));",
+           "typedef float tsf __attribute__((vector_size(16)));",
+           "union { %s s; tsi v; } ua = {a};" % cstruct(t),
+           "union { %s s; tsf v; } ur;" % cstruct(f),
+           "ur.v = __builtin_convertvector(ua.v, tsf);",
+           "return ur.s;"]
+    lane = (["%s r;" % cstruct(f)] + ["r.l%d = (float)a.l%d;" % (k, k) for k in range(4)]
+            + ["return r;"])
+    return "\n".join(two_lowerings(vec, lane))
+
+
+def n_i32_to_f32(t):
+    return (["f[%d] = turi_float((double)(float)(int32_t)lane_i(a[0], %d));" % (k, k)
+             for k in range(4)] + ["return mk(env, \"F32x4\", f, 4);"])
+
+
+# float -> int32, truncating and saturating: NaN is 0, at or above 2^31 is
+# INT32_MAX, below -2^31 is INT32_MIN.  Every lane is defined, where a C cast
+# of an out-of-range float is undefined behaviour.
+F2I = ("%(x)s != %(x)s ? 0 : %(x)s >= 2147483648.0f ? 2147483647 "
+       ": %(x)s < -2147483648.0f ? (-2147483647 - 1) : (int32_t)%(x)s")
+
+
+def k_f32_to_i32(t):
+    i = BY_P["i32x4"]
+    # the out-of-range lanes are zeroed before cvttps2dq and given their
+    # saturated value after, so the conversion itself only sees lanes in range
+    vec = ["typedef float tsf __attribute__((vector_size(16)));",
+           "typedef int32_t tsi __attribute__((vector_size(16)));",
+           "union { %s s; tsf v; } ua = {a};" % cstruct(t),
+           "union { %s s; tsi v; } ur;" % cstruct(i),
+           "tsf x = ua.v;",
+           "tsi big = (tsi)(x >= 2147483648.0f), small = (tsi)(x < -2147483648.0f);",
+           "tsi bad = (tsi)(x != x) | big | small;",
+           "union { tsf f; tsi i; } c = {x};",
+           "c.i &= ~bad;",
+           "tsi r = __builtin_convertvector(c.f, tsi);",
+           "ur.v = (r & ~bad) | (big & 2147483647) | (small & (-2147483647 - 1));",
+           "return ur.s;"]
+    lane = (["%s r;" % cstruct(i)]
+            + ["r.l%d = %s;" % (k, F2I % {"x": "a.l%d" % k}) for k in range(4)]
+            + ["return r;"])
+    return "\n".join(two_lowerings(vec, lane))
+
+
+def n_f32_to_i32(t):
+    out = []
+    for k in range(4):
+        out.append("{ float x = (float)lane_f(a[0], %d); int32_t r = %s; "
+                   "f[%d] = turi_int((int64_t)r); }" % (k, F2I % {"x": "x"}, k))
+    return out + ["return mk(env, \"I32x4\", f, 4);"]
+
+
+def k_f32_widen(half):
+    def body(t):
+        d = BY_P["f64x2"]
+        off = 0 if half == "lo" else 2
+        vec = ["typedef float tsf __attribute__((vector_size(16)));",
+               "typedef float tsh __attribute__((vector_size(8)));",
+               "typedef double tsd __attribute__((vector_size(16)));",
+               "union { %s s; tsf v; } ua = {a};" % cstruct(t),
+               "union { %s s; tsd v; } ur;" % cstruct(d),
+               "tsh h = __builtin_shufflevector(ua.v, ua.v, %d, %d);" % (off, off + 1),
+               "ur.v = __builtin_convertvector(h, tsd);",
+               "return ur.s;"]
+        lane = ["%s r;" % cstruct(d), "r.l0 = (double)a.l%d;" % off,
+                "r.l1 = (double)a.l%d;" % (off + 1), "return r;"]
+        return "\n".join(two_lowerings(vec, lane))
+    return body
+
+
+def n_f32_widen(half):
+    def body(t):
+        off = 0 if half == "lo" else 2
+        return (["f[%d] = turi_float((double)(float)lane_f(a[0], %d));" % (k, off + k)
+                 for k in range(2)] + ["return mk(env, \"F64x2\", f, 2);"])
+    return body
+
+
+def k_f64_narrow(t):
+    f = BY_P["f32x4"]
+    vec = ["typedef double tsd __attribute__((vector_size(16)));",
+           "typedef float tsh __attribute__((vector_size(8)));",
+           "typedef float tsf __attribute__((vector_size(16)));",
+           "union { %s s; tsd v; } ul = {lo}, uh = {hi};" % cstruct(t),
+           "union { %s s; tsf v; } ur;" % cstruct(f),
+           "tsh nl = __builtin_convertvector(ul.v, tsh), nh = __builtin_convertvector(uh.v, tsh);",
+           "ur.v = __builtin_shufflevector(nl, nh, 0, 1, 2, 3);",
+           "return ur.s;"]
+    lane = ["%s r;" % cstruct(f), "r.l0 = (float)lo.l0;", "r.l1 = (float)lo.l1;",
+            "r.l2 = (float)hi.l0;", "r.l3 = (float)hi.l1;", "return r;"]
+    return "\n".join(two_lowerings(vec, lane))
+
+
+def n_f64_narrow(t):
+    return (["f[%d] = turi_float((double)(float)lane_f(a[%d], %d));" % (k, k // 2, k % 2)
+             for k in range(4)] + ["return mk(env, \"F32x4\", f, 4);"])
+
+
+# ---- the mask operations: a lane is set when it is nonzero; every result
+# lane is -1 or 0 ----
+def k_mask_logic(op):
+    def body(m):
+        if op == "not":
+            vexpr, lexpr = "(tsm)(ua.v == 0)", "a.l%d == 0"
+            params = "ua = {a}, ur"
+        else:
+            c = "&" if op == "and" else "|"
+            vexpr = "(tsm)((ua.v != 0) %s (ub.v != 0))" % c
+            lexpr = "(a.l%%d != 0 %s b.l%%d != 0)" % (c * 2)
+            params = "ua = {a}, ub = {b}, ur"
+        vec = [mask_typedef(m), "union { %s s; tsm v; } %s;" % (cstruct(m), params),
+               "ur.v = %s;" % vexpr, "return ur.s;"]
+        lane = (["%s r;" % cstruct(m)]
+                + ["r.l%d = %s ? -1 : 0;" % (k, lexpr.replace("%d", str(k))) for k in lanes(m)]
+                + ["return r;"])
+        return "\n".join(two_lowerings(vec, lane))
+    return body
+
+
+def n_mask_logic(op):
+    def body(m):
+        out = []
+        for k in lanes(m):
+            if op == "not":
+                e = "lane_i(a[0], %d) == 0" % k
+            else:
+                e = "(lane_i(a[0], %d) != 0 %s lane_i(a[1], %d) != 0)" % (
+                    k, "&&" if op == "and" else "||", k)
+            out.append("f[%d] = turi_int(%s ? -1 : 0);" % (k, e))
+        return out + [mk_ret(m)]
+    return body
+
+
+def k_mask_reduce(op):
+    def body(m):
+        if op == "any":
+            return "return (" + " | ".join("a.l%d" % k for k in lanes(m)) + ") != 0;"
+        return "return " + " && ".join("a.l%d != 0" % k for k in lanes(m)) + ";"
+    return body
+
+
+def n_mask_reduce(op):
+    def body(m):
+        if op == "any":
+            return (["int64_t r = 0;"] + ["r |= lane_i(a[0], %d);" % k for k in lanes(m)]
+                    + ["return turi_bool(r != 0);"])
+        return (["bool r = true;"] + ["r = r && lane_i(a[0], %d) != 0;" % k for k in lanes(m)]
+                + ["return turi_bool(r);"])
+    return body
+
+
 ALL = [t["p"] for t in TYPES]
 FLOATS = ["f64x2", "f32x4"]
 LOADABLE = [t["p"] for t in TYPES if t["A"]]
@@ -539,7 +778,82 @@ OPS = [
          summary="every lane shifted right n bits, zero-filled (n outside 0 to 15 gives zero lanes).",
          doc=["v -- the vector", "n -- the shift count"],
          ex="(u16x8-shr (u16x8-splat {e2}) 8)"),
+] + [
+    dict(name=nm, types=ALL, params=[("a", "T"), ("b", "T")], ret="M", body=k_cmp(op),
+         nat=n_cmp(op), summary="lanewise a %s b: -1 where it holds, 0 where not." % op,
+         doc=["a -- a vector", "b -- a vector"],
+         ex="({p}-%s ({p}-splat {e1}) ({p}-splat {e0}))" % nm,
+         notes=(["Floats compare as IEEE: a NaN lane is unequal to everything and never less",
+                 "or greater."] if nm == "eq" else None))
+    for (nm, op) in [("eq", "=="), ("lt", "<"), ("le", "<="), ("gt", ">"), ("ge", ">=")]
+] + [
+    dict(name="select", types=ALL, params=[("m", "M"), ("a", "T"), ("b", "T")], ret="T",
+         body=k_select, nat=n_select,
+         summary="lane k is a[k] where m's lane k is set (nonzero), else b[k].",
+         doc=["m -- the mask, from a comparison", "a -- the lanes taken where m is set",
+              "b -- the lanes taken where it is not"],
+         ex="({p}-select ({p}-lt ({p}-splat {e1}) ({p}-splat {e0})) ({p}-splat {e1}) ({p}-splat {e0}))",
+         notes=["Branch-free: both a and b are computed.  Lanewise min of a and b is",
+                "`(P-select (P-lt a b) a b)`, as `P-min` is."]),
+    dict(name="shuffle", types=ALL, params=[("v", "T"), ("idx", "IX")], ret="T",
+         body=k_shuffle, nat=n_shuffle,
+         summary="lane k is v's lane idx[k] mod {L}.",
+         doc=["v -- the vector", "idx -- which lane of v each result lane takes"],
+         ex="({p}-shuffle ({p}-splat {e0}) {rev})   ; lanes reversed",
+         notes=["Constant indices compile to one shuffle instruction (gcc and clang); an",
+                "index outside 0 to {L1} wraps, so there is no out-of-range case."]),
+    dict(name="->f32x4", sep="", types=["i32x4"], params=[("a", "T")], ret="T:f32x4",
+         body=k_i32_to_f32, nat=n_i32_to_f32,
+         summary="each lane converted to float32, rounding to nearest (cvtdq2ps).",
+         doc=["a -- the vector"], ex="(i32x4->f32x4 (i32x4-splat {e0}))"),
+    dict(name="->i32x4", sep="", types=["f32x4"], params=[("a", "T")], ret="T:i32x4",
+         body=k_f32_to_i32, nat=n_f32_to_i32,
+         summary="each lane truncated toward zero to int32, saturating.",
+         doc=["a -- the vector"], ex="(f32x4->i32x4 (f32x4-splat {e0}))   ; => lanes of 7",
+         notes=["Every lane is defined: NaN gives 0, a lane at or above 2^31 gives",
+                "2147483647, one below -2^31 gives -2147483648.  (A C cast is undefined",
+                "there, and cvttps2dq alone gives -2147483648 for all three.)"]),
+    dict(name="widen-lo", types=["f32x4"], params=[("a", "T")], ret="T:f64x2",
+         body=k_f32_widen("lo"), nat=n_f32_widen("lo"),
+         summary="lanes 0 and 1 converted to float (exact).", doc=["a -- the vector"],
+         ex="(f32x4-widen-lo (f32x4-splat {e0}))", notes=[]),
+    dict(name="widen-hi", types=["f32x4"], params=[("a", "T")], ret="T:f64x2",
+         body=k_f32_widen("hi"), nat=n_f32_widen("hi"),
+         summary="lanes 2 and 3 converted to float (exact).", doc=["a -- the vector"],
+         ex="(f32x4-widen-hi (f32x4-splat {e0}))", notes=[]),
+    dict(name="narrow", types=["f64x2"], params=[("lo", "T"), ("hi", "T")], ret="T:f32x4",
+         body=k_f64_narrow, nat=n_f64_narrow,
+         summary="lo's lanes then hi's, each rounded to float32.",
+         doc=["lo -- lanes 0-1 of the result", "hi -- lanes 2-3"],
+         ex="(f64x2-narrow (f64x2-splat {e0}) (f64x2-splat {e1}))",
+         notes=["Rounds to nearest; a lane beyond float32's range becomes an infinity."]),
 ]
+
+MASK_OPS = [dict(op, types=[m["p"] for m in MASKS]) for op in [
+    dict(name="and", params=[("a", "T"), ("b", "T")], ret="T", body=k_mask_logic("and"),
+         nat=n_mask_logic("and"), summary="lane k is set where both a's and b's are.",
+         doc=["a -- a mask", "b -- a mask"], ex="({p}-and {set} {set})"),
+    dict(name="or", params=[("a", "T"), ("b", "T")], ret="T", body=k_mask_logic("or"),
+         nat=n_mask_logic("or"), summary="lane k is set where a's or b's is.",
+         doc=["a -- a mask", "b -- a mask"], ex="({p}-or {set} {set})"),
+    dict(name="not", params=[("a", "T")], ret="T", body=k_mask_logic("not"),
+         nat=n_mask_logic("not"), summary="lane k is set where a's is not.",
+         doc=["a -- a mask"], ex="({p}-not {set})"),
+    dict(name="any", params=[("a", "T")], ret="bool", body=k_mask_reduce("any"),
+         nat=n_mask_reduce("any"), summary="true when some lane of a is set.",
+         doc=["a -- a mask"], ex="({p}-any {set})   ; => true"),
+    dict(name="all", params=[("a", "T")], ret="bool", body=k_mask_reduce("all"),
+         nat=n_mask_reduce("all"), summary="true when every lane of a is set.",
+         doc=["a -- a mask"], ex="({p}-all {set})   ; => true"),
+]]
+
+
+def pairs():
+    """Every (operation, type) the files define, in file order."""
+    for t in TYPES + MASKS:
+        for op in OPS + MASK_OPS:
+            if t["p"] in op["types"]:
+                yield op, t
 
 NOTES = {
     "add": ["Integer lanes wrap.  Floats: one IEEE add per lane, as the scalar `+`."],
@@ -572,24 +886,37 @@ def kind_type(kind, t):
         return t["SUM"]
     if kind == "A":
         return t["A"]
-    return {"int": "int", "nil": "nil"}[kind]
+    if kind == "M":
+        return BY_P[t["M"]]["T"]
+    if kind == "IX":
+        return BY_P[t["IX"]]["T"]
+    return {"int": "int", "nil": "nil", "bool": "bool"}[kind]
 
 
 def fmt_vars(t):
     d = dict(t)
     d["L1"] = t["L"] - 1
+    if "IX" in t:
+        ix = BY_P[t["IX"]]
+        lit = "%d" if ix["E"] == "int" else "(as " + ix["E"] + " %d)"
+        d["rev"] = "(%s %s)" % (ix["T"], " ".join(lit % (t["L"] - 1 - k) for k in lanes(t)))
     return d
 
 
-def can_panic(op, t):
-    return op["name"] in ("lane", "load", "store!") or (op["name"] == "div" and not t["F"])
+def op_name(op, t):
+    return t["p"] + op.get("sep", "-") + op["name"]
 
 
 def render_op(op, t):
     d = fmt_vars(t)
-    lines = [";;; %s-%s -- %s" % (t["p"], op["name"], op["summary"].format(**d)), ";;;"]
-    if op["name"] in NOTES:
-        lines += [";;; " + n for n in NOTES[op["name"]]] + [";;;"]
+    lines = [";;; %s -- %s" % (op_name(op, t), op["summary"].format(**d)), ";;;"]
+    # an operation's own notes are templates; NOTES are verbatim
+    if op.get("notes") is not None:
+        notes = [n.format(**d) for n in op["notes"]]
+    else:
+        notes = NOTES.get(op["name"], [])
+    if notes:
+        lines += [";;; " + n for n in notes] + [";;;"]
     lines.append(";;; Parameters:")
     lines += [";;;   " + x.format(**d) for x in op["doc"]]
     lines.append(";;;")
@@ -601,7 +928,7 @@ def render_op(op, t):
     for (n, kind) in op["params"]:
         tt = kind_type(kind, t)
         ps.append(("^borrow %s : %s" if kind == "A" else "%s : %s") % (n, tt))
-    lines.append("(defn %s-%s [%s]" % (t["p"], op["name"], " ".join(ps)))
+    lines.append("(defn %s [%s]" % (op_name(op, t), " ".join(ps)))
     attrs = ["  #fx{Unsafe}" if op.get("unsafe") else "  #fx{}"]
     arrs = [n for (n, kind) in op["params"] if kind == "A"]
     if arrs:
@@ -640,6 +967,16 @@ HDR = """;;; tur/simd -- 16-byte vector types and their lanewise operations.
 ;;; check per call); `u8x16-widen-lo` / `-hi`, `u16x8-narrow` and `u16x8-shr`
 ;;; move bytes through sixteen-bit lanes, where a product fits.
 ;;;
+;;; Comparisons (`P-eq`, `P-lt`, `P-le`, `P-gt`, `P-ge`) return a mask of the
+;;; same lane width -- M64x2, M32x4, M16x8 or M8x16, -1 where the comparison
+;;; held and 0 where not -- and `P-select` picks each lane from one of two
+;;; vectors by a mask, without a branch; the masks combine with `M-and`,
+;;; `M-or`, `M-not` and reduce with `M-any` / `M-all`.  `P-shuffle` permutes
+;;; lanes by an index vector (one instruction when the indices are
+;;; constants).  `i32x4->f32x4`, `f32x4->i32x4` (truncating, saturating),
+;;; `f32x4-widen-lo` / `-hi` and `f64x2-narrow` convert between lane types;
+;;; every lane of every conversion is defined.
+;;;
 ;;; Compiled with gcc or clang, an operation is one vector instruction (a
 ;;; GNU vector extension over the struct's bytes); under `tur jit` the same
 ;;; operation is a loop over the lanes.  Both compute each lane exactly as
@@ -648,9 +985,11 @@ HDR = """;;; tur/simd -- 16-byte vector types and their lanewise operations.
 ;;; 16 bytes on purpose: a 32-byte vector lives in memory on gcc without AVX
 ;;; (the plan's S0 findings).
 ;;;
-;;; Keep a vector out of generic code: a 16-byte value crossing a generic
-;;; boundary is boxed on the heap, as every wide struct is, which costs more
-;;; than the vector saves.
+;;; Generic code takes a vector by value: a generic function (constrained or
+;;; not) and a generic ADT such as `(Option F64x2)` are specialized per type.
+;;; A `Vec` element is the exception -- each is boxed on the heap, as every
+;;; multi-word element is -- so keep bulk lane data in the numeric arrays and
+;;; load from them.
 ;;;
 ;;; Since: S1 (simd-and-vectorization-plan)
 (load "stdlib/typeclass.tur")
@@ -683,21 +1022,38 @@ def render_num(t):
         "  (neg [x] (%s-neg x)))" % p]) + "\n"
 
 
+def render_mask_type(m):
+    on = "-1" if m["E"] == "int" else "(as %s -1)" % m["E"]
+    out = [";; ===== %s =====" % m["T"],
+           ";;; %s -- a 16-byte mask of %d %s lanes, for the %d-lane vectors." % (
+               m["T"], m["L"], m["E"], m["L"]),
+           ";;;",
+           ";;; A comparison sets a lane to -1 where it held and 0 where it did not;",
+           ";;; `-select` and the mask operations take any nonzero lane as set.",
+           ";;; `(%s %s)` builds one with every lane set." % (m["T"], " ".join([on] * m["L"])),
+           ";;;",
+           ";;; Since: S1",
+           "(defstruct ^copy %s [%s])" % (
+               m["T"], " ".join("l%d : %s" % (k, m["E"]) for k in lanes(m)))]
+    return "\n".join(out) + "\n"
+
+
 def render():
     out = [HDR]
     for t in TYPES:
         out.append(render_type(t))
-    for t in TYPES:
-        for op in OPS:
-            if t["p"] in op["types"]:
-                out.append(render_op(op, t))
-        out.append(render_num(t))
+    for m in MASKS:
+        out.append(render_mask_type(m))
+    for t in TYPES + MASKS:
+        out += [render_op(op, t) for (op, u) in pairs() if u is t]
+        if t in TYPES:
+            out.append(render_num(t))
     return "".join(out)
 
 
 # ---- the interpreter twins ----
 def c_ident(s):
-    return s.replace("-", "_").replace("!", "_x")
+    return s.replace("->", "_to_").replace("-", "_").replace("!", "_x")
 
 
 def render_inc():
@@ -724,18 +1080,15 @@ def render_inc():
            "}",
            ""]
     regs = []
-    for t in TYPES:
-        for op in OPS:
-            if t["p"] not in op["types"]:
-                continue
-            nm = "%s-%s" % (t["p"], op["name"])
-            cid = "simdn_" + c_ident(nm)
-            out.append("static TuriValue %s(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {" % cid)
-            out.append("    (void)env; (void)ud; TuriValue f[16]; (void)f;")
-            out.append("    if (n < %d) return turi_nil();" % len(op["params"]))
-            out += ["    " + l for l in op["nat"](t)]
-            out.append("}")
-            regs.append((nm, cid))
+    for op, t in pairs():
+        nm = op_name(op, t)
+        cid = "simdn_" + c_ident(nm)
+        out.append("static TuriValue %s(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {" % cid)
+        out.append("    (void)env; (void)ud; TuriValue f[16]; (void)f;")
+        out.append("    if (n < %d) return turi_nil();" % len(op["params"]))
+        out += ["    " + l for l in op["nat"](t)]
+        out.append("}")
+        regs.append((nm, cid))
     out.append("")
     out.append("static void simd_natives_register(TuriEnv *env) {")
     out += ['    turi_env_register_native(env, "%s", %s, NULL);' % r for r in regs]
@@ -747,11 +1100,9 @@ def native_names():
     """Every native's name and the numvec handle kind of its array argument,
     if any -- for src/turi/native_caps.c rows."""
     rows = []
-    for t in TYPES:
-        for op in OPS:
-            if t["p"] in op["types"]:
-                arr = any(k == "A" for (_, k) in op["params"])
-                rows.append(("%s-%s" % (t["p"], op["name"]), t["ap"] if arr else None))
+    for op, t in pairs():
+        arr = any(k == "A" for (_, k) in op["params"])
+        rows.append((op_name(op, t), t["ap"] if arr else None))
     return rows
 
 

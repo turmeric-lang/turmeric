@@ -17,6 +17,16 @@ All notable changes to Turmeric are documented here.
   interpreter a native -- with the same bits on all three. A byte-image
   blend written on them runs as fast as hand-written vector C.
 
+- **Vector comparisons, masks, select, shuffle and conversions (`--enable=simd`).**
+  `P-eq` / `-lt` / `-le` / `-gt` / `-ge` return a mask (`M64x2`, `M32x4`,
+  `M16x8`, `M8x16`: -1 where the comparison held, 0 where not); `P-select`
+  picks each lane from one of two vectors by a mask without a branch; masks
+  combine with `M-and` / `-or` / `-not` and reduce with `M-any` / `-all`.
+  `P-shuffle` permutes lanes by an index vector (one instruction for
+  constant indices). `i32x4->f32x4`, `f32x4->i32x4` (truncating and
+  saturating, NaN to 0), `f32x4-widen-lo` / `-hi` and `f64x2-narrow` convert
+  between lane types, every lane defined.
+
 - **`NumArray`: generic numeric-array code.** One class over `F64Vec`,
   `F32Vec`, `I64Vec`, `I32Vec` and `U8Vec` (`stdlib/numvec.tur`), with the
   element type as the associated type `Elem` (`Sum` for `na-sum`, `View` for
