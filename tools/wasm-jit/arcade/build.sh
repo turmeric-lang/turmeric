@@ -20,8 +20,10 @@
 #                                  wasm-jit/sources.txt and stdlib-pkg/ the
 #                                  module is made from (default build-wasm/)
 #
-# The result is OUT_DIR/wasm-jit/turmeric-jit.{js,wasm}, stdlib.data, spices/
-# and spices.js (the loader, copied so a page takes it with the module).  It
+# The result is OUT_DIR/wasm-jit/turmeric-jit.{js,wasm}, stdlib.data, spices/,
+# spices.js (the loader) and lsp-worker.js (the language server's worker),
+# copied so a page takes them with the module; the tur_wasm_arcade target adds
+# the stock turmeric.{js,wasm} that worker runs.  It
 # is the JSPI module (TUR_WASM_JIT_JSPI=1), never built over
 # build-wasm/wasm-jit, whose module web/public serves to Try Turmeric's
 # Compile engine: under JSPI turi_wasm_jit_run returns a Promise, which that
@@ -63,5 +65,6 @@ bash "$ROOT/tools/wasm-jit/build-module.sh" "$OUT/wasm-jit" "$BUILD/wasm-jit/sou
 rm -rf "$OUT/wasm-jit/spices"
 python3 "$HERE/pack-spices.py" "$TUR_SPICES" "$OUT/wasm-jit/spices" ${TUR_ARCADE_SPICE_LIST:-raylib math}
 cp "$HERE/spices.js" "$OUT/wasm-jit/spices.js"
+cp "$HERE/lsp-worker.js" "$OUT/wasm-jit/lsp-worker.js"
 grep -q promising "$OUT/wasm-jit/turmeric-jit.js" || { echo "build.sh: the module is not a JSPI build (no promising export)" >&2; exit 1; }
 echo "build.sh: arcade module at $OUT/wasm-jit (raylib $(git -C "$RAYLIB_SRC" describe --tags --always 2>/dev/null || echo '?'))"

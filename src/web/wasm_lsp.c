@@ -58,6 +58,7 @@
 #include "lsp/lsp_scope.h"
 #include "lsp/lsp_session.h"
 #include "lsp/lsp_sym.h"
+#include "wasm_glue.h"         /* the page's include dirs; the defscript check */
 
 /* Where the Emscripten link step mounts the host `stdlib/` tree
  * (`--embed-file <src>/stdlib@/stdlib`). Absolute rather than the eval path's
@@ -122,7 +123,10 @@ static int read_whole_file(const char *path, char **out, size_t *out_len) {
 int tur_collect_symbols(const char *source_path, const char *logical_path,
                         LspSymbol *out, int cap, int *count_out) {
     /* The playground has no spice tree to walk up into -- every buffer is a
-     * tab, and the module search path is the bundled stdlib. */
+     * tab, and the module search path is the bundled stdlib plus the spices
+     * the page mounted (turi_wasm_add_include_dir; the raylib playground's
+     * packages, raylib-web-playground-plan J2), so `(import raylib/core)`
+     * resolves here as it does when the program runs. */
     (void)logical_path;
     wasm_lsp_init();
     lsp_collect_begin(out, cap, count_out);
@@ -184,6 +188,16 @@ int tur_collect_symbols(const char *source_path, const char *logical_path,
     uint32_t nforms = 0;
     Form **forms = read_all(&arena, &st, &file, &nforms);
 
+    /* A defscript header is read as under --enable=script-deps (the
+     * elaborator then drops it), as the Compile engine reads it; whether its
+     * spices are mounted is the run's to say. */
+    char header_why[256] = "";
+    bool saved_script_deps = g_opt_script_deps;
+    if (turi_wasm_script_header_check(source_path, header_why, sizeof header_why) != 0)
+        g_opt_script_deps = true;
+    int n_inc = 0;
+    const char *const *inc = turi_wasm_include_dirs(&n_inc);
+
     int rc = 0;
     if (!forms || diag_had_error()) {
         rc = 1;
@@ -200,8 +214,8 @@ int tur_collect_symbols(const char *source_path, const char *logical_path,
                                        /*separate_compilation=*/false,
                                        /*sandboxed=*/false,
                                        /*out_tc_env=*/NULL,
-                                       /*include_dirs=*/NULL,
-                                       /*n_include_dirs=*/0,
+                                       /*include_dirs=*/(const char **)inc,
+                                       /*n_include_dirs=*/n_inc,
                                        /*out_n_file_scope_defs=*/NULL,
                                        /*user_macros=*/NULL);
         /* Collect before judging: elaboration reports type errors on a tree it
@@ -212,6 +226,7 @@ int tur_collect_symbols(const char *source_path, const char *logical_path,
         if (!prog || diag_had_error()) rc = 1;
     }
 
+    g_opt_script_deps = saved_script_deps;
     symtab_free(&st);
     arena_free(&arena);
     free(src);

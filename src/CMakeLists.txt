@@ -1840,6 +1840,9 @@ set_target_properties(tur_lsp_session_unit PROPERTIES
 add_executable(tur_lsp_wasm_backend_unit
     ${CMAKE_SOURCE_DIR}/tests/lsp/wasm_backend_test.c
     ${CMAKE_SOURCE_DIR}/src/web/wasm_lsp.c
+    # The include-dir list and the defscript header check the analysis reads
+    # (raylib-web-playground-plan P2).
+    ${CMAKE_SOURCE_DIR}/src/web/wasm_glue.c
     $<TARGET_OBJECTS:tur_core>
 )
 target_include_directories(tur_lsp_wasm_backend_unit PRIVATE ${TUR_INCLUDE_DIRS})
@@ -2107,7 +2110,7 @@ if(TUR_WASM)
                 # go-to-definition can open a stdlib buffer without the page
                 # gaining a general filesystem (wasm_lsp.c,
                 # try-turmeric-navigation-and-minimap-plan M4).
-                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_boot_timings,_turi_wasm_reset,_turi_wasm_rewind_to_prelude,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_lsp_request,_turi_wasm_lsp_flush,_turi_wasm_lsp_reset,_turi_wasm_read_file,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_wasm_lang_registry,_turi_wasm_add_include_dir,_turi_wasm_clear_include_dirs,_turi_doc_lookup,_turi_smt_check,_turi_type_of,_turi_explain,_turi_wasm_trace_run,_turi_wasm_trace_stats,_turi_wasm_trace_seek,_turi_wasm_trace_state,_turi_wasm_trace_site_at,_turi_wasm_trace_find_line,_turi_wasm_trace_output_full,_turi_wasm_trace_buffer,_turi_wasm_trace_buffer_len,_turi_wasm_trace_release,_malloc,_free
+                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_boot_timings,_turi_wasm_reset,_turi_wasm_rewind_to_prelude,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_lsp_request,_turi_wasm_lsp_flush,_turi_wasm_lsp_reset,_turi_wasm_read_file,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_wasm_lang_registry,_turi_wasm_add_include_dir,_turi_wasm_clear_include_dirs,_turi_wasm_put_spice_file,_turi_doc_lookup,_turi_smt_check,_turi_type_of,_turi_explain,_turi_wasm_trace_run,_turi_wasm_trace_stats,_turi_wasm_trace_seek,_turi_wasm_trace_state,_turi_wasm_trace_site_at,_turi_wasm_trace_find_line,_turi_wasm_trace_output_full,_turi_wasm_trace_buffer,_turi_wasm_trace_buffer_len,_turi_wasm_trace_release,_malloc,_free
                 -sEXPORTED_RUNTIME_METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8
                 -sEXPORT_NAME=TurmericModule
                 -sMODULARIZE=1
@@ -2242,7 +2245,18 @@ if(TUR_WASM)
                     COMMENT "Building the raylib playground's module (wasm-arcade/wasm-jit)"
                     VERBATIM
                 )
-                add_dependencies(tur_wasm_arcade tur_stdlib_pkg)
+                add_dependencies(tur_wasm_arcade tur_stdlib_pkg tur_wasm)
+                # The language server's module beside the engine (P2): the
+                # stock turmeric.{js,wasm}, which carries `tur lsp`
+                # (wasm_lsp.c) and shares stdlib.data with the engine, so the
+                # arcade page takes one directory.
+                add_custom_command(TARGET tur_wasm_arcade POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        ${CMAKE_BINARY_DIR}/wasm/turmeric.js
+                        ${CMAKE_BINARY_DIR}/wasm/turmeric.wasm
+                        ${CMAKE_BINARY_DIR}/wasm-arcade/wasm-jit/
+                    COMMENT "Copying the language server's module beside the arcade module"
+                )
             endif()
         endif()
     endif()

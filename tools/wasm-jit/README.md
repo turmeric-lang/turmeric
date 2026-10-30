@@ -84,7 +84,13 @@ beside the module: `spicesFor` reads the program's imports and `defscript`
 header, `mountSpices` writes the closure under `/spices/<name>/src` and adds
 each to the search path. A `defscript :spices` header is then satisfied from
 what is mounted, and a name that is not is refused ("not in this build"),
-never fetched. `arcade/build-raylib.sh` builds the archive
+never fetched. Beside them, `arcade/lsp-worker.js` is the editor's language
+server: `tur lsp` in the stock `turmeric.{js,wasm}` (which `tur_wasm_arcade`
+copies in), in a classic Worker, with every offered spice mounted, speaking Try
+Turmeric's worker protocol so its `web/lsp-client.js` drives it unchanged. Both
+mount through `turi_wasm_put_spice_file` (spice sources under `/spices/` only;
+the stock module exports no filesystem) and `turi_wasm_add_include_dir`.
+`arcade/build-raylib.sh` builds the archive
 (raylib's own CMake under `emcmake`, the spice's `:wasm-options`, the
 module's `-pthread -fwasm-exceptions`); `arcade/build.sh` builds the module
 into `OUT_DIR/wasm-jit`. The CMake target, off by default:
@@ -100,8 +106,9 @@ node tools/wasm-jit/arcade/smoke/smoke.mjs build-wasm/wasm-arcade/wasm-jit
 `-DTUR_ARCADE_RAYLIB_LIB=<libraylib.a>` uses a prebuilt archive (CI caches
 it by raylib ref). The smoke test (the `wasm-arcade` CI job) drives the
 module in Playwright's Chromium: spices mounted from their packages, first
-frame, a console line from a running frame loop, Stop, a refusal, and a
-`defscript` header satisfied and one refused. A page that embeds raylib calls
+frame, a console line from a running frame loop, Stop, a refusal, a
+`defscript` header satisfied and one refused, and the language server analysing
+a raylib program clean and flagging an unknown import. A page that embeds raylib calls
 `turi_wasm_jit_set_fallback(0)` after `turi_wasm_init`, so a program the
 engine refuses comes back as `{"engine":"refused", ...}` instead of going to
 the tree-walker, which has no raylib natives.

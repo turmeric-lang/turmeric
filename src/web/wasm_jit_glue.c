@@ -59,7 +59,6 @@
 #include "compiler/diag.h"     /* the turn's diagnostic state, saved around C1 */
 #include "compiler/emit.h"     /* g_emit_ffi_export_shims */
 #include "compiler/jit_prune.h"
-#include "compiler/pkg.h"      /* pkg_script_header_read: a defscript header */
 #include "compiler/refine_discharge.h"
 #include "runtime/globals.h"   /* g_interpret_mode */
 #include "turi/inline_c_jit.h"
@@ -140,40 +139,6 @@ static char *run_interpreted(const char *path, const char *reason) {
     return result_json("interpreted", rc, reason, 0, 0, 0);
 }
 
-/* A defscript header's spices, against the mounted ones.  Returns 0 when
- * there is no header, 1 when every name is mounted (so the header may
- * compile), and -1 when it is malformed (its diagnostic is on stderr) or
- * names a spice that is not mounted (said on stderr, and in *why). */
-static int script_header_check(const char *path, char *why, size_t why_len) {
-    PkgManifest hdr;
-    memset(&hdr, 0, sizeof hdr);
-    PkgScriptStatus st = pkg_script_header_read(path, false, &hdr);
-    if (st == PKG_SCRIPT_NONE) return 0;
-    if (st == PKG_SCRIPT_ERROR) {
-        pkg_manifest_free(&hdr);
-        snprintf(why, why_len, "its defscript header is malformed");
-        return -1;
-    }
-    int n_inc = 0;
-    const char *const *inc = turi_wasm_include_dirs(&n_inc);
-    int rc = 1;
-    for (int i = 0; i < hdr.n_spices && rc == 1; i++) {
-        char want[512];
-        snprintf(want, sizeof want, "/spices/%s/src", hdr.spices[i].name);
-        bool mounted = false;
-        for (int j = 0; j < n_inc && !mounted; j++)
-            mounted = strcmp(inc[j], want) == 0;
-        if (!mounted && !hdr.spices[i].optional) {
-            snprintf(why, why_len, "spice '%s' is not in this build", hdr.spices[i].name);
-            fprintf(stderr, "tur: %s: the page carries only the spices it offers, "
-                            "and fetches nothing\n", why);
-            rc = -1;
-        }
-    }
-    pkg_manifest_free(&hdr);
-    return rc;
-}
-
 /* Split `args` (newline-separated) into argv[1..]; argv[0] is the program's
  * name.  Returns argc; *storage owns the strings. */
 static int split_args(const char *args, char ***argv_out, char **storage) {
@@ -211,8 +176,11 @@ char *turi_wasm_jit_run(const char *src, const char *args) {
      * environment leaves g_interpret_mode on, and under it the emitter takes
      * the interpreter's branches and evicts the CPS backend's handlers. */
     char header_why[256] = "";
-    int header = script_header_check(path, header_why, sizeof header_why);
+    int header = turi_wasm_script_header_check(path, header_why, sizeof header_why);
     if (header < 0) {
+        if (strstr(header_why, "not in this build"))
+            fprintf(stderr, "tur: %s: the page carries only the spices it offers, "
+                            "and fetches nothing\n", header_why);
         fflush(stderr);
         return result_json("error", 1, header_why, 0, 0, 0);
     }

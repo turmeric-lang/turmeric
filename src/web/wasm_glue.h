@@ -1,6 +1,8 @@
 #ifndef TURI_WASM_GLUE_H
 #define TURI_WASM_GLUE_H
 
+#include <stddef.h>   /* size_t */
+
 /* Version string for the WASM module */
 #define TURMERIC_VERSION "0.73.0"
 
@@ -97,6 +99,22 @@ int turi_wasm_add_include_dir(const char *dir);
 void turi_wasm_clear_include_dirs(void);
 /* The list as it stands (for the JIT glue); *out_n gets its length. */
 const char *const *turi_wasm_include_dirs(int *out_n);
+
+/* Write one file of a spice package (raylib-web-playground-plan J2) at
+ * `path`, creating its directories.  Only a Turmeric source under /spices/
+ * is accepted -- `/spices/<name>/src/...` ending `.tur` or `.tur.sweet`, no
+ * `..` -- so a page can mount spice packages without the module exporting a
+ * general filesystem.  Returns 0, or -1 when refused or the write fails. */
+int turi_wasm_put_spice_file(const char *path, const char *text);
+
+/* A `(defscript :spices #map{...})` header at the top of `path`, against the
+ * mounted spices: each name must be on the include-dir list as
+ * /spices/<name>/src (an `:optional` one may be absent).  Returns 0 when
+ * there is no header, 1 when every name is mounted, -1 when the header is
+ * malformed (its diagnostic is on stderr) or names an unmounted spice
+ * (*why says which).  The Compile engine refuses on -1; the language server
+ * reads the header as `--enable=script-deps` would whenever there is one. */
+int turi_wasm_script_header_check(const char *path, char *why, size_t why_len);
 
 /* Evaluate multiple expressions in sequence.
  * 

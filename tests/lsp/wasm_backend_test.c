@@ -19,9 +19,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>  /* mkdir */
+#include <unistd.h>    /* rmdir */
 
 #include "buf.h"
 #include "lsp_session.h"
+#include "web/wasm_glue.h"  /* turi_wasm_add_include_dir, turi_wasm_put_spice_file */
 #include "platform_fs.h"  /* setenv on Windows */
 
 static int passed = 0;
@@ -503,6 +506,90 @@ static void test_outline_omits_lifted_lambdas(void) {
  * main
  * --------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------------
+ * The page's mounted spices (raylib-web-playground-plan P2)
+ *
+ * The raylib playground mounts spice packages and puts each `src/` on the
+ * include-dir list; the analysis has to resolve imports through that list,
+ * or every `(import raylib/core ...)` the playground runs fine is flagged as
+ * a missing module.  A defscript header is read as the Compile engine reads
+ * it, not reported as needing --enable=script-deps.
+ * --------------------------------------------------------------------- */
+
+static void test_import_resolves_through_added_include_dir(void) {
+    /* A directory of its own under the working directory (no mkdtemp: MinGW
+     * has none), created through platform_fs.h's mkdir. */
+    const char *dir = "tur-lsp-wasm-backend-inc";
+    mkdir(dir, 0777);
+    char sub[300], path[340];
+    snprintf(sub, sizeof sub, "%s/arcadetest", dir);
+    mkdir(sub, 0777);
+    snprintf(path, sizeof path, "%s/thing.tur", sub);
+    FILE *f = fopen(path, "w");
+    if (!f) { CHECK(0, "write the module"); return; }
+    fputs("(defmodule arcadetest/thing\n"
+          "  (export twice)\n"
+          "  (defn twice [x : int] : int (* 2 x)))\n", f);
+    fclose(f);
+
+    /* Control: with nothing mounted (the list starts empty) the import is an
+     * error.  The list is never cleared here: turi_wasm_clear_include_dirs
+     * keeps its strings for the environments that borrow them, which LSan
+     * would report. */
+    fresh();
+    Buf b;
+    buf_init(&b);
+    buf_puts(&b, "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                 "\"params\":{\"textDocument\":{\"uri\":\"file:///project/imp.tur\","
+                 "\"text\":\"(defmodule m (export) (import arcadetest/thing :refer [twice]) "
+                 "(defn main [] : int (twice 21)))\"}}}");
+    buf_putc(&b, '\0');
+    Buf out = send_msg(b.data);
+    CHECK(contains(&out, "\"severity\":1"),
+          "control: an import of an unmounted module is an error");
+    buf_free(&out);
+
+    /* Mounted: the same buffer is clean. */
+    turi_wasm_add_include_dir(dir);
+    fresh();
+    out = send_msg(b.data);
+    CHECK(contains(&out, "\"diagnostics\":[]"),
+          "an import resolves through a directory the page added");
+    buf_free(&out);
+    buf_free(&b);
+
+    remove(path);
+    rmdir(sub);
+    rmdir(dir);
+}
+
+static void test_defscript_header_is_read_not_refused(void) {
+    fresh();
+    open_doc("file:///project/hdr.tur", "(defn f [] : int 1)\n");
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/hdr.tur\"},"
+        "\"contentChanges\":[{\"text\":\"(defscript :spices #map{\\\"math\\\" "
+        "#map{:path \\\"../math\\\"}})\\n(defn f [] : int 2)\\n\"}]}}");
+    CHECK(contains(&out, "\"diagnostics\":[]"),
+          "a defscript header raises no TUR-E0633 in the editor");
+    buf_free(&out);
+}
+
+static void test_put_spice_file_refuses_paths_outside_spices(void) {
+    CHECK(turi_wasm_put_spice_file("/etc/passwd.tur", "") == -1,
+          "a path outside /spices/ is refused");
+    CHECK(turi_wasm_put_spice_file("/spices/a/src/../../../tmp/x.tur", "") == -1,
+          "a path with .. is refused");
+    CHECK(turi_wasm_put_spice_file("/spices/a/lib/x.tur", "") == -1,
+          "a path outside a spice's src/ is refused");
+    CHECK(turi_wasm_put_spice_file("/spices/a/src/x.c", "") == -1,
+          "a file that is not Turmeric source is refused");
+    CHECK(turi_wasm_put_spice_file(NULL, "") == -1 &&
+          turi_wasm_put_spice_file("/spices/a/src/x.tur", NULL) == -1,
+          "a missing path or text is refused");
+}
+
 int main(int argc, char **argv) {
     /* The wasm build finds the stdlib at its MEMFS mount point; here it is
      * wherever the harness says, defaulting to the in-tree copy. */
@@ -526,6 +613,9 @@ int main(int argc, char **argv) {
     test_broken_buffer_falls_back_to_stdlib();
     test_synthesized_names_are_not_offered();
     test_outline_omits_lifted_lambdas();
+    test_import_resolves_through_added_include_dir();
+    test_defscript_header_is_read_not_refused();
+    test_put_spice_file_refuses_paths_outside_spices();
 
     lsp_session_reset();
 

@@ -800,8 +800,15 @@ Build the screen pane to the section 5.2 contract. Spices menu (packages from
 CSP, the Worker with COOP/COEP, the screen pane's iframe shell and its
 postMessage contract (`web/screen.js`), streamed console lines, Stop, the
 refusal and stack-overflow reports, an Examples menu read from `examples/`,
-and spices mounted from packages. **Left for P2:** Monaco and the LSP
-worker in place of the textarea, the Spices menu (it reads
+and spices mounted from packages. **The engine side of the LSP
+(2026-10-30, P2):** `wasm_lsp.c` resolves imports through the page's include
+dirs and reads a `defscript` header as the Compile engine does, both modules
+export `turi_wasm_put_spice_file` (a spice source under `/spices/<name>/src/`
+and nothing else), and `tur_wasm_arcade` ships `tools/wasm-jit/arcade/lsp-worker.js`
+with the stock module beside the engine; the smoke test checks the quick
+start analyses clean and an unknown import is flagged. **Left for P2:**
+Monaco and the arcade's use of that worker in place of the textarea, the
+Spices menu (it reads
 `engine/spices/index.json` and edits a `defscript` header in place), share
 links (`share-codec.js`), the theme, and the no-JSPI path (the callback
 examples only, with a note). Deploy to its own Worker with COOP/COEP headers (the

@@ -17,7 +17,10 @@
 // index.json), writes the files under /spices/<name>/src and puts that
 // directory on the module search path with turi_wasm_add_include_dir, so the
 // program's `(import raylib/core)` resolves.  The module must be running
-// (after turi_wasm_init); nothing is relinked.
+// (after turi_wasm_init); nothing is relinked.  It goes through two exports,
+// turi_wasm_put_spice_file and turi_wasm_add_include_dir, so it works on
+// either module -- the arcade's engine, and the stock module its language
+// server runs on, which exports no filesystem.
 
 export async function loadIndex(base) {
   const r = await fetch(`${base}/index.json`);
@@ -62,24 +65,33 @@ export function closure(names, index) {
   return out;
 }
 
+// Call an int export with string arguments (the module's heap, freed after).
+function callWithStrings(Module, fn, ...strs) {
+  const ptrs = strs.map((s) => {
+    const n = Module.lengthBytesUTF8(s) + 1;
+    const p = Module._malloc(n);
+    Module.stringToUTF8(s, p, n);
+    return p;
+  });
+  try { return fn(...ptrs); } finally { ptrs.forEach((p) => Module._free(p)); }
+}
+
 export async function mountSpices(Module, base, names, index) {
   const order = closure(names, index);
   const mounted = [];
   for (const name of order) {
     const root = `/spices/${name}/src`;
-    if (!Module.FS.analyzePath(root).exists) {
-      const r = await fetch(`${base}/${index.get(name).file}`);
-      if (!r.ok) throw new Error(`spice ${name}: ${r.status} fetching its package`);
-      const pkg = await r.json();
-      for (const [rel, text] of Object.entries(pkg.files)) {
-        const path = `${root}/${rel}`;
-        Module.FS.mkdirTree(path.slice(0, path.lastIndexOf('/')));
-        Module.FS.writeFile(path, text);
-      }
+    const r = await fetch(`${base}/${index.get(name).file}`);
+    if (!r.ok) throw new Error(`spice ${name}: ${r.status} fetching its package`);
+    const pkg = await r.json();
+    for (const [rel, text] of Object.entries(pkg.files)) {
+      if (callWithStrings(Module, Module._turi_wasm_put_spice_file, `${root}/${rel}`, text) !== 0)
+        throw new Error(`spice ${name}: the module refused ${root}/${rel}`);
     }
-    if (Module.ccall('turi_wasm_add_include_dir', 'number', ['string'], [root]) <= 0)
+    if (callWithStrings(Module, Module._turi_wasm_add_include_dir, root) <= 0)
       throw new Error(`spice ${name}: the module refused ${root} as an include dir`);
     mounted.push(name);
   }
   return { mounted };
 }
+

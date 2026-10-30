@@ -40,6 +40,10 @@
 #include "turi/repl.h"
 #include "elab.h"
 #include "expr.h"
+#include "pkg.h"   /* pkg_script_header_read: a defscript header */
+#include "platform_fs.h"  /* mkdir(path, mode) on MinGW too: this TU also
+                           * builds natively, as libturi_wasm */
+#include <sys/stat.h>
 #include "forms.h"
 #include "types.h"
 
@@ -68,6 +72,64 @@ static void wasm_apply_include_dirs(TuriEnv *env) {
     env->include_dirs       = (const char **)g_wasm_include_dirs;
     env->n_include_dirs     = g_wasm_n_include_dirs;
     env->include_dirs_owned = false;
+}
+
+int turi_wasm_script_header_check(const char *path, char *why, size_t why_len) {
+    PkgManifest hdr;
+    memset(&hdr, 0, sizeof hdr);
+    PkgScriptStatus st = pkg_script_header_read(path, false, &hdr);
+    if (st == PKG_SCRIPT_NONE) return 0;
+    if (st == PKG_SCRIPT_ERROR) {
+        pkg_manifest_free(&hdr);
+        snprintf(why, why_len, "its defscript header is malformed");
+        return -1;
+    }
+    int rc = 1;
+    for (int i = 0; i < hdr.n_spices && rc == 1; i++) {
+        char want[512];
+        snprintf(want, sizeof want, "/spices/%s/src", hdr.spices[i].name);
+        bool mounted = false;
+        for (int j = 0; j < g_wasm_n_include_dirs && !mounted; j++)
+            mounted = strcmp(g_wasm_include_dirs[j], want) == 0;
+        if (!mounted && !hdr.spices[i].optional) {
+            snprintf(why, why_len, "spice '%s' is not in this build", hdr.spices[i].name);
+            rc = -1;
+        }
+    }
+    pkg_manifest_free(&hdr);
+    return rc;
+}
+
+/* mkdir -p for every directory above `path`. */
+static void wasm_mkdirs_above(const char *path) {
+    char buf[1024];
+    size_t n = strlen(path);
+    if (n >= sizeof buf) return;
+    memcpy(buf, path, n + 1);
+    for (char *p = buf + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = '\0';
+        mkdir(buf, 0777);
+        *p = '/';
+    }
+}
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+int turi_wasm_put_spice_file(const char *path, const char *text) {
+    if (!path || !text || strncmp(path, "/spices/", 8) != 0 || strstr(path, "..")) return -1;
+    size_t n = strlen(path);
+    bool tur = (n > 4 && strcmp(path + n - 4, ".tur") == 0) ||
+               (n > 10 && strcmp(path + n - 10, ".tur.sweet") == 0);
+    if (!tur || !strstr(path + 8, "/src/")) return -1;
+    wasm_mkdirs_above(path);
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    size_t len = strlen(text);
+    bool ok = fwrite(text, 1, len, f) == len;
+    ok = (fclose(f) == 0) && ok;
+    return ok ? 0 : -1;
 }
 
 const char *const *turi_wasm_include_dirs(int *out_n) {
