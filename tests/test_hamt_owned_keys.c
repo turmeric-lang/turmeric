@@ -19,6 +19,8 @@
 
 #include "hamt.h"
 
+#define W(p) ((int64_t)(intptr_t)(p))   /* a pointer as the map's int64 word */
+
 /* Comparator over boxed double keys: the carrier words are payload pointers. */
 static bool dbl_key_eq(int64_t a, int64_t b) {
     const double *pa = (const double *)(intptr_t)a;
@@ -26,8 +28,8 @@ static bool dbl_key_eq(int64_t a, int64_t b) {
     return *pa == *pb;
 }
 
-static void *box_dbl(double d) {
-    return tur_hamt_box_key(&d, sizeof d);
+static int64_t box_dbl(double d) {
+    return W(tur_hamt_box_key(&d, sizeof d));
 }
 
 static int g_vals[64];  /* stable value storage (vals stay caller-owned) */
@@ -40,7 +42,7 @@ static Hamt *build_collision_map(uint64_t hash, const double *keys, int n) {
     tur_hamt_key_ops ops = tur_hamt_box_key_ops();
     for (int i = 0; i < n; i++) {
         Hamt *next = tur_hamt_set_eq_owned(m, hash, box_dbl(keys[i]),
-                                           &g_vals[i], dbl_key_eq, ops);
+                                           W(&g_vals[i]), dbl_key_eq, ops);
         tur_hamt_free(m);
         m = next;
     }
@@ -60,20 +62,20 @@ static void test_collision_sharing(void) {
     /* Lookups via transient probe boxes (released inside _get/_has). */
     for (int i = 0; i < n; i++) {
         assert(tur_hamt_has_eq_owned(base, H, box_dbl(keys[i]), dbl_key_eq, ops));
-        int *v = (int *)tur_hamt_get_eq_owned(base, H, box_dbl(keys[i]),
+        int *v = (int *)(intptr_t)tur_hamt_get_eq_owned(base, H, box_dbl(keys[i]),
                                               dbl_key_eq, ops);
-        assert(v == &g_vals[i]);
+        assert(v == W(&g_vals[i]));
     }
     /* A fractional key never truncates: 2.5 must NOT be found as 2.0. */
     double two = 2.0;
-    assert(!tur_hamt_has_eq_owned(base, H, tur_hamt_box_key(&two, sizeof two),
+    assert(!tur_hamt_has_eq_owned(base, H, W(tur_hamt_box_key(&two, sizeof two)),
                                   dbl_key_eq, ops));
 
     /* Fork several persistent versions off `base` (structural sharing of the
      * collision node -> shared boxed keys across versions). */
-    Hamt *v_upd = tur_hamt_set_eq_owned(base, H, box_dbl(3.5), &g_vals[10],
+    Hamt *v_upd = tur_hamt_set_eq_owned(base, H, box_dbl(3.5), W(&g_vals[10]),
                                         dbl_key_eq, ops);  /* update 3.5 */
-    Hamt *v_ins = tur_hamt_set_eq_owned(base, H, box_dbl(9.5), &g_vals[11],
+    Hamt *v_ins = tur_hamt_set_eq_owned(base, H, box_dbl(9.5), W(&g_vals[11]),
                                         dbl_key_eq, ops);  /* insert 9.5 */
     Hamt *v_del = tur_hamt_del_eq_owned(base, H, box_dbl(1.5), dbl_key_eq, ops);
 
@@ -84,10 +86,10 @@ static void test_collision_sharing(void) {
     /* base is unchanged by the forks (persistence). */
     assert(tur_hamt_count(base) == (uint32_t)n);
     {
-        int *v = (int *)tur_hamt_get_eq_owned(base, H, box_dbl(3.5), dbl_key_eq, ops);
-        assert(v == &g_vals[2]);   /* base still maps 3.5 -> original */
-        v = (int *)tur_hamt_get_eq_owned(v_upd, H, box_dbl(3.5), dbl_key_eq, ops);
-        assert(v == &g_vals[10]);  /* v_upd sees the updated value */
+        int *v = (int *)(intptr_t)tur_hamt_get_eq_owned(base, H, box_dbl(3.5), dbl_key_eq, ops);
+        assert(v == W(&g_vals[2]));   /* base still maps 3.5 -> original */
+        v = (int *)(intptr_t)tur_hamt_get_eq_owned(v_upd, H, box_dbl(3.5), dbl_key_eq, ops);
+        assert(v == W(&g_vals[10]));  /* v_upd sees the updated value */
         assert(tur_hamt_has_eq_owned(base, H, box_dbl(1.5), dbl_key_eq, ops));
         assert(!tur_hamt_has_eq_owned(v_del, H, box_dbl(1.5), dbl_key_eq, ops));
     }
@@ -111,7 +113,7 @@ static void test_spread_keys(void) {
     for (int i = 0; i < 40; i++) {
         double d = (double)i + 0.25;
         Hamt *next = tur_hamt_set_eq_owned(m, (uint64_t)(i * 0x9E37 + 1),
-                                           box_dbl(d), &g_vals[i % 64],
+                                           box_dbl(d), W(&g_vals[i % 64]),
                                            dbl_key_eq, ops);
         tur_hamt_free(m);
         m = next;
@@ -129,13 +131,13 @@ static void test_one_word_unchanged(void) {
     tur_hamt_key_ops none = { NULL, NULL };
     Hamt *m = tur_hamt_new();
     for (int64_t i = 1; i <= 20; i++) {
-        Hamt *next = tur_hamt_set_eq_owned(m, (uint64_t)i, (void *)(intptr_t)i,
-                                           &g_vals[i % 64], NULL, none);
+        Hamt *next = tur_hamt_set_eq_owned(m, (uint64_t)i, i,
+                                           W(&g_vals[i % 64]), NULL, none);
         tur_hamt_free(m);
         m = next;
     }
     assert(tur_hamt_count(m) == 20);
-    assert(tur_hamt_get_eq_owned(m, 7, (void *)(intptr_t)7, NULL, none) != NULL);
+    assert(tur_hamt_get_eq_owned(m, 7, 7, NULL, none) != 0);
     tur_hamt_free(m);
     printf("  PASS: one-word keys untouched\n");
 }
@@ -162,7 +164,7 @@ static void test_delete_collapse_lineage(void) {
     Hamt *base = tur_hamt_new();
     for (int i = 0; i < n; i++) {
         Hamt *next = tur_hamt_set_eq_owned(base, hashes[i], box_dbl(keys[i]),
-                                           &g_vals[i], dbl_key_eq, ops);
+                                           W(&g_vals[i]), dbl_key_eq, ops);
         tur_hamt_free(base);
         base = next;
     }

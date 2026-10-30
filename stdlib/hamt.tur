@@ -546,20 +546,14 @@
 ;;; loop body has no conditional around the per-entry lookup.
 
 
-(defn hamt/get-dynamic [m : ptr<void>
-                        hash : int
-                        key : int
-                        keyeq : ptr<void>]
+(defn hamt/get-dynamic [m : ptr<void> hash : int key : int keyeq : ptr<void>]
   #fx{}
   : int
   (tur_hamt_get_dynamic m hash key keyeq))
 ;;; hamt/has-dynamic? -- presence check matching hamt/get-dynamic's semantics.
 
 
-(defn hamt/has-dynamic? [m : ptr<void>
-                         hash : int
-                         key : int
-                         keyeq : ptr<void>]
+(defn hamt/has-dynamic? [m : ptr<void> hash : int key : int keyeq : ptr<void>]
   #fx{}
   : bool
   (tur_hamt_has_dynamic m hash key keyeq))
@@ -632,10 +626,7 @@
 ;;; Since: Phase P1
 ;; Reduce: fold all entries; returns final accumulator (as ptr).
 
-(defn hamt/reduce [m : ptr<void>
-                   fn : ptr<void>
-                   init : int
-                   ctx : ptr<void>]
+(defn hamt/reduce [m : ptr<void> fn : ptr<void> init : int ctx : ptr<void>]
   #fx{}
   : int
   (tur_hamt_reduce m fn init ctx))
@@ -737,10 +728,7 @@
 ;;; Since: Phase P1
 ;; Mutate a transient: insert/update key (hash, key, val).
 
-(defn hamt/transient-set! [t : ptr<void>
-                           hash : int
-                           key : int
-                           val : int]
+(defn hamt/transient-set! [t : ptr<void> hash : int key : int val : int]
   #fx{}
   : void
   (tur_hamt_transient_set t hash key val))
