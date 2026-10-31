@@ -1,7 +1,12 @@
 # Plan: a raylib playground in the browser ("Try Turmeric with a screen")
 
-> **Status:** P0 go on J and **P1 done** (2026-10-30); **P2 next**
-> ([section 7](#p2----the-page-arcade-repo)). P1
+> **Status:** P0 go on J, **P1 done** (2026-10-30) and **P2 done**
+> (2026-10-31); **P3 next** ([section 7](#p3----examples-and-docs)). P2
+> ([section 7](#p2----the-page-arcade-repo)): turmeric-arcade has Monaco with
+> the language server (raylib imports resolve, spice signatures are
+> type-checked), the Spices menu writing a pinned `defscript` header, share
+> links in Try's `#code=` format, light and dark themes, and a banner with
+> Run off in a browser without JSPI. P1
 > ([section 7](#p1----the-arcade-module-this-repo)): the arcade module is a
 > CMake target (`tur_wasm_arcade`) with a CI smoke test, the fallback
 > switch (J3 e) is in, spices are packages the page mounts (J2, `defscript`
@@ -806,12 +811,33 @@ dirs and reads a `defscript` header as the Compile engine does, both modules
 export `turi_wasm_put_spice_file` (a spice source under `/spices/<name>/src/`
 and nothing else), and `tur_wasm_arcade` ships `tools/wasm-jit/arcade/lsp-worker.js`
 with the stock module beside the engine; the smoke test checks the quick
-start analyses clean and an unknown import is flagged. **Left for P2:**
-Monaco and the arcade's use of that worker in place of the textarea, the
-Spices menu (it reads
-`engine/spices/index.json` and edits a `defscript` header in place), share
-links (`share-codec.js`), the theme, and the no-JSPI path (the callback
-examples only, with a note). Deploy to its own Worker with COOP/COEP headers (the
+start analyses clean and an unknown import is flagged.
+
+**Done (2026-10-31, turmeric-arcade #4-#9):**
+
+- Monaco in place of the textarea, with Try's Turmeric tokenizer, and the
+  textarea kept as the editor if Monaco fails to load (#4).
+- The language server: Try's `lsp-client.js` (its worker URL an option)
+  driving `engine/lsp-worker.js`, started on the editor's first focus; the
+  quick start analyses clean, an unknown `raylib/` import is marked, and an
+  `int` where `draw-text` takes a `cstr` is the spice's own type error (#5).
+- The Spices menu: a checkbox per spice in `engine/spices/index.json`;
+  ticking writes the `defscript` header, pinned to the turmeric-spices
+  commit the packages came from (there are no raylib or math tags), keeping
+  hand-written entries; the header runs natively under
+  `--enable=script-deps` (#6).
+- Share links: `#code=`, Try's gzip/base64url format, kept current as the
+  program is edited, and a Share button (#7).
+- Light and dark: Try's `theme.js`, the OS's until picked, Monaco
+  following (#8).
+- Without JSPI the engine cannot load at all (it is a JSPI build), so there
+  is no callback-only fallback yet: the page says so in a banner, turns Run
+  off, and keeps everything that needs no engine (#9). A second, non-JSPI
+  engine that would run the callback examples everywhere is option (a),
+  left for when it is wanted; Firefox and Safari shipping JSPI may make it
+  unnecessary.
+
+Deploy to its own Worker with COOP/COEP headers (the
 module is `-pthread`; keep that, the host serves the headers already).
 Playwright: the Try suite's shape (`web/tests/`) trimmed to the arcade's
 features. Prerequisites 6-7 should be closed or noted on the page first.
