@@ -311,8 +311,17 @@ static bool sd_build_entry(const char *script, const char *cache,
     *out_sha = NULL;
     static int counter = 0;
     char tmp[4096];
+#ifdef _WIN32
     snprintf(tmp, sizeof(tmp), "%s/.build-%s-%ld-%d", cache, s->name,
              (long)getpid(), counter++);
+#else
+    /* On POSIX the tree is built under the name it keeps: a :cmake-deps
+     * build records absolute paths into it (spice-deps-manifest.json, the
+     * CMake cache), so a rename afterwards would leave every one of them
+     * pointing at a directory that no longer exists. */
+    snprintf(tmp, sizeof(tmp), "%s/.tree-%s-%ld-%d", cache, s->name,
+             (long)getpid(), counter++);
+#endif
     (void)pkg_rm_rf(tmp);
 
     fprintf(stderr, "tur: fetching %s (%s) for %s\n", s->name,
@@ -414,22 +423,18 @@ static bool sd_build_entry(const char *script, const char *cache,
     }
 #else
     /* The tree keeps the name it was built under -- a :cmake-deps build
-     * records absolute paths into it -- and the visible name is a symlink,
-     * created atomically: whoever creates it first wins, and the loser's
+     * records absolute paths into it -- and the visible name is a symlink to
+     * it, created atomically: whoever creates it first wins, and the loser's
      * tree is removed. */
-    char real_name[4096];
-    snprintf(real_name, sizeof(real_name), ".tree-%s-%ld-%d", ename,
-             (long)getpid(), counter++);
-    char real_path[4096];
-    snprintf(real_path, sizeof(real_path), "%s/%s", cache, real_name);
-    bool placed = rename(tmp, real_path) == 0;
-    if (placed && symlink(real_name, entry_out) != 0) {
+    const char *real_name = sd_base(tmp);
+    bool placed = symlink(real_name, entry_out) == 0;
+    if (!placed && errno != EEXIST) {
         /* A filesystem without symlinks: rename, as on Windows. */
-        placed = errno != EEXIST && rename(real_path, entry_out) == 0;
+        placed = rename(tmp, entry_out) == 0;
     }
     if (!placed) {
         bool lost = sd_entry_complete(entry_out);
-        (void)pkg_rm_rf(sd_exists(real_path) ? real_path : tmp);
+        (void)pkg_rm_rf(tmp);
         if (!lost) {
             sd_error(script, "cannot move the cache entry for \"%s\" into "
                      "place: %s", s->name, strerror(errno));

@@ -124,6 +124,31 @@ const HEADER = (name) => `(defscript :spices #map{"${name}" #map{:url "https://g
     (println (v2-x (v2-add (vec2 7.1 0.0) (vec2 3.25 1.0))))
     0))`;
 
+// raygui, a spice with C of its own (:c-sources), which the module links:
+// its controls draw through raylib, and its Rect crosses into raygui's C by
+// value.  GuiGetState is 0 (STATE_NORMAL) once the style is loaded.
+const RAYGUI = `(defmodule gui
+  (export)
+  (import raylib/core     :refer [init-window begin-drawing end-drawing clear-background])
+  (import raylib/color    :refer [raywhite])
+  (import raygui/core     :refer [gui-load-style-default gui-get-state])
+  (import raygui/controls :refer [gui-label gui-check-box])
+  (import raygui/rect     :refer [rect])
+  (defn main [] : int
+    (init-window 480 270 "gui")
+    (gui-load-style-default)
+    (begin-drawing)
+    (clear-background (raywhite))
+    (gui-label (rect 10.5 8.0 120.0 16.0) "label")
+    (println (gui-check-box (rect 10.5 30.0 16.0 16.0) "box" 1))
+    (end-drawing)
+    (println (gui-get-state))
+    0))`;
+
+// What the engine offers: every package in spices/index.json.
+const OFFERED = JSON.parse(fs.readFileSync(path.join(MOD, 'spices/index.json'), 'utf8'))
+  .spices.map((x) => x.name);
+
 let failed = 0;
 const check = (ok, what, detail) => {
   console.log(`${ok ? 'PASS' : 'FAIL'} ${what}${detail ? ` -- ${detail}` : ''}`);
@@ -212,6 +237,11 @@ try {
   check(r.answer.engine === 'error' && /spice 'nope' is not in this build/.test(r.answer.reason || ''),
         'a defscript header naming a spice the build lacks is refused by name', JSON.stringify(r.answer));
 
+  r = await runFor(RAYGUI);
+  check(r.answer.engine === 'compiled' && r.answer.exit === 0 && r.lines.slice(-2).join() === '1,0' &&
+          String(r.boot.spices) === 'math,raylib,raygui',
+        "raygui's C is linked: its controls draw and return", `${JSON.stringify(r.answer)} out=${JSON.stringify(r.lines.slice(-2))}`);
+
   // The language server (P2): the stock module in lsp-worker.js, with every
   // offered spice mounted, analyses the quick start clean and flags an import
   // of a module no spice has.
@@ -238,7 +268,7 @@ try {
     w.terminate();
     return r;
   }, [HELLO, HELLO.replace('raylib/text ', 'raylib/nope ')]);
-  check(lsp.boot && lsp.boot.type === 'ready' && String(lsp.boot.spices) === 'raylib,math',
+  check(lsp.boot && lsp.boot.type === 'ready' && String(lsp.boot.spices) === String(OFFERED),
         'the language server boots with every offered spice mounted', JSON.stringify(lsp.boot));
   check(Array.isArray(lsp.hello) && lsp.hello.length === 0,
         'the quick start analyses clean (raylib imports resolve)', JSON.stringify(lsp.hello));

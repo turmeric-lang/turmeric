@@ -1,7 +1,11 @@
 # Plan: a raylib playground in the browser ("Try Turmeric with a screen")
 
 > **Status:** P0 go on J, **P1 done** (2026-10-30) and **P2 done**
-> (2026-10-31); **P3 next** ([section 7](#p3----examples-and-docs)). P2
+> (2026-10-31); **P3 under way** (2026-11-04,
+> [section 7](#p3----examples-and-docs)): all six section 8 examples are
+> written and verified natively and in the page; the engine now links each
+> packaged spice's C (raygui) and offers raygui, ecs and ecs-raylib; the
+> arcade's README guide and the raylib spice README's link are what is left. P2
 > ([section 7](#p2----the-page-arcade-repo)): turmeric-arcade has Monaco with
 > the language server (raylib imports resolve, spice signatures are
 > type-checked), the Spices menu writing a pinned `defscript` header, share
@@ -848,6 +852,46 @@ The section 8 set, each verified natively and in the page. A short guide in
 the arcade repo's README; one paragraph and a link from this repo's
 `web-emscripten-tutorial.md` and the raylib spice README ("try it in the
 browser"). Prerequisite 5 must be closed, or each example audited for floats kept in a `vec` or map.
+
+**Done (2026-11-04):**
+
+- The six examples, in turmeric-arcade's `examples/` as `07-bouncing-ball`,
+  `08-bouncing-ball-callback`, `09-pong`, `10-life`, `11-raygui-tuner` and
+  `12-ecs-circles`. Each carries a `defscript` header pinned to the
+  turmeric-spices commit the engine's packages come from, so the file runs
+  natively as it stands (`tur --enable=script-deps run`); the callback twin
+  is web-only, since natively `run-main-loop` has no browser to hand the
+  closure to (8.1 is its native twin).
+- **Verified natively** under Xvfb, with keys and clicks sent by xdotool: the
+  ball moves and resets, Space serves, raygui's slider, checkbox and colour
+  picker respond, and Space adds 50 ECS circles. **In the page**,
+  `web/tests/examples.spec.js` runs each from its file: the ball moves and R
+  resets it, the callback's `main` returns and frames keep coming, Space
+  serves, raygui's panel and picker draw, 200 circles move -- and **Life's
+  counts are the native run's** (708, then 205 after 60 generations and 151
+  after 120, from one seed), at about 30 generations a second.
+- The audits. Prerequisite 5: no example keeps a float in a `vec` or map
+  (Life's grid and the tuner's trail are ints; ECS components are ecs-raylib's
+  fixed-point ints). Prerequisites 6 and 7: no `println` in a blocking loop's
+  own body (Life's report is a helper `defn`), and no per-frame tail calls.
+  raylib's colours are heap handles, so the examples make theirs once; the
+  loop macros' `(raywhite)` is still one small allocation a frame.
+- The engine (this repo): `tools/wasm-jit/arcade/build.sh` compiles and links
+  every packaged spice's `:c-sources` and embeds its `:c-includes` headers
+  (`pack-spices.py --native`), so raygui's implementation is in the module,
+  and the default list is `raylib math raygui ecs ecs-raylib`; the smoke test
+  draws raygui's controls.
+- Found on the way, and fixed: a `defscript` header's spice with
+  `:cmake-deps` (raylib) could not find its library natively -- the cache
+  tree was built under one name and renamed, so every path the CMake build
+  recorded went stale (`src/compiler/script_deps.c`; on POSIX the tree is now
+  built under the name it keeps); a header naming raylib and raygui linked
+  raylib's `rl_web_loop.c` twice, once per cache tree (`:c-sources` are now
+  keyed by spice name as well as path, `src/driver/spice.c`); and ecs viewed
+  the stdlib vector header with `size_t` fields, which on wasm32 read the
+  length from the padding -- ILP32 shape 3 in a spice, fixed in
+  turmeric-spices (the report lists the other spices with the view).
+- One paragraph and a link in `web-emscripten-tutorial.md`.
 
 ### P4 -- Hardening
 

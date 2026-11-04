@@ -341,6 +341,85 @@ out="$("${X[@]}" run "$S/stale.tur" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && grep -q 'lock is stale' <<<"$out"; then ok "SD4: a dep added after locking reports a stale lock"
 else bad "SD4: a dep added after locking reports a stale lock" "rc=$rc $out"; fi
 
+# A header dep with native code: its :cmake-deps library is built inside the
+# cache entry, and the paths that build records (spice-deps-manifest.json)
+# must still name the entry once it is in place.  They used to name the
+# temporary build directory, which was renamed away, so the program could
+# not find the library's header (raylib.h for the raylib spice).
+if [ "$IS_WINDOWS" = 1 ]; then
+    ok "SD2: a :cmake-deps library builds into the entry (skipped: Windows renames the tree)"
+elif ! command -v cmake >/dev/null 2>&1; then
+    ok "SD2: a :cmake-deps library builds into the entry (skipped: no cmake)"
+else
+    N="$WORK/nat"
+    mkdir -p "$N/native/adder"
+    printf 'cmake_minimum_required(VERSION 3.10)\nproject(adder C)\nadd_library(adder STATIC adder.c)\ntarget_include_directories(adder PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})\n' \
+        > "$N/native/adder/CMakeLists.txt"
+    printf 'int adder_add(int a, int b);\n' > "$N/native/adder/adder.h"
+    printf '#include "adder.h"\nint adder_add(int a, int b) { return a + b; }\n' > "$N/native/adder/adder.c"
+    mkspice "$N" nat nat/add '(defmodule nat/add
+  (export add)
+  (defn add [a : int b : int] : int
+    ```c
+    #include <adder.h>
+    return adder_add((int)a, (int)b);
+    ```))' '
+  :cmake-deps #map{"adder" #map{:path "../native/adder" :targets ["adder"]}}'
+    (cd "$N" && "${GIT[@]}" tag v1)
+    publish "$N"
+    cat > "$S/native.tur" <<EOF
+(defscript :spices #map{"nat" #map{:url "$(url "$N")" :ref "v1"}})
+(defmodule native
+  (import nat/add)
+  (defn main [] : int
+    (println (nat/add/add 40 2))
+    0))
+EOF
+    out="$("${X[@]}" run "$S/native.tur" 2>/dev/null | tail -1)"
+    expect "SD2: a :cmake-deps library builds into the entry, and the script links it" "42" "$out"
+    MAN="$(ls "$TUR_HOME"/cache/script-spices/nat-*/cmake/spice-deps-manifest.json 2>/dev/null | head -1)"
+    if [ -n "$MAN" ] && ! grep -q '/\.build-' "$MAN"; then ok "SD2: ... and its manifest names the entry, not the build directory"
+    else bad "SD2: ... and its manifest names the entry, not the build directory" "$(cat "$MAN" 2>&1)"; fi
+fi
+
+# A spice with :c-sources that a header names AND another header dep depends
+# on: the two copies are two cache entries (the header's, and the one in the
+# dependent's own spices/), but one spice -- its C is compiled once.  Linking
+# both was a duplicate-symbol failure (a header with raylib and raygui).
+CN="$WORK/cnat"
+mkdir -p "$CN/c"
+printf 'int cnat_seven(void) { return 7; }\n' > "$CN/c/cnat.c"
+mkspice "$CN" cnat cnat/seven '(defmodule cnat/seven
+  (export seven)
+  (defn seven [] : int
+    ```c
+    extern int cnat_seven(void);
+    return cnat_seven();
+    ```))' '
+  :build-opts #map{:c-sources ["c/cnat.c"]}'
+(cd "$CN" && "${GIT[@]}" tag v1)
+publish "$CN"
+CW="$WORK/cwrap"
+mkspice "$CW" cwrap cwrap/twice '(defmodule cwrap/twice
+  (export fourteen)
+  (import cnat/seven)
+  (defn fourteen [] : int (* 2 (cnat/seven/seven))))' "
+  :spices #map{\"cnat\" #map{:url \"$(url "$CN")\" :ref \"v1\"}}"
+(cd "$CW" && "${GIT[@]}" tag v1)
+publish "$CW"
+cat > "$S/both.tur" <<EOF
+(defscript :spices #map{"cnat"  #map{:url "$(url "$CN")" :ref "v1"}
+                        "cwrap" #map{:url "$(url "$CW")" :ref "v1"}})
+(defmodule both
+  (import cnat/seven)
+  (import cwrap/twice)
+  (defn main [] : int
+    (println (+ (cnat/seven/seven) (cwrap/twice/fourteen)))
+    0))
+EOF
+out="$("${X[@]}" run "$S/both.tur" 2>&1 | tail -1)"
+expect "SD2: a header dep's :c-sources, reached twice, are linked once" "21" "$out"
+
 # ================================================================== #
 # SD5 -- tur cache                                                    #
 # ================================================================== #

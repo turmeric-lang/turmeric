@@ -590,6 +590,15 @@ void collect_spice_aux_c_roots(const char *const *roots, int n_roots,
             char sc[4096];
             const char *skey = realpath(path, sc) ? sc : path;
             if (aux_c_seen(&src_seen, &n_src, &cap_src, skey)) continue;
+            /* The same spice in two trees -- a script header's raylib and the
+             * raylib a header's raygui depends on are two cache entries --
+             * is still one spice: its sources are keyed by its name too, so
+             * the first copy reached is the one compiled. */
+            if (m.name) {
+                char nkey[4096];
+                snprintf(nkey, sizeof(nkey), "%s\n%s", m.name, m.c_sources[i]);
+                if (aux_c_seen(&src_seen, &n_src, &cap_src, nkey)) continue;
+            }
             buf_putc(sources, ' ');
             if (!drv_buf_put_quoted(sources, path))
                 fprintf(stderr, "tur: skipping :c-sources path (too long to "

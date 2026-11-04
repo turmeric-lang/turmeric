@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # build.sh -- the arcade module (raylib-web-playground-plan P1 / J0): the
-# JSPI build of the browser JIT module with raylib's web archive, the raylib
-# spice's one native TU (rl_web_loop.c) and raylib.h linked and embedded,
-# and beside it the spice packages (J2): OUT_DIR/wasm-jit/spices/, one
+# JSPI build of the browser JIT module with raylib's web archive and raylib.h
+# linked and embedded, plus every packaged spice's own C -- its :build-opts
+# :c-sources compiled and linked (raylib's rl_web_loop.c, raygui's
+# raygui_impl.c), the headers of its :c-includes embedded (raygui.h) -- and
+# beside it the spice packages (J2): OUT_DIR/wasm-jit/spices/, one
 # <name>.json per spice and an index.json (pack-spices.py), which the page
 # mounts after the module has started (spices.js) -- the spices' Turmeric
 # sources are data, so adding one is a repack, not a relink.
@@ -14,8 +16,8 @@
 #   RAYLIB_LIB=<web libraylib.a>   use this archive instead of building one
 #                                  into OUT_DIR/raylib (build-raylib.sh)
 #   TUR_ARCADE_SPICE_LIST="a b"    the spices to package (default: raylib
-#                                  math); the list must be closed under each
-#                                  spice's :spices deps
+#                                  math raygui ecs ecs-raylib); the list must
+#                                  be closed under each spice's :spices deps
 #   TUR_WASM_BUILD_DIR=<dir>       the configured -DTUR_WASM=ON build whose
 #                                  wasm-jit/sources.txt and stdlib-pkg/ the
 #                                  module is made from (default build-wasm/)
@@ -48,14 +50,38 @@ if [ -z "${RAYLIB_LIB:-}" ]; then
 fi
 [ -f "$RAYLIB_LIB" ] || { echo "build.sh: no $RAYLIB_LIB" >&2; exit 2; }
 
-# The spice's frame-callback shim, compiled the way the module's own objects
-# are (pthread, wasm EH, -O2).
-emcc -c "$TUR_SPICES/spices/raylib/c/raylib/rl_web_loop.c" -o "$OUT/rl_web_loop.o" \
-  -pthread -fwasm-exceptions -O2
+SPICE_LIST=${TUR_ARCADE_SPICE_LIST:-raylib math raygui ecs ecs-raylib}
+
+# The spices' own C (pack-spices.py --native): each :c-sources file compiled
+# the way the module's own objects are (pthread, wasm EH, -O2), against
+# raylib's headers and the spice's :c-includes, and each header of those
+# dirs embedded beside raylib.h for the program's inline C.  A spice's C is
+# linked, not packaged: the page can add Turmeric after start-up, not code
+# for the import table.
+NATIVE_OBJS=""
+NATIVE_HDRS=""
+rm -rf "$OUT/native"
+# shellcheck disable=SC2086
+NATIVE=$(python3 "$HERE/pack-spices.py" --native "$TUR_SPICES" $SPICE_LIST)
+while read -r kind name path incs; do
+  case "$kind" in
+    src)
+      obj="$OUT/native/$name/$(basename "${path%.c}").o"
+      mkdir -p "$(dirname "$obj")"
+      inc_flags=()
+      for i in $incs; do inc_flags+=("-I$i"); done
+      emcc -c "$path" -o "$obj" -I"$RAYLIB_SRC/src" "${inc_flags[@]}" \
+        -pthread -fwasm-exceptions -O2
+      NATIVE_OBJS="$NATIVE_OBJS $obj" ;;
+    hdr) NATIVE_HDRS="$NATIVE_HDRS $path" ;;
+    "") ;;
+    *) echo "build.sh: pack-spices.py --native: unexpected line '$kind'" >&2; exit 1 ;;
+  esac
+done <<< "$NATIVE"
 
 export TUR_WASM_JIT_JSPI=1
-export TUR_WASM_JIT_EXTRA_OBJECTS="$RAYLIB_LIB $OUT/rl_web_loop.o"
-export TUR_WASM_JIT_EXTRA_HEADERS="$RAYLIB_SRC/src/raylib.h"
+export TUR_WASM_JIT_EXTRA_OBJECTS="$RAYLIB_LIB$NATIVE_OBJS"
+export TUR_WASM_JIT_EXTRA_HEADERS="$RAYLIB_SRC/src/raylib.h$NATIVE_HDRS"
 # The GL flags pkg_web_compose_link_flags (src/compiler/pkg.c) gives a
 # :web :canvas :gl :es3 project.
 export TUR_WASM_JIT_EXTRA_LINK="-sUSE_GLFW=3 -sGL_ENABLE_GET_PROC_ADDRESS -sMAX_WEBGL_VERSION=2"
@@ -63,7 +89,7 @@ bash "$ROOT/tools/wasm-jit/build-module.sh" "$OUT/wasm-jit" "$BUILD/wasm-jit/sou
   "$(tr -d '\n' < "$ROOT/VERSION")" "${TUR_MIR_SOURCE_DIR:-$ROOT/external/mir}" "$BUILD/stdlib-pkg"
 # shellcheck disable=SC2086
 rm -rf "$OUT/wasm-jit/spices"
-python3 "$HERE/pack-spices.py" "$TUR_SPICES" "$OUT/wasm-jit/spices" ${TUR_ARCADE_SPICE_LIST:-raylib math}
+python3 "$HERE/pack-spices.py" "$TUR_SPICES" "$OUT/wasm-jit/spices" $SPICE_LIST
 cp "$HERE/spices.js" "$OUT/wasm-jit/spices.js"
 cp "$HERE/lsp-worker.js" "$OUT/wasm-jit/lsp-worker.js"
 grep -q promising "$OUT/wasm-jit/turmeric-jit.js" || { echo "build.sh: the module is not a JSPI build (no promising export)" >&2; exit 1; }

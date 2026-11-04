@@ -19,6 +19,15 @@ try-REPL build) and `docs/guides/c-integration-guide.md` (which covers native C
 interop). The target audience is a developer who wants to embed or ship a
 Turmeric program on a web page.
 
+**To try a raylib program in the browser without building anything**, use
+[Turmeric Arcade](https://play.turmeric-lang.com): an editor beside a screen
+pane, where a raylib program -- the bouncing ball, pong, Life, a raygui panel,
+an ECS world -- is compiled in the page by the browser JIT and drawn on a
+canvas. Its examples carry a `defscript` header, so each runs natively too
+(`tur --enable=script-deps run <file>`). The engine is this repo's
+`tur_wasm_arcade` target ([tools/wasm-jit/README.md](https://github.com/turmeric-lang/turmeric/blob/main/tools/wasm-jit/README.md));
+the site is [turmeric-lang/turmeric-arcade](https://github.com/turmeric-lang/turmeric-arcade).
+
 ---
 
 ## Prerequisites
@@ -588,6 +597,8 @@ export default defineConfig({
 
 ## Next Steps
 
+- [Turmeric Arcade](https://play.turmeric-lang.com) -- raylib programs compiled
+  and run in the browser, with examples that also run natively
 - `docs/guides/c-integration-guide.md` -- calling C from Turmeric (native builds)
 - `docs/guides/effects-system-guide.md` -- algebraic effects in Turmeric
 - `web/README.md` -- the full try-REPL build and deployment workflow
