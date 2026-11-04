@@ -6,7 +6,10 @@
 > turmeric-arcade's Examples menu, each verified natively and in the page;
 > the engine links each packaged spice's C (raygui) and offers raygui, ecs
 > and ecs-raylib; the arcade README has a guide, and this repo's web tutorial
-> and the raylib spice README link to the site. **P4 next** (hardening). P2
+> and the raylib spice README link to the site. **P4's page items done**
+> (2026-11-04, [section 7](#p4----hardening)): an FPS counter, `?example=`
+> links and a layout for phones; usage counts wait on the owner asking for
+> them, and the section 8 "Later" examples are not scheduled. P2
 > ([section 7](#p2----the-page-arcade-repo)): turmeric-arcade has Monaco with
 > the language server (raylib imports resolve, spice signatures are
 > type-checked), the Spices menu writing a pinned `defscript` header, share
@@ -909,6 +912,33 @@ Asyncify way, its note); telemetry-free usage counts if the owner wants them
 (the CSP forbids third party scripts, keep it that way). If the MIR
 interpreter's speed is what limits the examples, the lever is wasm-jit-plan
 section 8's T2 (a MIR-to-wasm generator), not a server.
+
+**Done (2026-11-04, turmeric-arcade #12):**
+
+- The FPS counter. A frame is one `glfwSwapBuffers`, which raylib's
+  `EndDrawing` calls once a frame on the web, in the blocking loop and the
+  frame callback alike; the screen shell wraps that import as the engine is
+  instantiated (Emscripten's `instantiateWasm` hands over the import object),
+  so nothing in the engine changed, and reports the rate twice a second. It
+  reads 60 on the bouncing balls and the raygui tuner, about 55 on ECS
+  circles (200 entities) and 30 on Life, which targets 30. J4 went the JSPI
+  way, so there is no Asyncify note to add.
+- `?example=NAME` opens on an example and `&run` runs it on arrival. Picking
+  an example puts its link in the URL, an edit switches to `#code=` (which
+  wins on reload), and Share gives the short link while the example is
+  unedited.
+- Phones and narrow windows: one column with the screen first and full
+  width, then the editor and the console; the page scrolls; the toolbar
+  wraps with controls big enough to tap. A tap reaches the program as a
+  click (Life's cells flip); there is no keyboard, so the examples that need
+  keys need one.
+- `web/tests/p4.spec.js` covers each, the phone cases on a Pixel 7's
+  viewport and touch.
+
+**Not done:** usage counts (only if the owner wants them; nothing on the page
+sends anything anywhere today), and T2, which is wasm-jit-plan's and only
+matters if the interpreter's speed limits an example -- none of section 8's
+does now.
 
 ## 8. Examples
 
