@@ -1,11 +1,12 @@
 # Plan: a raylib playground in the browser ("Try Turmeric with a screen")
 
 > **Status:** P0 go on J, **P1 done** (2026-10-30) and **P2 done**
-> (2026-10-31); **P3 under way** (2026-11-04,
-> [section 7](#p3----examples-and-docs)): all six section 8 examples are
-> written and verified natively and in the page; the engine now links each
-> packaged spice's C (raygui) and offers raygui, ecs and ecs-raylib; the
-> arcade's README guide and the raylib spice README's link are what is left. P2
+> (2026-10-31); **P3 done** (2026-11-04,
+> [section 7](#p3----examples-and-docs)): all six section 8 examples are in
+> turmeric-arcade's Examples menu, each verified natively and in the page;
+> the engine links each packaged spice's C (raygui) and offers raygui, ecs
+> and ecs-raylib; the arcade README has a guide, and this repo's web tutorial
+> and the raylib spice README link to the site. **P4 next** (hardening). P2
 > ([section 7](#p2----the-page-arcade-repo)): turmeric-arcade has Monaco with
 > the language server (raylib imports resolve, spice signatures are
 > type-checked), the Spices menu writing a pinned `defscript` header, share
@@ -853,7 +854,8 @@ the arcade repo's README; one paragraph and a link from this repo's
 `web-emscripten-tutorial.md` and the raylib spice README ("try it in the
 browser"). Prerequisite 5 must be closed, or each example audited for floats kept in a `vec` or map.
 
-**Done (2026-11-04):**
+**Done (2026-11-04; turmeric #1449, turmeric-spices #133,
+turmeric-arcade #10 and #11):**
 
 - The six examples, in turmeric-arcade's `examples/` as `07-bouncing-ball`,
   `08-bouncing-ball-callback`, `09-pong`, `10-life`, `11-raygui-tuner` and
@@ -891,7 +893,14 @@ browser"). Prerequisite 5 must be closed, or each example audited for floats kep
   the stdlib vector header with `size_t` fields, which on wasm32 read the
   length from the padding -- ILP32 shape 3 in a spice, fixed in
   turmeric-spices (the report lists the other spices with the view).
-- One paragraph and a link in `web-emscripten-tutorial.md`.
+- The docs: a "Writing a program" guide in the arcade's README (the header
+  and running natively, the two loop styles, the pane, the engine's limits,
+  a table of the examples); one paragraph and a link in
+  `web-emscripten-tutorial.md`; a "Try it in the browser" section in the
+  raylib spice README.
+- The arcade's `engine.lock` pins the #1449 and #133 merges, so its CI
+  builds the engine with raygui linked and five spices packaged, and runs
+  all six examples in the page.
 
 ### P4 -- Hardening
 
