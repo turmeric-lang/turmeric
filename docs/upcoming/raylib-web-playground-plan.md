@@ -13,7 +13,8 @@
 > way** ([section 7](#p5----the-editor)): bringing the editor up to Try
 > Turmeric's and the C playground's -- Turmeric's token colours, Try's
 > editor options, the program kept across reloads and draggable dividers
-> are in review; the minimap is next. P2
+> are done; the minimap is next, and PWA support and social cards are on
+> the list. P2
 > ([section 7](#p2----the-page-arcade-repo)): turmeric-arcade has Monaco with
 > the language server (raylib imports resolve, spice signatures are
 > type-checked), the Spices menu writing a pinned `defscript` header, share
@@ -955,7 +956,7 @@ completion, hover, signature help, go-to-definition, document symbols and
 occurrence highlights are registered for its one buffer. What it lacked was
 mostly around them.
 
-**In review (2026-11-04):**
+**Done (2026-11-04, turmeric-arcade #14 and #15):**
 
 - Turmeric's token colours (turmeric-arcade #14). The arcade's Monaco theme
   had no token rules, so it showed Monaco's stock colours; it now reads
@@ -968,8 +969,7 @@ mostly around them.
   kept in localStorage across reloads (a link wins over it), with the C
   playground's `storage.js` so blocked storage cannot break the page; and
   draggable, keyboard-operable dividers between the editor, the screen and
-  the console, remembered (the C playground's `split.js`, generalised to two)
-  -- the arcade PR after #14, since both edit the editor's setup.
+  the console, remembered (the C playground's `split.js`, generalised to two).
 
 **Next, in order:**
 
@@ -995,6 +995,18 @@ mostly around them.
 6. **A doc panel** (Try's `web/doc-panel.js`): `turi_doc_lookup`,
    `turi_type_of` and `turi_explain` are in the same module, behind the same
    kind of worker message as format.
+7. **Installable, and shareable.** A web app manifest and a service worker
+   (as the C playground does with vite-plugin-pwa, `registerType: 'prompt'` so
+   an update never reloads the page under the visitor): the page shell
+   precached, the engine (`turmeric-jit.wasm`, `stdlib.data`, the spice
+   packages, ~12 MB) cached as it is first used rather than on install, and
+   offline play once it has been. The service worker's responses must keep the
+   page and the screen iframe cross-origin isolated (COOP/COEP), which the
+   engine's threads need. With it: the TA badge as the app icon (192, 512,
+   maskable and Apple touch sizes), and Open Graph / Twitter tags with a
+   1200x630 social image after turmeric-lang.com's `og-image.png` -- its
+   layout and palette, the arcade's badge and a screen where Turmeric's has
+   a code card.
 
 **Not ported:** tabs and projects (one program), the REPL (the arcade runs
 programs, not sessions), Try's time-travel trace and the C playground's
