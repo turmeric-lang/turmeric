@@ -13,7 +13,7 @@
 > way** ([section 7](#p5----the-editor)): bringing the editor up to Try
 > Turmeric's and the C playground's -- Turmeric's token colours, Try's
 > editor options, the program kept across reloads and draggable dividers
-> first; the minimap next. P2
+> are in review; the minimap is next. P2
 > ([section 7](#p2----the-page-arcade-repo)): turmeric-arcade has Monaco with
 > the language server (raylib imports resolve, spice signatures are
 > type-checked), the Spices menu writing a pinned `defscript` header, share
@@ -955,7 +955,7 @@ completion, hover, signature help, go-to-definition, document symbols and
 occurrence highlights are registered for its one buffer. What it lacked was
 mostly around them.
 
-**Done (2026-11-04):**
+**In review (2026-11-04):**
 
 - Turmeric's token colours (turmeric-arcade #14). The arcade's Monaco theme
   had no token rules, so it showed Monaco's stock colours; it now reads
@@ -968,7 +968,8 @@ mostly around them.
   kept in localStorage across reloads (a link wins over it), with the C
   playground's `storage.js` so blocked storage cannot break the page; and
   draggable, keyboard-operable dividers between the editor, the screen and
-  the console, remembered (the C playground's `split.js`, generalised to two).
+  the console, remembered (the C playground's `split.js`, generalised to two)
+  -- the arcade PR after #14, since both edit the editor's setup.
 
 **Next, in order:**
 
