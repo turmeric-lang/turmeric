@@ -9,7 +9,11 @@
 > and the raylib spice README link to the site. **P4's page items done**
 > (2026-11-04, [section 7](#p4----hardening)): an FPS counter, `?example=`
 > links and a layout for phones; usage counts wait on the owner asking for
-> them, and the section 8 "Later" examples are not scheduled. P2
+> them, and the section 8 "Later" examples are not scheduled. **P5 under
+> way** ([section 7](#p5----the-editor)): bringing the editor up to Try
+> Turmeric's and the C playground's -- Turmeric's token colours, Try's
+> editor options, the program kept across reloads and draggable dividers
+> are in review; the minimap is next. P2
 > ([section 7](#p2----the-page-arcade-repo)): turmeric-arcade has Monaco with
 > the language server (raylib imports resolve, spice signatures are
 > type-checked), the Spices menu writing a pinned `defscript` header, share
@@ -939,6 +943,64 @@ section 8's T2 (a MIR-to-wasm generator), not a server.
 sends anything anywhere today), and T2, which is wasm-jit-plan's and only
 matters if the interpreter's speed limits an example -- none of section 8's
 does now.
+
+### P5 -- The editor
+
+Bring the arcade's editor up to Try Turmeric's (this repo's `web/`) and the C
+playground's (c.turmeric-lang.com, turmeric-lang/c2mp), taking what serves a
+page with one program and leaving what serves a session or a project. A skim
+of both (2026-11-04) found the arcade already has most of the language
+intelligence: its `web/lsp-client.js` is Try's, so the language server's
+completion, hover, signature help, go-to-definition, document symbols and
+occurrence highlights are registered for its one buffer. What it lacked was
+mostly around them.
+
+**In review (2026-11-04):**
+
+- Turmeric's token colours (turmeric-arcade #14). The arcade's Monaco theme
+  had no token rules, so it showed Monaco's stock colours; it now reads
+  `web/editor-palette.json` (a copy of this repo's, the one place the colours
+  are written down) with Try's rainbow brackets, in both themes. And a spinner
+  instead of the program's raw text while Monaco loads.
+- Try's editor options (wrap, folding, bracket-pair guides, a three-lane
+  overview ruler for diagnostics, occurrence highlighting, no suggestions in
+  strings and comments), F12 for go-to-definition, Ctrl/Cmd+S; the program
+  kept in localStorage across reloads (a link wins over it), with the C
+  playground's `storage.js` so blocked storage cannot break the page; and
+  draggable, keyboard-operable dividers between the editor, the screen and
+  the console, remembered (the C playground's `split.js`, generalised to two)
+  -- the arcade PR after #14, since both edit the editor's setup.
+
+**Next, in order:**
+
+1. **The minimap.** Monaco's own, as Try configures it
+   (`web/main.js`, `web/minimap.js`): blocks rather than glyphs, the slider
+   on hover, gated on the editor's width (hidden under ~600 px, so never on a
+   phone) with the visitor's choice remembered, and its colours and the
+   overview ruler's read from the stylesheet (`web/editor-theme.js`
+   `minimapColors`, whose `cssHex` guard keeps an unparsed colour from
+   painting the strip red). The arcade's examples are 60-130 lines, so it
+   earns its width only on the larger ones; the toggle matters.
+2. **Hover docs for builtins.** Try's client falls back to the doc table when
+   the server has no hover (`docFallbackHover`); the arcade passes no
+   `lookupDoc`, and needs `doc-names.json` beside the engine.
+3. **A Symbols button and an outline** (Try's `web/outline.js`, the C
+   playground's Symbols menu): go-to-symbol exists (Ctrl+Shift+O) but nothing
+   on the page says so.
+4. **The Run button's shortcut hint** (the C playground's `<kbd>` icons).
+5. **Format** (Alt+Shift+F and Format Document): the stock module the
+   language server runs in exports `turi_wasm_format`, but
+   `tools/wasm-jit/arcade/lsp-worker.js` answers only `lsp` messages; a
+   `format` message there, an `engine.lock` bump, then the arcade's provider.
+6. **A doc panel** (Try's `web/doc-panel.js`): `turi_doc_lookup`,
+   `turi_type_of` and `turi_explain` are in the same module, behind the same
+   kind of worker message as format.
+
+**Not ported:** tabs and projects (one program), the REPL (the arcade runs
+programs, not sessions), Try's time-travel trace and the C playground's
+recorded debugger (each is its engine's own instrumentation; a debugger here
+would need a tracing mode in the browser JIT), and the C playground's own
+completion, highlighter and minimap, which exist because it has no Monaco.
 
 ## 8. Examples
 
