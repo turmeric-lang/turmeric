@@ -25,7 +25,7 @@ pane, where a raylib program -- the bouncing ball, pong, Life, a raygui panel,
 an ECS world -- is compiled in the page by the browser JIT and drawn on a
 canvas. Its examples carry a `defscript` header, so each runs natively too
 (`tur --enable=script-deps run <file>`). The engine is this repo's
-`tur_wasm_arcade` target ([tools/wasm-jit/README.md](../../tools/wasm-jit/README.md));
+`tur_wasm_arcade` target ([tools/wasm-jit/README.md](https://github.com/turmeric-lang/turmeric/blob/main/tools/wasm-jit/README.md));
 the site is [turmeric-lang/turmeric-arcade](https://github.com/turmeric-lang/turmeric-arcade).
 
 ---
