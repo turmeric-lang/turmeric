@@ -71,6 +71,15 @@ Four shapes, all measured on the module:
    `vec-of-tvec-eq-manual`, `eq-carrier-capturing-comparator`,
    `comparator-float-elements-word-adapter` and `option-niche-vec-closure-cmp`
    left the baseline.
+   **Spices have it too (2026-11-04, raylib-web-playground-plan P3):** the ecs
+   spice's `world-alloc-entity!` and `world-despawn!` viewed `(.gens w)` -- a
+   stdlib vector -- with `size_t len; size_t cap`, so on the page the first
+   entity trapped with `memory access out of bounds` (fixed in
+   turmeric-spices, in the same change as the arcade's ECS example). The same
+   view is still in `frame/group.tur`, `c-dsl/codegen.tur` and `types.tur`,
+   `glsl/codegen.tur`, and `plot/area.tur` and `contour.tur` (`CstrVec`,
+   `StrVec`, `FillVec`) -- wrong on any wasm32 target, harmless natively; none
+   is in the arcade's engine yet.
 
 4. **A struct's pointer field read through a 64-bit cell view.** *Found
    2026-10-29* (raylib-web-playground-plan prerequisite 2), by Emscripten's

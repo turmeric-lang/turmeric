@@ -2,6 +2,7 @@
 """pack-spices.py -- the arcade's spice packages (raylib-web-playground-plan J2).
 
     pack-spices.py SPICES_CHECKOUT OUT_DIR NAME...
+    pack-spices.py --native SPICES_CHECKOUT NAME...
 
 One package per spice: OUT_DIR/<name>.json, holding the spice's src/ tree as
 {"name", "version", "description", "deps", "files": {relpath: text}}, where
@@ -19,6 +20,14 @@ spice and its deps is always enough.
 
 Spice sources are Turmeric text; anything else under src/ is refused rather
 than mangled into a string.
+
+With --native, nothing is packed: it prints what the module has to link for
+the named spices, from each one's `:build-opts` -- a line
+`src NAME SOURCE INCLUDE_DIR...` per `:c-sources` file (raylib's
+rl_web_loop.c, raygui's raygui_impl.c), and a line `hdr NAME HEADER` per `.h`
+directly in a `:c-includes` dir, for /sysinclude (raygui.h).  Paths are
+absolute.  A spice's C is code the page cannot add after start-up, so it is
+linked into the module; its Turmeric sources stay packages.
 """
 import json
 import os
@@ -61,6 +70,44 @@ def string_field(text, key):
     return m.group(1) if m else ''
 
 
+def string_list(text, key):
+    """The strings of `KEY [...]`, or []."""
+    m = re.search(re.escape(key) + r'\s+\[([^\]]*)\]', text)
+    return re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1)) if m else []
+
+
+def native_inputs(root, name):
+    """(sources, headers) of the spice's :build-opts, as absolute paths:
+    sources is [(source, [include dirs])]."""
+    d = os.path.join(root, 'spices', name)
+    manifest = os.path.join(d, 'build.tur')
+    if not os.path.isfile(manifest):
+        sys.exit('pack-spices: no %s' % manifest)
+    opts = map_body(open(manifest, encoding='utf-8').read(), ':build-opts') or ''
+    incs = [os.path.abspath(os.path.join(d, i)) for i in string_list(opts, ':c-includes')]
+    srcs = []
+    for rel in string_list(opts, ':c-sources'):
+        p = os.path.abspath(os.path.join(d, rel))
+        if not os.path.isfile(p):
+            sys.exit('pack-spices: %s: no C source %s' % (name, rel))
+        srcs.append((p, incs))
+    hdrs = []
+    for i in incs:
+        if not os.path.isdir(i):
+            sys.exit('pack-spices: %s: no include dir %s' % (name, i))
+        hdrs += [os.path.join(i, f) for f in sorted(os.listdir(i)) if f.endswith('.h')]
+    return srcs, hdrs
+
+
+def main_native(root, names):
+    for n in names:
+        srcs, hdrs = native_inputs(root, n)
+        for src, incs in srcs:
+            print(' '.join(['src', n, src] + incs))
+        for h in hdrs:
+            print('hdr %s %s' % (n, h))
+
+
 def read_spice(root, name):
     d = os.path.join(root, 'spices', name)
     manifest = os.path.join(d, 'build.tur')
@@ -94,6 +141,8 @@ def read_spice(root, name):
 
 
 def main(argv):
+    if len(argv) >= 3 and argv[1] == '--native':
+        return main_native(argv[2], argv[3:])
     if len(argv) < 4:
         sys.exit(__doc__.strip().splitlines()[2].strip())
     root, out, names = argv[1], argv[2], argv[3:]

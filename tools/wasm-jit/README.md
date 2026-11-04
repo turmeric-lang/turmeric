@@ -75,10 +75,15 @@ does that), and drive it from a browser -- node 22's V8 has no JSPI.
 ### The arcade module (`arcade/`, `tur_wasm_arcade`)
 
 The raylib playground's engine (raylib-web-playground-plan P1): the JSPI
-build with raylib's web archive, the raylib spice's `rl_web_loop.c` and
-`raylib.h` linked and embedded, and beside it a package per spice
+build with raylib's web archive and `raylib.h` linked and embedded, plus each
+packaged spice's own C -- its `:build-opts` `:c-sources` compiled and linked
+(raylib's `rl_web_loop.c`, raygui's `raygui_impl.c`) and the headers of its
+`:c-includes` embedded (`raygui.h`), which `pack-spices.py --native` lists --
+and beside it a package per spice
 (`wasm-jit/spices/<name>.json` and `index.json`, from `arcade/pack-spices.py`;
-`TUR_ARCADE_SPICE_LIST`, default `raylib math`). A page mounts the ones a
+`TUR_ARCADE_SPICE_LIST`, default `raylib math raygui ecs ecs-raylib`). A
+spice's Turmeric is data the page adds after start-up; its C is code, so it is
+in the module, and adding a spice with C is a relink. A page mounts the ones a
 program names after the module has started with `arcade/spices.js`, copied
 beside the module: `spicesFor` reads the program's imports and `defscript`
 header, `mountSpices` writes the closure under `/spices/<name>/src` and adds
@@ -107,7 +112,8 @@ node tools/wasm-jit/arcade/smoke/smoke.mjs build-wasm/wasm-arcade/wasm-jit
 it by raylib ref). The smoke test (the `wasm-arcade` CI job) drives the
 module in Playwright's Chromium: spices mounted from their packages, first
 frame, a console line from a running frame loop, Stop, a refusal, a
-`defscript` header satisfied and one refused, and the language server analysing
+`defscript` header satisfied and one refused, raygui's controls drawing (its
+C linked), and the language server analysing
 a raylib program clean and flagging an unknown import. A page that embeds raylib calls
 `turi_wasm_jit_set_fallback(0)` after `turi_wasm_init`, so a program the
 engine refuses comes back as `{"engine":"refused", ...}` instead of going to
