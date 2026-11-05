@@ -57,7 +57,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [vec-literal-option-none-after-some-mistyped](vec-literal-option-none-after-some-mistyped.md) | low (refusal) | `[(some 3) (none)]` is TUR-E0001 (`vec-push!` arg 2: expected `(Option int)`, got `(Option A)`) on every engine; `[(none) (some 3)]` compiles. The later element is not elaborated against the type the earlier one fixed |
+| ~~[vec-literal-option-none-after-some-mistyped](../archive/vec-literal-option-none-after-some-mistyped.md)~~ | low (refusal) | **RESOLVED 2026-11-05** (archived): a return-only generic call at a bare type-variable parameter a sibling grounded is grounded too, so `[(some 3) (none)]` and `(vec-push! v (none))` compile. Pinned by `vec-literal-none-after-some` |
 
 ## Found landing simd-and-vectorization-plan N0 (filed 2026-10-28)
 
@@ -109,7 +109,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [borrow-param-consumed-in-own-body](borrow-param-consumed-in-own-body.md) | medium | `^borrow` is enforced only at call sites: inside the borrowing function (or a `(fn [^borrow h : H] ...)` lambda) the parameter can be passed to a consuming slot, so a double close compiles clean |
+| ~~[borrow-param-consumed-in-own-body](../archive/borrow-param-consumed-in-own-body.md)~~ | medium | **RESOLVED 2026-11-05** (archived): passing a linear/affine `^borrow` parameter to a consuming slot, in a `defn` or a lambda, is TUR-E0109; lending it to another `^borrow` slot stays legal. Pinned by `errors/borrow-*param-consumed-in-body` |
 | ~~[ok-nil-lowercase-miscompiles](../archive/ok-nil-lowercase-miscompiles.md)~~ | low-medium | **RESOLVED 2026-10-29** (archived): a `nil` parameter is spelled `int64_t` and a nil argument passes 0, so `(ok nil)`, `(some nil)` and a declared `[x : nil]` compile. Pinned by `ok-nil-lowercase` |
 | ~~[bare-nullary-ctor-as-value-emits-undeclared-c](../archive/bare-nullary-ctor-as-value-emits-undeclared-c.md)~~ | low | **RESOLVED 2026-10-29** (archived): a bare nullary constructor elaborates as its application, on both engines (the interpreter matched no arm). Pinned by `bare-nullary-ctor-value` |
 
@@ -367,7 +367,7 @@ on `main` 3d9e02a2.
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[turi-fiber-handle-defers-fire-at-the-wrong-time](../archive/turi-fiber-handle-defers-fire-at-the-wrong-time.md)~~ | low | **RESOLVED 2026-10-24** (archived): `defer` and `catch-unwind` are work-stack capturable -- a capture carries the body's pending defers and catch boundaries, a resume re-installs a copy (`ws_slice_reinstall`), and an abandoning case fires them -- so a multi-shot resume over such a body runs under `tur --interpret`. A body under `catch-panic-of` still takes the fiber. Pinned by `defer-abortive-handler-no-inline-c`, `cps-catch-unwind-multishot`, `discontinue-multishot` |
-| [turi-defer-body-panic-is-swallowed](turi-defer-body-panic-is-swallowed.md) | medium | Under `tur --interpret`, a panic raised in a deferred body is lost when a work-stack `catch-unwind` would take it: the fire helpers restore the saved `panicking` signal over it. Compiled catches it. Cases 16 and 17 of `defer-cps-abortive-handler` (left out of its inline-C-free twin) |
+| ~~[turi-defer-body-panic-is-swallowed](../archive/turi-defer-body-panic-is-swallowed.md)~~ | medium | **RESOLVED 2026-11-05** (archived): the fire helpers leave a panic a deferred body raised in place, after firing the rest of the chain, so a work-stack `catch-unwind` takes it as compiled does. Cases 16 and 17 are back in `defer-abortive-handler-no-inline-c` |
 
 ## Found revisiting the two dynvar plans (filed 2026-10-17)
 
@@ -3488,7 +3488,7 @@ the `__int128` work only surfaced them.  Both resolved the same day.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [monomorph-emitted-before-its-type-argument](monomorph-emitted-before-its-type-argument.md) | medium | With `tourist/app` imported before the markup spices, the C for `ctor_Cons_Cons__Hole` (which takes a `Hole` by value) precedes `struct tur_adt_Hole`, and cc rejects the incomplete type; the other import order compiles |
-| [unused-module-global-heap-init-reported-as-leak](unused-module-global-heap-init-reported-as-leak.md) | low | A module `def` holding a heap constructor box that nothing reads is a `static` global the C compiler drops with its store, so LeakSanitizer reports the box (dom/core's `__syntax-node` and friends) |
+| ~~[unused-module-global-heap-init-reported-as-leak](../archive/unused-module-global-heap-init-reported-as-leak.md)~~ | low | **RESOLVED 2026-11-05** (archived): a file-local `def` with an initializer is emitted `__attribute__((used))`, so its store survives and the box stays reachable. Pinned by `module-def-unread-heap-not-leaked` (`requires.leak-check`) |
 
 ## Found executing stats-formula-plan (filed 2026-10-29)
 
@@ -3499,7 +3499,7 @@ any struct with an `Option` field triggers it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [closure-with-adt-param-rejected-by-generic-fn-param](closure-with-adt-param-rejected-by-generic-fn-param.md) | low-medium | A capturing lambda `(fn [a : int b : Box] ...)`, `Box` a `defdata`, passed to a generic `(fn [B A] B)` parameter is refused with `got (fn [int <adt>] : int)`; a non-capturing lambda, a named defn or a `defstruct` is accepted |
+| ~~[closure-with-adt-param-rejected-by-generic-fn-param](../archive/closure-with-adt-param-rejected-by-generic-fn-param.md)~~ | low-medium | **RESOLVED 2026-11-05** (archived): a capturing lambda's value type carries its full parameter types, so a `defdata` parameter fits a generic `(fn [B A] B)` slot as the captureless twin does. Pinned by `closure-adt-param-generic-fn` |
 | [stdlib-cstr-import-breaks-spice-library-build](stdlib-cstr-import-breaks-spice-library-build.md) | medium | A spice module that imports stdlib `cstr` checks, runs and tests, but `tur build <spice-dir>` fails on `#include "cstr.h"`, a header the project build never writes |
 | [list-typed-load-collides-with-frame-ownstr-string](list-typed-load-collides-with-frame-ownstr-string.md) | low-medium | An imported module that loads `stdlib/list-typed.tur` and an import of `frame/print` cannot be compiled together: stdlib's `String` meets `frame/ownstr`'s (`defopaque: 'String' is already defined`) |
 | [stats-ols-pvalues-wrong-continued-fraction](stats-ols-pvalues-wrong-continued-fraction.md) | medium | tur-stats' `ols` / `ols-frame` compute p-values through an incomplete-beta continued fraction with the wrong terms: slightly off everywhere, and -0.8967 for t = 1.56 on 144 df (R: 0.1203); the coefficients are right |

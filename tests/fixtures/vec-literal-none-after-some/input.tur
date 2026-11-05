@@ -1,0 +1,20 @@
+;; vec-literal-option-none-after-some-mistyped: a later `(none)` in a `[...]`
+;; literal is grounded against the element type the earlier `(some 3)` fixed,
+;; in either order, and through a plain vec-push! onto a typed Vec.
+(defn show-opt [o : (Option int)] : int
+  (match o
+    (Some x) (println x)
+    (None)   (println "none"))
+  0)
+(defn main [] : int
+  (let [a [(some 3) (none)]
+        b [(none) (some 4)]
+        c : (Vec (Option int)) (vec-new)]
+    (vec-push! c (none))
+    (println (vec-len a))
+    (show-opt (vec-get a 0))
+    (show-opt (vec-get a 1))
+    (println (vec-len b))
+    (show-opt (vec-get b 1))
+    (println (vec-len c)))
+  0)

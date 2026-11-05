@@ -1,5 +1,15 @@
 # `tur --interpret`: a panic raised in a deferred body is swallowed
 
+> **RESOLVED 2026-11-05.** Both fire helpers (`src/turi/eval.c`) now remember
+> a panic a deferred body raised, keep firing the rest of the chain with
+> `g_firing_panic_defer` set (so a second panicking defer is the double panic
+> it is compiled), and leave the signal raised at the end through
+> `defer_fire_restore`, which drops a return or throw the panic interrupted.
+> The callers that fire on a normal exit already short-circuit on
+> `env_signaled`, so the raised panic unwinds to the `DK_CATCH_UNWIND`
+> boundary. Cases 16 and 17 are back in `defer-abortive-handler-no-inline-c`,
+> which now matches `defer-cps-abortive-handler` line for line on both engines.
+
 **Severity: medium** (engine divergence: a panic the compiled program raises
 is lost under the interpreter, and the program goes on). Interpreter only.
 Found 2026-10-24 writing `defer-abortive-handler-no-inline-c`, the

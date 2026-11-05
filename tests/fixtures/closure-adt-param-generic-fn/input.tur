@@ -1,0 +1,14 @@
+;; closure-with-adt-param-rejected-by-generic-fn-param: a CAPTURING lambda
+;; whose parameter is a `defdata` type fits a generic (fn [B A] B) slot, as its
+;; captureless twin does.
+(defmodule rp/lam
+  (export main)
+  (defdata ^heap ^copy Box (Bx int))
+  (defn fold [A B] [xs : (Cons A) init : B f : (fn [B A] B)] : B
+    (if (tnil? xs) init (fold (ttail xs) (f init (thead xs)) f)))
+  (defn main [] : int
+    (let [xs (tcons-of (Bx 1) (tcons-of (Bx 2) (tnil)))
+          k  10]
+      (println (fold xs 0 (fn [a : int b : Box] : int (match b (Bx v) (+ a (+ k v))))))
+      (println (fold xs 0 (fn [a : int b : Box] : int (match b (Bx v) (+ a v))))))
+    0))

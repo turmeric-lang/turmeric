@@ -101,6 +101,7 @@ typedef enum DiagCode {
     TUR_E0106_CYCLIC_LIFETIME,        /* lifetime outlives-constraints form a cycle */
     TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER, /* handler case drops an owning field of a captured by-value local (double-drop vs scope auto-drop) */
     TUR_E0108_REF_FIELD_MOVED_OUT_OF_BORROW, /* a by-value struct with an owning ref field returned out of a borrow / global / element */
+    TUR_E0109_BORROW_PARAM_CONSUMED,  /* a ^borrow parameter's linear/affine value passed to a consuming slot */
     /* UT1: Uniqueness type errors (-Xunique-types) */
     TUR_E0200_UNIQUE_ALIASED,      /* value is not unique -- aliased by another binding */
     TUR_E0201_UNIQUE_COPY,         /* cannot copy a unique value (use after consume) */

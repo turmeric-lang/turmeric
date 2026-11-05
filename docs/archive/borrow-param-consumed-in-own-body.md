@@ -1,5 +1,17 @@
 # A `^borrow` parameter can be consumed inside the function that borrows it
 
+> **RESOLVED 2026-11-05.** A `^borrow` parameter holding a linear or affine
+> value (by its flags, or -- for a lambda parameter, which does not copy them
+> -- by its type) passed to a slot that is neither `^borrow` nor `^unique ^mut`
+> is now **TUR-E0109** "borrowed value 'h' cannot be consumed here"
+> (`src/compiler/elab_call.c`, beside the LB1 move tracking). Lending it on to
+> another `^borrow` slot stays legal. A plain move-kinded value (a by-value
+> recursive ADT) is deliberately left out: `byval-recursive-adt-shared-copy-not-freed`
+> copies one out of a borrow into a consuming callee, and the ownership
+> provenance keeps that safe. Pinned by `errors/borrow-param-consumed-in-body`,
+> `errors/borrow-lambda-param-consumed-in-body` and `borrow-param-forwarded-to-borrow`.
+> Returning the borrowed value is not covered by this check.
+
 **Severity:** medium (a silent hole in the linearity check: double close /
 use-after-free compiles clean).
 

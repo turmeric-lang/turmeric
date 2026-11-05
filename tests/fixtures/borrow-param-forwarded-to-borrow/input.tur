@@ -1,0 +1,16 @@
+;; borrow-param-consumed-in-own-body: what stays legal -- a ^borrow parameter
+;; lent on to another ^borrow parameter, from a defn and from a lambda.
+(defopaque ^linear H :int)
+(defn h-open [] : H ```c return 41; ```)
+(defn h-close [h : H] : nil ```c (void)h; ```)
+(defn h-peek [^borrow h : H] : int ```c return (int64_t)h; ```)
+(defn fwd [^borrow h : H] : int (+ 1 (h-peek h)))
+(defn with-h [h : H f : (fn [^borrow H] int)] : int
+  (let [n (f h)]
+    (do (h-close h) n)))
+(defn main [] : int
+  (let [h (h-open)
+        n (fwd h)]
+    (do (h-close h) (println n)))
+  (println (with-h (h-open) (fn [^borrow h : H] : int (fwd h))))
+  0)

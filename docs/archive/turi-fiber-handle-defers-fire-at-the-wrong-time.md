@@ -37,7 +37,7 @@ past-fiber-body` now uses that shape), or under a `defer` whose body itself
 performs. Not this report: cases 16 and 17 of the compiled fixture -- a
 deferred body that panics -- are swallowed by the interpreter at any scope
 exit, handle or not:
-[turi-defer-body-panic-is-swallowed](../reported/turi-defer-body-panic-is-swallowed.md).
+[turi-defer-body-panic-is-swallowed](turi-defer-body-panic-is-swallowed.md).
 
 **Narrowed again 2026-10-22: the stored-`k` case is fixed too; what is left
 is the single-shot limit.** Each side of a fiber `handle` now has its own

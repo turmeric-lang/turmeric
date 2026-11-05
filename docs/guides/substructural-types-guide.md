@@ -201,6 +201,10 @@ Rules:
   (`mutex-free` then `mutex-lock`).
 - A handle that is only ever borrowed, never consumed, is still `TUR-E0100`
   (dropped without being consumed).
+- **Inside** the borrowing function (or a `(fn [^borrow h : H] ...)` lambda)
+  the parameter can be read or lent on to another `^borrow` parameter, but
+  passing it to a consuming parameter is `TUR-E0109`: the caller still owns
+  it, so that consumption would be a second one (a double close).
 - `^borrow` is a no-op for non-linear arguments, so the same accessor works
   whether or not the handle's type is under a linear discipline.
 

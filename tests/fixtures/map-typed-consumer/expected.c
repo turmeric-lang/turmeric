@@ -10358,23 +10358,23 @@ static void json_slfree(int64_t node) {
   
 }
 
-static int64_t SCHEMA_unSTR_1001532;
-static int64_t SCHEMA_unINT_1001533;
-static int64_t SCHEMA_unFLOAT_1001534;
-static int64_t SCHEMA_unBOOL_1001535;
-static int64_t SCHEMA_unNIL_1001536;
-static int64_t SCHEMA_unLITERAL_1001537;
-static int64_t SCHEMA_unOBJECT_1001538;
-static int64_t SCHEMA_unARRAY_1001539;
-static int64_t SCHEMA_unOPTIONAL_1001540;
-static int64_t SCHEMA_unUNION_1001541;
-static int64_t SCHEMA_unTRANSFORM_1001542;
-static int64_t SCHEMA_unREC_1001543;
-static int64_t SCHEMA_unALWAYS_1001544;
-static int64_t SCHEMA_unNEVER_1001545;
-static int64_t SCHEMA_unAP_1001546;
-static int64_t SCHEMA_unFIELD_1001547;
-static int64_t SCHEMA_unAP_unFAT_1001548;
+static __attribute__((used)) int64_t SCHEMA_unSTR_1001532;
+static __attribute__((used)) int64_t SCHEMA_unINT_1001533;
+static __attribute__((used)) int64_t SCHEMA_unFLOAT_1001534;
+static __attribute__((used)) int64_t SCHEMA_unBOOL_1001535;
+static __attribute__((used)) int64_t SCHEMA_unNIL_1001536;
+static __attribute__((used)) int64_t SCHEMA_unLITERAL_1001537;
+static __attribute__((used)) int64_t SCHEMA_unOBJECT_1001538;
+static __attribute__((used)) int64_t SCHEMA_unARRAY_1001539;
+static __attribute__((used)) int64_t SCHEMA_unOPTIONAL_1001540;
+static __attribute__((used)) int64_t SCHEMA_unUNION_1001541;
+static __attribute__((used)) int64_t SCHEMA_unTRANSFORM_1001542;
+static __attribute__((used)) int64_t SCHEMA_unREC_1001543;
+static __attribute__((used)) int64_t SCHEMA_unALWAYS_1001544;
+static __attribute__((used)) int64_t SCHEMA_unNEVER_1001545;
+static __attribute__((used)) int64_t SCHEMA_unAP_1001546;
+static __attribute__((used)) int64_t SCHEMA_unFIELD_1001547;
+static __attribute__((used)) int64_t SCHEMA_unAP_unFAT_1001548;
 static int64_t schema_slstr(void) {
         int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 0; s[1] = 0; s[2] = 0; s[3] = 0;

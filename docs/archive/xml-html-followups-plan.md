@@ -917,7 +917,7 @@ What building C, A1-A2 and D1 changed against the text above.
   client loads `json/ownstr`, whose `String` collided with `dom/ownstr`'s;
   with that fixed, serving the pages turned up
   [monomorph-emitted-before-its-type-argument](../reported/monomorph-emitted-before-its-type-argument.md),
-  [unused-module-global-heap-init-reported-as-leak](../reported/unused-module-global-heap-init-reported-as-leak.md)
+  [unused-module-global-heap-init-reported-as-leak](unused-module-global-heap-init-reported-as-leak.md)
   and a live literal that leaked each content hole's markup (fixed in
   turlive.c), and the test stayed direct.
 - **A5.** `read-string-at` (a macro-time native beside `read-string`):

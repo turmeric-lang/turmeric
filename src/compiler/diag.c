@@ -366,6 +366,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0106_CYCLIC_LIFETIME:            return "TUR-E0106";
         case TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER: return "TUR-E0107";
         case TUR_E0108_REF_FIELD_MOVED_OUT_OF_BORROW: return "TUR-E0108";
+        case TUR_E0109_BORROW_PARAM_CONSUMED:      return "TUR-E0109";
         /* ST0: Substructural type errors */
         case TUR_E0150_AFFINE_USED_TWICE:          return "TUR-E0150";
         case TUR_E0151_RELEVANT_DROPPED:           return "TUR-E0151";
@@ -579,6 +580,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0106") == 0) return TUR_E0106_CYCLIC_LIFETIME;
     if (strcmp(s, "TUR-E0107") == 0) return TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER;
     if (strcmp(s, "TUR-E0108") == 0) return TUR_E0108_REF_FIELD_MOVED_OUT_OF_BORROW;
+    if (strcmp(s, "TUR-E0109") == 0) return TUR_E0109_BORROW_PARAM_CONSUMED;
     /* ST0: Substructural type errors */
     if (strcmp(s, "TUR-E0150") == 0) return TUR_E0150_AFFINE_USED_TWICE;
     if (strcmp(s, "TUR-E0151") == 0) return TUR_E0151_RELEVANT_DROPPED;
@@ -1596,6 +1598,26 @@ static const DiagExplanation diag_explanations_[] = {
       "Fix: return a new value -- (R (ref (deref (.p x))) (.n x)) copies the box --\n"
       "or take the parameter by value (without ^borrow) so the function owns what\n"
       "it returns, or return only the fields the caller needs.\n",
+    },
+    /* borrow-param-consumed-in-own-body */
+    { TUR_E0109_BORROW_PARAM_CONSUMED,
+      "TUR-E0109: A ^borrow parameter is consumed inside the function borrowing it\n"
+      "\n"
+      "A ^borrow parameter reads its linear or affine argument without taking\n"
+      "it: the caller keeps the value and stays responsible for consuming it.\n"
+      "So the borrowing function may read the value, or lend it on to another\n"
+      "^borrow parameter, but it may not pass it to a parameter that consumes\n"
+      "it.  If it could, the caller's later consumption would be a second one:\n"
+      "a double close, or a use after free.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (defopaque ^linear H :int)\n"
+      "  (defn h-close [h : H] : nil ...)\n"
+      "  (defn sneaky [^borrow h : H] : int\n"
+      "    (do (h-close h) 0))                ; ERROR: h-close consumes h\n"
+      "\n"
+      "Fix: drop ^borrow so the function owns (and must consume) the value, or\n"
+      "leave the consumption to the caller and only read the value here.\n",
     },
     /* ST1: Substructural type explanations */
     { TUR_E0150_AFFINE_USED_TWICE,

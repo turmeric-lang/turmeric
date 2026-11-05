@@ -1,5 +1,14 @@
 # A module `def` holding a heap value nobody reads is reported as a leak
 
+> **RESOLVED 2026-11-05.** A file-local top-level `def` with an initializer
+> is now emitted `static __attribute__((used))`
+> (`src/compiler/emit_module.c`), so the C compiler keeps the global and its
+> store and LeakSanitizer sees the box as reachable. Measured with
+> `run-leak-check.sh`'s flags (`-O1 -fsanitize=address`, source runtime): the
+> new `module-def-unread-heap-not-leaked` fixture leaked 8 bytes in 2
+> allocations before and is clean after. 162 `expected.c` snapshots changed,
+> each only by the attribute.
+
 **Severity: low (a false positive that fails a leak-checked test).**
 Found 2026-10-29 cleaning up after module-type-names-collide-across-modules.
 
