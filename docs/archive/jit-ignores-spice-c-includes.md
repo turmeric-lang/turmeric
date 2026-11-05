@@ -1,5 +1,14 @@
 # `tur jit` does not pass a spice's `:c-includes` to c2mir
 
+> **RESOLVED 2026-11-05.** `cmd_jit` and the REPL's spice image now collect
+> the enclosing spice's aux flags (`drv_collect_build_aux`), unquote the
+> ` -I'<dir>'` tokens into plain paths (`drv_include_flag_dirs`,
+> `src/driver/cc.c`) and append them to the SDK dirs c2mir is handed
+> (`jit_include_dirs_for`, `src/driver/jit.c`). Pinned by the
+> `jit :c-includes` case of `tests/spice-c-sources-tests.sh` (fixture
+> `tests/fixtures/spices/spice-c-include-jit`), which fails on a TUR-W0070
+> fallback, not only on a wrong answer.
+
 **Severity:** low (the program still runs, on the cc fallback). A spice that
 declares `:build-opts #map{:c-includes ["c/foo"]}` and whose inline C includes
 a header from there (`/* __tur_include__: #include "foo.h" */`) builds and

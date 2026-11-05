@@ -2230,6 +2230,7 @@ typedef enum {
     RET_CONFLICT_TYPE_REVERSE,
     RET_CONFLICT_BOOL_INTEGER,
     RET_CONFLICT_CARRIER_AGGREGATE,
+    RET_CONFLICT_ADT_UNDER_SCALAR, /* carrier-adt-body-passes-int-return -> TUR-E0709 */
     RET_CONFLICT_NIL_BODY,
     RET_CONFLICT_RIGID_TYVAR,   /* declared-tyvars-are-not-rigid -> TUR-E0709 */
 } ReturnConflict;

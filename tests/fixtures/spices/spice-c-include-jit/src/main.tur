@@ -1,0 +1,11 @@
+(defmodule main
+  ;; The header is only on the include path :c-includes adds.
+  (defn jit-answer [] #fx{Unsafe} : int
+    ```c
+    #include "jit_answer.h"
+    return jit_answer();
+    ```)
+
+  (defn main [] : int
+    (println (unsafe (jit-answer)))
+    0))

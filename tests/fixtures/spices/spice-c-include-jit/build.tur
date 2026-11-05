@@ -1,0 +1,8 @@
+;; jit-ignores-spice-c-includes: a spice whose inline C includes a header
+;; reachable only through :c-includes.  No :c-sources, so `tur jit` can run it
+;; in-process -- if c2mir is handed the -I dir too.
+(defpackage spice-c-include-jit
+  :name "spice-c-include-jit"
+  :build-opts #map{
+    :c-includes ["c/inc"]
+  })

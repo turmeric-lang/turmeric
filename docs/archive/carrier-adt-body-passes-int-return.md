@@ -1,5 +1,21 @@
 # A word-carried ADT body passes a `: int` return silently
 
+> **RESOLVED 2026-11-05** (fix direction 1, and 2 for the committed class).
+> `return_position_conflict` (`src/compiler/elab_core.c`) has a committed-only
+> arm, `RET_CONFLICT_ADT_UNDER_SCALAR`: a non-opaque, non-parametric user ADT
+> body under an integer-family declared return is TUR-E0709, decided on the
+> TYPE rather than `type_c_name`. It is not exempt under `--interpret`
+> (`map-multiword-struct-key`'s erasure is an instance method, not committed),
+> so `U`, `Datum` (`--enable=quote-data`) and the by-value shapes are refused
+> on every engine. Pinned by `errors/return-type-carrier-adt-under-int`.
+>
+> **Left as it was:** a PARAMETRIC ADT seen bare (`Fix`, `Free` in
+> `stdlib/fix.tur` / `stdlib/free.tur`, which pass their nodes as `: int` on
+> purpose) -- turning the check on there is the stdlib retyping
+> `stdlib-int-stand-in-audit` tracks, not a one-line change. Generic,
+> `#{Unsafe}` and instance-method positions keep their carrier tolerance, as
+> fix direction 1 said.
+
 **Severity: medium.** A type error is accepted, and the function returns a heap
 address as its integer answer. Arithmetic on that "integer" gives garbage, and
 nothing warns. The compiled engine rejects the same mistake for a by-value ADT

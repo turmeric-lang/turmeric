@@ -1988,6 +1988,11 @@ Type         clone_struct_app_type(Type t);
 /* TS4P1: ADT-app (polymorphic ADT monomorphisation) registry. */
 void         type_codegen_reset_adt_apps(void);
 void         type_codegen_emit_adt_apps(Buf *out);
+/* Emit only the registered app equal to `t` (and the monomorphs it embeds),
+ * for a pre-flush that must not pull every other registered app ahead of the
+ * user typedefs it names (monomorph-emitted-before-its-type-argument).
+ * Returns false when `t` is not a registered app. */
+bool         type_codegen_emit_adt_app_for(Buf *out, Type t);
 const char  *type_register_adt_app(Type t);
 char        *type_adt_app_ctor_suffix(Type t);
 /* CONV-S1: stable interned C typedef name (`tur_adt_<mangled>`) for the by-value

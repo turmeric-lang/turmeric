@@ -1,5 +1,20 @@
 # A `(Cons T)` monomorph's constructor is emitted before `T`'s struct
 
+> **RESOLVED 2026-11-05.** The record-field pre-flush in `emit_program`
+> (`src/compiler/emit_module.c`, slice 1 of structdef-retirement) and the
+> `defdynamic` root's pre-flush called `type_codegen_emit_adt_apps`, which
+> flushes EVERY registered monomorph -- so the `(Option int)` field of an
+> unrelated struct pulled a `(Cons Foo)` registered by then ahead of `Foo`'s
+> typedef. They now flush only the monomorph they need
+> (`type_codegen_emit_adt_app_for`, `src/compiler/types.c`, which still
+> emits the monomorphs that one embeds), falling back to the full flush only
+> for a type that is not a registered app. Pinned by
+> `tests/fixtures/monomorph-after-its-type-argument` (a `^heap`, a by-value
+> sum and a `^copy` product `T`, each in a `(Cons T)`). The one-module repro
+> was the measured shape; the turmeric-spices `tourist/app` import-order
+> repro is the same flush by its symptoms but was not re-run here (no spices
+> checkout).
+
 **Severity: medium (a valid program fails in the C compiler; the import order decides).**
 Found 2026-10-29 cleaning up after module-type-names-collide-across-modules.
 

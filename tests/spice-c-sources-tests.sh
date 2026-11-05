@@ -255,6 +255,36 @@ else
 fi
 rm -rf "$XMI/build"
 
+# jit-ignores-spice-c-includes: `tur jit` hands c2mir the spice's :c-includes
+# dirs, as `tur build`/`tur run` hand them to cc.  Before, c2mir could not open
+# the header and the run fell back to cc with TUR-W0070 -- same answer, so the
+# assertion is on the warning's absence, not only the output.
+CIJ="$SPICES/spice-c-include-jit"
+jprobe=$("$TUR" jit /nonexistent-tur-jit-probe.tur 2>&1 || true)
+case "$jprobe" in
+  *"carries no JIT"*)
+    echo "PASS jit :c-includes (skipped: this tur carries no JIT)"
+    PASS=$((PASS + 1)) ;;
+  *)
+    jerr=$(mktemp)
+    jout=$(cd "$CIJ" && "$OLDPWD/$TUR" jit src/main.tur 2>"$jerr")
+    jout="$jout$(cat "$jerr")"; rm -f "$jerr"
+    case "$jout" in
+      *TUR-W0070*|*"error in opening file"*)
+        echo "FAIL jit :c-includes -- c2mir did not get the spice's include dir"
+        echo "$jout" | sed 's/^/    /'
+        FAIL=$((FAIL + 1)); FAILED+=("jit :c-includes") ;;
+      42*)
+        echo "PASS jit :c-includes reach c2mir (no cc fallback)"
+        PASS=$((PASS + 1)) ;;
+      *)
+        echo "FAIL jit :c-includes -- unexpected output"
+        echo "$jout" | sed 's/^/    /'
+        FAIL=$((FAIL + 1)); FAILED+=("jit :c-includes") ;;
+    esac ;;
+esac
+rm -rf "$CIJ/build"
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

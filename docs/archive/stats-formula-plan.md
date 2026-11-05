@@ -650,9 +650,9 @@ Not done: `y ~ .` (a syntax error that says so), and everything in the
 Turmeric bugs found on the way, each worked around in the spice and filed
 (the spice README says where):
 [closure-with-adt-param-rejected-by-generic-fn-param](closure-with-adt-param-rejected-by-generic-fn-param.md),
-[stdlib-cstr-import-breaks-spice-library-build](../reported/stdlib-cstr-import-breaks-spice-library-build.md),
+[stdlib-cstr-import-breaks-spice-library-build](stdlib-cstr-import-breaks-spice-library-build.md),
 [list-typed-load-collides-with-frame-ownstr-string](../reported/list-typed-load-collides-with-frame-ownstr-string.md),
 and a one-module repro added to
-[monomorph-emitted-before-its-type-argument](../reported/monomorph-emitted-before-its-type-argument.md).
+[monomorph-emitted-before-its-type-argument](monomorph-emitted-before-its-type-argument.md).
 Fitting through tur-stats also showed its p-values are computed wrongly:
 [stats-ols-pvalues-wrong-continued-fraction](../reported/stats-ols-pvalues-wrong-continued-fraction.md).

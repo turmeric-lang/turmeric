@@ -143,6 +143,67 @@ static bool file_has_main_defn(const char *path) {
     return found;
 }
 
+/* stdlib-cstr-import-breaks-spice-library-build: the module names `path`
+ * imports, read off the text -- `(import NAME` and a sweet-exp line-leading
+ * `import NAME`.  A false hit costs nothing (the caller keeps only names that
+ * are stdlib `defmodule` files); a miss is the old failure.  Appends to
+ * names/n/cap (each malloc'd). */
+static void scan_import_names(const char *path, char ***names, int *n, int *cap) {
+    char *src = NULL;
+    size_t len = 0;
+    if (drv_read_entire_file_quiet(path, &src, &len) != 0) return;
+    for (size_t i = 0; i + 7 <= len; i++) {
+        if (strncmp(src + i, "import", 6) != 0) continue;
+        bool sexpr = i > 0 && src[i - 1] == '(';
+        bool sweet = false;
+        if (!sexpr) {
+            size_t k = i;
+            while (k > 0 && (src[k - 1] == ' ' || src[k - 1] == '\t')) k--;
+            sweet = (k == 0 || src[k - 1] == '\n');
+        }
+        if (!sexpr && !sweet) continue;
+        size_t j = i + 6;
+        if (src[j] != ' ' && src[j] != '\t') continue;
+        while (j < len && (src[j] == ' ' || src[j] == '\t')) j++;
+        size_t st = j;
+        while (j < len && src[j] != ' ' && src[j] != '\t' && src[j] != '\n' &&
+               src[j] != '\r' && src[j] != ')' && src[j] != '(' &&
+               src[j] != '[' && src[j] != ']')
+            j++;
+        if (j == st || j - st > 200) continue;
+        if (*n >= *cap) {
+            int nc = *cap ? *cap * 2 : 8;
+            char **nn = (char **)realloc(*names, (size_t)nc * sizeof(char *));
+            if (!nn) break;
+            *names = nn; *cap = nc;
+        }
+        (*names)[(*n)++] = strndup(src + st, j - st);
+        i = j;
+    }
+    free(src);
+}
+
+/* True when `path` is a module file: its first form is `(defmodule`. */
+static bool file_is_defmodule(const char *path) {
+    char *src = NULL;
+    size_t len = 0;
+    if (drv_read_entire_file_quiet(path, &src, &len) != 0) return false;
+    bool found = false;
+    size_t i = 0;
+    while (i < len) {
+        while (i < len && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' ||
+                           src[i] == '\r')) i++;
+        if (i < len && src[i] == ';') {
+            while (i < len && src[i] != '\n') i++;
+            continue;
+        }
+        found = (len - i >= 10 && strncmp(src + i, "(defmodule", 10) == 0);
+        break;
+    }
+    free(src);
+    return found;
+}
+
 /* Return true if `path` carries a `^used` (or the earlier `#[used]`) attribute -- a defn explicitly
  * retained with external C linkage because it is reached only through its
  * mangled C symbol (cross-module inline-C bridge or by-address C-ABI callback).
@@ -1333,13 +1394,101 @@ int cmd_build_project(const char *root_in, const char *out_path,
         free(seen);
     }
 
+    /* stdlib-cstr-import-breaks-spice-library-build: a stdlib `defmodule`
+     * (`cstr`, `time`, ...) that a module in the build set imports is a module
+     * too -- the importer's header names `cstr.h` and its .c calls
+     * `cstr__...`.  Nothing else provides either: unlike a :spices dep, a
+     * stdlib module has no library of its own to link against, and the
+     * whole-program route above inlines it, which is why `tur run`/`tur test`
+     * never saw this.  So compile it here and LINK it -- it goes right after
+     * the project's own modules, inside n_own even for a shared library, but
+     * not among the exported ones (n_files).  Closed transitively: a stdlib
+     * module may import another. */
+    int n_stdlib_mods = 0;
+    {
+        const char *sroot = resolve_stdlib_root();
+        char sroot_abs[4096];
+        if (sroot && realpath(sroot, sroot_abs)) sroot = sroot_abs;
+        char **seen_mods = NULL;
+        int n_seen_mods = 0, cap_seen_mods = 0;
+        for (int i = 0; i < n_all; i++) {
+            const char *sr = all_roots[i];
+            char *mn = derive_module_name(all_files[i], sr);
+            if (n_seen_mods >= cap_seen_mods) {
+                cap_seen_mods = cap_seen_mods ? cap_seen_mods * 2 : 16;
+                seen_mods = (char **)realloc(seen_mods,
+                                             (size_t)cap_seen_mods * sizeof(char *));
+            }
+            seen_mods[n_seen_mods++] = mn;
+        }
+        char **std_files = NULL;
+        int n_std = 0, cap_std = 0;
+        char **pending = NULL;
+        int n_pending = 0, cap_pending = 0;
+        for (int i = 0; sroot && i < n_all; i++)
+            scan_import_names(all_files[i], &pending, &n_pending, &cap_pending);
+        while (sroot && n_pending > 0) {
+            char *name = pending[--n_pending];
+            bool dup = false;
+            for (int s = 0; s < n_seen_mods; s++)
+                if (strcmp(seen_mods[s], name) == 0) { dup = true; break; }
+            char cand[4096];
+            int cn = snprintf(cand, sizeof(cand), "%s/%s.tur", sroot, name);
+            struct stat cst;
+            if (dup || cn <= 0 || (size_t)cn >= sizeof(cand) ||
+                stat(cand, &cst) != 0 || !S_ISREG(cst.st_mode) ||
+                !file_is_defmodule(cand)) {
+                free(name);
+                continue;
+            }
+            if (n_seen_mods >= cap_seen_mods) {
+                cap_seen_mods = cap_seen_mods ? cap_seen_mods * 2 : 16;
+                seen_mods = (char **)realloc(seen_mods,
+                                             (size_t)cap_seen_mods * sizeof(char *));
+            }
+            seen_mods[n_seen_mods++] = name;
+            if (n_std >= cap_std) {
+                cap_std = cap_std ? cap_std * 2 : 4;
+                std_files = (char **)realloc(std_files, (size_t)cap_std * sizeof(char *));
+            }
+            std_files[n_std++] = strdup(cand);
+            scan_import_names(cand, &pending, &n_pending, &cap_pending);
+        }
+        for (int k = 0; k < n_pending; k++) free(pending[k]);
+        free(pending);
+        for (int s = 0; s < n_seen_mods; s++) free(seen_mods[s]);
+        free(seen_mods);
+        if (n_std > 0) {
+            static char stdlib_src_root[4096];
+            snprintf(stdlib_src_root, sizeof(stdlib_src_root), "%s", sroot);
+            if (n_all + n_std > cap_all) {
+                cap_all = n_all + n_std;
+                all_files = (char **)realloc(all_files, (size_t)cap_all * sizeof(char *));
+                all_roots = (const char **)realloc(all_roots,
+                                                   (size_t)cap_all * sizeof(char *));
+            }
+            /* Splice in at n_files: [project | stdlib | deps]. */
+            memmove(all_files + n_files + n_std, all_files + n_files,
+                    (size_t)(n_all - n_files) * sizeof(char *));
+            memmove(all_roots + n_files + n_std, all_roots + n_files,
+                    (size_t)(n_all - n_files) * sizeof(char *));
+            for (int k = 0; k < n_std; k++) {
+                all_files[n_files + k] = std_files[k];
+                all_roots[n_files + k] = stdlib_src_root;
+            }
+            n_all += n_std;
+            n_stdlib_mods = n_std;
+        }
+        free(std_files);
+    }
+
     /* n_own = project's own modules (link these); n_all - n_own = dep modules
      * compiled only for header generation (shared mode skips their link).
      * --bundle-deps links them into the library too -- the self-contained
      * image `tur repl` and a notebook dlopen, which have no other copy of a
      * dep's code to resolve against.  Either way only the project's own
      * modules are the library's exports: a dep's are not in its manifest. */
-    int n_own = (shared && !g_build_bundle_deps) ? n_files : n_all;
+    int n_own = (shared && !g_build_bundle_deps) ? n_files + n_stdlib_mods : n_all;
     char *build_dir = drv_resolve_build_dir(root, cli_build_dir);
     int rc;
     if (!build_dir) {
