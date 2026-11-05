@@ -77,7 +77,15 @@ def to_uri(path):
     emits, so the tests have to speak it too or they compare two spellings of
     the same file and call them different.
     """
-    p = os.path.abspath(path).replace("\\", "/")
+    # A drive-absolute path (what native_path hands back under MSYS2) is left
+    # as it is.  MSYS2's python is the POSIX build, and from 3.14 its abspath
+    # no longer knows D:/ is absolute: it prefixed the working directory,
+    # giving file:///d/a/turmeric/turmeric/D:/a/_temp/... -- a uri for no
+    # file, so the spice test's cross-module lookups all came back empty
+    # while every single-buffer test (the server has the text) still passed.
+    p = path.replace("\\", "/")
+    if not (len(p) > 2 and p[1] == ":" and p[2] == "/"):
+        p = os.path.abspath(path).replace("\\", "/")
     return "file:///" + p if (len(p) > 1 and p[1] == ":") else "file://" + p
 
 PASS = 0
