@@ -1,0 +1,10 @@
+;; unused-module-global-heap-init-reported-as-leak: a top-level `def` holding
+;; a heap constructor box that nothing reads is a process-lifetime value, not
+;; a leak.  The global is emitted `used`, so the C compiler keeps it and its
+;; store and LeakSanitizer still sees the box (run-leak-check.sh).
+(defdata ^heap ^copy Kind (Syntax) (Limit))
+(def __syntax-node (Syntax))
+(def __limit-node (Limit))
+(defn main [] : int
+  (println "ok")
+  0)

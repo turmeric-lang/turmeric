@@ -22296,8 +22296,17 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                     body_def_init_len += body.len - _b0;
                 }
             } else {
-                buf_printf(&file, "%s%s %s;\n", split_def_storage(e->as.def_.binding),
-                           def_ctype, bn);
+                /* unused-module-global-heap-init-reported-as-leak: a
+                 * file-local def nothing reads let the C compiler drop the
+                 * global AND its store, so the box its initializer built had
+                 * no pointer left and LeakSanitizer called a process-lifetime
+                 * value a leak -- in one program and not another, by what the
+                 * optimizer could see.  `used` keeps the global and its
+                 * store, so the box stays reachable. */
+                const char *storage = split_def_storage(e->as.def_.binding);
+                bool keep = e->as.def_.init && strcmp(storage, "static ") == 0;
+                buf_printf(&file, "%s%s%s %s;\n", storage,
+                           keep ? "__attribute__((used)) " : "", def_ctype, bn);
             }
             if (e->as.def_.init && !def_declare_only) {
                 /* Gap F: route to def_init_body so user-has-main programs

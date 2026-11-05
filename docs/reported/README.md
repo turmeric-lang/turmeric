@@ -3488,7 +3488,7 @@ the `__int128` work only surfaced them.  Both resolved the same day.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [monomorph-emitted-before-its-type-argument](monomorph-emitted-before-its-type-argument.md) | medium | With `tourist/app` imported before the markup spices, the C for `ctor_Cons_Cons__Hole` (which takes a `Hole` by value) precedes `struct tur_adt_Hole`, and cc rejects the incomplete type; the other import order compiles |
-| [unused-module-global-heap-init-reported-as-leak](unused-module-global-heap-init-reported-as-leak.md) | low | A module `def` holding a heap constructor box that nothing reads is a `static` global the C compiler drops with its store, so LeakSanitizer reports the box (dom/core's `__syntax-node` and friends) |
+| ~~[unused-module-global-heap-init-reported-as-leak](../archive/unused-module-global-heap-init-reported-as-leak.md)~~ | low | **RESOLVED 2026-11-05** (archived): a file-local `def` with an initializer is emitted `__attribute__((used))`, so its store survives and the box stays reachable. Pinned by `module-def-unread-heap-not-leaked` (`requires.leak-check`) |
 
 ## Found executing stats-formula-plan (filed 2026-10-29)
 
