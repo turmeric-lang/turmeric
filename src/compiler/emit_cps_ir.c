@@ -955,6 +955,24 @@ static bool fat_param_handed_on(const Binding *fn, uint32_t i, const CAtom *a) {
     return cp->is_poly_fn && cp->poly_type && cp->poly_type->kind == TY_FORALL;
 }
 
+/* cps-byvalue-struct-with-closure-field: a closure-field struct handed BY
+ * VALUE to a cps->cps callee whose own parameter at that position is the same
+ * type and is admitted for it (only field reads, fn_byval_agg_param_ok).  The
+ * `__cps` entry takes it by value; nothing crosses a one-word slot, and as on
+ * the direct path the callee borrows it -- the caller's drop_fnfields (or the
+ * CPS reap) releases its closures. */
+static bool byval_fnfield_only_product(const Type *t);
+static bool fn_byval_agg_param_ok(const FnDef *fd, const Binding *p);
+static bool fnfield_param_handed_on(const Binding *fn, uint32_t i, const CAtom *a) {
+    if (a->kind != CA_VAR && a->kind != CA_CVAR) return false;
+    if (!byval_fnfield_only_product(a->type)) return false;
+    const FnDef *cfd = fn ? fn->source_fn_def : NULL;
+    if (!cfd || i >= cfd->n_params || !cfd->params[i]) return false;
+    const Binding *cp = cfd->params[i];
+    if (!type_eq(cp->type, *a->type)) return false;
+    return fn_byval_agg_param_ok(cfd, cp);
+}
+
 static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
                          bool cps_to_direct, bool to_cps_entry) {
     bool cef = callee_effect_free(fn);
@@ -969,6 +987,7 @@ static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
          * whose atom_is_fat_fn reject evicts the caller (E2b keeps a fat-fn param
          * that is only CALLED/CAPTURED, never re-threaded as an arg). */
         if (cef && atom_is_fn_value(&args[i]) && !atom_is_fat_fn(&args[i])) continue;
+        if (!cps_to_direct && fnfield_param_handed_on(fn, i, &args[i])) continue;
         if (cps_to_direct && !call_arg_ok(&args[i], true) &&
             call_arg_ok(&args[i], false) &&
             cps_direct_param_takes_agg_raw(fn, i, &args[i], to_cps_entry))
@@ -3750,8 +3769,133 @@ static bool fn_single_concrete_sig(const FnDef *fd) {
  * 2026-07-22 (sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch), so a
  * function that performs and takes `(Rect :int :int)` no longer evicts --
  * along with every function sharing its effect. */
+static int expr_count_all_uses(const Expr *e, const Binding *b);
+
+/* cps-byvalue-struct-with-closure-field: a by-value product whose only owning
+ * fields are closures (a handler or callback beside plain data).  The closure
+ * fields are what give it drop glue -- the caller's `drop_fnfields_<T>` frees
+ * them at ITS scope end; a callee that takes the struct by value never drops
+ * it (local-struct-drop) -- so for a callee it is a borrowed bundle of words,
+ * exactly as it is on the direct path. */
+static bool byval_fnfield_only_product(const Type *t) {
+    if (!t) return false;
+    Type _r; t = cps_resolve_ty(t, &_r);
+    if (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)) return false;
+    if (!type_is_byvalue_adt_product(*(Type *)t)) return false;
+    const AdtDef *d = slot_agg_def(t);
+    if (!d || !d->needs_drop_glue || d->n_ctors != 1 || !d->ctors[0]) return false;
+    if (d->n_type_params > 0 || type_has_unresolved_tyvar(t)) return false;
+    const CtorDef *c = d->ctors[0];
+    bool any_fn = false;
+    for (uint32_t i = 0; i < c->n_fields; i++) {
+        TypeKind k = c->fields[i].kind;
+        if (k == TY_FN) { any_fn = true; continue; }
+        if (!slot_ty(k)) return false;
+    }
+    return any_fn;
+}
+
+static bool agg_param_only_field_reads(const Expr *e, const Binding *p);
+
+/* `p` passed whole, as argument `i` of `call`, to a plain named function whose
+ * parameter there is the same type and is itself only field-read: still a
+ * borrow, by value, all the way down.  Bounded, since a recursive callee asks
+ * the question of itself. */
+static uint32_t g_agg_reader_depth;
+static bool agg_param_handed_to_reader(const Expr *call, uint32_t i, const Binding *p) {
+    const Binding *fb = call->as.call_.fn_binding;
+    if (!fb || call->as.call_.ctor || call->as.call_.dict_arg || call->as.call_.fn_expr)
+        return false;
+    const FnDef *cfd = fb->source_fn_def;
+    if (!cfd || !cfd->body || cfd->closure || i >= cfd->n_params || !cfd->params[i])
+        return false;
+    const Binding *cp = cfd->params[i];
+    if (!type_eq(cp->type, p->type)) return false;
+    if (cp == p) return true;
+    if (g_agg_reader_depth >= 8) return false;
+    g_agg_reader_depth++;
+    bool ok = agg_param_only_field_reads(cfd->body, cp);
+    g_agg_reader_depth--;
+    return ok;
+}
+
+/* Every use of `p` in `e` is a field read `(.f p)` -- the struct itself is never
+ * passed, stored, returned, rebound or assigned.  Forms this walk does not take
+ * apart refuse if they mention `p` at all (expr_count_all_uses is exhaustive). */
+static bool agg_param_only_field_reads(const Expr *e, const Binding *p) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_VAR: return e->as.var.binding != p;
+        case EX_GET_FIELD: {
+            const Expr *s = e->as.get_field_.struct_expr;
+            while (s && s->kind == EX_ASCRIBE) s = s->as.ascribe_.inner;
+            if (s && s->kind == EX_VAR && s->as.var.binding == p) return true;
+            return agg_param_only_field_reads(e->as.get_field_.struct_expr, p);
+        }
+        case EX_CALL:
+            if (e->as.call_.fn_binding == p) return false;
+            if (!agg_param_only_field_reads(e->as.call_.fn_expr, p)) return false;
+            if (!agg_param_only_field_reads(e->as.call_.dict_arg, p)) return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *a = e->as.call_.args[i];
+                while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+                if (a && a->kind == EX_VAR && a->as.var.binding == p &&
+                    agg_param_handed_to_reader(e, i, p))
+                    continue;
+                if (!agg_param_only_field_reads(e->as.call_.args[i], p)) return false;
+            }
+            return true;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!agg_param_only_field_reads(e->as.builtin.args[i], p)) return false;
+            return true;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (!agg_param_only_field_reads(e->as.do_.items[i], p)) return false;
+            return true;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (!agg_param_only_field_reads(e->as.let_.bindings[i].init, p)) return false;
+            return agg_param_only_field_reads(e->as.let_.body, p);
+        case EX_IF:
+            return agg_param_only_field_reads(e->as.if_.cond, p) &&
+                   agg_param_only_field_reads(e->as.if_.then_, p) &&
+                   agg_param_only_field_reads(e->as.if_.else_or_null, p);
+        case EX_WHILE:
+            return agg_param_only_field_reads(e->as.while_.cond, p) &&
+                   agg_param_only_field_reads(e->as.while_.body, p);
+        case EX_SET:
+            return e->as.set_.target != p &&
+                   agg_param_only_field_reads(e->as.set_.value, p);
+        case EX_ASCRIBE:
+            return agg_param_only_field_reads(e->as.ascribe_.inner, p);
+        case EX_RETURN:
+            return agg_param_only_field_reads(e->as.return_.value, p);
+        case EX_MATCH:
+            if (!agg_param_only_field_reads(e->as.match_.scrutinee, p)) return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (!agg_param_only_field_reads(e->as.match_.arms[i].guard, p) ||
+                    !agg_param_only_field_reads(e->as.match_.arms[i].body, p))
+                    return false;
+            return true;
+        case EX_HANDLE: {
+            const HandleExpr *h = e->as.handle_.handle;
+            if (!h) return true;
+            for (uint32_t i = 0; i < h->n_cases; i++)
+                if (!agg_param_only_field_reads(h->cases[i].body, p)) return false;
+            return agg_param_only_field_reads(h->body, p);
+        }
+        default:
+            return expr_count_all_uses(e, p) == 0;
+    }
+}
+
 static bool fn_byval_agg_param_ok(const FnDef *fd, const Binding *p) {
-    return fn_single_concrete_sig(fd) && slot_box_ty(&p->type);
+    if (!fn_single_concrete_sig(fd)) return false;
+    if (slot_box_ty(&p->type)) return true;
+    return byval_fnfield_only_product(&p->type) &&
+           agg_param_only_field_reads(fd->body, p);
 }
 
 /* E2b soundness gate: the fat-closure (is_poly_fn) param `p` is only CALLED (as a
