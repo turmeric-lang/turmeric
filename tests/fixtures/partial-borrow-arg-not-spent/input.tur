@@ -1,0 +1,19 @@
+;; partial-application-of-borrow-param-consumes-affine-arg: partially applying
+;; a `^borrow` parameter does not spend the affine argument when the closure is
+;; a let binding that is only called; the vector is freed once, at scope exit.
+(load "stdlib/numvec.tur")
+(defn nested [] : nil
+  (let [a (u8vec-new 3 (as uint8 1))]
+    (let [s (u8vec-set! a)]
+      (s 2 (as uint8 42)))
+    (println (u8vec-ref a 2))))
+
+(defn main [] : int
+  (let [a (u8vec-new 2 (as uint8 0))
+        s (u8vec-set! a)]
+    (s 1 (as uint8 77))
+    (s 0 (as uint8 5))
+    (println (u8vec-ref a 1))
+    (println (u8vec-ref a 0)))
+  (nested)
+  0)

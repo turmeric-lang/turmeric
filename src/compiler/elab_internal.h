@@ -203,6 +203,15 @@ struct ReaderMacroRegistry;
 
 typedef struct Elab {
     Arena       *arena;
+    /* partial-application-of-borrow-param-consumes-affine-arg: the `let`
+     * initializer form being elaborated (elab_let).  A partial application
+     * that IS that form may leave an affine / linear argument it passes to a
+     * `^borrow` slot unspent; the let then checks that the closure does not
+     * escape and the argument is not consumed while it is in scope.  The
+     * arguments rolled back are reported in `pap_borrowed`. */
+    const struct Form *pap_borrow_form;
+    struct Binding    *pap_borrowed[8];
+    uint32_t           n_pap_borrowed;
     /* for-comprehension-pure-picks-the-payload-type: while a lambda passed to
      * a dot-method is elaborated, the head its result must have when the
      * receiver fixes it (`(Option b)` for a `bind` over an Option), for a

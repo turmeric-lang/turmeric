@@ -7028,6 +7028,37 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     #define PAP_SLOT_FULL(idx) \
         (src_full_types ? src_full_types[fn_is_closure ? ((idx) + 1) : (idx)] : NULL)
 
+    /* partial-application-of-borrow-param-consumes-affine-arg: a saturated
+     * call into a `^borrow` slot hands an affine / linear variable's single use
+     * back (elab_call_fn_inner).  A partial application keeps the argument in
+     * its env, so its borrow lasts as long as the closure does: hand the use
+     * back only when this application is a `let` initializer (`elab_let` set
+     * `pap_borrow_form` to it), which then refuses the program unless the
+     * closure stays inside the let and the argument is not consumed there.
+     * Anywhere else the argument is spent, as before. */
+    if (e->pap_borrow_form == call && fn_type.kind == TY_FN) {
+        for (uint32_t i = 0; i < n_provided; i++) {
+            Expr *a = elab_args[i];
+            if (!a || a->kind != EX_VAR || !a->as.var.binding) continue;
+            uint32_t slot = fn_is_closure ? i + 1 : i;
+            if (slot >= fn_type.as.fn.arity ||
+                    !FN_ARG_FLAG(fn_type.as.fn, slot, FA_BORROW))
+                continue;
+            Binding *ab = a->as.var.binding;
+            if (e->n_pap_borrowed >= 8) break;   /* unrecorded: leave it spent */
+            bool rolled = false;
+            if (ab->is_linear && ab->is_linear_consumed) {
+                ab->is_linear_consumed = false;
+                rolled = true;
+            }
+            if (ab->is_affine && ab->usage_state == USAGE_USED_ONCE) {
+                ab->usage_state = USAGE_UNUSED;
+                rolled = true;
+            }
+            if (rolled) e->pap_borrowed[e->n_pap_borrowed++] = ab;
+        }
+    }
+
     /* Build capture bindings for provided args */
     Binding **cap_bindings = (Binding **)arena_alloc(e->arena, n_provided * sizeof(Binding *));
     for (uint32_t i = 0; i < n_provided; i++) {

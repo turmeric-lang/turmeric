@@ -70,7 +70,7 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [borrowed-drop-temporary-leaks-outside-the-hoist](borrowed-drop-temporary-leaks-outside-the-hoist.md) | low (leak) | A fresh move-only Drop value passed straight to a `^borrow` parameter is freed after the call only when the call returns a scalar and no earlier argument has an effect; `(f64vec-show (f64vec-new 4 7.1))` and `(peek2 (g) (mk))` still leak it |
-| [partial-application-of-borrow-param-consumes-affine-arg](partial-application-of-borrow-param-consumes-affine-arg.md) | low (refusal) | `(u8vec-set! a)` spends affine `a` (TUR-E0150 on its next use) though a saturated call into the same `^borrow` slot does not: `elab_partial_apply` has no use rollback, and adding one needs a non-escape check on the closure |
+| ~~[partial-application-of-borrow-param-consumes-affine-arg](../archive/partial-application-of-borrow-param-consumes-affine-arg.md)~~ | low (refusal) | **RESOLVED 2026-11-05** (archived): a partial application bound by `let` leaves its `^borrow` argument unspent; the let refuses it (TUR-E0150, naming the borrow) when the closure escapes or the argument is consumed in scope. Pinned by `partial-borrow-arg-not-spent` and two `errors/` fixtures |
 | ~~[syntax-gensym-not-fresh-against-program-names](../archive/syntax-gensym-not-fresh-against-program-names.md)~~ | medium-low (silent capture) | **RESOLVED 2026-10-29** (archived): `syntax-gensym` in a `defmacro*` draws from the elaborator's counter and skips names either symbol table holds, so it no longer hands out a name the call site binds. Pinned by `syntax-gensym-fresh-against-program` |
 
 ## Found by the refined-fn-types optimization scan (filed 2026-10-28)

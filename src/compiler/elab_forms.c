@@ -4,6 +4,9 @@
 #include "experiments.h"     /* loop-invariants-plan: experiment_warn_if_used */
 #include "cps.h"             /* cps_visit_children -- gen_sets_binding */
 
+/* emit_core.c: is `b` used as a value, not only called, within `e`? */
+bool closure_binding_escapes(const Expr *e, const Binding *b);
+
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
 
@@ -1024,6 +1027,13 @@ Expr *elab_let(Elab *e, const Form *call) {
     LetBinding *binds = NULL;
     bool       *binding_moved_during_init = NULL; /* tracks moves of preceding bindings during each init elaboration */
     uint32_t    n_binds = 0, cap = 0;
+    /* partial-application-of-borrow-param-consumes-affine-arg: bindings whose
+     * initializer is a partial application that left a `^borrow` argument
+     * unspent (elab_partial_apply), checked once the body is elaborated. */
+    struct { uint32_t idx; uint32_t n; Binding *borrowed[8]; } pap_recs[8];
+    uint32_t n_pap_recs = 0;
+    uint32_t pending_pap_n = 0;
+    Binding *pending_pap[8];
     Scope       inner;
     scope_init(&inner, e->scope);
     e->scope = &inner;
@@ -1465,7 +1475,18 @@ Expr *elab_let(Elab *e, const Form *call) {
                 if (found) e->expected_type = (Type *)found;
             }
         }
+        const struct Form *prev_pap_form = e->pap_borrow_form;
+        uint32_t prev_pap_n = e->n_pap_borrowed;
+        Binding *prev_pap[8];
+        memcpy(prev_pap, e->pap_borrowed, sizeof prev_pap);
+        e->pap_borrow_form = init_form;
+        e->n_pap_borrowed = 0;
         Expr *init = elab_form(e, init_form);
+        pending_pap_n = e->n_pap_borrowed;
+        memcpy(pending_pap, e->pap_borrowed, sizeof pending_pap);
+        e->pap_borrow_form = prev_pap_form;
+        e->n_pap_borrowed = prev_pap_n;
+        memcpy(e->pap_borrowed, prev_pap, sizeof prev_pap);
         e->expected_type = prev_expected;
         /* refined-function-types-plan F3 (D4c): an annotated `let` is a
          * coercion site -- a function value bound at a refined function type
@@ -2110,6 +2131,21 @@ Expr *elab_let(Elab *e, const Form *call) {
         /* byvalue-recursive-shared-copies-leak: a local is an owner, so a
          * shared view it is initialised from gets its own counts. */
         init = elab_own_byval_copy(e, init, b);
+        if (pending_pap_n) {
+            if (n_pap_recs < 8) {
+                pap_recs[n_pap_recs].idx = n_binds;
+                pap_recs[n_pap_recs].n = pending_pap_n;
+                memcpy(pap_recs[n_pap_recs].borrowed, pending_pap, sizeof pending_pap);
+                n_pap_recs++;
+            } else {
+                /* No room to check it: spend the arguments after all. */
+                for (uint32_t q = 0; q < pending_pap_n; q++) {
+                    if (pending_pap[q]->is_affine) pending_pap[q]->usage_state = USAGE_USED_ONCE;
+                    if (pending_pap[q]->is_linear) pending_pap[q]->is_linear_consumed = true;
+                }
+            }
+            pending_pap_n = 0;
+        }
         binds[n_binds].binding = b;
         binds[n_binds].init = init;
         binding_moved_during_init[n_binds] = false; /* new binding, not yet moved during init */
@@ -2192,6 +2228,40 @@ Expr *elab_let(Elab *e, const Form *call) {
                     body->as.do_.items = items;
                     body->as.do_.n = body_count;
                 }
+            }
+        }
+
+        /* partial-application-of-borrow-param-consumes-affine-arg: a closure
+         * that borrows an argument through a `^borrow` slot is sound while it
+         * stays inside this let (called, never stored, returned or captured)
+         * and the argument is not consumed here -- the argument outlives the
+         * let, and the closure's env never drops it. */
+        for (uint32_t r = 0; rc == 0 && body && r < n_pap_recs; r++) {
+            Binding *clo = binds[pap_recs[r].idx].binding;
+            bool escapes = closure_binding_escapes(body, clo);
+            for (uint32_t k = pap_recs[r].idx + 1; !escapes && k < n_binds; k++)
+                if (binds[k].init) escapes = closure_binding_escapes(binds[k].init, clo);
+            for (uint32_t q = 0; q < pap_recs[r].n; q++) {
+                Binding *ab = pap_recs[r].borrowed[q];
+                bool consumed = ab->is_moved ||
+                    (ab->is_affine && ab->usage_state != USAGE_UNUSED) ||
+                    (ab->is_linear && ab->is_linear_consumed);
+                if (!escapes && !consumed) continue;
+                const char *an = ab->name ? ab->name->name : "?";
+                const char *cn = clo->name ? clo->name->name : "?";
+                diag_emit_with_code(DIAG_ERROR, binds[pap_recs[r].idx].init->span,
+                    TUR_E0150_AFFINE_USED_TWICE,
+                    escapes
+                      ? "partial application '%s' borrows '%s' through a ^borrow "
+                        "parameter, and '%s' is used here as a value (returned, "
+                        "stored or captured), so the borrow could outlive '%s'; "
+                        "call the function saturated instead"
+                      : "partial application '%s' borrows '%s' through a ^borrow "
+                        "parameter, and '%s' is consumed while '%s' is in scope; "
+                        "call the function saturated instead",
+                    cn, an, escapes ? cn : an, escapes ? an : cn);
+                rc = -1;
+                break;
             }
         }
 

@@ -1,5 +1,16 @@
 # Partially applying a `^borrow` parameter spends an affine argument
 
+**RESOLVED 2026-11-05.** A partial application that is a `let` initializer
+hands back the use of an affine or linear argument it passes to a `^borrow`
+slot (`elab_partial_apply`, keyed on `Elab.pap_borrow_form`). After the body,
+`elab_let` refuses the program with TUR-E0150, naming the borrow, when the
+closure is used as a value (`closure_binding_escapes` over the body and later
+initializers) or the argument is consumed while the closure is in scope.
+Anywhere else -- a partial application passed, returned or stored directly --
+the argument is spent as before. The env still never drops it. Pinned by
+`tests/fixtures/partial-borrow-arg-not-spent` (leak-checked) and
+`errors/partial-borrow-closure-escapes` / `errors/partial-borrow-arg-consumed-in-scope`.
+
 **Severity: low (a compile-time refusal of a valid program; nothing unsafe runs).**
 
 Found 2026-10-28 revisiting the known limits of `stdlib/numvec.tur`

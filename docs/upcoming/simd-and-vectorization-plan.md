@@ -227,8 +227,10 @@ worth having:
   to bind it first
   ([borrowed-drop-temporary-leaks-outside-the-hoist](../reported/borrowed-drop-temporary-leaks-outside-the-hoist.md));
   a closure capturing an OWNED array takes it over, so the scope cannot also
-  use it; and partially applying a setter spends the array
-  ([partial-application-of-borrow-param-consumes-affine-arg](../reported/partial-application-of-borrow-param-consumes-affine-arg.md)).
+  use it. Partially applying a setter used to spend the array; since
+  2026-11-05 a `let`-bound `(u8vec-set! a)` that is only called leaves it
+  unspent
+  ([partial-application-of-borrow-param-consumes-affine-arg](../archive/partial-application-of-borrow-param-consumes-affine-arg.md)).
 - **Every op that touches the header is an inline-C body of its own** --
   `new`, `free`, `copy`, `len`, `ref`, `set!` -- never a Turmeric wrapper over
   a raw body, so a panic (an index out of range, a negative length) names the
