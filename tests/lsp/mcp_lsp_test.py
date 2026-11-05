@@ -77,7 +77,14 @@ def to_uri(path):
     emits, so the tests have to speak it too or they compare two spellings of
     the same file and call them different.
     """
-    p = os.path.abspath(path).replace("\\", "/")
+    # A path native_path already made Windows-native -- C:/... -- is absolute,
+    # but MSYS2's python is POSIX-flavoured, and its 3.14 build says it is not:
+    # abspath then glued the cwd on (file:///d/a/turmeric/turmeric/C:/Users/...),
+    # the server analysed the buffer at a path that does not exist, and the
+    # spice test (A6) found no build.tur above it.  Keep a drive path as it is.
+    p = path.replace("\\", "/")
+    if not (len(p) > 2 and p[0].isalpha() and p[1] == ":" and p[2] == "/"):
+        p = os.path.abspath(path).replace("\\", "/")
     return "file:///" + p if (len(p) > 1 and p[1] == ":") else "file://" + p
 
 PASS = 0
