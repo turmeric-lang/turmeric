@@ -1,0 +1,11 @@
+;; borrow-param-consumed-in-own-body: a ^borrow parameter's linear value
+;; cannot be passed to a consuming parameter inside the borrowing function --
+;; the caller still owns it and consumes it later (a double close).
+(defopaque ^linear H :int)
+(defn h-open [] : H ```c return 1; ```)
+(defn h-close [h : H] : nil ```c (void)h; ```)
+(defn sneaky [^borrow h : H] : int (do (h-close h) 0))
+(defn main [] : int
+  (let [h (h-open)
+        n (sneaky h)]
+    (do (h-close h) (println n) 0)))

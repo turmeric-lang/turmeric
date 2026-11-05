@@ -109,7 +109,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [borrow-param-consumed-in-own-body](borrow-param-consumed-in-own-body.md) | medium | `^borrow` is enforced only at call sites: inside the borrowing function (or a `(fn [^borrow h : H] ...)` lambda) the parameter can be passed to a consuming slot, so a double close compiles clean |
+| ~~[borrow-param-consumed-in-own-body](../archive/borrow-param-consumed-in-own-body.md)~~ | medium | **RESOLVED 2026-11-05** (archived): passing a linear/affine `^borrow` parameter to a consuming slot, in a `defn` or a lambda, is TUR-E0109; lending it to another `^borrow` slot stays legal. Pinned by `errors/borrow-*param-consumed-in-body` |
 | ~~[ok-nil-lowercase-miscompiles](../archive/ok-nil-lowercase-miscompiles.md)~~ | low-medium | **RESOLVED 2026-10-29** (archived): a `nil` parameter is spelled `int64_t` and a nil argument passes 0, so `(ok nil)`, `(some nil)` and a declared `[x : nil]` compile. Pinned by `ok-nil-lowercase` |
 | ~~[bare-nullary-ctor-as-value-emits-undeclared-c](../archive/bare-nullary-ctor-as-value-emits-undeclared-c.md)~~ | low | **RESOLVED 2026-10-29** (archived): a bare nullary constructor elaborates as its application, on both engines (the interpreter matched no arm). Pinned by `bare-nullary-ctor-value` |
 

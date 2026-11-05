@@ -133,7 +133,7 @@ allocation table:
 | E0001-E0026, E0042 | Core typing, scope, typeclasses, effects |
 | W0030-W0044 | Effect-row lints and general lints |
 | W0050, W0060-W0064, W0070-W0071 | CLI flags, experiments, `#lang`, JIT fallback (printed to stderr directly) |
-| E0100-E0108, E0150-E0151 | Linear, borrow, substructural |
+| E0100-E0109, E0150-E0151 | Linear, borrow, substructural |
 | E0200-E0260 | Uniqueness, sessions, handler typing, sized types |
 | E0270-E0291 | Reader literals (`#json`, `#map`, `#rat`, `#cx`) and `#row` fields, text-only |
 | E0292-E0303 | Construction, union, opaque casts |

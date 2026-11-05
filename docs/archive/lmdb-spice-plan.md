@@ -537,7 +537,7 @@ the other CI legs run when the spice PR does.
 | `cps-capture-named-env` | any CPS-lifted function with a parameter named `env` |
 | `nested-byval-app-field-sized-as-a-word` | a `(Result (Option cstr) E)` callback segfaulted (sret through the word shim) |
 
-Filed, not fixed: `borrow-param-consumed-in-own-body` (docs/reported/).
+Filed, then fixed 2026-11-05: `borrow-param-consumed-in-own-body` (docs/archive/) -- TUR-E0109.
 `ok-nil-lowercase-miscompiles` and `bare-nullary-ctor-as-value-emits-undeclared-c`
 were fixed 2026-10-29 (docs/archive/): `(ok nil)` and `[DbiCreate]` now compile.
 

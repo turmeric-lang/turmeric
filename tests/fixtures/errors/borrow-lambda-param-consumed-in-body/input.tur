@@ -1,0 +1,11 @@
+;; borrow-param-consumed-in-own-body: the lambda form -- a (fn [^borrow h : H]
+;; ...) handed to a (fn [^borrow H] int) slot may not consume h either.
+(defopaque ^linear H :int)
+(defn h-open [] : H ```c return 1; ```)
+(defn h-close [h : H] : nil ```c (void)h; ```)
+(defn with-h [h : H f : (fn [^borrow H] int)] : int
+  (let [n (f h)]
+    (do (h-close h) n)))
+(defn main [] : int
+  (println (with-h (h-open) (fn [^borrow h : H] : int (do (h-close h) 0))))
+  0)

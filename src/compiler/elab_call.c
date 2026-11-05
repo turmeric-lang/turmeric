@@ -11447,6 +11447,42 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             }
         }
 
+        /* borrow-param-consumed-in-own-body: a `^borrow` PARAMETER holding a
+         * linear or affine value cannot be handed to a slot that consumes it.
+         * The caller kept the value (the LB1 rollback below is what lets it),
+         * so a consumption here would be the second one -- the double close
+         * the report's repro compiled clean.  Lending it on to another
+         * ^borrow slot stays legal; the ^unique ^mut slot is refused above. */
+        if (args[i]->kind == EX_VAR && fn_type.kind == TY_FN && fn_binding) {
+            Binding *arg_bb = args[i]->as.var.binding;
+            if (arg_bb && arg_bb->is_borrow &&
+                    (arg_bb->is_linear || arg_bb->is_affine ||
+                     ty_is_linear(arg_bb->type) ||
+                     arg_bb->type.substruct == SK_AFFINE ||
+                     arg_bb->type.substruct == SK_LINEAR)) {
+                /* (A lambda parameter does not copy its type's linearity onto
+                 * the binding, so the type is read as well as the flags.  A
+                 * plain move-kinded value -- a by-value recursive ADT -- is
+                 * not covered: copying one out of a borrow into a consuming
+                 * callee is allowed, and its ownership provenance keeps the
+                 * spine from being freed under the owner
+                 * (byval-recursive-adt-shared-copy-not-freed).) */
+                uint32_t slot = fn_binding->closure_fn_binding ? i + 1 : i;
+                bool slot_borrows = slot < fn_type.as.fn.arity &&
+                    (FN_ARG_FLAG(fn_type.as.fn, slot, FA_BORROW) ||
+                     FN_ARG_FLAG(fn_type.as.fn, slot, FA_UNIQUE_MUT));
+                if (slot < fn_type.as.fn.arity && !slot_borrows) {
+                    diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                                        TUR_E0109_BORROW_PARAM_CONSUMED,
+                                        "borrowed value '%s' cannot be consumed here -- "
+                                        "it is a ^borrow parameter, so the caller still "
+                                        "owns it; pass it only to a ^borrow parameter",
+                                        arg_bb->name->name);
+                    return NULL;
+                }
+            }
+        }
+
         /* Phase 11: Move tracking - if arg is a CK_MOVE binding reference, poison it.
          * UT2 semantics:
          *  - ^unique ^mut param: exclusive mutable ACCESS (borrow-like); caller keeps
