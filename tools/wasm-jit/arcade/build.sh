@@ -23,7 +23,8 @@
 #                                  module is made from (default build-wasm/)
 #
 # The result is OUT_DIR/wasm-jit/turmeric-jit.{js,wasm}, stdlib.data, spices/,
-# spices.js (the loader) and lsp-worker.js (the language server's worker),
+# spices.js (the loader), lsp-worker.js (the language server's worker) and
+# doc-names.json (the stdlib's and these spices' one-line docs, for hover),
 # copied so a page takes them with the module; the tur_wasm_arcade target adds
 # the stock turmeric.{js,wasm} that worker runs.  It
 # is the JSPI module (TUR_WASM_JIT_JSPI=1), never built over
@@ -90,6 +91,10 @@ bash "$ROOT/tools/wasm-jit/build-module.sh" "$OUT/wasm-jit" "$BUILD/wasm-jit/sou
 # shellcheck disable=SC2086
 rm -rf "$OUT/wasm-jit/spices"
 python3 "$HERE/pack-spices.py" "$TUR_SPICES" "$OUT/wasm-jit/spices" $SPICE_LIST
+# The doc table the editor's hover falls back to (doc-names.py): the stdlib
+# and these spices, one summary line a name.
+# shellcheck disable=SC2086
+python3 "$HERE/doc-names.py" "$TUR_SPICES" "$OUT/wasm-jit/doc-names.json" $SPICE_LIST
 cp "$HERE/spices.js" "$OUT/wasm-jit/spices.js"
 cp "$HERE/lsp-worker.js" "$OUT/wasm-jit/lsp-worker.js"
 grep -q promising "$OUT/wasm-jit/turmeric-jit.js" || { echo "build.sh: the module is not a JSPI build (no promising export)" >&2; exit 1; }
