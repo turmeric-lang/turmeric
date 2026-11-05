@@ -3324,6 +3324,65 @@ static const Binding *emit_drop_glue_root(const Expr *d) {
     return arg && arg->kind == EX_VAR ? arg->as.var.binding : NULL;
 }
 
+/* generic-affine-local-never-dropped: the instance of class `cls` the program
+ * defines at exactly `t`, or NULL. */
+static const TypeClassInstance *emit_find_instance_at(const EmitCtx *ctx,
+                                                      const char *cls, const Type *t) {
+    uint32_t n_items = 0;
+    const Expr **items = flatten_program_items(ctx->program_root, &n_items);
+    if (!items) return NULL;
+    const TypeClassInstance *found = NULL;
+    for (uint32_t i = 0; i < n_items && !found; i++) {
+        if (items[i]->kind != EX_INSTANCE_DEF) continue;
+        const TypeClassInstance *inst = items[i]->as.instance_def_.instance;
+        if (!inst || !inst->typeclass || !inst->typeclass->name ||
+            inst->n_type_args != 1 || strcmp(inst->typeclass->name->name, cls) != 0)
+            continue;
+        if (type_eq(inst->type_args[0], *t)) found = inst;
+    }
+    free((void *)items);
+    return found;
+}
+
+/* The body a defer runs here.  An ordinary defer runs its own body.  The
+ * scope-exit drop of a type-variable local (defer_.spec_drop_of) is decided
+ * per specialization: when the binding's type resolves, in the active spec, to
+ * a move-only Drop opaque -- the rule a concrete local gets at elaboration
+ * (elab_fresh_sole_owner_drop_inst) -- it is a call of that instance's drop
+ * method on the binding; otherwise there is nothing to run and this returns
+ * NULL. */
+const Expr *emit_defer_body(EmitCtx *ctx, const Expr *d) {
+    if (!d || d->kind != EX_DEFER) return NULL;
+    Binding *b = d->as.defer_.spec_drop_of;
+    if (!b) return d->as.defer_.body;
+    if (!ctx || !ctx->current_abi_specialization || !ctx->program_root ||
+        !ctx->type_arena)
+        return NULL;
+    Type t = emit_resolve_type(ctx, b->type);
+    if (t.kind != TY_ADT || !t.as.adt_.def || !t.as.adt_.def->is_opaque) return NULL;
+    const TypeClassInstance *di = emit_find_instance_at(ctx, "Drop", &t);
+    if (!di || di->n_method_impls == 0 || !di->method_impls[0] ||
+        !di->method_impls[0]->binding)
+        return NULL;
+    if (emit_find_instance_at(ctx, "Clone", &t)) return NULL;
+    Expr *var = (Expr *)arena_alloc(ctx->type_arena, sizeof(Expr));
+    memset(var, 0, sizeof(*var));
+    var->kind = EX_VAR;
+    var->type = t;
+    var->span = d->span;
+    var->as.var.binding = b;
+    Expr *call = (Expr *)arena_alloc(ctx->type_arena, sizeof(Expr));
+    memset(call, 0, sizeof(*call));
+    call->kind = EX_CALL;
+    call->type = TYPE_NIL;
+    call->span = d->span;
+    call->as.call_.fn_binding = di->method_impls[0]->binding;
+    call->as.call_.n_args = 1;
+    call->as.call_.args = (Expr **)arena_alloc(ctx->type_arena, sizeof(Expr *));
+    call->as.call_.args[0] = var;
+    return call;
+}
+
 bool emit_frame_has_pending_drops(const EmitCtx *ctx) {
     for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f))
         for (uint32_t i = g_frame_drops_n; i-- > 0; )
@@ -3339,7 +3398,8 @@ void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const Expr *ret_value
                 continue;
             /* LIFO, as tur_frame_fire_lifo would have run them. */
             for (uint32_t j = g_frame_drops[i].n; j-- > 0; ) {
-                const Expr *d = g_frame_drops[i].items[j]->as.defer_.body;
+                const Expr *d = emit_defer_body(ctx, g_frame_drops[i].items[j]);
+                if (!d) continue;
                 const Binding *root = emit_drop_glue_root(d);
                 if (root && ret_value && emit_value_moves_binding(ret_value, root))
                     continue;

@@ -417,9 +417,10 @@ generic loops.
 - **Vectorized:** `probe-generic-map` (`na-map!`, in place) in all three of
   its specializations and `probe-generic-fold` (`na-fold`), at gcc `-O3` and
   clang `-O2` -- `tests/check-numvec-vectorized.py`, 91 of 91.
-- **Known gap:** a generic-typed local is never dropped, so `na-copy`'s
-  result must be released with `na-free`
-  ([generic-affine-local-never-dropped](../reported/generic-affine-local-never-dropped.md)).
+- **Closed gap (2026-11-05):** a generic-typed local was never dropped, so
+  `na-copy`'s result had to be released with `na-free`; a `let` of it that
+  only `^borrow` parameters see is now dropped per specialization
+  ([generic-affine-local-never-dropped](../archive/generic-affine-local-never-dropped.md)).
 - `tests/fixtures/numvec-class` calls every method through generics on all
   five types; cc, `tur jit` and turi agree, leak-checked.
 

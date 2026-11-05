@@ -1488,7 +1488,8 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
          * sole body of a let or defn) degenerates to "fires at scope end"
          * trivially — emit the body inline. */
         case EX_DEFER: {
-            emit_stmt(ctx, body, e->as.defer_.body);
+            const Expr *db = emit_defer_body(ctx, e);
+            if (db) emit_stmt(ctx, body, db);
             return;
         }
         /* Phase 3/4: return */

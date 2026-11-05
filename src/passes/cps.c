@@ -2339,6 +2339,8 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             out->as.defer_.body = new_body;
             out->as.defer_.captures = new_captures;
             out->as.defer_.n_captures = e->as.defer_.n_captures;
+            out->as.defer_.is_drop_glue = e->as.defer_.is_drop_glue;
+            out->as.defer_.spec_drop_of = e->as.defer_.spec_drop_of;
             return out;
         }
         

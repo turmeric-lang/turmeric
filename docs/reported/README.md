@@ -56,7 +56,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [generic-affine-local-never-dropped](generic-affine-local-never-dropped.md) | medium-low (leak) | A `let`-bound value of a generic's type variable is never dropped in any specialization, even when that type is `^affine` with a `Drop` instance; the same code at the concrete type drops it. `NumArray` code frees `na-copy`'s result with `na-free` meanwhile |
+| ~~[generic-affine-local-never-dropped](../archive/generic-affine-local-never-dropped.md)~~ | medium-low (leak) | **RESOLVED 2026-11-05** (archived): a type-variable `let` local whose every use is a `^borrow` argument is dropped per specialization when its type is a move-only Drop opaque, on both engines; `numvec-class` no longer frees `na-copy`'s result by hand. Pinned by `generic-affine-local-dropped` |
 | [assoc-typed-receiver-not-a-dispatch-arg](assoc-typed-receiver-not-a-dispatch-arg.md) | low (refusal) | A class method whose only class-typed parameter is an associated type (`(peek [h : Handle])`) is E0015 at a concrete type and "cannot infer ... return-directed" in a generic. The emitter's silent wrong-instance half is fixed; `NumArray` works around the rest by passing the array too |
 
 ## Found fixing the REPL display reports (filed 2026-10-29)

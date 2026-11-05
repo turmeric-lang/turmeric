@@ -614,6 +614,148 @@ static struct TypeClassInstance *binding_closure_drop_inst(Elab *e, Binding *b,
     return b ? elab_fresh_sole_owner_drop_inst(e, &b->type, init) : NULL;
 }
 
+/* generic-affine-local-never-dropped: is `b` a local whose type is a named
+ * type variable of the enclosing generic, initialised fresh?  Its Drop instance
+ * (if any) is a fact of each specialization, not of the body, so the decision
+ * is deferred to the emitter (elab_spec_drop_glue_defer).  Cheap pre-check;
+ * elab_spec_drop_uses_ok is the body-side half. */
+static bool binding_is_spec_drop_candidate(const Binding *b, const Expr *init) {
+    return b && !b->is_global && b->type.kind == TY_TYVAR &&
+           b->type.as.tyvar_.name && !b->type.as.tyvar_.assoc_of &&
+           init_yields_fresh_owner(init, NULL, 0, 0);
+}
+
+/* Every mention of `b` in `x` is a direct argument at a `^borrow` parameter of
+ * a call to a named function.  A value of a type variable is not move-tracked
+ * (is_moved is set only for affine types, and the body does not know the
+ * specialization's type is one), so any other use -- returned, stored, bound,
+ * captured, or passed to an owning parameter -- may have handed it on, and a
+ * scope-exit drop could then free it under its new owner.  Anything this walk
+ * does not recognise and that mentions `b` refuses: the rule only ever
+ * greenlights a drop it can see is the sole release. */
+static bool spec_drop_uses_ok(const Expr *x, Binding *b, uint32_t depth) {
+    if (!x) return true;
+    if (depth > 64) return false;
+    switch (x->kind) {
+    case EX_VAR:
+        return x->as.var.binding != b;
+    case EX_CALL: {
+        const Binding *fb = x->as.call_.fn_binding;
+        const Type *ft = fb ? &fb->type : NULL;
+        bool direct = ft && ft->kind == TY_FN && ft->as.fn.arg_flags &&
+                      !fb->closure_fn_binding && !x->as.call_.ctor;
+        for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
+            const Expr *a = x->as.call_.args[i];
+            const Expr *s = a;
+            while (s && s->kind == EX_ASCRIBE) s = s->as.ascribe_.inner;
+            if (s && s->kind == EX_VAR && s->as.var.binding == b) {
+                if (!direct || i >= ft->as.fn.arity) return false;
+                if (FN_ARG_FLAG(ft->as.fn, i, FA_BORROW)) continue;
+                /* A dictionary dispatch's fn_binding is a representative
+                 * instance method; the promise is the CLASS signature's. */
+                const Expr *d = x->as.call_.dict_arg;
+                const TypeClassInstance *di =
+                    d && d->kind == EX_DICT ? d->as.dict_.instance : NULL;
+                const TypeClass *tc = di ? di->typeclass : NULL;
+                bool borrowed = false;
+                for (uint8_t m = 0; tc && m < di->n_method_impls &&
+                                    m < tc->n_methods && !borrowed; m++)
+                    if (di->method_impls[m] && di->method_impls[m]->binding == fb)
+                        borrowed = i < 32 &&
+                                   (tc->methods[m].borrow_param_mask & (1u << i));
+                if (!borrowed) return false;
+                continue;
+            }
+            if (!spec_drop_uses_ok(a, b, depth + 1)) return false;
+        }
+        /* The callee position and anything else the call carries. */
+        Expr saved = *x;
+        saved.as.call_.n_args = 0;
+        uint32_t nf = 0;
+        Binding **fv = collect_free_vars(&saved, NULL, 0, NULL, 0, &nf);
+        bool hit = false;
+        for (uint32_t k = 0; k < nf && !hit; k++) hit = fv[k] == b;
+        free(fv);
+        return !hit;
+    }
+    case EX_DO:
+        for (uint32_t i = 0; i < x->as.do_.n; i++)
+            if (!spec_drop_uses_ok(x->as.do_.items[i], b, depth + 1)) return false;
+        return true;
+    case EX_BUILTIN:
+        /* `(+ (peek c) 1)`: the operands are walked; `b` itself as an operand
+         * refuses (EX_VAR above). */
+        for (uint32_t i = 0; i < x->as.builtin.n; i++)
+            if (!spec_drop_uses_ok(x->as.builtin.args[i], b, depth + 1)) return false;
+        return true;
+    case EX_LET:
+    case EX_LETREC:
+        /* `(let [n (na-len c)] ...)` reads it; `(let [d c] ...)` is a bare
+         * EX_VAR init and refuses. */
+        for (uint32_t i = 0; i < x->as.let_.n; i++)
+            if (!spec_drop_uses_ok(x->as.let_.bindings[i].init, b, depth + 1))
+                return false;
+        return spec_drop_uses_ok(x->as.let_.body, b, depth + 1);
+    case EX_WHILE:
+        return spec_drop_uses_ok(x->as.while_.cond, b, depth + 1) &&
+               spec_drop_uses_ok(x->as.while_.body, b, depth + 1);
+    case EX_SET:
+        return x->as.set_.target != b &&
+               spec_drop_uses_ok(x->as.set_.value, b, depth + 1);
+    case EX_ASCRIBE:
+        return spec_drop_uses_ok(x->as.ascribe_.inner, b, depth + 1);
+    case EX_HANDLE: {
+        /* `(unsafe (na-ref-unchecked c i))` is a handle around the body; the
+         * clauses must not mention `b` at all. */
+        const HandleExpr *h = x->as.handle_.handle;
+        if (!h) return true;
+        for (uint8_t i = 0; i < h->n_cases; i++) {
+            uint32_t nf = 0;
+            Binding **fv = collect_free_vars(h->cases[i].body, NULL, 0, NULL, 0, &nf);
+            bool hit = false;
+            for (uint32_t k = 0; k < nf && !hit; k++) hit = fv[k] == b;
+            free(fv);
+            if (hit) return false;
+        }
+        return spec_drop_uses_ok(h->body, b, depth + 1);
+    }
+    case EX_IF:
+        return spec_drop_uses_ok(x->as.if_.cond, b, depth + 1) &&
+               spec_drop_uses_ok(x->as.if_.then_, b, depth + 1) &&
+               spec_drop_uses_ok(x->as.if_.else_or_null, b, depth + 1);
+    default: {
+        uint32_t nf = 0;
+        Binding **fv = collect_free_vars(x, NULL, 0, NULL, 0, &nf);
+        bool hit = false;
+        for (uint32_t k = 0; k < nf && !hit; k++) hit = fv[k] == b;
+        free(fv);
+        return !hit;
+    }
+    }
+}
+
+/* The let body's value must not be `b` either: the do's last item is checked
+ * by spec_drop_uses_ok as a bare EX_VAR, which refuses. */
+static bool elab_spec_drop_uses_ok(const Expr *body, Binding *b) {
+    return spec_drop_uses_ok(body, b, 0);
+}
+
+/* `(defer nil)` flagged drop glue with `spec_drop_of = b`: the emitter resolves
+ * `b`'s type in each specialization and, when that type is a move-only Drop
+ * opaque, runs its Drop method there (emit_defer_body); elsewhere it is a
+ * no-op.  The capture is `b` itself, so the thunk's env carries it. */
+static Expr *elab_spec_drop_glue_defer(Elab *e, Binding *b, Span span) {
+    Expr *defer_expr = expr_new(e->arena, EX_DEFER, TYPE_NIL, span);
+    defer_expr->as.defer_.body = expr_new(e->arena, EX_NIL_LIT, TYPE_NIL, span);
+    Binding **caps = (Binding **)arena_alloc(e->arena, sizeof(Binding *));
+    caps[0] = b;
+    defer_expr->as.defer_.captures = caps;
+    defer_expr->as.defer_.n_captures = 1;
+    defer_expr->as.defer_.is_drop_glue = true;
+    defer_expr->as.defer_.spec_drop_of = b;
+    return defer_expr;
+}
+
 /* `(defer (<Drop.drop> b))`, flagged drop glue: the scope-exit release of a
  * move-only Drop opaque local, through its instance's method. */
 Expr *elab_drop_glue_defer(Elab *e, Binding *b, struct TypeClassInstance *di,
@@ -2195,6 +2337,12 @@ Expr *elab_let(Elab *e, const Form *call) {
             has_ref_bindings = true;
             break;
         }
+        /* generic-affine-local-never-dropped: a fresh type-variable local may
+         * be a Drop opaque in some specialization. */
+        if (binding_is_spec_drop_candidate(binds[k].binding, binds[k].init)) {
+            has_ref_bindings = true;
+            break;
+        }
     }
 
     /* The binding_moved_during_init array (built during the binding loop) records which
@@ -2316,6 +2464,21 @@ Expr *elab_let(Elab *e, const Form *call) {
         /* Phase 5: Inject defers for ref bindings into the do body */
         if (has_ref_bindings && body && body->kind == EX_DO) {
             /* We need to add defer expressions to the do body */
+            /* generic-affine-local-never-dropped: which type-variable locals
+             * get a per-specialization drop (decided once, used by both loops). */
+            bool *spec_drop_ok = (bool *)arena_alloc(e->arena,
+                                                     (n_binds ? n_binds : 1) * sizeof(bool));
+            for (uint32_t k = 0; k < n_binds; k++) {
+                Binding *sb = binds[k].binding;
+                spec_drop_ok[k] = binding_is_spec_drop_candidate(sb, binds[k].init) &&
+                                  !binding_moved_during_init[k] && !sb->is_moved &&
+                                  !sb->is_linear_consumed &&
+                                  !is_binding_consumed(body, sb) &&
+                                  elab_spec_drop_uses_ok(body, sb);
+                /* A later binding's init may take it too. */
+                for (uint32_t j = k + 1; j < n_binds && spec_drop_ok[k]; j++)
+                    spec_drop_ok[k] = spec_drop_uses_ok(binds[j].init, sb, 0);
+            }
             /* First, collect all ref binding names that need drops (excluding moved ones) */
             uint32_t n_refs = 0;
             for (uint32_t k = 0; k < n_binds; k++) {
@@ -2349,6 +2512,9 @@ Expr *elab_let(Elab *e, const Form *call) {
                          !binding_moved_during_init[k] &&
                          !binds[k].binding->is_moved &&
                          !is_binding_consumed(body, binds[k].binding)) {
+                    n_refs++;
+                }
+                else if (spec_drop_ok[k]) {
                     n_refs++;
                 }
             }
@@ -2437,6 +2603,9 @@ Expr *elab_let(Elab *e, const Form *call) {
                             !is_binding_consumed(body, binds[k].binding)) {
                             new_items[defer_idx++] =
                                 elab_drop_glue_defer(e, binds[k].binding, di, call->span);
+                        } else if (!di && spec_drop_ok[k]) {
+                            new_items[defer_idx++] =
+                                elab_spec_drop_glue_defer(e, binds[k].binding, call->span);
                         }
                     }
                 }
