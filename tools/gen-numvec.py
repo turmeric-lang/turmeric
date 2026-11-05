@@ -1232,7 +1232,7 @@ NA_METHODS = [
     ("min", ["^borrow a : v"], "Elem", False, "the smallest element (an empty array panics)"),
     ("max", ["^borrow a : v"], "Elem", False, "the largest element (an empty array panics)"),
     ("copy", ["^borrow a : v"], "v", False,
-     "a fresh copy, owned by the caller -- free it with `na-free` (a generic local is not dropped yet)"),
+     "a fresh copy, owned by the caller (a `let` of it that only `^borrow` parameters see is dropped at scope exit)"),
     ("free", ["a : v"], "nil", False, "release an array now, consuming it"),
     ("show", ["^borrow a : v"], "String", False, "an owned \"#P[a b c]\" String"),
 ]
