@@ -3072,6 +3072,19 @@ static bool arg_is_effect_free(const Expr *a) {
     }
 }
 
+/* A literal: reading it later than written is unobservable. */
+static bool arg_is_literal(const Expr *a) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    if (!a) return true;
+    switch (a->kind) {
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        return true;
+    default:
+        return false;
+    }
+}
+
 /* borrowed-temporary-never-dropped: a fresh move-only Drop value (a
  * `defopaque ^affine` with a Drop instance -- stdlib/numvec.tur's arrays,
  * httpd's Handler) passed straight to a `^borrow` parameter has no owner: the
@@ -3103,6 +3116,29 @@ static Binding *hoist_borrowed_drop_temp(Elab *e, Expr **slot, Span span,
     return tb;
 }
 
+/* Bind a plain-scalar argument to a `__borrowa` temp ahead of a hoisted
+ * borrowed temporary, so the two keep their written evaluation order. */
+static void hoist_ordered_arg_temp(Elab *e, Expr **slot, Span span,
+                                   HoistList *hl) {
+    Expr *a = *slot;
+    char nm[48];
+    snprintf(nm, sizeof nm, "__borrowa_%u", elab_fresh_id(e));
+    const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+    Binding *tb = binding_new(e, sym, a->type, false, false, span);
+    if (hl->n == hl->cap) {
+        uint32_t nc = hl->cap ? hl->cap * 2 : 4;
+        LetBinding *nv = (LetBinding *)arena_alloc(e->arena, nc * sizeof(LetBinding));
+        if (hl->n) memcpy(nv, hl->v, hl->n * sizeof(LetBinding));
+        hl->v = nv; hl->cap = nc;
+    }
+    hl->v[hl->n].binding = tb;
+    hl->v[hl->n].init = a;
+    hl->n++;
+    Expr *v = expr_new(e->arena, EX_VAR, a->type, span);
+    v->as.var.binding = tb;
+    *slot = v;
+}
+
 static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     if (!call || call->kind != EX_CALL) return call;
     const Binding *fb = call->as.call_.fn_binding;
@@ -3115,17 +3151,60 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     struct TypeClassInstance *drop_inst[8];
     uint32_t n_drop = 0;
     bool prefix_effect_free = true;
-    bool scalar_result = type_kind_is_plain_scalar(call->type.kind);
+    /* borrowed-drop-temporary-leaks-outside-the-hoist: an effectful argument
+     * before the temporary no longer keeps it unowned when every non-literal
+     * argument before it is a plain scalar.  Those are hoisted into
+     * `__borrowa` temps ahead of it, in order -- variables too, since an
+     * effectful neighbour may assign one -- so the call reads them all from
+     * temps and evaluation order is kept.  `hoisted_upto` is the first
+     * argument not yet moved into the let. */
+    uint32_t hoisted_upto = 0;
+    /* A scalar result cannot point into the temp.  Nor can a move-only Drop
+     * opaque one (borrowed-drop-temporary-leaks-outside-the-hoist): it owns
+     * its own resource -- its Drop releases it -- so it is not a view of the
+     * argument's (a view type like F64View is neither affine nor Drop).
+     * `(f64vec-copy (f64vec-new 4 7.1))` releases the temporary, and the copy
+     * goes to whatever owns the call's value, as a `let` init or a further
+     * hoist (init_yields_fresh_owner sees through the let this builds). */
+    bool scalar_result = type_kind_is_plain_scalar(call->type.kind) ||
+        elab_fresh_sole_owner_drop_inst(e, &call->type, call) != NULL;
     for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
         Expr **slot = &args[i];
         HOIST_PEEL_SLOT(slot);
         if (arg_is_freeable_closure_source(fb, i, *slot)) {
             (void)hoist_fresh_closure(e, slot, span, &hl);
-        } else if (scalar_result && prefix_effect_free && n_drop < 8 &&
+        } else if (scalar_result && n_drop < 8 &&
                    FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW)) {
-            struct TypeClassInstance *di =
-                elab_fresh_sole_owner_drop_inst(e, &(*slot)->type, *slot);
+            bool order_ok = prefix_effect_free;
+            if (!order_ok) {
+                order_ok = true;
+                for (uint32_t j = hoisted_upto; j < i && order_ok; j++) {
+                    const Expr *aj = args[j];
+                    while (aj && aj->kind == EX_ASCRIBE) aj = aj->as.ascribe_.inner;
+                    if (aj && aj->kind == EX_VAR && aj->as.var.binding &&
+                        strncmp(aj->as.var.binding->name->name, "__borrow", 8) == 0)
+                        continue;                 /* already a hoist temp */
+                    if (!arg_is_literal(args[j]) &&
+                        !type_kind_is_plain_scalar(args[j]->type.kind))
+                        order_ok = false;
+                }
+            }
+            struct TypeClassInstance *di = order_ok
+                ? elab_fresh_sole_owner_drop_inst(e, &(*slot)->type, *slot)
+                : NULL;
             if (di) {
+                if (!prefix_effect_free) {
+                    for (uint32_t j = hoisted_upto; j < i; j++) {
+                        const Expr *aj = args[j];
+                        while (aj && aj->kind == EX_ASCRIBE) aj = aj->as.ascribe_.inner;
+                        if (arg_is_literal(aj)) continue;
+                        if (aj->kind == EX_VAR && aj->as.var.binding &&
+                            strncmp(aj->as.var.binding->name->name, "__borrow", 8) == 0)
+                            continue;
+                        hoist_ordered_arg_temp(e, &args[j], span, &hl);
+                    }
+                }
+                hoisted_upto = i + 1;
                 drop_tmp[n_drop] = hoist_borrowed_drop_temp(e, slot, span, &hl);
                 drop_inst[n_drop++] = di;
             }
