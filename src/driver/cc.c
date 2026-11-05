@@ -1186,6 +1186,67 @@ bool drv_buf_put_quoted(Buf *b, const char *s) {
     return true;
 }
 
+/* jit-ignores-spice-c-includes: undo drv_buf_put_quoted for each ` -I` token
+ * of `flags`.  Inside '...' every byte is literal (POSIX); inside "..." a run
+ * of n backslashes before a quote is n/2 backslashes plus, for odd n, a
+ * literal quote (the Windows rule tur_shell_quote writes); outside quotes a
+ * backslash escapes the next byte (the POSIX '\'' splice). */
+int drv_include_flag_dirs(const char *flags, char ***out) {
+    *out = NULL;
+    if (!flags) return 0;
+    int n = 0, cap = 0;
+    const char *p = flags;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        bool is_inc = p[0] == '-' && p[1] == 'I';
+        if (is_inc) p += 2;
+        Buf w;
+        buf_init(&w);
+        char q = 0;
+        while (*p && (q || (*p != ' ' && *p != '\t'))) {
+            if (q == '\'') {
+                if (*p == '\'') q = 0; else buf_putc(&w, *p);
+                p++;
+            } else if (q == '"') {
+                if (*p == '\\') {
+                    size_t bs = 0;
+                    while (p[bs] == '\\') bs++;
+                    if (p[bs] == '"') {
+                        for (size_t i = 0; i < bs / 2; i++) buf_putc(&w, '\\');
+                        if (bs % 2) buf_putc(&w, '"');
+                        p += bs + 1;
+                    } else {
+                        for (size_t i = 0; i < bs; i++) buf_putc(&w, '\\');
+                        p += bs;
+                    }
+                } else if (*p == '"') {
+                    q = 0; p++;
+                } else {
+                    buf_putc(&w, *p++);
+                }
+            } else if (*p == '\'' || *p == '"') {
+                q = *p++;
+            } else if (*p == '\\' && p[1]) {
+                buf_putc(&w, p[1]); p += 2;
+            } else {
+                buf_putc(&w, *p++);
+            }
+        }
+        if (is_inc && w.len > 0) {
+            if (n >= cap) {
+                int nc = cap ? cap * 2 : 4;
+                char **na = (char **)realloc(*out, (size_t)nc * sizeof(char *));
+                if (!na) { buf_free(&w); break; }
+                *out = na; cap = nc;
+            }
+            (*out)[n++] = strdup(w.data);
+        }
+        buf_free(&w);
+    }
+    return n;
+}
+
 /* tur-link-and-build-split-plan Phase 1: assemble and run the final link `cc`
  * command.  `inputs` is the space-joined list of primary inputs -- the single
  * generated `.c` for the monolithic path, or one-or-more `.o`/`.c` args for the

@@ -44,7 +44,6 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [jit-ignores-spice-c-includes](jit-ignores-spice-c-includes.md) | low (cc fallback) | `tur jit` hands c2mir only the SDK include dirs, so a spice's `:c-includes` header is "error in opening file" and the program falls back to cc; `tur build` / `test` / `run` pass it |
 
 ## Found building the NumArray class (filed 2026-10-29)
 

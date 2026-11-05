@@ -126,6 +126,39 @@ static int jit_sdk_include_dirs(char *inc0, size_t cap0,
     return n;
 }
 
+/* jit-ignores-spice-c-includes: the SDK dirs plus the `:c-includes` of the
+ * spice enclosing `probe` (and its deps), the -I set `tur build`/`tur run`
+ * hand cc (drv_collect_build_aux).  `*owned` holds the spice dirs; free them
+ * with jit_free_include_dirs once c2mir is done.  Returns the count. */
+static int jit_include_dirs_for(const char *probe, const char *const *sdk,
+                                int n_sdk, const char ***out, char ***owned,
+                                int *n_owned) {
+    *owned = NULL;
+    *n_owned = 0;
+    if (probe && strcmp(probe, "-") != 0) {
+        Buf cmk, auxi, auxs;
+        buf_init(&cmk); buf_init(&auxi); buf_init(&auxs);
+        drv_collect_build_aux(probe, &cmk, &auxi, &auxs, NULL);
+        if (auxi.len > 0) *n_owned = drv_include_flag_dirs(auxi.data, owned);
+        buf_free(&cmk); buf_free(&auxi); buf_free(&auxs);
+    }
+    const char **all = (const char **)malloc(((size_t)n_sdk + (size_t)*n_owned + 1)
+                                             * sizeof(char *));
+    int n = 0;
+    if (all) {
+        for (int k = 0; k < n_sdk; k++) all[n++] = sdk[k];
+        for (int k = 0; k < *n_owned; k++) all[n++] = (*owned)[k];
+    }
+    *out = all;
+    return n;
+}
+
+static void jit_free_include_dirs(const char **all, char **owned, int n_owned) {
+    for (int k = 0; k < n_owned; k++) free(owned[k]);
+    free(owned);
+    free((void *)all);
+}
+
 /* J1 (docs/archive/jit-engine-plan.md section 3.2): `tur jit <file>` --
  * compile and execute in process via c2mir + MIR-gen, no cc subprocess, no
  * disk artifacts.  Front half is cmd_build's exactly: run_core_passes via
@@ -299,11 +332,16 @@ int cmd_jit(int argc, char **argv) {
 
     /* Include path for `#include "hamt.h"` et al. */
     static char jit_inc0[4096], jit_inc1[4096], jit_inc2[4096];
-    const char *jit_incs[3];
-    int n_jit_incs = jit_sdk_include_dirs(jit_inc0, sizeof(jit_inc0),
-                                          jit_inc1, sizeof(jit_inc1),
-                                          jit_inc2, sizeof(jit_inc2),
-                                          jit_incs);
+    const char *jit_sdk[3];
+    int n_jit_sdk = jit_sdk_include_dirs(jit_inc0, sizeof(jit_inc0),
+                                         jit_inc1, sizeof(jit_inc1),
+                                         jit_inc2, sizeof(jit_inc2),
+                                         jit_sdk);
+    const char **jit_incs = NULL;
+    char **jit_spice_incs = NULL;
+    int n_jit_spice_incs = 0;
+    int n_jit_incs = jit_include_dirs_for(input, jit_sdk, n_jit_sdk, &jit_incs,
+                                          &jit_spice_incs, &n_jit_spice_incs);
     if (getenv("TUR_JIT_SPLIT_DEBUG")) {
         fprintf(stderr, "jit-debug: n_incs=%d", n_jit_incs);
         for (int di = 0; di < n_jit_incs; di++)
@@ -371,6 +409,7 @@ int cmd_jit(int argc, char **argv) {
                               prog_argc, prog_argv, &prog_rc);
     }
     free(prog_argv);
+    jit_free_include_dirs(jit_incs, jit_spice_incs, n_jit_spice_incs);
     buf_free(&csrc);
     buf_free(&split_src);
     buf_free(&autolink);
@@ -582,7 +621,7 @@ static int repl_jit_shadow_entry(const char *src, const char *link) {
  * TU calls would be dropped.  The spice build passes false for that reason;
  * C1's one function is reached through its non-static __ffi shim. */
 static int repl_jit_compile_image(Buf *csrc, const char *autolink, bool prune,
-                                  TurJitImage **out) {
+                                  const char *probe, TurJitImage **out) {
     Buf split_src;
     buf_init(&split_src);
     bool split_used = jit_try_split_preamble(csrc, &split_src);
@@ -604,10 +643,17 @@ static int repl_jit_compile_image(Buf *csrc, const char *autolink, bool prune,
     }
 
     static char jinc0[4096], jinc1[4096], jinc2[4096];
-    const char *jincs[3];
-    int n_jincs = jit_sdk_include_dirs(jinc0, sizeof(jinc0),
-                                       jinc1, sizeof(jinc1),
-                                       jinc2, sizeof(jinc2), jincs);
+    const char *jsdk[3];
+    int n_jsdk = jit_sdk_include_dirs(jinc0, sizeof(jinc0),
+                                      jinc1, sizeof(jinc1),
+                                      jinc2, sizeof(jinc2), jsdk);
+    /* `probe` (a spice's build.tur) adds that spice's :c-includes, which a
+     * reload of a spice whose inline C includes its own headers needs. */
+    const char **jincs = NULL;
+    char **jspice = NULL;
+    int n_jspice = 0;
+    int n_jincs = jit_include_dirs_for(probe, jsdk, n_jsdk, &jincs,
+                                       &jspice, &n_jspice);
 
     const Buf *use = reduced_used ? &split_src : csrc;
     int jrc = tur_jit_compile_image(use->data, use->len, autolink,
@@ -619,6 +665,7 @@ static int repl_jit_compile_image(Buf *csrc, const char *autolink, bool prune,
         jrc = tur_jit_compile_image(csrc->data, csrc->len, autolink,
                                     jincs, n_jincs, out);
     }
+    jit_free_include_dirs(jincs, jspice, n_jspice);
     buf_free(&split_src);
     return jrc;
 }
@@ -769,9 +816,11 @@ static int repl_jit_build(const char *build_dir, void **out_image,
     /* S2: same hash-gated preamble swap as cmd_jit -- a REPL reload is
      * exactly the loop the split exists for. */
     TurJitImage *img = NULL;
+    char img_probe[4400];
+    snprintf(img_probe, sizeof(img_probe), "%s/build.tur", rootd);
     int jrc = repl_jit_compile_image(&csrc,
                                      autolink.len ? autolink.data : NULL,
-                                     /*prune=*/false, &img);
+                                     /*prune=*/false, img_probe, &img);
     buf_free(&csrc);
     buf_free(&autolink);
     if (jrc != TUR_JIT_OK) {
@@ -891,7 +940,7 @@ static int repl_inline_c_jit_build_here(const char *name, const char *src,
             rc = -1;
         } else if (repl_jit_compile_image(&csrc,
                                           autolink.len ? autolink.data : NULL,
-                                          /*prune=*/true, &img) != TUR_JIT_OK) {
+                                          /*prune=*/true, NULL, &img) != TUR_JIT_OK) {
             rc = -1;
         }
         tur_jit_set_quiet_warnings(was_quiet);

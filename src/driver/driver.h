@@ -252,6 +252,12 @@ void autolink_regions_off(Buf *autolink);
 void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
                              bool *out_needs_asan);
 bool drv_buf_put_quoted(Buf *b, const char *s);
+/* The plain directories of the ` -I<quoted>` tokens drv_collect_build_aux puts
+ * in its aux_includes buffer, unquoted (POSIX '...' or Windows "..." quoting,
+ * whichever drv_buf_put_quoted wrote).  For a consumer that takes paths, not
+ * a shell line -- c2mir under `tur jit`.  Returns the count; *out is a
+ * malloc'd array of malloc'd strings (free each, then the array). */
+int drv_include_flag_dirs(const char *flags, char ***out);
 void drv_replay_to_stderr(const char *path);
 int drv_link_command_run(const char *cc, const char *cc_flags,
                          const char *inputs,
