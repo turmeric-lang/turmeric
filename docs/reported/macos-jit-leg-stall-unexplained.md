@@ -232,7 +232,7 @@ three weeks (2973 -> 3484 passing), so the worst draw's ~1.45x headroom under
 
 The Linux JIT leg, for contrast, failed 21 of 73 commits in the same window,
 all of it the aborting-fixture timeouts already filed as
-[jit-linux-aborting-fixtures-time-out](jit-linux-aborting-fixtures-time-out.md);
+[jit-linux-aborting-fixtures-time-out](../archive/jit-linux-aborting-fixtures-time-out.md);
 macOS shows none of it.
 
 Not seen: the uploaded `jit-ctest-log-macos-latest` artifacts and full log

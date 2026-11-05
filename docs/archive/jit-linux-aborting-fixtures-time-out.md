@@ -1,5 +1,21 @@
 # Aborting fixtures intermittently time out on the Linux JIT leg
 
+> **RESOLVED 2026-11-05 (confirmed on CI).** The hypothesis held and the
+> 2026-10-12 fix took effect. Every `JIT engine (ubuntu-latest)` log since
+> then carries
+> `run-jit: core dumps piped to '|/usr/lib/systemd/systemd-coredump'; RLIMIT_CORE=1 byte so aborting fixtures skip them`
+> -- the runner pipes cores, as supposed, to systemd-coredump rather than
+> apport. Swept: all 270 `main` runs of `ci.yml` from 2026-10-12 to
+> 2026-11-05. 237 logs carry the line, 27 runs had no JIT job, 3 logs were
+> empty or the run was cancelled. The two runs just before it landed (10-12,
+> 00:03 and 02:06: 38186563013, 38191857979) had 10 and 2 of the clustered
+> aborting-fixture timeouts; from 38213450525 (10-12 06:37) on there are
+> none. The one run with timeouts since, 39630203081 (10-21, scheduled),
+> timed out seven fixtures that do not abort (`httpd-async-*`, `image-*`,
+> `cps-capturing-letrec-loop-deep`) and the whole ctest target
+> (`Timeout 2400.31 sec`) -- a slow runner, not this. The 15 most recent
+> runs (11-01 to 11-05) all report `jit fixture summary: N passed, 0 failed`.
+
 **2026-10-12: the 2026-10-09 mitigation was a no-op; fixed, still
 unconfirmed.** It set the limit with `ulimit -c 1`, and bash counts `-c` in
 1024-byte blocks: that is a 1024-byte limit (`bash -c 'ulimit -c 1; grep "core
@@ -56,7 +72,7 @@ clusters of alphabetical neighbours with timestamps a second or two apart, and
 
 (The `r7rs-eval` `stdout mismatch` in the same runs was a separate, real bug,
 fixed as
-[r7rs-eval-host-procedure-name-on-the-stack](../archive/r7rs-eval-host-procedure-name-on-the-stack.md).)
+[r7rs-eval-host-procedure-name-on-the-stack](r7rs-eval-host-procedure-name-on-the-stack.md).)
 
 ## Hypothesis (unverified)
 
