@@ -1,5 +1,13 @@
 # A capturing closure whose parameter is a `defdata` type is refused by a generic fn-typed parameter
 
+> **RESOLVED 2026-11-05.** The capturing path of `elab_fn`
+> (`src/compiler/elab_fns.c`) built the closure VALUE's type with `type_fn` from
+> the parameters' kinds alone; the env-shifted thunk type kept
+> `arg_full_types`, the value's did not, so a `defdata` parameter read back as a
+> def-less `<adt>`. The value's type now carries the full parameter types (the
+> thunk's, past the env slot). Pinned by `closure-adt-param-generic-fn`, which
+> runs the capturing and captureless lambdas side by side on all three engines.
+
 **Severity: low-medium (a valid program is rejected; a hand-written recursion
 works around it).** Found 2026-10-29 executing stats-formula-plan
 (turmeric-spices `spices/stats-formula`).

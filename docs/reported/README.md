@@ -3499,7 +3499,7 @@ any struct with an `Option` field triggers it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [closure-with-adt-param-rejected-by-generic-fn-param](closure-with-adt-param-rejected-by-generic-fn-param.md) | low-medium | A capturing lambda `(fn [a : int b : Box] ...)`, `Box` a `defdata`, passed to a generic `(fn [B A] B)` parameter is refused with `got (fn [int <adt>] : int)`; a non-capturing lambda, a named defn or a `defstruct` is accepted |
+| ~~[closure-with-adt-param-rejected-by-generic-fn-param](../archive/closure-with-adt-param-rejected-by-generic-fn-param.md)~~ | low-medium | **RESOLVED 2026-11-05** (archived): a capturing lambda's value type carries its full parameter types, so a `defdata` parameter fits a generic `(fn [B A] B)` slot as the captureless twin does. Pinned by `closure-adt-param-generic-fn` |
 | [stdlib-cstr-import-breaks-spice-library-build](stdlib-cstr-import-breaks-spice-library-build.md) | medium | A spice module that imports stdlib `cstr` checks, runs and tests, but `tur build <spice-dir>` fails on `#include "cstr.h"`, a header the project build never writes |
 | [list-typed-load-collides-with-frame-ownstr-string](list-typed-load-collides-with-frame-ownstr-string.md) | low-medium | An imported module that loads `stdlib/list-typed.tur` and an import of `frame/print` cannot be compiled together: stdlib's `String` meets `frame/ownstr`'s (`defopaque: 'String' is already defined`) |
 | [stats-ols-pvalues-wrong-continued-fraction](stats-ols-pvalues-wrong-continued-fraction.md) | medium | tur-stats' `ols` / `ols-frame` compute p-values through an incomplete-beta continued fraction with the wrong terms: slightly off everywhere, and -0.8967 for t = 1.56 on 144 df (R: 0.1203); the coefficients are right |

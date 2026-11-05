@@ -16005,6 +16005,14 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
         clo_ty.as.fn.is_variadic    = fn_is_variadic;
         clo_ty.as.fn.rest_kind      = fn_rest_kind;
         clo_ty.as.fn.rest_full_type = fn_rest_full_type;
+        /* closure-with-adt-param-rejected-by-generic-fn-param: the full
+         * parameter types travel too (the thunk type above carries them,
+         * shifted past the env slot).  From the bare kinds alone a `defdata`
+         * parameter read back as a def-less `<adt>`, so `(fn [a : int b :
+         * Box] ...)` with a capture was refused where a generic `(fn [B A] B)`
+         * bound `A := Box` -- its captureless twin was accepted. */
+        if (b->type.as.fn.arg_full_types && n_params > 0)
+            clo_ty.as.fn.arg_full_types = b->type.as.fn.arg_full_types + 1;
         /* curried-fn-typed-param: preserve the closure's full result type so a
          * closure that *returns a function* keeps the inner (fn ...) type on
          * its first-class value.  Without this, a let-bound closure value
