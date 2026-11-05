@@ -66,7 +66,7 @@ The second direction, deciding what a row-less function type means when it
 flows into a slot with a row, is not done. It has no live repro today: a
 row-less `(fn [int] int)` PARAMETER cannot be passed to a rowed slot at all
 (`expected (fn [int] : int), got ptr<void>`), which is the open
-[fn-param-not-forwardable-to-effect-rowed-param](../reported/fn-param-not-forwardable-to-effect-rowed-param.md).
+[fn-param-not-forwardable-to-effect-rowed-param](fn-param-not-forwardable-to-effect-rowed-param.md).
 Whoever fixes that one must decide this question there, or the hole opens
 through a parameter. Until then R-1 (skipping CPS colouring for a `#fx{}`
 parameter) is not safe on this fix alone.

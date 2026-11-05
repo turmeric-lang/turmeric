@@ -8259,6 +8259,55 @@ void elab_stamp_self_call_sum_drops(Binding *b, Expr *body) {
     stamp_self_call_sum_drops(b, body);
 }
 
+/* fn-param-not-forwardable-to-effect-rowed-param: does this row name a row
+ * variable?  Before PASS_EFFECT_ENV a row is still symbolic, and a lowercase
+ * name is a variable there (effect_row_resolve). */
+static bool effect_row_is_open(const EffectRow *r) {
+    if (!r) return false;
+    switch (r->kind) {
+    case ERK_VAR:   return true;
+    case ERK_UNION: return effect_row_is_open(r->as.union_.left) ||
+                           effect_row_is_open(r->as.union_.right);
+    case ERK_UNRESOLVED:
+        for (uint32_t k = 0; k < r->as.unresolved.n_sym_names; k++) {
+            const Symbol *nm = r->as.unresolved.sym_names[k];
+            if (nm && nm->name && nm->name[0] >= 'a' && nm->name[0] <= 'z')
+                return true;
+        }
+        return false;
+    default:
+        return false;
+    }
+}
+
+/* A row as the program spells it, `#fx{IO}`, for a diagnostic. */
+static void fx_row_print_surface(Buf *b, const EffectRow *r) {
+    if (r && r->kind == ERK_UNRESOLVED) {
+        buf_puts(b, "#fx{");
+        for (uint32_t k = 0; k < r->as.unresolved.n_sym_names; k++) {
+            if (k) buf_putc(b, ' ');
+            const Symbol *nm = r->as.unresolved.sym_names[k];
+            buf_puts(b, nm && nm->name ? nm->name : "?");
+        }
+        buf_putc(b, '}');
+    } else if (!r || r->kind == ERK_EMPTY) {
+        buf_puts(b, "#fx{}");
+    } else {
+        effect_row_print(b, (EffectRow *)r);
+    }
+}
+
+/* Two function types with the same arity, parameter kinds and result kind --
+ * the shape check a carrier-to-nominal bridge needs; rows are compared by
+ * the caller. */
+static bool fn_sig_kinds_match(const Type *a, const Type *b) {
+    if (a->as.fn.arity != b->as.fn.arity) return false;
+    if (a->as.fn.result_kind != b->as.fn.result_kind) return false;
+    for (uint32_t k = 0; k < a->as.fn.arity; k++)
+        if (a->as.fn.arg_kinds[k] != b->as.fn.arg_kinds[k]) return false;
+    return true;
+}
+
 static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
@@ -9547,6 +9596,57 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             if (fn_type.kind == TY_FN && fn_arg_idx_fp < fn_type.as.fn.arity &&
                 FN_ARG_FLAG(fn_type.as.fn, fn_arg_idx_fp, FA_FAT)) {
                 arg_ok = true;
+            }
+        }
+        /* fn-param-not-forwardable-to-effect-rowed-param: a plain, effect-free
+         * `(fn [A] R)` PARAMETER rides the poly carrier (ptr<void>, signature
+         * in poly_type), while a parameter whose type carries an effect row
+         * keeps its nominal TY_FN and takes a fat handle.  When the slot's row
+         * is open -- `#fx{e}`, the row-polymorphic idiom -- accept the
+         * carrier: the nominal-slot conversion below boxes it
+         * (EX_POLY_TO_FAT), and the row variable binds to whatever the
+         * parameter carries, as a direct call through it would.  A CLOSED row
+         * (`#fx{}`, `#fx{IO}`) is refused: a row-less parameter may carry any
+         * effects, and the ER4 check would read it as carrying none. */
+        if (!arg_ok && expected_arg_kind == TY_FN && args[i]->type.kind == TY_PTR_VOID &&
+            fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+            const Expr *pv = args[i];
+            while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+            const Binding *pb = (pv && pv->kind == EX_VAR) ? pv->as.var.binding : NULL;
+            uint32_t rfi = fn_binding->closure_fn_binding ? i + 1 : i;
+            const Type *rpt = (rfi < fn_type.as.fn.arity)
+                ? fn_type.as.fn.arg_full_types[rfi] : NULL;
+            const Type *ppt = (pb && pb->is_param && pb->is_poly_fn) ? pb->poly_type : NULL;
+            if (rpt && rpt->kind == TY_FN && rpt->as.fn.effect_row &&
+                !rpt->as.fn.cfnptr && ppt && ppt->kind == TY_FN &&
+                !ppt->as.fn.cfnptr && !ppt->as.fn.effect_row &&
+                fn_sig_kinds_match(ppt, rpt)) {
+                if (effect_row_is_open(rpt->as.fn.effect_row)) {
+                    arg_ok = true;
+                } else {
+                    Buf eb; buf_init(&eb);
+                    fx_row_print_surface(&eb, rpt->as.fn.effect_row);
+                    buf_putc(&eb, '\0');
+                    Buf ab; buf_init(&ab);
+                    type_print(&ab, *ppt);
+                    buf_putc(&ab, '\0');
+                    diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                        TUR_E0009_EFFECT_ROW_MISMATCH,
+                        "function '%s' arg %u: '%s' is a parameter typed %s, "
+                        "with no effect row, so it may carry any effects; it "
+                        "cannot be passed where '%s' declares the closed row "
+                        "%s",
+                        fn_binding->name->name, i + 1, pb->name->name, ab.data,
+                        fn_binding->name->name, eb.data);
+                    diag_emit(DIAG_HELP, args[i]->span,
+                        "give '%s' a row as well -- `(fn [...] #fx{e} R)`, with "
+                        "#fx{e} on the function that declares it -- or declare "
+                        "the row the callee allows on it",
+                        pb->name->name);
+                    buf_free(&eb);
+                    buf_free(&ab);
+                    return NULL;
+                }
             }
         }
         /* TS4P1: For a polymorphic ADT constructor, the field is stored as TY_INT
