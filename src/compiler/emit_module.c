@@ -21641,7 +21641,13 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                     if (pf->full_type && pf->full_type->kind == TY_APP &&
                         adt_field_is_inline_byval(pf)) {
                         (void)type_c_name(*pf->full_type);
-                        type_codegen_emit_adt_apps(&early_file);
+                        /* monomorph-emitted-before-its-type-argument: flush
+                         * THIS field's monomorph, not the whole registry -- a
+                         * `(Cons Foo)` registered by then would otherwise land
+                         * here too, ahead of Foo's own typedef. */
+                        if (!type_codegen_emit_adt_app_for(&early_file,
+                                                           *pf->full_type))
+                            type_codegen_emit_adt_apps(&early_file);
                     }
                 }
             }
@@ -21888,7 +21894,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                  * did) and otherwise flushed after this block: flush it here,
                  * as the record-field pre-flush above does.  The later flush's
                  * guards make it a no-op. */
-                if (entry->value_type.kind == TY_APP)
+                if (entry->value_type.kind == TY_APP &&
+                    !type_codegen_emit_adt_app_for(&early_file, entry->value_type))
                     type_codegen_emit_adt_apps(&early_file);
                 buf_printf(&early_file, "static %s _dynvar_root_%s;\n", ctype, mname);
                 buf_printf(&early_file, "static pthread_key_t _dynvar_key_%s;\n", mname);

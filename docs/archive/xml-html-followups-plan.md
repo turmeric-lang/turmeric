@@ -916,7 +916,7 @@ What building C, A1-A2 and D1 changed against the text above.
   test reads the Response directly. It did so first because tourist's HTTP
   client loads `json/ownstr`, whose `String` collided with `dom/ownstr`'s;
   with that fixed, serving the pages turned up
-  [monomorph-emitted-before-its-type-argument](../reported/monomorph-emitted-before-its-type-argument.md),
+  [monomorph-emitted-before-its-type-argument](monomorph-emitted-before-its-type-argument.md),
   [unused-module-global-heap-init-reported-as-leak](unused-module-global-heap-init-reported-as-leak.md)
   and a live literal that leaked each content hole's markup (fixed in
   turlive.c), and the test stayed direct.

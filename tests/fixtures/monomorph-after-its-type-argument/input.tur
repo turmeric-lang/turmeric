@@ -1,0 +1,24 @@
+;; monomorph-emitted-before-its-type-argument: a struct with an `(Option int)`
+;; field pre-flushes that monomorph ahead of the user typedefs.  It used to
+;; flush EVERY registered monomorph, so a `(Cons T)` of a user ADT T landed
+;; before T's typedef -- `unknown type name` for a ^heap T, `incomplete type`
+;; for a by-value one.  One ADT of each shape.
+(defmodule rp/c
+  (export main)
+  (defstruct Unrelated [x : (Option int)])
+  (defdata ^heap ^copy HeapFoo (HeapFoo int))
+  (defdata SumFoo (SumA int) (SumB cstr))
+  (defdata ^copy CopyFoo (CopyFoo int))
+  (defn mk-heap [n : int acc : (Cons HeapFoo)] : (Cons HeapFoo)
+    (if (= n 0) acc (mk-heap (- n 1) (tcons-of (HeapFoo n) acc))))
+  (defn mk-sum [n : int acc : (Cons SumFoo)] : (Cons SumFoo)
+    (if (= n 0) acc (mk-sum (- n 1) (tcons-of (SumA n) acc))))
+  (defn mk-copy [n : int acc : (Cons CopyFoo)] : (Cons CopyFoo)
+    (if (= n 0) acc (mk-copy (- n 1) (tcons-of (CopyFoo n) acc))))
+  (defn main [] : int
+    (let [u (Unrelated (some 7))]
+      (println (match (.x u) (Some v) v (None) 0)))
+    (println (tlength (mk-heap 3 (tnil))))
+    (println (tlength (mk-sum 4 (tnil))))
+    (println (tlength (mk-copy 5 (tnil))))
+    0))

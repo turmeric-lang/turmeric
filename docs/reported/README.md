@@ -44,6 +44,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| ~~[jit-ignores-spice-c-includes](../archive/jit-ignores-spice-c-includes.md)~~ | low (cc fallback) | **RESOLVED 2026-11-05** (archived): `tur jit` and the REPL's spice image unquote the spice's collected `:c-includes` `-I` flags and hand the dirs to c2mir beside the SDK ones. Pinned by `jit :c-includes` in `tests/spice-c-sources-tests.sh` |
 
 ## Found building the NumArray class (filed 2026-10-29)
 
@@ -3486,19 +3487,20 @@ the `__int128` work only surfaced them.  Both resolved the same day.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [monomorph-emitted-before-its-type-argument](monomorph-emitted-before-its-type-argument.md) | medium | With `tourist/app` imported before the markup spices, the C for `ctor_Cons_Cons__Hole` (which takes a `Hole` by value) precedes `struct tur_adt_Hole`, and cc rejects the incomplete type; the other import order compiles |
+| ~~[monomorph-emitted-before-its-type-argument](../archive/monomorph-emitted-before-its-type-argument.md)~~ | medium | **RESOLVED 2026-11-05** (archived): the record-field and `defdynamic` pre-flushes emitted EVERY registered monomorph ahead of the user typedefs; they now emit only the one they need. Pinned by `monomorph-after-its-type-argument` |
 | ~~[unused-module-global-heap-init-reported-as-leak](../archive/unused-module-global-heap-init-reported-as-leak.md)~~ | low | **RESOLVED 2026-11-05** (archived): a file-local `def` with an initializer is emitted `__attribute__((used))`, so its store survives and the box stays reachable. Pinned by `module-def-unread-heap-not-leaked` (`requires.leak-check`) |
 
 ## Found executing stats-formula-plan (filed 2026-10-29)
 
 The spice is turmeric-spices `spices/stats-formula`; each report says what it
 does to work around the bug. The plan also added a one-module repro to
-[monomorph-emitted-before-its-type-argument](monomorph-emitted-before-its-type-argument.md):
-any struct with an `Option` field triggers it.
+[monomorph-emitted-before-its-type-argument](../archive/monomorph-emitted-before-its-type-argument.md):
+any struct with an `Option` field triggered it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[closure-with-adt-param-rejected-by-generic-fn-param](../archive/closure-with-adt-param-rejected-by-generic-fn-param.md)~~ | low-medium | **RESOLVED 2026-11-05** (archived): a capturing lambda's value type carries its full parameter types, so a `defdata` parameter fits a generic `(fn [B A] B)` slot as the captureless twin does. Pinned by `closure-adt-param-generic-fn` |
+| ~~[stdlib-cstr-import-breaks-spice-library-build](../archive/stdlib-cstr-import-breaks-spice-library-build.md)~~ | medium | **RESOLVED 2026-11-05** (archived): `tur build <dir>` compiles and links every stdlib `defmodule` the build set imports (not exported). Pinned by `build-library-imports-stdlib-module` in `tests/run-build-project.sh` |
 | [list-typed-load-collides-with-frame-ownstr-string](list-typed-load-collides-with-frame-ownstr-string.md) | low-medium | An imported module that loads `stdlib/list-typed.tur` and an import of `frame/print` cannot be compiled together: stdlib's `String` meets `frame/ownstr`'s (`defopaque: 'String' is already defined`) |
 | [stats-ols-pvalues-wrong-continued-fraction](stats-ols-pvalues-wrong-continued-fraction.md) | medium | tur-stats' `ols` / `ols-frame` compute p-values through an incomplete-beta continued fraction with the wrong terms: slightly off everywhere, and -0.8967 for t = 1.56 on 144 df (R: 0.1203); the coefficients are right |
 

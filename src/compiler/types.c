@@ -5627,6 +5627,16 @@ void type_codegen_emit_adt_apps(Buf *out) {
     }
 }
 
+bool type_codegen_emit_adt_app_for(Buf *out, Type t) {
+    for (uint32_t i = 0; i < g_n_adt_apps; i++) {
+        if (type_eq(g_adt_apps[i].type, t)) {
+            emit_registered_adt_app_rec(out, i);
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Phase E: Reset the fn-ptr typedef registry (called before each compilation unit). */
 void type_codegen_reset_fn_ptr_typedefs(void) {
     for (uint32_t i = 0; i < g_n_fn_ptr_typedefs; i++)
