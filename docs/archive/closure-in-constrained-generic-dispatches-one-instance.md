@@ -1,5 +1,25 @@
 # A closure inside a constrained generic calls one instance for every instantiation
 
+> **RESOLVED 2026-11-05.** The per-spec clone already existed for a
+> constrained INSTANCE method's dispatching closure (`inner_dispatch`,
+> constrained-instance-element-dispatch-in-closures) but was gated on
+> `fd->owner_instance`. A plain constrained defn now takes it too
+> (`src/compiler/emit_module.c`), with two additions the instance path did not
+> need: a clone whose captures change representation per spec (a by-value
+> struct receiver, an associated-type `float`/`float32`) gets its own env
+> (`emit_inner_captures_change_repr`), and a lambda on the CPS path
+> (`may_await` / `cps_colored` on its lifted FnDef) is left shared, because a
+> clone has no `__cps` twin and an await below it would refuse to park
+> (`await-in-generic-capturing-lambda`). To read those flags during the ABI
+> scan, `emit_program_inner` now runs the (idempotent) CPS coloring before it.
+> Pinned by `closure-in-constrained-generic-per-instance` (the report's repro,
+> plus a two-call closure) and `closure-in-constrained-generic-assoc-capture`
+> (the captured-float shape, zero findings from
+> `check-emitted-float-conversions.py`); all three engines agree.
+>
+> **Not covered:** an awaiting lambda in a constrained generic still shares
+> one closure across specs, as before.
+
 **Severity: high (silent wrong behaviour on the compiled engines).**
 
 Found 2026-10-29 while checking whether a generic numeric-array API is

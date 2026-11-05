@@ -8120,10 +8120,26 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * the closure and clone it per outer spec (mirroring the inner_passed path)
      * so its element call grounds `A` to the concrete element instance.  Only
      * fires when no returned/passed closure spec is already in play. */
+    /* closure-in-constrained-generic-dispatches-one-instance: not only an
+     * instance method -- a plain constrained defn (`(defn clo [V] [(Sh V)] [a :
+     * V] (let [f (fn [] (sh a))] (f)))`) has the same shape, and its single
+     * lifted closure called one instance for every instantiation.  The
+     * predicate already accepts a tyvar the spec binds directly; the
+     * constraint-var grounding below stays instance-only. */
     bool inner_dispatch = false;
-    if (!inner_closure && !borrow_path && fd && fd->body && fd->owner_instance &&
+    if (!inner_closure && !borrow_path && fd && fd->body &&
         bindings && n_bindings > 0) {
         Binding *disp = emit_find_dispatch_spec_closure(fd->body, fd, bindings, n_bindings);
+        /* For a plain constrained defn, leave a lambda on the CPS path (one
+         * that may await or reach a control operator) alone: a per-spec clone
+         * has no `__cps` twin, so an await below it would refuse to park
+         * (await-in-generic-capturing-lambda).  The flags live on the LIFTED
+         * top-level FnDef, which the coloring before the scan set. */
+        if (disp && !fd->owner_instance) {
+            const Expr *dx = emit_abi_find_fn_expr(items, n_items, disp);
+            const FnDef *dfd = (dx && dx->kind == EX_FN_DEF) ? dx->as.fn_def_.fn : NULL;
+            if (!dfd || dfd->may_await || dfd->cps_colored) disp = NULL;
+        }
         if (disp) {
             inner_closure = disp;
             inner_dispatch = true;
@@ -8842,6 +8858,15 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                  (inner_app_annotated &&
                   emit_inner_captures_change_repr(inner_fd, bindings,
                                                   n_bindings, ctx->type_arena)));
+            /* closure-in-constrained-generic-dispatches-one-instance: a plain
+             * constrained defn's dispatch clone may capture a value of the
+             * spec's type (a by-value struct receiver, an associated-type
+             * float) whose layout differs per spec -- that clone needs its
+             * own env, not the base's carrier slots. */
+            if (inner_dispatch && fd && !fd->owner_instance &&
+                emit_inner_captures_change_repr(inner_fd, bindings, n_bindings,
+                                                ctx->type_arena))
+                own_env = true;
             if (own_env)
                 emit_assign_inner_env_override(ctx, inner_fd, inner_res, inner_spec);
             uint32_t inner_idx = (uint32_t)(inner_spec - ctx->abi_specializations);
@@ -21544,6 +21569,11 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         n_items = k;
     }
 
+    /* closure-in-constrained-generic-dispatches-one-instance: the scan's
+     * per-spec closure cloning asks whether a lambda may await (a clone has no
+     * `__cps` twin).  The CPS backend colors the program later; coloring is
+     * idempotent (it resets first), so color it now too. */
+    cps_color_program(NULL, (Expr *)program);
     /* J1: ABI specialization scan (extracted into emit_abi_scan_program). */
     emit_abi_scan_program(&ctx, items, n_items);
     /* cross-module-generic-of-generic-instantiation-missing: complete the

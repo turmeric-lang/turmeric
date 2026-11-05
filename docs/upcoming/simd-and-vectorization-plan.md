@@ -360,7 +360,7 @@ writes generic code over it:
 
 - **A lambda inside a constrained generic calls one instance for every
   spec** on the compiled engines
-  ([closure-in-constrained-generic-dispatches-one-instance](../reported/closure-in-constrained-generic-dispatches-one-instance.md),
+  ([closure-in-constrained-generic-dispatches-one-instance](../archive/closure-in-constrained-generic-dispatches-one-instance.md),
   high, pre-existing). The layer's own methods take no lambdas, and
   `P-for` / `P-fold` / `P-build` expand to loops, not closures -- but a
   generic `na-map!` taking a function, or user generic code with a local
@@ -1001,7 +1001,7 @@ Results identical in every cell.
    element-typed blocker
    ([assoc-type-method-at-applied-opaque-instance-no-instance](../archive/assoc-type-method-at-applied-opaque-instance-no-instance.md))
    is fixed. Before anything higher-order goes in the class:
-   [closure-in-constrained-generic-dispatches-one-instance](../reported/closure-in-constrained-generic-dispatches-one-instance.md).
+   [closure-in-constrained-generic-dispatches-one-instance](../archive/closure-in-constrained-generic-dispatches-one-instance.md).
 2. Names. Honest names, `F64Vec`, not `FlVec` (as shipped). **Decided
    2026-10-29:** there is no generic type; the generic layer is the class
    **`NumArray`**, its methods prefixed **`na-`** (`na-len`, `na-sum`,
@@ -1105,7 +1105,7 @@ Results identical in every cell.
      `map2!`, `build` from a function of the index. Vectorized everywhere,
      including gcc `-O2`, but each needs a lambda per element, and a lambda
      inside generic code hits
-     [closure-in-constrained-generic-dispatches-one-instance](../reported/closure-in-constrained-generic-dispatches-one-instance.md);
+     [closure-in-constrained-generic-dispatches-one-instance](../archive/closure-in-constrained-generic-dispatches-one-instance.md);
      only a kernel with a fixed operation (`add-scalar!`, `mul!`) avoids it.
    - **(c) Do nothing** and document the gap: a store loop runs scalar, at
      the speed of the equivalent C loop under gcc `-O2` today.

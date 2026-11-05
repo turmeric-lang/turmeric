@@ -1,0 +1,34 @@
+;; closure-in-constrained-generic-dispatches-one-instance: a lambda inside a
+;; constrained generic whose body calls a class method on the constraint's
+;; type variable.  It was lifted once and every specialization shared it, so
+;; all but one instantiation ran the wrong instance (W2 W2 for clo).  Each
+;; spec now gets its own clone of the closure, as a constrained INSTANCE
+;; method's closures already did.
+(defclass Sh [v] (sh [a : v] : nil))
+(defopaque W1 :int)
+(defopaque W2 :int)
+(definstance Sh [W1] (sh [a] (println "W1")))
+(definstance Sh [W2] (sh [a] (println "W2")))
+
+(defn direct [V] [(Sh V)] [a : V] : nil (sh a))
+
+;; called in place
+(defn clo [V] [(Sh V)] [a : V] : nil
+  (let [f (fn [] (sh a))]
+    (f)))
+
+;; called twice, with a non-dispatching capture beside the dispatching one
+(defn clo2 [V] [(Sh V)] [a : V n : int] : int
+  (let [g (fn [k : int] : int (do (sh a) {k + n}))]
+    {(g 1) + (g 2)}))
+
+(defn main [] : int
+  (direct (:: 0 W1))
+  (direct (:: 0 W2))
+  (clo (:: 0 W1))
+  (clo (:: 0 W2))
+  (clo (:: 0 W2))
+  (clo (:: 0 W1))
+  (println (clo2 (:: 0 W2) 10))
+  (println (clo2 (:: 0 W1) 20))
+  0)

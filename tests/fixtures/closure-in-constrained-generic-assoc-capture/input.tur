@@ -1,0 +1,26 @@
+;; closure-in-constrained-generic-dispatches-one-instance, the capture half: a
+;; lambda in a constrained generic that captures the by-value struct receiver
+;; and an associated-type value (`E = float` / `float32`) and dispatches on
+;; them.  The single shared closure called one instance's method with the
+;; other's struct -- a cc type error -- and held the float as a carrier word.
+;; Each spec's clone now has its own env, laid out at that spec's types.
+(defstruct F [x : float])
+(defstruct G [y : float32])
+(defclass Cl [c]
+  (type E : Type)
+  (c-get [^borrow a : c] : E)
+  (c-put [^borrow a : c x : E] : nil))
+(definstance Cl [F] (type E = float)
+  (c-get [a] (.x a))
+  (c-put [a x] (println x)))
+(definstance Cl [G] (type E = float32)
+  (c-get [a] (.y a))
+  (c-put [a x] (println x)))
+(defn rt [C] [(Cl C)] [^borrow a : C] : nil
+  (let [t (c-get a)
+        f (fn [] (c-put a t))]
+    (f)))
+(defn main [] : int
+  (rt (F 7.1))
+  (rt (G (as float32 3.25)))
+  0)
