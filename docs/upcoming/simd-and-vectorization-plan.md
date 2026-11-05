@@ -755,7 +755,7 @@ What it settles for S1:
    ([archived](../archive/c2mir-paste-of-u8-prefixed-token.md)); and
    `tur jit` does not pass a spice's `:c-includes` to c2mir, so an S0 kernel
    runs on the cc fallback under it
-   ([jit-ignores-spice-c-includes](../reported/jit-ignores-spice-c-includes.md)).
+   ([jit-ignores-spice-c-includes](../archive/jit-ignores-spice-c-includes.md)).
 
 ### S1 -- compiler-known vector types (`--enable=simd`)
 
