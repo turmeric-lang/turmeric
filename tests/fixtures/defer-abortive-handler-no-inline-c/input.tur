@@ -1,7 +1,7 @@
 ;; The inline-C-free twin of defer-cps-abortive-handler (whose `note` is
-;; inline C, so run-turi.sh never ran it): every case but the two whose
-;; deferred body panics (16, 17 -- the interpreter swallows a panic raised in
-;; a deferred body: turi-defer-body-panic-is-swallowed).  Under --interpret a
+;; inline C, so run-turi.sh never ran it): every case, the two whose deferred
+;; body panics (16, 17) included -- the interpreter used to swallow a panic
+;; raised in a deferred body (turi-defer-body-panic-is-swallowed).  Under --interpret a
 ;; body with a defer now stays on the work stack, whose captured slice carries
 ;; the body's defers (turi-fiber-handle-defers-fire-at-the-wrong-time), so
 ;; case 5 -- multi-shot over a defer-bearing body -- runs there too.
@@ -14,6 +14,7 @@
 ;; in the resumed copy, when (and as often as) it runs.
 
 (defn note [s : cstr] : int (do (println s) 0))
+(defn boom [] : int (panic "boom"))
 
 (defeffect Abort [] : int)
 (defeffect Ask [] : int)
@@ -142,6 +143,20 @@
 (defn w19-run [] : int
   (+ 100 (escape (fn [k] (w19-handle k)))))
 
+;; 16. A deferred body that panics on the abort path is an ordinary panic:
+;;     catch-unwind catches it.
+(defn w16 [] : int
+  (defer (boom))
+  (+ 1 (perform (Abort))))
+
+;; 17. Three defers, the middle one panics: the other two still run, LIFO,
+;;     as a direct frame runs every closure of its chain; then the panic.
+(defn w17 [] : int
+  (defer (note "w17: first declared, fires last"))
+  (defer (boom))
+  (defer (note "w17: third declared, fires first"))
+  (+ 1 (perform (Abort))))
+
 (defn run1 [] : int
   (note (if (= 0 (handle (w1) (Abort [] k) 0)) "1: handle -> 0" "1: ?")))
 (defn run2 [] : int
@@ -179,12 +194,18 @@
   (note (if (= 3 (w14-loop 3 0)) "14: loop -> 3" "14: ?")))
 (defn run15 [] : int
   (note (if (= 43 (handle (handle (w15) (Ask [] k) (+ 1 (resume k (perform (Outer))))) (Outer [] k) (resume k 41))) "15: handle -> 43" "15: ?")))
+(defn run16 [] : int
+  (let [r (catch-unwind (fn [] : int (handle (w16) (Abort [] k) 0)))]
+    (note (if (err? r) "16: caught" "16: no panic"))))
+(defn run17 [] : int
+  (let [r (catch-unwind (fn [] : int (handle (w17) (Abort [] k) 0)))]
+    (note (if (err? r) "17: caught" "17: no panic"))))
 (defn run18 [] : int
   (note (if (= 107 (w18-run)) "18: escape -> 107" "18: ?")))
 (defn run19 [] : int
   (note (if (= 107 (w19-run)) "19: escape -> 107" "19: ?")))
 (defn main [] : int
   (run1) (run2) (run3) (run4) (run5) (run6) (run7) (run8)
-  (run9) (run10) (run11) (run12) (run13) (run14) (run15) (run18) (run19)
+  (run9) (run10) (run11) (run12) (run13) (run14) (run15) (run16) (run17) (run18) (run19)
   (note "done")
   0)

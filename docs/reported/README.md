@@ -367,7 +367,7 @@ on `main` 3d9e02a2.
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[turi-fiber-handle-defers-fire-at-the-wrong-time](../archive/turi-fiber-handle-defers-fire-at-the-wrong-time.md)~~ | low | **RESOLVED 2026-10-24** (archived): `defer` and `catch-unwind` are work-stack capturable -- a capture carries the body's pending defers and catch boundaries, a resume re-installs a copy (`ws_slice_reinstall`), and an abandoning case fires them -- so a multi-shot resume over such a body runs under `tur --interpret`. A body under `catch-panic-of` still takes the fiber. Pinned by `defer-abortive-handler-no-inline-c`, `cps-catch-unwind-multishot`, `discontinue-multishot` |
-| [turi-defer-body-panic-is-swallowed](turi-defer-body-panic-is-swallowed.md) | medium | Under `tur --interpret`, a panic raised in a deferred body is lost when a work-stack `catch-unwind` would take it: the fire helpers restore the saved `panicking` signal over it. Compiled catches it. Cases 16 and 17 of `defer-cps-abortive-handler` (left out of its inline-C-free twin) |
+| ~~[turi-defer-body-panic-is-swallowed](../archive/turi-defer-body-panic-is-swallowed.md)~~ | medium | **RESOLVED 2026-11-05** (archived): the fire helpers leave a panic a deferred body raised in place, after firing the rest of the chain, so a work-stack `catch-unwind` takes it as compiled does. Cases 16 and 17 are back in `defer-abortive-handler-no-inline-c` |
 
 ## Found revisiting the two dynvar plans (filed 2026-10-17)
 

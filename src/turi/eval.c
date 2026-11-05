@@ -3265,7 +3265,35 @@ static _Thread_local bool g_firing_panic_defer;
 /* Execute all defers pushed above mark (LIFO / head-first) and free them.
  * Scope-boundary markers are skipped and freed.  Head-first across nested
  * scopes yields the compiled *normal-exit* ordering: innermost scope first,
- * same-scope LIFO.  Errors inside defers are silently discarded. */
+ * same-scope LIFO.  A panic a body raises against a work-stack catch boundary
+ * (turi_runtime_panic sets the signal and returns) is NOT discarded: the rest
+ * of the chain still fires -- a later panic being the double panic it is
+ * compiled -- and the signal is left raised at the end, superseding a return
+ * or throw that was in flight.  See
+ * docs/archive/turi-defer-body-panic-is-swallowed.md. */
+/* turi-defer-body-panic-is-swallowed: the signals a fire helper leaves when
+ * it is done.  `body_panicked` says a deferred body raised a panic the
+ * fire's own save/restore would otherwise overwrite: it stays raised, and a
+ * return or throw it interrupted is dropped -- the panic unwinds past it, as
+ * the compiled frame's chain does. */
+static void defer_fire_restore(TuriEnv *env, bool body_panicked,
+                               bool saved_throwing, TuriValue saved_tv,
+                               bool saved_returning, TuriValue saved_rv,
+                               bool saved_panicking, bool prev_fpd) {
+    if (body_panicked && !saved_panicking) {
+        env->throwing  = false;
+        env->returning = false;
+        env->panicking = true;
+    } else {
+        env->throwing     = saved_throwing;
+        env->throw_value  = saved_tv;
+        env->returning    = saved_returning;
+        env->return_value = saved_rv;
+        env->panicking    = saved_panicking;
+    }
+    g_firing_panic_defer = prev_fpd;
+}
+
 static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
                                   EvalFrame *fallback_frame) {
     bool saved_throwing  = env->throwing;
@@ -3274,6 +3302,7 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
     TuriValue saved_rv   = env->return_value;
     bool saved_panicking = env->panicking;   /* C1: defers fire during unwind */
     bool prev_fpd        = g_firing_panic_defer;
+    bool body_panicked   = false;
 
     while (env->defer_stack != mark) {
         DeferItem *item = (DeferItem *)env->defer_stack;
@@ -3291,24 +3320,21 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
         env->throwing  = false;
         env->returning = false;
         env->panicking = false;
-        g_firing_panic_defer = saved_panicking;
+        g_firing_panic_defer = saved_panicking || body_panicked;
 
         /* Evaluate with snapshot frame; fall back to fallback for globals. */
         EvalFrame *dframe = item->snapshot;
         if (dframe) dframe->parent = fallback_frame;
         eval_expr(env, dframe, item->body);
+        if (env->panicking) body_panicked = true;
 
         frame_release(env, item->snapshot);   /* no-op if the body captured it */
         free(item);
     }
 
     /* Restore signals (caller decides what to do with them). */
-    env->throwing     = saved_throwing;
-    env->throw_value  = saved_tv;
-    env->returning    = saved_returning;
-    env->return_value = saved_rv;
-    env->panicking    = saved_panicking;
-    g_firing_panic_defer = prev_fpd;
+    defer_fire_restore(env, body_panicked, saved_throwing, saved_tv,
+                       saved_returning, saved_rv, saved_panicking, prev_fpd);
 }
 
 /* Fire defers at an *early exit* (return / throw / panic) boundary, one SCOPE
@@ -3356,6 +3382,7 @@ static void fire_defers_to_mark_by_scope(TuriEnv *env, DeferItem *mark,
     TuriValue saved_rv   = env->return_value;
     bool saved_panicking = env->panicking;   /* C1: defers fire during unwind */
     bool prev_fpd        = g_firing_panic_defer;
+    bool body_panicked   = false;
 
     /* Fire runs innermost-first (runs were recorded head-first, so index 0 is
      * the innermost scope); within a run keep head-first order (LIFO). */
@@ -3367,10 +3394,11 @@ static void fire_defers_to_mark_by_scope(TuriEnv *env, DeferItem *mark,
             env->throwing  = false;
             env->returning = false;
             env->panicking = false;
-            g_firing_panic_defer = saved_panicking;
+            g_firing_panic_defer = saved_panicking || body_panicked;
             EvalFrame *dframe = item->snapshot;
             if (dframe) dframe->parent = fallback_frame;
             eval_expr(env, dframe, item->body);
+            if (env->panicking) body_panicked = true;
             frame_release(env, item->snapshot);   /* as above */
             free(item);
         }
@@ -3380,12 +3408,8 @@ static void fire_defers_to_mark_by_scope(TuriEnv *env, DeferItem *mark,
     free(run_end);
     free(items);
 
-    env->throwing     = saved_throwing;
-    env->throw_value  = saved_tv;
-    env->returning    = saved_returning;
-    env->return_value = saved_rv;
-    env->panicking    = saved_panicking;
-    g_firing_panic_defer = prev_fpd;
+    defer_fire_restore(env, body_panicked, saved_throwing, saved_tv,
+                       saved_returning, saved_rv, saved_panicking, prev_fpd);
 }
 
 /* SR/C1: the set of *propagating* control signals.  A signal short-circuits the
