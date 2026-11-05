@@ -88,7 +88,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-callcc-reclaim-depends-on-type-size](turi-callcc-reclaim-depends-on-type-size.md) | low-medium (test fragility) | `tur_turi_callcc_reclaim` failed (+51 MB stored-continuation growth, bound 28) when only `sizeof(Type)` grew 128 -> 160 bytes, and passed again at 128. The sweep freed fewer images, which looks like a stale conservative stack root; unconfirmed |
+| [turi-callcc-reclaim-depends-on-type-size](turi-callcc-reclaim-depends-on-type-size.md) | low-medium (test fragility) | **Traced 2026-11-05:** reproduced by padding `Type` to 160 bytes (1963 freed, +49 MB); the chain is image N -> a dead slot naming an escaped frame of an activation that had already ended -> its binding of continuation N-1. Skipping ended call frames from images (until a restore) was tried and is not enough: escaped non-call frames carry the chain too. `tur_turi_callcc_reclaim` failed (+51 MB stored-continuation growth, bound 28) when only `sizeof(Type)` grew 128 -> 160 bytes, and passed again at 128. The sweep freed fewer images, which looks like a stale conservative stack root; unconfirmed |
 
 ## Found running the corpus through the browser JIT module (filed 2026-10-28)
 
