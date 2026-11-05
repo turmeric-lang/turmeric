@@ -1272,6 +1272,38 @@ else
     fail "build-wasm-simd-opt-out" "rc=$nosimd_rc out=$nosimd_out args=$(cat "$WASMDIR/args.txt" 2>/dev/null)"
 fi
 
+# stdlib-cstr-import-breaks-spice-library-build: a library that imports a
+# stdlib `defmodule` (`cstr`) builds -- the stdlib module is compiled and linked
+# in, so the importer's `#include "cstr.h"` resolves and the .so defines what
+# it calls -- and the stdlib module's functions stay out of the manifest.
+CSL="$WORK/cstr-lib"
+mkdir -p "$CSL/src/cs"
+cat > "$CSL/build.tur" <<'EOF'
+(defpackage cs-lib
+  :name    "cs-lib"
+  :version "0.1.0"
+  :exports #map{"cs/a" ["a-len"]})
+EOF
+cat > "$CSL/src/cs/a.tur" <<'EOF'
+(defmodule cs/a
+  (export a-len)
+  (import cstr :refer [cstr-len])
+  (defn a-len [s : cstr] : int (cstr-len s)))
+EOF
+csl_out=$(cd "$CSL" && "$TUR" build . 2>&1)
+csl_rc=$?
+csl_so=$(ls "$CSL"/build/lib/*cs-lib* 2>/dev/null | grep -v manifest | head -1)
+if [ $csl_rc -ne 0 ] || [ -z "$csl_so" ]; then
+    fail "build-library-imports-stdlib-module" "rc=$csl_rc out=$csl_out"
+elif command -v nm >/dev/null 2>&1 &&
+     ! grep -q ' T cstr__cstr_hylen$' <<< "$(nm "$csl_so" 2>/dev/null)"; then
+    fail "build-library-imports-stdlib-module" "cstr's code is not in $csl_so"
+elif grep -q 'cstr/' "$csl_so.manifest" 2>/dev/null; then
+    fail "build-library-imports-stdlib-module" "cstr leaked into the manifest: $(cat "$csl_so.manifest")"
+else
+    pass "build-library-imports-stdlib-module"
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
