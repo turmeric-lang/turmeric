@@ -413,7 +413,7 @@ generic loops.
   4. (Not a change: the elaborator cannot yet call a method whose only
      class-typed parameter is an associated type, so the view methods take
      the array too and ignore it --
-     [assoc-typed-receiver-not-a-dispatch-arg](../reported/assoc-typed-receiver-not-a-dispatch-arg.md).)
+     [assoc-typed-receiver-not-a-dispatch-arg](../archive/assoc-typed-receiver-not-a-dispatch-arg.md).)
 - **Vectorized:** `probe-generic-map` (`na-map!`, in place) in all three of
   its specializations and `probe-generic-fold` (`na-fold`), at gcc `-O3` and
   clang `-O2` -- `tests/check-numvec-vectorized.py`, 91 of 91.

@@ -57,7 +57,7 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [generic-affine-local-never-dropped](generic-affine-local-never-dropped.md) | medium-low (leak) | A `let`-bound value of a generic's type variable is never dropped in any specialization, even when that type is `^affine` with a `Drop` instance; the same code at the concrete type drops it. `NumArray` code frees `na-copy`'s result with `na-free` meanwhile |
-| [assoc-typed-receiver-not-a-dispatch-arg](assoc-typed-receiver-not-a-dispatch-arg.md) | low (refusal) | A class method whose only class-typed parameter is an associated type (`(peek [h : Handle])`) is E0015 at a concrete type and "cannot infer ... return-directed" in a generic. The emitter's silent wrong-instance half is fixed; `NumArray` works around the rest by passing the array too |
+| ~~[assoc-typed-receiver-not-a-dispatch-arg](../archive/assoc-typed-receiver-not-a-dispatch-arg.md)~~ | low (refusal) | **RESOLVED 2026-11-05** (archived): a method whose first parameter is an associated type dispatches on the instance that binds it to the argument's type, is no longer taken for a return-directed one, and its result in a generic is read at the projection's variable. Pinned by `assoc-typed-receiver-concrete-and-chained` and `errors/assoc-typed-receiver-ambiguous` |
 
 ## Found fixing the REPL display reports (filed 2026-10-29)
 
