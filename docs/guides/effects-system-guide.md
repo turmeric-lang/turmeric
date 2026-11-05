@@ -143,15 +143,12 @@ defn main [] : int
   0
 ```
 
-Two engine bugs break this rule today:
-
-- In compiled code (and `tur jit`), a `set!` from a handled body to a `^mut` of
-  the enclosing function is lost once the `handle` returns, unless a clause
-  also uses that variable. This is not specific to `^multishot`
-  ([handle-body-set-to-enclosing-mut-lost-compiled](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/handle-body-set-to-enclosing-mut-lost-compiled.md)).
-- `tur --interpret` shares a `^mut` local of a function's tail-position `let`
-  between the copies instead of copying it
-  ([turi-multishot-tail-let-frame-shared-across-resumes](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-multishot-tail-let-frame-shared-across-resumes.md)).
+One engine bug breaks this rule today: in compiled code (and `tur jit`), a
+`^mut` local the backend keeps in a shared heap cell -- one a loop assigns
+conditionally or more than once per iteration, or one an `if`/`match` arm
+assigns on the way to a `perform` -- is the same cell in every run, so a write
+made before the `perform` is seen by the next run
+([cps-cell-promoted-mut-shared-across-multishot-resumes](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-cell-promoted-mut-shared-across-multishot-resumes.md)).
 
 **Rules.**
 
@@ -851,18 +848,15 @@ The lowering carries a loop's `^mut` state in the helper's parameters when a
 variable is assigned once and unconditionally, and in a shared cell otherwise
 (assigned inside an `if`/`match` arm, more than once per iteration, or read
 in a branch after its assignment), so the game-loop shape -- a tick
-accumulator decremented inside a `when` -- lowers as written. A loop followed
+accumulator decremented inside a `when` -- lowers as written. A `set!` whose
+value itself performs lowers anywhere, in or out of a loop and under an
+`if`/`match` arm: `(set! x (+ x (perform (Choose))))` binds the performed
+value first, as a `let` would. A loop followed
 by more statements that read the carried state is fine too. The limits that
 remain evict the function to the direct emitter, with a located error at the
 `perform`:
 
 - a `while` nested inside a `while` that performs;
-- a `set!` whose value itself performs, unless it is an unconditional
-  assignment to a loop's carried variable. So `(when c (set! x (perform ...)))`
-  inside a loop is refused, and so is `(set! x (+ x (perform ...)))` anywhere
-  outside one, even in straight-line code. Bind the performed value with a
-  `let` first: `(let [v (perform ...)] (set! x (+ x v)))`
-  ([cps-set-whose-value-performs-always-evicts](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-set-whose-value-performs-always-evicts.md));
 - a loop that sits inside a handler clause and performs an effect handled
   further out (hoisting the loop into a helper does not escape this one: the
   helper is evicted with its caller);

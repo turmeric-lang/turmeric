@@ -8094,6 +8094,30 @@ static void cell_init_rewrite(CTerm *t) {
     #undef CIR
 }
 
+/* cps-set-whose-value-performs-always-evicts: may `t` leave the C frame it
+ * starts in -- a control op, a colored call, a nested join or loop?  When the
+ * body of a CT_LETCONT can, the join is emitted as its own lifted frame whose
+ * env snapshots the enclosing mutables at the split, so a branch's `set!` is
+ * lost at the join.  Conservative: anything that is not a plain direct-style
+ * binder, branch or delivery counts. */
+static bool term_may_split(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_APPCONT:  return false;
+        case CT_LETVAL:   return term_may_split(t->as.letval.body);
+        case CT_LETPRIM:  return term_may_split(t->as.letprim.body);
+        case CT_LETCALL:  return term_may_split(t->as.letcall.body);
+        case CT_LETRAW:   return term_may_split(t->as.letraw.body);
+        case CT_IF:       return term_may_split(t->as.if_.then_) ||
+                                 term_may_split(t->as.if_.else_);
+        case CT_MATCH:
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (term_may_split(t->as.match.arms[i].body)) return true;
+            return false;
+        default:          return true;
+    }
+}
+
 /* Populate g_byref_muts by scanning the whole function term for a delegated
  * `(set! m k)` continuation store. */
 static void byref_scan(const CTerm *t) {
@@ -8110,7 +8134,19 @@ static void byref_scan(const CTerm *t) {
         case CT_LETVAL:  byref_scan(t->as.letval.body); return;
         case CT_LETPRIM: byref_scan(t->as.letprim.body); return;
         case CT_LETCALL: byref_scan(t->as.letcall.body); return;
-        case CT_LETCONT: byref_scan(t->as.letcont.jbody); byref_scan(t->as.letcont.body); return;
+        case CT_LETCONT: {
+            /* cps-set-whose-value-performs-always-evicts: a branch that
+             * suspends delivers to a lifted join whose env snapshotted the
+             * enclosing mutables at the split -- `(if c (set! s (* s (perform
+             * (E)))) nil) s` read the old `s`.  Promote every enclosing `^mut`
+             * the branches assign to the shared cell, as for a loop's
+             * cell-carried vars (loop_cell_scan's rule, over the join body). */
+            if (term_may_split(t->as.letcont.body)) {
+                uint32_t jb[CC_MAX_BOUND];
+                loop_cell_scan(t->as.letcont.body, jb, 0);
+            }
+            byref_scan(t->as.letcont.jbody); byref_scan(t->as.letcont.body); return;
+        }
         case CT_IF:      byref_scan(t->as.if_.then_); byref_scan(t->as.if_.else_); return;
         case CT_MATCH:   for (uint32_t i = 0; i < t->as.match.n_arms; i++)
                              byref_scan(t->as.match.arms[i].body);

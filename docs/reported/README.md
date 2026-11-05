@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found executing five reports (filed 2026-11-05)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cps-cell-promoted-mut-shared-across-multishot-resumes](cps-cell-promoted-mut-shared-across-multishot-resumes.md) | low (engine disagreement, `^multishot` only) | A `^mut` the CPS backend promotes to a shared heap cell (a loop's cell-carried variable, or one a suspending `if`/`match` arm assigns) is one cell for every copy a `^multishot` resume runs, so a write before the `perform` is seen by the next run: compiled `12032`, the guide and `tur --interpret` `12022` |
+
 ## Found graduating simd-and-vectorization-plan S1 (filed 2026-10-30)
 
 | Report | Severity | One line |
@@ -132,7 +138,7 @@ directory is worse for triage than no index.
 | ~~[handle-body-set-to-enclosing-mut-lost-compiled](../archive/handle-body-set-to-enclosing-mut-lost-compiled.md)~~ | high (silent wrong value) | **RESOLVED 2026-10-26** (archived): `byref_scan` now promotes every enclosing `^mut` the handled body touches to a shared cell. Pinned by `handle-body-set-enclosing-mut` |
 | ~~[multishot-capture-check-skips-the-continuation](../archive/multishot-capture-check-skips-the-continuation.md)~~ | medium (soundness) | **RESOLVED 2026-10-26** (archived): the continuation is now checked (`ms2b_walk`); the clause-side rule stays. Pinned by `errors/multishot-continuation-linear-*`. Original: TUR-E0500 inspects the `^multishot` clause, which runs once per `perform`, not the continuation, which runs once per resume: a `^linear` value the body consumes after the `perform` is consumed twice with no diagnostic, while a clause reading a plain struct once is refused |
 | ~~[turi-multishot-tail-let-frame-shared-across-resumes](../archive/turi-multishot-tail-let-frame-shared-across-resumes.md)~~ | medium-low (engine disagreement) | **RESOLVED 2026-11-05** (archived): `clone_ws_slice` also clones the unowned frames between two owned ones (the tail `let`'s), and its map is growable. Pinned by `turi-multishot-tail-let-copied` |
-| [cps-set-whose-value-performs-always-evicts](cps-set-whose-value-performs-always-evicts.md) | low (compile-time limit) | Any `set!` whose value performs evicts its function unless it updates a loop's carried variable, even in straight-line code; the guide and the error said only the conditional in-loop case. Both now say so; binding the value with `let` first works |
+| ~~[cps-set-whose-value-performs-always-evicts](../archive/cps-set-whose-value-performs-always-evicts.md)~~ | low (compile-time limit) | **RESOLVED 2026-11-05** (archived): a `set!` whose value performs binds the value first and lowers anywhere; a suspending `if`/`match` arm's write to an enclosing `^mut` now reaches the join (it was a silent wrong value in the hand-written `let` rewrite). Pinned by `cps-set-value-performs` |
 
 ## Found checking the installed-spice `:bin` conflict exemption (filed 2026-10-24)
 

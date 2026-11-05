@@ -1,0 +1,77 @@
+;; cps-set-whose-value-performs-always-evicts: a `set!` whose value performs
+;; lowers on the CPS path anywhere -- straight-line, under an `if`/`match`
+;; arm (the join must see the branch's write), and in a loop -- and every
+;; line equals `tur --interpret`.
+(defeffect Choose [] : int)
+
+(defn straight [] : int
+  (let [^mut s 1]
+    (set! s (+ s (perform (Choose))))
+    s))
+
+(defn bare [] : int
+  (let [^mut s 1]
+    (set! s (perform (Choose)))
+    (+ s 100)))
+
+(defn branch [c : bool] : int
+  (let [^mut s 5]
+    (if c
+      (set! s (* s (perform (Choose))))
+      (set! s 0))
+    s))
+
+(defn let-in-branch [c : bool] : int
+  (let [^mut s 5]
+    (if c
+      (let [v (perform (Choose))] (set! s (* s v)))
+      nil)
+    s))
+
+(defn write-before-perform [c : bool] : int
+  (let [^mut s 5]
+    (if c
+      (do (set! s (+ s 1))
+          (let [v (perform (Choose))] (set! s (+ s v))))
+      nil)
+    s))
+
+(defn in-match [x : int] : int
+  (let [^mut s 5]
+    (match (some x)
+      (Some y) (set! s (+ y (perform (Choose))))
+      (None) nil)
+    s))
+
+(defn in-loop [] : int
+  (let [^mut i 0
+        ^mut x 1]
+    (while (< i 5)
+      (when (= (mod i 2) 0) (set! x (+ x (perform (Choose)))))
+      (set! i (+ i 1)))
+    x))
+
+(defn twice-per-iter [] : int
+  (let [^mut i 0
+        ^mut x 1]
+    (while (< i 4)
+      (set! x (* 2 (perform (Choose))))
+      (set! x (+ x (perform (Choose))))
+      (set! i (+ i 1)))
+    x))
+
+(defn main [] : int
+  (println (handle (straight) (Choose [] k) (resume k 10)))          ; 11
+  (println (handle (bare) (Choose [] k) (resume k 10)))              ; 110
+  (println (handle (branch true) (Choose [] k) (resume k 3)))        ; 15
+  (println (handle (branch false) (Choose [] k) (resume k 3)))       ; 0
+  (println (handle (let-in-branch true) (Choose [] k) (resume k 3))) ; 15
+  (println (handle (in-match 7) (Choose [] k) (resume k 3)))         ; 10
+  (println (handle (in-loop) (Choose [] k) (resume k 10)))           ; 31
+  (println (handle (twice-per-iter) (Choose [] k) (resume k 3)))     ; 9
+  (println (handle (straight)
+             (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (branch true)
+             (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (write-before-perform true) (Choose [] k) (resume k 10)))  ; 16
+  0)

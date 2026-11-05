@@ -1,5 +1,20 @@
 # A `set!` whose value performs evicts its function, not only the conditional in-loop case the docs named
 
+**RESOLVED 2026-11-05.** A `set!` whose value has control lowers as the `let`
+rewrite (fix direction 1): `set_value_hoisted` in `src/passes/cps_ir.c` binds
+the value to a fresh binder through the CPS path and delegates the assignment
+of that atom. That exposed a wrong value the hand-written rewrite already
+had: in `(if c (let [v (perform (E))] (set! s (* s v))) nil) s` the lifted
+join read `s` from an env snapshotted at the split (5 where the interpreter
+prints 15). `byref_scan` now promotes every enclosing `^mut` a suspending
+branch of a join assigns to the shared cell (`term_may_split`, reusing
+`loop_cell_scan`'s rule). The guide bullet and the eviction text no longer
+list the shape. Pinned by `tests/fixtures/cps-set-value-performs`
+(straight-line, bare, `if` and `match` arms, a conditional and a doubled
+in-loop update; every line equals `tur --interpret` and `tur jit`). The shared
+cell is shared across `^multishot` resumes too, which the loop-cell promotion
+already did: [cps-cell-promoted-mut-shared-across-multishot-resumes](../reported/cps-cell-promoted-mut-shared-across-multishot-resumes.md).
+
 **Severity:** low (compile-time limitation with a located error and an easy
 rewrite). Until 2026-10-25 both the effects guide's "Performs inside loops and
 conditionals" list and the eviction error itself said that only a
