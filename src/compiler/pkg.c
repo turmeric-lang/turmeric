@@ -2035,10 +2035,17 @@ bool pkg_lock_read(const char *path, PkgLockFile *out) {
     file.src     = src;
     file.len     = (uint32_t)sz;
     file.file_id = 0;
+    /* diag-file0-registrations-outlive-their-frame: `file` is a stack local
+     * and `src` is freed right after the read, so the slot is handed back as
+     * soon as the reader is done with it.  Nothing below reports through
+     * diag, and a long-lived caller (`tur run`, the LSP) must not be left
+     * with file 0 naming this frame. */
+    const SourceFile *prev_file0 = diag_source_file(0);
     diag_register_file(&file);
 
     uint32_t nforms = 0;
     Form **forms = read_all(&arena, &st, &file, &nforms);
+    diag_unregister_file(&file, prev_file0);
     free(src);
 
     if (!forms || diag_had_error() || nforms == 0) {

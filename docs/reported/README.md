@@ -151,7 +151,7 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [wasm-linear-stack-overflow-unchecked](wasm-linear-stack-overflow-unchecked.md) | low (stock `tur_wasm` only) | **The JIT module is fixed 2026-10-29**: it links with `-sSTACK_OVERFLOW_CHECK=2`, and the page reports the abort as a stack overflow (pinned by `jit-engine.spec.js`). Still open: the stock `tur_wasm` links without the check, so a linear-stack overflow there would be an OOB trap or memory corruption; whether anything reaches it is not measured |
-| [diag-file0-registrations-outlive-their-frame](diag-file0-registrations-outlive-their-frame.md) | low (latent) | The open residue of the archived manifest file-0 fix: `pkg_lock_read`, `fmt_format_buffer`, `cmd_format`, `cmd_explain` and the driver's `compile_to_*` leave `files_[0]` naming a dead frame. No caller trips it. `global.c` is not affected (it saves and restores) |
+| ~~[diag-file0-registrations-outlive-their-frame](../archive/diag-file0-registrations-outlive-their-frame.md)~~ | low (latent) | **RESOLVED 2026-11-05** (archived): `pkg_lock_read` and `fmt_format_buffer`, the two sites a long-lived process reaches, hand file 0 back; the command-level ones are left as the report said |
 
 ## Found checking tvm's installer rc choice (filed 2026-10-24)
 
