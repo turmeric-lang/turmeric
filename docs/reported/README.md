@@ -57,7 +57,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [vec-literal-option-none-after-some-mistyped](vec-literal-option-none-after-some-mistyped.md) | low (refusal) | `[(some 3) (none)]` is TUR-E0001 (`vec-push!` arg 2: expected `(Option int)`, got `(Option A)`) on every engine; `[(none) (some 3)]` compiles. The later element is not elaborated against the type the earlier one fixed |
+| ~~[vec-literal-option-none-after-some-mistyped](../archive/vec-literal-option-none-after-some-mistyped.md)~~ | low (refusal) | **RESOLVED 2026-11-05** (archived): a return-only generic call at a bare type-variable parameter a sibling grounded is grounded too, so `[(some 3) (none)]` and `(vec-push! v (none))` compile. Pinned by `vec-literal-none-after-some` |
 
 ## Found landing simd-and-vectorization-plan N0 (filed 2026-10-28)
 

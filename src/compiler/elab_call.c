@@ -9721,6 +9721,37 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                         open_first_strict[i] = true;
                         arg_ok = true;
                     }
+                } else if (!arg_ok && expected_full->kind == TY_TYVAR &&
+                           args[i]->type.kind == TY_APP &&
+                           w2_arg_is_free_poly_call(args[i]) &&
+                           !ng_type_names_rigid_sig_tyvar(e, &args[i]->type)) {
+                    /* vec-literal-option-none-after-some-mistyped: the same
+                     * grounding against a BARE type-variable parameter.
+                     * `(vec-push! v (none))` with `v : (Vec (Option int))`
+                     * -- the second element of `[(some 3) (none)]` -- bound
+                     * `A := (Option int)` from `v`, then compared that with
+                     * the nullary call's own open `(Option A)` and refused
+                     * it.  When the siblings ground the parameter, pin the
+                     * nullary call to it (recorded so emit monomorphizes it)
+                     * and take the grounded type as the argument's. */
+                    Type inst = call_instantiate_type(e, expected_full,
+                                                      type_bindings, n_type_bindings);
+                    if (inst.kind == TY_APP && !call_type_has_named_tyvar(&inst)) {
+                        CallTypeBinding ngscratch[16];
+                        uint8_t ngn = 0;
+                        if (call_collect_type_bindings(&args[i]->type, inst,
+                                                       ngscratch, &ngn)) {
+                            if (ngn > 0 && !args[i]->as.call_.abi_bindings) {
+                                AbiTypeBinding *saved = (AbiTypeBinding *)arena_alloc(
+                                    e->arena, ngn * sizeof(AbiTypeBinding));
+                                for (uint8_t bi = 0; bi < ngn; bi++) saved[bi] = ngscratch[bi];
+                                args[i]->as.call_.abi_bindings   = saved;
+                                args[i]->as.call_.n_abi_bindings = ngn;
+                            }
+                            args[i]->type = inst;
+                            arg_ok = true;
+                        }
+                    }
                 }
             } else if (arg_ok && expected_arg_kind == TY_APP &&
                        args[i]->type.kind == TY_APP &&
