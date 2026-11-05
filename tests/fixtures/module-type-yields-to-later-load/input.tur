@@ -1,0 +1,18 @@
+;; list-typed-load-collides-with-frame-ownstr-string: a module's type
+;; yields its bare name to a top-level declaration that arrives later -- here
+;; stdlib/string.tur's String, loaded by the file of a module imported after
+;; lib/own.  lib/own's String becomes lib/own/String, as it would have been
+;; had the load come first; :refer, the alias and the qualified name still
+;; reach it, and a bare String outside it is the stdlib's.
+(defmodule main
+  (import lib/own :as own :refer [make-s s-len String])
+  (import lib/lt :refer [one])
+  (defn twice [s : String] : int (* 2 (s-len s)))
+  (defn main [] : int
+    (println (list-count (one)))
+    (println (s-len (make-s 4)))
+    (println (twice (make-s 5)))
+    (println (s-len (:: 6 own/String)))
+    (println (s-len (:: 7 lib/own/String)))
+    (println (string/to-cstr (string/from-cstr "stdlib String")))
+    0))

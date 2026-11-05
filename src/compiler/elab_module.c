@@ -1258,6 +1258,22 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
      * matters for the bare top-level defns that live alongside it.  See
      * docs/archive/compiled-string-return-int-conversion.md (secondary
      * blocker). */
+    /* list-typed-load-collides-with-frame-ownstr-string: a top-level type a
+     * spliced load declares takes its bare name back from a module elaborated
+     * earlier BEFORE the forward declarations below read their signatures --
+     * otherwise `(defn builder/finish ...) : String` would bind the module's
+     * type and the stdlib's own body would not check against it. */
+    for (uint32_t i = 0; i < nforms; i++) {
+        const Form *f = forms[i];
+        if (!f || f->tag != F_LIST || f->as.list.len < 2 ||
+            f->as.list.items[0]->tag != F_SYM ||
+            f->as.list.items[0]->as.sym != e->sym_defopaque)
+            continue;
+        uint32_t ni = elab_type_decl_name_index(f);
+        if (ni >= f->as.list.len || f->as.list.items[ni]->tag != F_SYM) continue;
+        Binding *held = scope_lookup(&e->global, f->as.list.items[ni]->as.sym);
+        if (held) (void)elab_module_yield_type_name(e, held);
+    }
     prof_enter(PROF_ELAB);   /* --timings: declaring defns is elaboration */
     elab_forward_declare_defns(e, forms, 0, nforms);
     prof_exit(PROF_ELAB);
@@ -1877,6 +1893,46 @@ static const Symbol *module_qualified_sym(Elab *e, const Symbol *mod, const Symb
     const Symbol *s = symtab_intern(e->st, strslice(buf, (uint32_t)n));
     free(buf);
     return s;
+}
+
+/* list-typed-load-collides-with-frame-ownstr-string: see elab_internal.h.
+ * A module's type is renamed when its declaration meets a name something
+ * else already holds (elab_module_type_renames).  A top-level declaration that
+ * arrives AFTER the module -- a stdlib `load` at the top of a later-imported
+ * module file -- met the module's bare name instead and was refused.  Only a
+ * constructor-less opaque is renamed after the fact: its body has been
+ * elaborated, so every use already holds the AdtDef, not the name, and the
+ * C name is derived from the def at emit, after this. */
+bool elab_module_yield_type_name(Elab *e, Binding *held) {
+    if (!held || !held->is_global || !held->defining_module_name ||
+        e->current_module_name)
+        return false;
+    if (held->type.kind != TY_ADT || !held->type.as.adt_.def) return false;
+    AdtDef *def = held->type.as.adt_.def;
+    if (!def->is_opaque || def->n_ctors != 0 || !def->name ||
+        strcmp(def->name, held->name->name) != 0)
+        return false;
+    ElabModule *lm = elab_find_loaded_module(e, held->defining_module_name);
+    if (!lm) return false;
+    const Symbol *from = held->name;
+    const Symbol *to = module_qualified_sym(e, held->defining_module_name, from);
+    if (scope_lookup(&e->global, to)) return false;
+    scope_rename_binding(&e->global, held, to);
+    def->name = to->name;
+    const Symbol **nf = (const Symbol **)arena_alloc(
+        e->arena, (lm->n_renames + 1) * sizeof(Symbol *));
+    const Symbol **nt = (const Symbol **)arena_alloc(
+        e->arena, (lm->n_renames + 1) * sizeof(Symbol *));
+    if (lm->n_renames) {
+        memcpy((void *)nf, lm->rename_from, lm->n_renames * sizeof(Symbol *));
+        memcpy((void *)nt, lm->rename_to, lm->n_renames * sizeof(Symbol *));
+    }
+    nf[lm->n_renames] = from;
+    nt[lm->n_renames] = to;
+    lm->rename_from = nf;
+    lm->rename_to = nt;
+    lm->n_renames++;
+    return true;
 }
 
 /* `s` renamed: itself when it is a renamed name, or a compound spelling with

@@ -254,6 +254,14 @@ before. The rename changes the type's C name, so inline C that spells
 `tur_adt_Attr` by hand names the first definer's type; an `extern-c` or a
 `^export-as` name is unaffected.
 
+The order can also run the other way: a module defines an opaque `String`
+first, and a module imported later loads `stdlib/string.tur` at the top of
+its file. The top-level declaration then takes the bare name and the
+module's `defopaque` is the one renamed (`lib/own/String`), exactly as if the
+load had come first; the ways of reaching it above still work. A colliding
+type with constructors (`defstruct`, `defdata`) is still refused in that
+order.
+
 ### Macros are exported the same way
 
 ```turmeric

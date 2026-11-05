@@ -1849,6 +1849,13 @@ Binding *scope_lookup(Scope *s, const Symbol *name);
 bool binding_private_elsewhere(const Elab *e, const Binding *b);
 Binding *scope_lookup_visible(const Elab *e, Scope *s, const Symbol *name);
 uint32_t scope_idx_newest(const Scope *s, const Symbol *name);
+void scope_rename_binding(Scope *s, Binding *b, const Symbol *name);
+/* list-typed-load-collides-with-frame-ownstr-string: a top-level (stdlib or
+ * `load`ed) declaration of `name` meets module-owned type binding `held`.
+ * Rename the module's type to `<module>/<name>` -- the name it would have had
+ * had the top-level one come first -- and return true; false when `held` is
+ * not such a binding (the caller reports the duplicate). */
+bool elab_module_yield_type_name(Elab *e, Binding *held);
 Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
     Binding **self_exclude, uint32_t n_self_exclude, uint32_t *n_out);
 void elab_register_file_def(Elab *e, Expr *def_expr);

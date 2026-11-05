@@ -1,5 +1,27 @@
 # Loading `stdlib/list-typed.tur` in a module collides with tur-frame's `String`
 
+> **RESOLVED 2026-11-05.** A module's constructor-less opaque type yields its
+> bare name to a top-level declaration that arrives after it: when a stdlib
+> or `load`ed `defopaque` meets a module-owned type of the same name, the
+> module's type is renamed `<module>/<name>` -- the name
+> module-type-names-collide-across-modules would have given it had the load
+> come first -- and the module's rename table grows the entry, so `:refer`,
+> an alias and the qualified name still reach it
+> (`elab_module_yield_type_name`, `src/compiler/elab_module.c`; called from
+> `elab_defopaque` and, for a load spliced into an imported module's file,
+> before that file's defns are forward-declared, since their signatures read
+> the name). The body that came first is already elaborated, so its uses hold
+> the AdtDef, not the name, and the C name follows the def at emit.
+>
+> **Not covered:** a colliding module type WITH constructors (`defstruct`,
+> `defdata`) is still refused -- its constructor bindings and the constructor
+> registry would need the same rename. tur-frame's `ownstr` `String` is a
+> `defopaque`, which is the shape this report found.
+>
+> Pinned by `tests/fixtures/module-type-yields-to-later-load` (a module's
+> `String` beside a later module whose file loads `stdlib/list-typed.tur`;
+> `:refer`, alias and qualified spellings; the stdlib `String` beside it).
+
 **Severity: low-medium (two ordinary dependencies cannot be used together).**
 Found 2026-10-29 executing stats-formula-plan.
 

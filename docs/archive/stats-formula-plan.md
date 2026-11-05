@@ -651,7 +651,7 @@ Turmeric bugs found on the way, each worked around in the spice and filed
 (the spice README says where):
 [closure-with-adt-param-rejected-by-generic-fn-param](closure-with-adt-param-rejected-by-generic-fn-param.md),
 [stdlib-cstr-import-breaks-spice-library-build](stdlib-cstr-import-breaks-spice-library-build.md),
-[list-typed-load-collides-with-frame-ownstr-string](../reported/list-typed-load-collides-with-frame-ownstr-string.md),
+[list-typed-load-collides-with-frame-ownstr-string](list-typed-load-collides-with-frame-ownstr-string.md),
 and a one-module repro added to
 [monomorph-emitted-before-its-type-argument](monomorph-emitted-before-its-type-argument.md).
 Fitting through tur-stats also showed its p-values are computed wrongly:
