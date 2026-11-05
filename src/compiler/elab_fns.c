@@ -13305,6 +13305,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         "bridge them",
                         name_f->as.sym->name, want, gb.data);
                     break;
+                case RET_CONFLICT_ADT_UNDER_SCALAR:
+                    diag_emit_with_code(DIAG_ERROR, conflict_src->span,
+                        TUR_E0709_RETURN_TYPE_MISMATCH,
+                        "function '%s' declares return type '%s' but its body "
+                        "returns %s -- a data value is not a number (whatever "
+                        "word it is carried in), and this committed monomorphic "
+                        "function has no carrier to bridge it; declare the "
+                        "return as '%s'",
+                        name_f->as.sym->name, want, gb.data, gb.data);
+                    break;
                 case RET_CONFLICT_NIL_BODY:
                     /* The message names the two causes that actually produce
                      * this, because the bare type mismatch is not enough to find

@@ -5762,6 +5762,16 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                             "two share and nothing to bridge them",
                             meth, want, gb.data);
                         break;
+                    case RET_CONFLICT_ADT_UNDER_SCALAR:
+                        diag_emit_with_code(DIAG_ERROR, method_body->span,
+                            TUR_E0709_RETURN_TYPE_MISMATCH,
+                            "instance method '%s' declares return type '%s' but "
+                            "its body returns %s -- a data value is not a "
+                            "number, and this instance commits to the class "
+                            "type variable's grounding, so there is no carrier "
+                            "to bridge it",
+                            meth, want, gb.data);
+                        break;
                     case RET_CONFLICT_NIL_BODY:
                         /* Unreachable while the call above passes
                          * ret_annotated=false; present so the switch stays

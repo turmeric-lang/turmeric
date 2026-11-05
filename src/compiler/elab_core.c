@@ -3640,6 +3640,26 @@ ReturnConflict return_position_conflict(const AdtDef *ret_adt,
         return_type_bool_integer_conflict(ret_kind, body))
         return RET_CONFLICT_BOOL_INTEGER;
 
+    /* carrier-adt-body-passes-int-return: a user ADT body under an
+     * integer-family return, decided on the TYPE.  The aggregate check below
+     * asks the C spelling, and an ADT that rides the word carrier (one holding
+     * a `(List ...)`, a quoted `Datum`) is spelled `int64_t` like the int it
+     * is returned as -- so the function handed back a heap address as its
+     * integer answer.  In a committed position there is no carrier crossing
+     * to bridge; generic / `#{Unsafe}` / instance-method positions keep their
+     * tolerance.  An opaque newtype (`defopaque H :int`) is the int and stays
+     * accepted.  So, for now, is a PARAMETRIC ADT seen bare (its arguments
+     * already dropped): stdlib's `fix.tur` / `free.tur` hand `Fix` / `Free`
+     * values around as `: int` on purpose, a stand-in to retype on its own
+     * (stdlib-int-stand-in-audit), not here. */
+    if (cls == RET_CLASS_COMMITTED && !ret_adt &&
+        ps_is_integer_scalar_kind(ret_kind) && body.kind == TY_ADT &&
+        body.as.adt_.def && !body.as.adt_.def->is_opaque &&
+        body.as.adt_.def->n_ctors > 0 &&
+        body.as.adt_.def->n_type_params == 0 &&
+        !type_is_transparent_int_newtype(body))
+        return RET_CONFLICT_ADT_UNDER_SCALAR;
+
     /* Non-carrier aggregate vs carrier scalar.  Unlike the two checks above this
      * is NOT gated on the return class: every tolerance the carrier classes buy
      * is a tolerance between two things that are both `int64_t` in the emitted

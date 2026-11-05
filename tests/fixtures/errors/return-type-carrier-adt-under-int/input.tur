@@ -1,0 +1,11 @@
+;; carrier-adt-body-passes-int-return: `U` holds a `(List ...)`, so it rides
+;; the int64 word carrier and its C spelling is `int64_t` -- the same as the
+;; `: int` it is returned as.  The aggregate check asked the C spelling and
+;; let it through; the function handed back a heap address as its answer.
+;; The committed-class check asks the TYPE, on every engine.
+(load "stdlib/list-typed.tur")
+(defdata U (UA int) (UL (List int)))
+(defn f [] : int (UA 1))
+(defn main [] : int
+  (println (+ (f) 1))
+  0)
