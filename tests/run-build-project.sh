@@ -1295,8 +1295,9 @@ csl_rc=$?
 csl_so=$(ls "$CSL"/build/lib/*cs-lib* 2>/dev/null | grep -v manifest | head -1)
 if [ $csl_rc -ne 0 ] || [ -z "$csl_so" ]; then
     fail "build-library-imports-stdlib-module" "rc=$csl_rc out=$csl_out"
+# Mach-O nm prints C symbols with a leading underscore (`_cstr__...`).
 elif command -v nm >/dev/null 2>&1 &&
-     ! grep -q ' T cstr__cstr_hylen$' <<< "$(nm "$csl_so" 2>/dev/null)"; then
+     ! grep -qE ' T _?cstr__cstr_hylen$' <<< "$(nm "$csl_so" 2>/dev/null)"; then
     fail "build-library-imports-stdlib-module" "cstr's code is not in $csl_so"
 elif grep -q 'cstr/' "$csl_so.manifest" 2>/dev/null; then
     fail "build-library-imports-stdlib-module" "cstr leaked into the manifest: $(cat "$csl_so.manifest")"
