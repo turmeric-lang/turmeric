@@ -12,9 +12,9 @@
 > them, and the section 8 "Later" examples are not scheduled. **P5 under
 > way** ([section 7](#p5----the-editor)): bringing the editor up to Try
 > Turmeric's and the C playground's -- Turmeric's token colours, Try's
-> editor options, the program kept across reloads and draggable dividers
-> are done; the minimap is next, and PWA support and social cards are on
-> the list. P2
+> editor options, the program kept across reloads and draggable dividers,
+> PWA support and social cards, Code and Run views on a phone, and the
+> minimap are done; hover docs for builtins are next. P2
 > ([section 7](#p2----the-page-arcade-repo)): turmeric-arcade has Monaco with
 > the language server (raylib imports resolve, spice signatures are
 > type-checked), the Spices menu writing a pinned `defscript` header, share
@@ -971,42 +971,41 @@ mostly around them.
   draggable, keyboard-operable dividers between the editor, the screen and
   the console, remembered (the C playground's `split.js`, generalised to two).
 
+**Done (2026-11-05, turmeric-arcade #16, #17 and #18):**
+
+- Installable and shareable (#16): a web app
+  manifest and a service worker (vite-plugin-pwa, `registerType: 'prompt'`),
+  the page shell precached and the engine cached on first use, COOP/COEP kept;
+  the TA badge as the app icon, Open Graph and Twitter tags, and a 1200x630
+  social image with a four-example thumbnail grid.
+- On a phone, two views -- Code (the editor) and Run (the screen over the
+  console) -- instead of one column to scroll through, with a dot on Run
+  when the program prints while Code shows (#17).
+- The minimap (#18): Monaco's own, as Try configures it (`web/main.js`,
+  `web/minimap.js`) -- blocks rather than glyphs, the slider on hover, shown
+  when the editor is 600 px wide or more (so on at a 1280 px window's even
+  split), a toolbar button whose choice is remembered and then wins, and
+  never on a phone. Its colours come from the page's stylesheet, literal hex
+  only, as `minimapColors` does. With it, the indent guides take Try's
+  faintness (a tenth of the way from the canvas to the text, a quarter for
+  the active one) rather than Monaco's stock grey.
+
 **Next, in order:**
 
-1. **The minimap.** Monaco's own, as Try configures it
-   (`web/main.js`, `web/minimap.js`): blocks rather than glyphs, the slider
-   on hover, gated on the editor's width (hidden under ~600 px, so never on a
-   phone) with the visitor's choice remembered, and its colours and the
-   overview ruler's read from the stylesheet (`web/editor-theme.js`
-   `minimapColors`, whose `cssHex` guard keeps an unparsed colour from
-   painting the strip red). The arcade's examples are 60-130 lines, so it
-   earns its width only on the larger ones; the toggle matters.
-2. **Hover docs for builtins.** Try's client falls back to the doc table when
+1. **Hover docs for builtins.** Try's client falls back to the doc table when
    the server has no hover (`docFallbackHover`); the arcade passes no
    `lookupDoc`, and needs `doc-names.json` beside the engine.
-3. **A Symbols button and an outline** (Try's `web/outline.js`, the C
+2. **A Symbols button and an outline** (Try's `web/outline.js`, the C
    playground's Symbols menu): go-to-symbol exists (Ctrl+Shift+O) but nothing
    on the page says so.
-4. **The Run button's shortcut hint** (the C playground's `<kbd>` icons).
-5. **Format** (Alt+Shift+F and Format Document): the stock module the
+3. **The Run button's shortcut hint** (the C playground's `<kbd>` icons).
+4. **Format** (Alt+Shift+F and Format Document): the stock module the
    language server runs in exports `turi_wasm_format`, but
    `tools/wasm-jit/arcade/lsp-worker.js` answers only `lsp` messages; a
    `format` message there, an `engine.lock` bump, then the arcade's provider.
-6. **A doc panel** (Try's `web/doc-panel.js`): `turi_doc_lookup`,
+5. **A doc panel** (Try's `web/doc-panel.js`): `turi_doc_lookup`,
    `turi_type_of` and `turi_explain` are in the same module, behind the same
    kind of worker message as format.
-7. **Installable, and shareable.** A web app manifest and a service worker
-   (as the C playground does with vite-plugin-pwa, `registerType: 'prompt'` so
-   an update never reloads the page under the visitor): the page shell
-   precached, the engine (`turmeric-jit.wasm`, `stdlib.data`, the spice
-   packages, ~12 MB) cached as it is first used rather than on install, and
-   offline play once it has been. The service worker's responses must keep the
-   page and the screen iframe cross-origin isolated (COOP/COEP), which the
-   engine's threads need. With it: the TA badge as the app icon (192, 512,
-   maskable and Apple touch sizes), and Open Graph / Twitter tags with a
-   1200x630 social image after turmeric-lang.com's `og-image.png` -- its
-   layout and palette, the arcade's badge and a screen where Turmeric's has
-   a code card.
 
 **Not ported:** tabs and projects (one program), the REPL (the arcade runs
 programs, not sessions), Try's time-travel trace and the C playground's
