@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found executing five reports (filed 2026-11-05)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cps-cell-promoted-mut-shared-across-multishot-resumes](cps-cell-promoted-mut-shared-across-multishot-resumes.md) | low (engine disagreement, `^multishot` only) | A `^mut` the CPS backend promotes to a shared heap cell (a loop's cell-carried variable, or one a suspending `if`/`match` arm assigns) is one cell for every copy a `^multishot` resume runs, so a write before the `perform` is seen by the next run: compiled `12032`, the guide and `tur --interpret` `12022` |
+
 ## Found graduating simd-and-vectorization-plan S1 (filed 2026-10-30)
 
 | Report | Severity | One line |
@@ -64,7 +70,7 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [borrowed-drop-temporary-leaks-outside-the-hoist](borrowed-drop-temporary-leaks-outside-the-hoist.md) | low (leak) | A fresh move-only Drop value passed straight to a `^borrow` parameter is freed after the call only when the call returns a scalar and no earlier argument has an effect; `(f64vec-show (f64vec-new 4 7.1))` and `(peek2 (g) (mk))` still leak it |
-| [partial-application-of-borrow-param-consumes-affine-arg](partial-application-of-borrow-param-consumes-affine-arg.md) | low (refusal) | `(u8vec-set! a)` spends affine `a` (TUR-E0150 on its next use) though a saturated call into the same `^borrow` slot does not: `elab_partial_apply` has no use rollback, and adding one needs a non-escape check on the closure |
+| ~~[partial-application-of-borrow-param-consumes-affine-arg](../archive/partial-application-of-borrow-param-consumes-affine-arg.md)~~ | low (refusal) | **RESOLVED 2026-11-05** (archived): a partial application bound by `let` leaves its `^borrow` argument unspent; the let refuses it (TUR-E0150, naming the borrow) when the closure escapes or the argument is consumed in scope. Pinned by `partial-borrow-arg-not-spent` and two `errors/` fixtures |
 | ~~[syntax-gensym-not-fresh-against-program-names](../archive/syntax-gensym-not-fresh-against-program-names.md)~~ | medium-low (silent capture) | **RESOLVED 2026-10-29** (archived): `syntax-gensym` in a `defmacro*` draws from the elaborator's counter and skips names either symbol table holds, so it no longer hands out a name the call site binds. Pinned by `syntax-gensym-fresh-against-program` |
 
 ## Found by the refined-fn-types optimization scan (filed 2026-10-28)
@@ -131,8 +137,8 @@ directory is worse for triage than no index.
 | --- | --- | --- |
 | ~~[handle-body-set-to-enclosing-mut-lost-compiled](../archive/handle-body-set-to-enclosing-mut-lost-compiled.md)~~ | high (silent wrong value) | **RESOLVED 2026-10-26** (archived): `byref_scan` now promotes every enclosing `^mut` the handled body touches to a shared cell. Pinned by `handle-body-set-enclosing-mut` |
 | ~~[multishot-capture-check-skips-the-continuation](../archive/multishot-capture-check-skips-the-continuation.md)~~ | medium (soundness) | **RESOLVED 2026-10-26** (archived): the continuation is now checked (`ms2b_walk`); the clause-side rule stays. Pinned by `errors/multishot-continuation-linear-*`. Original: TUR-E0500 inspects the `^multishot` clause, which runs once per `perform`, not the continuation, which runs once per resume: a `^linear` value the body consumes after the `perform` is consumed twice with no diagnostic, while a clause reading a plain struct once is refused |
-| [turi-multishot-tail-let-frame-shared-across-resumes](turi-multishot-tail-let-frame-shared-across-resumes.md) | medium-low (engine disagreement) | `tur --interpret` shares a function's tail-`let` locals between the copies a `^multishot` resume runs (`11031` where compiled prints `11021`): `clone_ws_slice` clones only frames a `DriveCont` owns, and the F1 tail let leaves none |
-| [cps-set-whose-value-performs-always-evicts](cps-set-whose-value-performs-always-evicts.md) | low (compile-time limit) | Any `set!` whose value performs evicts its function unless it updates a loop's carried variable, even in straight-line code; the guide and the error said only the conditional in-loop case. Both now say so; binding the value with `let` first works |
+| ~~[turi-multishot-tail-let-frame-shared-across-resumes](../archive/turi-multishot-tail-let-frame-shared-across-resumes.md)~~ | medium-low (engine disagreement) | **RESOLVED 2026-11-05** (archived): `clone_ws_slice` also clones the unowned frames between two owned ones (the tail `let`'s), and its map is growable. Pinned by `turi-multishot-tail-let-copied` |
+| ~~[cps-set-whose-value-performs-always-evicts](../archive/cps-set-whose-value-performs-always-evicts.md)~~ | low (compile-time limit) | **RESOLVED 2026-11-05** (archived): a `set!` whose value performs binds the value first and lowers anywhere; a suspending `if`/`match` arm's write to an enclosing `^mut` now reaches the join (it was a silent wrong value in the hand-written `let` rewrite). Pinned by `cps-set-value-performs` |
 
 ## Found checking the installed-spice `:bin` conflict exemption (filed 2026-10-24)
 
@@ -151,7 +157,7 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [wasm-linear-stack-overflow-unchecked](wasm-linear-stack-overflow-unchecked.md) | low (stock `tur_wasm` only) | **The JIT module is fixed 2026-10-29**: it links with `-sSTACK_OVERFLOW_CHECK=2`, and the page reports the abort as a stack overflow (pinned by `jit-engine.spec.js`). Still open: the stock `tur_wasm` links without the check, so a linear-stack overflow there would be an OOB trap or memory corruption; whether anything reaches it is not measured |
-| [diag-file0-registrations-outlive-their-frame](diag-file0-registrations-outlive-their-frame.md) | low (latent) | The open residue of the archived manifest file-0 fix: `pkg_lock_read`, `fmt_format_buffer`, `cmd_format`, `cmd_explain` and the driver's `compile_to_*` leave `files_[0]` naming a dead frame. No caller trips it. `global.c` is not affected (it saves and restores) |
+| ~~[diag-file0-registrations-outlive-their-frame](../archive/diag-file0-registrations-outlive-their-frame.md)~~ | low (latent) | **RESOLVED 2026-11-05** (archived): `pkg_lock_read` and `fmt_format_buffer`, the two sites a long-lived process reaches, hand file 0 back; the command-level ones are left as the report said |
 
 ## Found checking tvm's installer rc choice (filed 2026-10-24)
 
@@ -193,7 +199,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [ci-latest-run-is-one-job-upload](ci-latest-run-is-one-job-upload.md) | low-medium | The /ci tiles and skip ledger read the rows at the newest single `ts`, but each CI job uploads with its own `ts`, so on live data "latest run" is one job: **Suites: 1** and a one-suite wall time. The page-test fixture gives a run one `ts` and hides it |
+| ~~[ci-latest-run-is-one-job-upload](../archive/ci-latest-run-is-one-job-upload.md)~~ | low-medium | **RESOLVED 2026-11-05** (archived): `latest` is the newest `run_id`'s rows, newest per series, and the run axis is keyed on `(run_id, run_attempt)`; the page fixture gives each job its own `ts` and pins the Suites tile |
 
 ## Found executing r7rs-heap-frames-plan (filed 2026-10-23)
 

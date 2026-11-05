@@ -1,0 +1,45 @@
+;; turi-multishot-tail-let-frame-shared-across-resumes: each resume of a
+;; `^multishot` k runs its own copy of the rest of the handled body, so a local
+;; bound in a function's tail `let` starts from its value at the perform in
+;; every run -- on `tur --interpret` as compiled.  `deep` holds more than 64
+;; frames at the perform, past the old fixed-size clone map.
+(defeffect Choose [] : int)
+
+(defn tail-let [] : int
+  (let [^mut s 1]
+    (let [v (perform (Choose))]
+      (set! s (+ s v))
+      s)))
+
+(defn nontail-let [] : int
+  (+ 0 (let [^mut s 1]
+         (let [v (perform (Choose))]
+           (set! s (+ s v))
+           s))))
+
+(defn two-tail-lets [] : int
+  (let [^mut a 1]
+    (let [^mut b 2]
+      (let [v (perform (Choose))]
+        (set! a (+ a v))
+        (set! b (+ b v))
+        (+ a b)))))
+
+(defn deep [i : int] : int
+  (if (= i 0)
+    (perform (Choose))
+    (let [^mut s i]
+      (let [v (deep (- i 1))]
+        (set! s (+ s v))
+        s))))
+
+(defn main [] : int
+  (println (handle (tail-let)
+             (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (nontail-let)
+             (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (two-tail-lets)
+             (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (deep 80)
+             (Choose [] ^multishot k) (+ (* 100000 (resume k 10)) (resume k 20))))
+  0)

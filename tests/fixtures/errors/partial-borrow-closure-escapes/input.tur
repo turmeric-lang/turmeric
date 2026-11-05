@@ -1,0 +1,8 @@
+;; partial-application-of-borrow-param-consumes-affine-arg: a partial application
+;; that borrows an affine argument is refused when the borrow could dangle.
+(load "stdlib/numvec.tur")
+(defn mk [] : (fn [int uint8] nil)
+  (let [a (u8vec-new 2 (as uint8 0))
+        s (u8vec-set! a)]
+    s))
+(defn main [] : int (mk) 0)

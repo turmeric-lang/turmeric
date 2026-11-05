@@ -5204,6 +5204,25 @@ static Expr *cvar_expr(CpsB *b, CVar *y, const Type *ty, Span sp) {
     return yv;
 }
 
+/* cps-set-whose-value-performs-always-evicts: a `set!` that is not a loop's
+ * carried variable and whose value carries control.  Done as the `let`
+ * rewrite a user would write by hand -- `(let [v VALUE] (set! s v))`: the
+ * value is bound to a fresh binder through the CPS path, then the assignment
+ * of that atom (now control-free) is delegated to the direct emitter, which
+ * already knows a raw, cell-promoted or global target.  Returns the delegated
+ * set! with its value replaced, or NULL when even that is not delegatable
+ * (the caller evicts as before).  `*v` receives the binder to bind. */
+static Expr *set_value_hoisted(CpsB *b, Expr *e, CVar *v) {
+    Expr *val = e->as.set_.value;
+    if (!val || is_atomic(ascribe_peel(val))) return NULL;
+    *v = fresh_cvar(b, &val->type);
+    Expr *ns = arena_alloc(b->a, sizeof(Expr));
+    *ns = *e;
+    ns->as.set_.value = cvar_expr(b, v, &val->type, val->span);
+    if (!safe_to_delegate(b, ns)) return NULL;
+    return ns;
+}
+
 /* await-parks-only-to-the-nearest-c-frame: a call through a forall param with
  * a computed argument -- `(f (+ x 0.5))`.  Its `.fn` fallback is the direct
  * emitter's own rendering of the call, which must read only atoms, so hoist
@@ -5826,6 +5845,16 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
                 return build_letraw(b, e, x, ac);
             }
+            {
+                CVar v;
+                Expr *ns = set_value_hoisted(b, e, &v);
+                if (ns) {
+                    CVar x = fresh_cvar(b, &e->type);
+                    CTerm *ac = new_term(b, CT_APPCONT);
+                    ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                    return cps_bind(b, e->as.set_.value, v, build_letraw(b, ns, x, ac));
+                }
+            }
             return unsupported_form(b, e);
         }
         case EX_RESET: {
@@ -6436,9 +6465,16 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 lv->as.letval.x = x; lv->as.letval.v = u; lv->as.letval.body = rest;
                 return cps_bind(b, e->as.set_.value, b->loop_nexts[idx], lv);
             }
-            /* Not a loop-carried set!: preserve the prior default (delegate a
-             * control-free set! to the direct emitter, else evict). */
+            /* Not a loop-carried set!: delegate a control-free set! to the
+             * direct emitter; one whose value has control binds the value
+             * first (set_value_hoisted), else evict. */
             if (safe_to_delegate(b, e)) return build_letraw(b, e, x, rest);
+            {
+                CVar v;
+                Expr *ns = set_value_hoisted(b, e, &v);
+                if (ns)
+                    return cps_bind(b, e->as.set_.value, v, build_letraw(b, ns, x, rest));
+            }
             return unsupported_form(b, e);
         }
         case EX_CLOSURE: {

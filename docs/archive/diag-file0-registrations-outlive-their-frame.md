@@ -1,9 +1,18 @@
 # Several readers still leave diag file 0 pointing at their own dead stack frame
 
+**RESOLVED 2026-11-05.** The two sites a long-lived process reaches now hand
+file 0 back: `pkg_lock_read` unregisters right after its read (it also frees
+the source buffer there, so nothing after it may read the registration), and
+`fmt_format_buffer` unregisters on its one return, restoring the empty slot
+its own `diag_reset()` left. `cmd_format`, `cmd_explain` and the driver's
+`compile_to_*` are left as the fix directions said (the process ends, or the
+frame outlives the compile). Latent, so there is no fixture: no caller tripped
+it before either.
+
 **Severity:** low (latent). No caller is known to trip any of these today:
 every path checked emits nothing between the read and the next `diag_reset()`.
 Filed 2026-10-24 so that the residue of the resolved
-[manifest-read-leaves-a-dangling-file-registration](../archive/manifest-read-leaves-a-dangling-file-registration.md)
+[manifest-read-leaves-a-dangling-file-registration](manifest-read-leaves-a-dangling-file-registration.md)
 has an open row. Until now it was listed only in that archived report's last
 paragraph, and that list is partly wrong (below).
 

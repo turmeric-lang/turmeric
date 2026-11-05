@@ -125,7 +125,10 @@ test.describe('CI metrics dashboard', () => {
                 ? { passed: 80, failed: 0 }
                 : {};
           rows.push({
-            branch: 'main', build_type: 'Debug', ...env, ts: now - i * 3600,
+            // Each CI job uploads its own suites with its own `ts`, as live:
+            // three jobs a run, a minute apart, the slowest suite's last
+            // (ci-latest-run-is-one-job-upload).
+            branch: 'main', build_type: 'Debug', ...env, ts: now - i * 3600 - (k % 3) * 60,
             sha: 'a'.repeat(40), run_id: String(i), suite, status: 'pass',
             // Differs per environment so switching it visibly redraws the table.
             duration_ms: 1000 * (suites.length - k) * (e + 1) + i * 10 * (e + 1),
@@ -196,6 +199,10 @@ test.describe('CI metrics dashboard', () => {
     // Four stat tiles, and a provenance line naming the latest commit.
     await expect(page.locator('#ci-tiles .ci-tile')).toHaveCount(4);
     await expect(page.locator('#ci-provenance .mono').first()).toHaveText(/^[0-9a-f]{7}$/);
+    // The Suites tile counts the newest RUN -- every job's suites -- though
+    // each job of it uploaded with its own `ts` (ci-latest-run-is-one-job-upload).
+    await expect(page.locator('#ci-tiles .ci-tile', { hasText: 'Suites' })
+      .locator('.ci-tile-value')).toHaveText('26');
 
     // The chart drew real geometry, and the legend accounts for every series.
     const lines = page.locator('#ci-chart .ci-series-line');

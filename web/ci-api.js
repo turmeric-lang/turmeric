@@ -297,7 +297,7 @@ async function timings(db, url, envs) {
   const { ids } = env;
   const n = ids.length;
 
-  const top = await db.prepare(`SELECT ts, sha FROM suite_run
+  const top = await db.prepare(`SELECT ts, sha, run_id FROM suite_run
       WHERE env_id IN (${inList(ids)}) AND kind IS NULL ORDER BY ts DESC LIMIT 1`)
     .bind(...ids).first();
   const latestTs = top?.ts ?? 0;
@@ -306,14 +306,23 @@ async function timings(db, url, envs) {
 
   const [body, latest] = await db.batch([
     mode === 'run'
-      ? db.prepare(`SELECT suite, shard_index, shard_total, ts, sha, duration_ms, status, cpu
+      ? db.prepare(`SELECT suite, shard_index, shard_total, run_id, run_attempt, ts, sha,
+          duration_ms, status, cpu
           FROM suite_run WHERE env_id IN (${inList(ids)}) AND kind IS NULL AND ts >= ?${n + 1}`)
         .bind(...ids, Number.isFinite(cutoff) ? cutoff : 0)
       : db.prepare(dailySQL(ids)).bind(...ids, Number.isFinite(cutoff) ? cutoff : 0),
+    // The newest RUN, not the newest `ts`: each CI job uploads its suites with
+    // its own `ts`, so the rows at one `ts` are one job's. Every row of the
+    // newest run_id, newest per series (ci-aggregate.js latestRunRows).
     db.prepare(`SELECT suite, shard_index, shard_total, duration_ms, status, skip_reason,
-        partial_skip_reason FROM suite_run
-        WHERE env_id IN (${inList(ids)}) AND kind IS NULL AND ts = ?${n + 1}`)
-      .bind(...ids, latestTs),
+        partial_skip_reason FROM (
+          SELECT *, row_number() OVER (PARTITION BY suite, shard_index, shard_total
+                                       ORDER BY ts DESC, run_attempt DESC) AS rn
+          FROM suite_run
+          WHERE env_id IN (${inList(ids)}) AND kind IS NULL
+            AND (run_id = ?${n + 1} OR (?${n + 1} IS NULL AND ts = ?${n + 2})))
+        WHERE rn = 1`)
+      .bind(...ids, top?.run_id ?? null, latestTs),
   ]);
   return {
     env: key,

@@ -2624,6 +2624,10 @@ int fmt_format_buffer(const char *path_label, const char *src, size_t len,
 
     symtab_free(&st);
     arena_free(&arena);
+    /* diag-file0-registrations-outlive-their-frame: `file` is this frame's
+     * local; hand the slot back (it was empty -- diag_reset above cleared
+     * it) so the LSP's formatting request does not leave file 0 dangling. */
+    diag_unregister_file(&file, NULL);
     return rc;
 }
 
