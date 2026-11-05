@@ -1,5 +1,13 @@
 # /ci "latest run" is the newest single job upload, not the newest run
 
+**RESOLVED 2026-11-05.** Both fix directions. `latest` is every row of the
+newest `run_id`, the newest per series (`latestRunRows` in
+`web/ci-aggregate.js`; a window over `run_id` in `web/ci-api.js`), and the
+duration chart's run axis is keyed on `(run_id, run_attempt)` at the run's
+newest `ts` (`shapeRuns`). The page-test fixture now gives each of a run's
+three jobs its own `ts`, and `web/tests/ci.spec.js` asserts the Suites tile
+counts the whole run (26; the old code showed 9, one job's slice).
+
 **Severity:** low-medium (the dashboard's headline tiles and skip ledger are
 wrong on live data; nothing outside /ci is affected).
 

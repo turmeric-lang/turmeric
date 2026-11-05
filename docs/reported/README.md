@@ -199,7 +199,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [ci-latest-run-is-one-job-upload](ci-latest-run-is-one-job-upload.md) | low-medium | The /ci tiles and skip ledger read the rows at the newest single `ts`, but each CI job uploads with its own `ts`, so on live data "latest run" is one job: **Suites: 1** and a one-suite wall time. The page-test fixture gives a run one `ts` and hides it |
+| ~~[ci-latest-run-is-one-job-upload](../archive/ci-latest-run-is-one-job-upload.md)~~ | low-medium | **RESOLVED 2026-11-05** (archived): `latest` is the newest `run_id`'s rows, newest per series, and the run axis is keyed on `(run_id, run_attempt)`; the page fixture gives each job its own `ts` and pins the Suites tile |
 
 ## Found executing r7rs-heap-frames-plan (filed 2026-10-23)
 

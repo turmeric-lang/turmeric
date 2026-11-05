@@ -128,6 +128,11 @@ export function rangeCutoff(latestTs, range) {
 //
 // The CPU is per run, not per cell, because a `ts` is one job's upload and a
 // job is one machine.
+//
+// A run is a workflow run, (run_id, run_attempt) -- not a `ts`. Each CI job
+// uploads its own suites with its own `ts`, so one run carries several; keying
+// the axis on `ts` counted every job upload as a run (705 "runs" in a week of
+// ~90). A run sits at its newest `ts`.
 export function shapeRuns(rows) {
   const suites = [...new Set(rows.map(seriesName))].sort();
   const sIdx = new Map(suites.map((s, i) => [s, i]));
@@ -135,21 +140,45 @@ export function shapeRuns(rows) {
   const cIdx = new Map(cpus.map((c, i) => [c, i]));
   const runAt = new Map();
   for (const r of rows) {
-    const run = runAt.get(r.ts);
-    if (!run) runAt.set(r.ts, { sha: String(r.sha ?? '').slice(0, 12), cpu: r.cpu || null });
-    else if (!run.cpu && r.cpu) run.cpu = r.cpu;
+    const k = runKey(r);
+    const run = runAt.get(k);
+    if (!run) runAt.set(k, { ts: r.ts, sha: String(r.sha ?? '').slice(0, 12), cpu: r.cpu || null });
+    else {
+      if (r.ts > run.ts) run.ts = r.ts;
+      if (!run.cpu && r.cpu) run.cpu = r.cpu;
+    }
   }
-  const ts = [...runAt.keys()].sort((a, b) => a - b);
-  const rIdx = new Map(ts.map((t, i) => [t, i]));
+  const keys = [...runAt.keys()].sort((a, b) => runAt.get(a).ts - runAt.get(b).ts || (a < b ? -1 : a > b ? 1 : 0));
+  const rIdx = new Map(keys.map((k, i) => [k, i]));
   const cells = rows.map((r) => [
-    sIdx.get(seriesName(r)), rIdx.get(r.ts), r.duration_ms, statusCode(r.status),
+    sIdx.get(seriesName(r)), rIdx.get(runKey(r)), r.duration_ms, statusCode(r.status),
   ]);
   cells.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const runs = ts.map((t) => {
-    const { sha, cpu } = runAt.get(t);
-    return [t, sha, cpu ? cIdx.get(cpu) : -1];
+  const runs = keys.map((k) => {
+    const { ts, sha, cpu } = runAt.get(k);
+    return [ts, sha, cpu ? cIdx.get(cpu) : -1];
   });
   return { suites, cpus, runs, cells };
+}
+
+// The environment's newest run: every row of the newest run_id (any attempt;
+// a re-run of failed jobs is a later attempt carrying only those jobs), newest
+// row per series. Each job uploads with its own `ts`, so the rows at the single
+// newest `ts` are one job's -- the tiles read "Suites: 1".
+export function latestRunRows(rows) {
+  if (!rows.length) return [];
+  const top = rows.reduce((m, r) => (r.ts > m.ts ? r : m), rows[0]);
+  const inRun = top.run_id != null
+    ? rows.filter((r) => String(r.run_id) === String(top.run_id))
+    : rows.filter((r) => r.ts === top.ts);
+  const bySeries = new Map();
+  for (const r of inRun) {
+    const k = seriesName(r);
+    const have = bySeries.get(k);
+    if (!have || r.ts > have.ts || (r.ts === have.ts && (r.run_attempt ?? 0) > (have.run_attempt ?? 0)))
+      bySeries.set(k, r);
+  }
+  return [...bySeries.values()];
 }
 
 // "AMD EPYC 7763 64-Core Processor" -> "EPYC 7763", "Intel(R) Xeon(R)
@@ -226,7 +255,8 @@ export function timingsFromRows(allRows, key, range) {
   const cutoff = rangeCutoff(latestTs, range);
   const inRange = rows.filter((r) => r.ts >= cutoff);
   const mode = modeOf(range);
-  const newest = rows.filter((r) => r.ts === latestTs);
+  const newest = latestRunRows(rows);
+  const top = rows.find((r) => r.ts === latestTs);
   return {
     env: key,
     range,
@@ -234,7 +264,7 @@ export function timingsFromRows(allRows, key, range) {
     ...(mode === 'run' ? shapeRuns(inRange) : shapeDays(dailyMedians(inRange))),
     latest: shapeLatest(newest),
     latest_ts: latestTs,
-    latest_sha: newest[0]?.sha ?? null,
+    latest_sha: top?.sha ?? null,
   };
 }
 
