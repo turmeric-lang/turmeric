@@ -1,5 +1,15 @@
 # turi: a `^multishot` resume shares a function's tail-`let` locals with the other copies
 
+**RESOLVED 2026-11-05.** Fix directions 1, 3 and 4. `clone_ws_slice`
+(`src/turi/eval.c`) walks each owned frame's parent chain and, when the chain
+reaches another owned frame, clones every frame in between -- the F1 tail
+`let`'s among them; a chain that reaches the root without meeting one leaves
+the region and stays shared. The clone map is growable, so a slice owning
+more than 64 frames is no longer silently half-shared. Pinned by
+`tests/fixtures/turi-multishot-tail-let-copied` (the repro's three functions,
+plus an 80-deep recursion past the old cap), which prints the same on every
+engine.
+
 **Severity:** medium-low (engine disagreement, silent wrong value under
 `tur --interpret` only). Each resume of a `^multishot` `k` should run its own
 copy of the rest of the handled body, so a local bound inside the body starts

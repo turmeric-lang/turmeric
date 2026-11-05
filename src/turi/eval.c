@@ -8998,27 +8998,63 @@ static EvalFrame *clone_frame_bindings(TuriEnv *env, EvalFrame *src, EvalFrame *
  * arg accumulators (BUILTIN_ARG/CALL_ARG/MAKE_STRUCT) are duplicated so the two
  * runs never share mutable state.  `out` must hold `n` DriveConts. */
 static void clone_ws_slice(TuriEnv *env, const DriveCont *src, size_t n, DriveCont *out) {
-    /* Map owned source frames -> clones. */
-    EvalFrame *keys[64]; EvalFrame *vals[64]; size_t nmap = 0;
+    /* Map owned source frames -> clones.  Growable: the 64-entry array this
+     * used to be stopped cloning past 64 owned frames without saying so, and
+     * the later runs then shared the rest. */
+    size_t cap = 16, nmap = 0;
+    EvalFrame **keys = (EvalFrame **)malloc(cap * sizeof(EvalFrame *));
+    EvalFrame **vals = (EvalFrame **)malloc(cap * sizeof(EvalFrame *));
+    if (!keys || !vals) abort();
+#define CWS_FIND(f, out_idx) do { (out_idx) = (size_t)-1; \
+        for (size_t _q = 0; _q < nmap; _q++) if (keys[_q] == (f)) { (out_idx) = _q; break; } } while (0)
+#define CWS_ADD(f) do { if (nmap == cap) { cap *= 2; \
+            keys = (EvalFrame **)realloc(keys, cap * sizeof(EvalFrame *)); \
+            vals = (EvalFrame **)realloc(vals, cap * sizeof(EvalFrame *)); \
+            if (!keys || !vals) abort(); } \
+        keys[nmap] = (f); vals[nmap] = clone_frame_bindings(env, (f), (f)->parent); nmap++; } while (0)
     for (size_t i = 0; i < n; i++) {
         DriveKind k = src[i].kind;
         if ((k == DK_LET_BIND || k == DK_LET_BODY || k == DK_MATCH_BODY ||
-             k == DK_CALL_RET) && src[i].frame && nmap < 64) {
-            keys[nmap] = src[i].frame;
-            vals[nmap] = clone_frame_bindings(env, src[i].frame, src[i].frame->parent);
-            nmap++;
+             k == DK_CALL_RET) && src[i].frame) {
+            size_t at; CWS_FIND(src[i].frame, at);
+            if (at == (size_t)-1) CWS_ADD(src[i].frame);
         }
     }
-    /* Re-parent clones whose parent is itself an owned (cloned) frame. */
-    for (size_t m = 0; m < nmap; m++)
-        for (size_t p = 0; p < nmap; p++)
-            if (vals[m]->parent == keys[p]) { vals[m]->parent = vals[p]; break; }
+    /* turi-multishot-tail-let-frame-shared-across-resumes: a frame the slice
+     * does not own can still be private to it.  A `let` in tail position (F1)
+     * descends into its body with no DriveCont of its own, so its frame is
+     * reachable only as the `parent` of an owned frame -- and every resume
+     * then wrote the same `^mut` local.  Walk each owned frame's parent chain:
+     * when it reaches another owned frame, every frame in between was made
+     * inside the captured region (an owned frame's activation began after the
+     * prompt), so clone it too.  A chain that reaches the root without meeting
+     * one leaves the region (a closure's defining frame, the globals): those
+     * frames stay shared, as they must. */
+    for (size_t m = 0; m < nmap; m++) {
+        EvalFrame *path[64]; size_t np = 0;
+        bool closed = false;
+        for (EvalFrame *f = keys[m]->parent; f; f = f->parent) {
+            size_t at; CWS_FIND(f, at);
+            if (at != (size_t)-1) { closed = true; break; }
+            if (np == 64) break;   /* too deep to be one region: leave it shared */
+            path[np++] = f;
+        }
+        if (closed)
+            for (size_t j = 0; j < np; j++) CWS_ADD(path[j]);
+    }
+    /* Re-parent clones whose parent is itself a cloned frame. */
+    for (size_t m = 0; m < nmap; m++) {
+        size_t at; CWS_FIND(keys[m]->parent, at);
+        if (at != (size_t)-1) vals[m]->parent = vals[at];
+    }
+#undef CWS_ADD
     /* Copy DriveConts, remapping frames and duplicating accumulators. */
     for (size_t i = 0; i < n; i++) {
         out[i] = src[i];
-        if (out[i].frame)
-            for (size_t m = 0; m < nmap; m++)
-                if (out[i].frame == keys[m]) { out[i].frame = vals[m]; break; }
+        if (out[i].frame) {
+            size_t at; CWS_FIND(out[i].frame, at);
+            if (at != (size_t)-1) out[i].frame = vals[at];
+        }
         /* Duplicate heap accumulators (aux) that hold partial results. */
         if (src[i].aux) {
             size_t cnt = 0;
@@ -9037,6 +9073,9 @@ static void clone_ws_slice(TuriEnv *env, const DriveCont *src, size_t n, DriveCo
             }
         }
     }
+#undef CWS_FIND
+    free(keys);
+    free(vals);
 }
 
 /* turi-fiber-handle-defers-fire-at-the-wrong-time, fix direction 1: at a
