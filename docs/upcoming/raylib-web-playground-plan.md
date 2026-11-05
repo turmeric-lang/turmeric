@@ -14,8 +14,8 @@
 > Turmeric's and the C playground's -- Turmeric's token colours, Try's
 > editor options, the program kept across reloads and draggable dividers,
 > PWA support and social cards, Code and Run views on a phone, the
-> minimap, a Symbols outline and the Run shortcut's keycaps are done; hover
-> docs are under way. P2
+> minimap, a Symbols outline, the Run shortcut's keycaps and hover docs
+> are done; Format is next. P2
 > ([section 7](#p2----the-page-arcade-repo)): turmeric-arcade has Monaco with
 > the language server (raylib imports resolve, spice signatures are
 > type-checked), the Spices menu writing a pinned `defscript` header, share
@@ -996,25 +996,24 @@ mostly around them.
   marked, a row a jump; its last row names Ctrl/Cmd+Shift+O and opens
   Monaco's filterable quick outline. And the Run button's shortcut as
   keycaps (Ctrl or Cmd, and Enter), where there is a keyboard and room.
+- Hover docs (#18, `web/hover-docs.js`, turmeric#1455). The server's hover
+  gives a name's type and no words (println's overloads, vec-push!'s
+  signature), and nothing for a name it has no binding for; Try shows the
+  doc table's line only in that second case (`docFallbackHover`). The engine
+  ships the table: `tools/wasm-jit/arcade/doc-names.py` writes
+  `doc-names.json` beside the module, the stdlib and the packaged spices only
+  (5,177 names, 123 KB gzipped, against Try's 1.2 MB of every spice), and the
+  smoke test checks it. The arcade adds the line under the type with a hover
+  provider of its own, so `lsp-client.js` stays Try's; the line says where it
+  is from, and a name the program defines itself gets none.
 
 **Next, in order:**
 
-1. **Hover docs** (in progress). The server's hover gives a name's type and
-   no words (println's overloads, vec-push!'s signature), and nothing for a
-   name it has no binding for; Try shows the doc table's line only in that
-   second case (`docFallbackHover`). The engine now ships the table:
-   `tools/wasm-jit/arcade/doc-names.py` writes `doc-names.json` beside the
-   module, the stdlib and the packaged spices only (5,177 names, 123 KB
-   gzipped, against Try's 1.2 MB of every spice), and the smoke test checks
-   it. The arcade's half follows with the `engine.lock` bump that brings it:
-   a hover provider of its own, so the line shows under the type as well and
-   `lsp-client.js` stays Try's, labelled with where it is from, and left off
-   a name the program defines itself.
-2. **Format** (Alt+Shift+F and Format Document): the stock module the
+1. **Format** (Alt+Shift+F and Format Document): the stock module the
    language server runs in exports `turi_wasm_format`, but
    `tools/wasm-jit/arcade/lsp-worker.js` answers only `lsp` messages; a
    `format` message there, an `engine.lock` bump, then the arcade's provider.
-3. **A doc panel** (Try's `web/doc-panel.js`): `turi_doc_lookup`,
+2. **A doc panel** (Try's `web/doc-panel.js`): `turi_doc_lookup`,
    `turi_type_of` and `turi_explain` are in the same module, behind the same
    kind of worker message as format.
 
