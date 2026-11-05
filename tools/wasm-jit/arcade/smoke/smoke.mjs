@@ -274,6 +274,20 @@ try {
         'the quick start analyses clean (raylib imports resolve)', JSON.stringify(lsp.hello));
   check(Array.isArray(lsp.bad) && lsp.bad.some((d) => d.startsWith('1 ')),
         'an import of a module no spice has is flagged', JSON.stringify(lsp.bad));
+
+  // The hover's doc table (doc-names.py): the stdlib's builtins and the
+  // packaged spices' functions, each with its spice; no spice the build lacks.
+  const docs = await page.evaluate(async () => {
+    const r = await fetch('/engine/doc-names.json');
+    return r.ok ? r.json() : null;
+  });
+  const doc = (n) => (docs || []).find((d) => d.name === n) || null;
+  check(Array.isArray(docs) && doc('println')?.kind === 'builtin' && !doc('println').spice &&
+          doc('draw-circle')?.spice === 'raylib' && doc('gui-button')?.spice === 'raygui' &&
+          docs.every((d) => !d.spice || OFFERED.includes(d.spice)),
+        "doc-names.json has the stdlib's and the packaged spices' docs, and no others",
+        docs ? `${docs.length} names; println=${JSON.stringify(doc('println'))} draw-circle=${JSON.stringify(doc('draw-circle'))}`
+             : 'not served');
 } finally {
   await browser.close();
   server.close();
