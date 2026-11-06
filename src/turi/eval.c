@@ -4264,8 +4264,12 @@ static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
         return turi_errorf("eval: unhandled effect: %s", cont->perf_name);
     }
 
-    /* Bind params and k in a new frame. */
-    EvalFrame *hframe = eval_frame_new(env, frame);
+    /* Bind params and k in a new frame.  turi-call-pins-and-side-frames-not-
+     * reclaimed: the case body runs synchronously on this C frame, and `k`
+     * is the fiber, not this frame, so it is a call frame handed back when
+     * the body returns -- unless a closure over it escaped (frame_escape),
+     * or a capture since it was made may run the body again (the epoch). */
+    EvalFrame *hframe = eval_frame_new_call(env, frame);
     for (uint32_t i = 0; i < matched->n_params && i < cont->n_perf_args; i++) {
         const char *pname = matched->param_bindings[i]->name->name;
         frame_bind(env, hframe, pname, cont->perf_args[i]);
@@ -4273,7 +4277,7 @@ static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
     frame_bind(env, hframe, matched->k_binding->name->name, turi_effect_cont(cont));
 
     TuriValue result = eval_expr(env, hframe, matched->body);
-    eval_frame_free(hframe);
+    frame_release(env, hframe);
     return result;
 }
 
@@ -11612,7 +11616,17 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * becomes the handle's value (received by DK_PROMPT@pidx). */
                 len = (size_t)pidx + 1;
                 st[pidx].index = 0;   /* disable while its own case body runs */
-                EvalFrame *hf = eval_frame_new(env, st[pidx].frame);
+                /* turi-call-pins-and-side-frames-not-reclaimed: the case frame
+                 * lives as long as the case body runs, which ends when this
+                 * prompt (st[pidx], pend_wc = wc) delivers its value -- k
+                 * names the BODY's frames, not this one.  So it is a call
+                 * frame, handed back there (DK_PROMPT) unless something marked
+                 * it escaped meanwhile: a closure over it, or a capture of the
+                 * case body's own frames by a perform inside it. */
+                EvalFrame *hf = turi_frame_reclaim_on() && !env->debugger
+                    ? eval_frame_new_call(env, st[pidx].frame)
+                    : eval_frame_new(env, st[pidx].frame);
+                wc->case_frame = hf->reclaimable ? hf : NULL;
                 for (uint32_t i = 0; i < matched->n_params && i < n; i++)
                     frame_bind(env, hf, matched->param_bindings[i]->name->name, pargs[i]);
                 frame_bind(env, hf, matched->k_binding->name->name, turi_ws_cont_val(env, wc));
@@ -12897,6 +12911,14 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* The case that ran under this prompt is done: a body it
                  * abandoned runs its defers now. */
                 ws_case_abandoned(env, pwc);
+                /* ... and its frame is dead, unless it escaped (frame_release
+                 * declines then, and defers it past a capture's epoch).  A
+                 * second pop of a copied prompt finds it already taken. */
+                if (pwc && !pwc->oneshot && pwc->case_frame) {
+                    EvalFrame *ccf = pwc->case_frame;
+                    pwc->case_frame = NULL;
+                    frame_release(env, ccf);
+                }
                 break;
             }
             case DK_GET_FIELD: {

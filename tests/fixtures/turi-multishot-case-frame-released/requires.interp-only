@@ -1,0 +1,1 @@
+the compiled backend refuses a perform under a do whose value is a lambda in a handled body; this pins tur --interpret behaviour
