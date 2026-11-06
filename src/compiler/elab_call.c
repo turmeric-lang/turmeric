@@ -10487,8 +10487,29 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             && (fn_binding->nonretain_ptr_param_mask & (1u << i))
             && fn_binding->type.kind == TY_FN
             && effect_row_is_empty(fn_binding->type.as.fn.effect_row)) {
-            if (any_expr_is_owned_temp(args[i], 8))
+            if (any_expr_is_owned_temp(args[i], 8)) {
                 args[i]->any_drop_after = true;
+            } else {
+                /* any-widen-deep-drop-frees-borrowed-children, the leak
+                 * residue: an EXPLICIT widen argument, `(llen (:: one any))`.
+                 * It is already an `any`, so the frame-box rule above (which
+                 * runs for an implicit widen) never saw it, and the owned-temp
+                 * rule declines because the payload's children are `one`'s.
+                 * The box then had no owner.  The frame-box conditions hold
+                 * here too -- the callee keeps nothing of it and cannot
+                 * suspend -- so the header copy lives in the caller's frame:
+                 * no allocation, and `one`'s children stay `one`'s. */
+                Expr *w = args[i];
+                while (w && w->kind == EX_ASCRIBE) w = w->as.ascribe_.inner;
+                if (w && w->kind == EX_UNION_INJECT && !w->as.union_inject_.frame_box &&
+                    w->as.union_inject_.value &&
+                    w->as.union_inject_.value->type.kind != TY_UNION &&
+                    w->as.union_inject_.value->type.kind != TY_ANY) {
+                    w->as.union_inject_.frame_box = true;
+                    if (w->as.union_inject_.value->kind == EX_FN_TO_FAT)
+                        w->as.union_inject_.value->as.fn_to_fat_.stack_ok = true;
+                }
+            }
         }
 
         /* RM1 (reclamation-plan): the sum-box temporary case, the any rule one

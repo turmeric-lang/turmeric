@@ -10230,6 +10230,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * name; EX_ANY_CAST unboxes via the same predicate on the target. */
                 const char *cn = emit_type_c_name(ctx,
                     emit_resolve_type(ctx, e->as.union_inject_.value->type));
+                /* A large by-value ADT PARAMETER arrives as `const T *`
+                 * (type_struct_pass_by_ptr), so its expression is the pointer:
+                 * copy what it points at.  `(llen (:: one any))` with
+                 * `one : Lst` a parameter failed in cc on both arms below
+                 * ("incompatible types ... from 'const tur_adt_Lst *'"). */
+                char *pbp_inner = NULL;
+                if (expr_is_pbp_param(ctx, e->as.union_inject_.value)) {
+                    size_t ln = strlen(inner) + 4;
+                    pbp_inner = (char *)malloc(ln);
+                    snprintf(pbp_inner, ln, "*(%s)", inner);
+                }
+                const char *inner_v = pbp_inner ? pbp_inner : inner;
                 if (e->as.union_inject_.frame_box) {
                     /* any-struct-box-leak-per-widen: elab proved this widen is a
                      * call argument the callee neither retains nor outlives (it
@@ -10244,7 +10256,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * dangling before the call it was built for. */
                     char *slot = fresh_tmp(ctx);
                     indent_buf(body, ctx->indent);
-                    buf_printf(body, "%s %s = (%s);\n", cn, slot, inner);
+                    buf_printf(body, "%s %s = (%s);\n", cn, slot, inner_v);
                     buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)&%s)",
                                (long long)tag, slot);
                     free(slot);
@@ -10261,11 +10273,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(body,
                         "%s *%s = (%s *)malloc(sizeof(%s)); "
                         "*%s = (%s); TUR_REGION_NOTE_WORDS(%s, sizeof *%s);\n",
-                        cn, bx, cn, cn, bx, inner, bx, bx);
+                        cn, bx, cn, cn, bx, inner_v, bx, bx);
                     buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)%s)",
                                (long long)tag, bx);
                     free(bx);
                 }
+                free(pbp_inner);
             } else if (e->type.kind == TY_ANY && inj_pt.kind == TY_UNION) {
                 /* union-to-any-widen-emits-uncompilable-c: a UNION payload is
                  * the third kind that cannot ride the carrier as an integer,
