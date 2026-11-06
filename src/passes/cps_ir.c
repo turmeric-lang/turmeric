@@ -5409,16 +5409,37 @@ static bool catch_delim_type_ok(const Type *t) {
         default: return false;
     }
 }
+/* cps-catch-unwind-cannot-cross-an-effect-capture: a thunk whose body is
+ * typed `never` -- `(fn [] : int (panic "x"))` -- delivers no value, so the
+ * prompt's type is the one the thunk DECLARES.  Without this the catch kept
+ * the delegated lowering, which evicts a function that also holds a handle. */
+static const Type *catch_delim_type(const FnDef *tf) {
+    static Type declared[4];
+    const Type *bt = &tf->body->type;
+    if (bt->kind != TY_NEVER) return bt;
+    if (!tf->binding || tf->binding->type.kind != TY_FN) return bt;
+    TypeKind rk = tf->binding->type.as.fn.result_kind;
+    int slot;
+    switch (rk) {
+        case TY_INT: slot = 0; break;
+        case TY_BOOL: slot = 1; break;
+        case TY_CSTR: slot = 2; break;
+        case TY_NIL: slot = 3; break;
+        default: return bt;
+    }
+    if (declared[slot].kind != rk) declared[slot] = type_simple(rk, CK_COPY);
+    return &declared[slot];
+}
 static CTerm *build_catch(CpsB *b, Expr *e, CVar x, CTerm *rest, bool reap) {
     const FnDef *tf = cps_catch_inline_thunk(e);
-    if (!tf || !catch_delim_type_ok(&tf->body->type)) return NULL;
+    if (!tf || !catch_delim_type_ok(catch_delim_type(tf))) return NULL;
     CTerm *t = new_term(b, CT_RESET);
     t->as.reset.x = x;
     t->as.reset.is_catch = true;
     t->as.reset.catch_type = e->kind == EX_CATCH_PANIC_OF
                            ? (int)e->as.catch_panic_of_.type_kind : -1;
-    t->as.reset.delim_ty = &tf->body->type;
-    t->as.reset.delim = cps_tail(b, tf->body, kont_prompt(tf->body->type.kind));
+    t->as.reset.delim_ty = catch_delim_type(tf);
+    t->as.reset.delim = cps_tail(b, tf->body, kont_prompt(t->as.reset.delim_ty->kind));
     t->as.reset.body = rest;
     t->as.reset.catch_reap = reap;
     return t;

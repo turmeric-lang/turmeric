@@ -1,0 +1,25 @@
+;; cps-catch-unwind-never-thunk -- a catch-unwind whose thunk body is typed
+;; `never` (`(fn [] : int (panic "x"))`) is translated under a catch prompt
+;; at the type the thunk DECLARES, like any one-word thunk
+;; (cps-catch-unwind-cannot-cross-an-effect-capture).  Before, it kept the
+;; delegated lowering, which evicted `f` -- a function that also holds a
+;; handle -- and its perform then had no lowering: a compile error.
+
+(defeffect Ask [] : int)
+
+(defn asks [] : int (perform (Ask)))
+
+(defn f [] : int
+  (let [r (catch-unwind (fn [] : int (panic "x")))
+        h (handle (asks) (Ask [] k) (resume k 10))]
+    (+ (if (err? r) 100 200) h)))
+
+(defn g [] : bool
+  (let [r (catch-unwind (fn [] : bool (panic "y")))
+        h (handle (asks) (Ask [] k) (resume k 1))]
+    (and (err? r) (= h 1))))
+
+(defn main [] : int
+  (println (f))      ;; 110
+  (println (g))      ;; true
+  0)
