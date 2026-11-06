@@ -1,0 +1,22 @@
+;; catch-unwind-match-in-place -- a `match` written on a catch-unwind's value
+;; finds its arm on both engines (turi-catch-unwind-result-unmatchable, filed
+;; and fixed 2026-11-06).  Under --interpret the catch built its Result as the
+;; legacy int64[3] box, which ok?/ok-val read but a constructor pattern never
+;; matches: every line below died with "match: no arm matched" there, while
+;; the compiled program printed the answers.
+
+(defn boom [] : int (panic "boom"))
+
+(defn main [] : int
+  (println (match (catch-unwind (fn [] : int 5)) (Ok v) v (Err e) 0))           ;; 5
+  (println (match (catch-unwind (fn [] : int (panic "x"))) (Ok v) v (Err e) 7)) ;; 7
+  (println (match (catch-unwind (fn [] : int (boom))) (Ok v) v (Err e) 8))      ;; 8
+  (let [r : (Result int int) (catch-unwind (fn [] : int (do (panic "y") 1)))]
+    (println (match r (Ok v) v (Err e) 9)))                                     ;; 9
+  (let [r (catch-unwind (fn [] : int (boom)))]
+    (println (err? r))                                                          ;; true
+    (println (match r
+               (Ok v) "no"
+               (Err e) "caught")))                                         ;; caught
+  (println (match (catch-unwind (fn [] : cstr "fine")) (Ok s) s (Err e) "no"))  ;; fine
+  0)
