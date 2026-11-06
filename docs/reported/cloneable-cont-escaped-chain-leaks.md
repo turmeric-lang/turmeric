@@ -1,5 +1,13 @@
 # A cloneable continuation that escapes its shift receiver has no owner
 
+**Narrowed 2026-11-06: fix direction 2 is done -- the rule is written
+down.** The delimited-control guide says, under "Who frees a cloneable `k`",
+that a `k` that leaves its receiver is the program's to drop with
+`tur_cloneable_cont_drop`, clones included, and shows the repro below with
+the drop. The leak-checked fixture `cloneable-cont-escaped-dropped` pins
+that the documented program is clean (a resume, a clone and its resume, both
+drops). What is left is fix direction 1: an automatic owner.
+
 **Severity: low (leak).** 488 B per escaped continuation: the 32-byte wrapper
 plus its DK chain copy. A clone or snapshot the program takes and never drops
 leaks the same amount. This is the residue of

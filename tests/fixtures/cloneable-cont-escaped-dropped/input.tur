@@ -1,0 +1,19 @@
+;; cloneable-cont-escaped-dropped: a cloneable continuation that leaves its
+;; receiver (k-id returns it) has no automatic owner, so the program drops it
+;; -- the rule docs/guides/delimited-control-operators-guide.md states under
+;; "Who frees a cloneable k" (cloneable-cont-escaped-chain-leaks).  Leak-
+;; checked: without the drop, 488 B leak; with it, none.  A clone is dropped
+;; on its own, as the guide says.
+(defn k-id [k] : int k)
+(defn make [base : int] : int
+  (cloneable-reset (+ base (cloneable-shift k-id 0))))
+
+(defn main [] : int
+  (let [c (make 5)]
+    (println (tur_cloneable_cont_resume c 1))   ; 6
+    (println (tur_cloneable_cont_resume c 2))   ; 7
+    (let [d (tur_cloneable_cont_clone c)]
+      (println (tur_cloneable_cont_resume d 30)) ; 35
+      (tur_cloneable_cont_drop d))
+    (tur_cloneable_cont_drop c))
+  0)
