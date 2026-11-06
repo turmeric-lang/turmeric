@@ -2103,6 +2103,19 @@ if(TUR_WASM)
                 -sEXIT_RUNTIME=0
                 -sSTACK_SIZE=16777216
                 -sDEFAULT_PTHREAD_STACK_SIZE=8388608
+                # Bounds-check every write of the stack pointer, as the browser
+                # JIT module does (tools/wasm-jit/build-module.sh): at -O2
+                # nothing else does, so an overflow of the 16 MiB linear stack
+                # (a large local in a recursion, say) wrote below it and
+                # trapped later as an unrelated out-of-bounds access, or not at
+                # all.  Checked, it aborts with "stack overflow", which the
+                # page reports as the eval's error.  The canary
+                # CHECK_NULL_WRITES would plant at address 0 changes what a
+                # read through a null pointer sees, so it stays off.  Measured
+                # cost on the JIT module: none above noise.
+                # docs/archive/wasm-linear-stack-overflow-unchecked.md.
+                -sSTACK_OVERFLOW_CHECK=2
+                -sCHECK_NULL_WRITES=0
                 -sINITIAL_MEMORY=67108864
                 # _turi_wasm_read_file is deliberately a named operation rather
                 # than adding FS to EXPORTED_RUNTIME_METHODS: it reads .tur

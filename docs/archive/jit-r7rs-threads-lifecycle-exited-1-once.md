@@ -1,6 +1,14 @@
 # `r7rs-threads-lifecycle` exited 1 once under the JIT, after the fork fix
 
-**Severity:** low -- one occurrence in 26 Linux JIT runs, unreproduced, no
+**CLOSED UNREPRODUCED 2026-11-06.** One occurrence on 2026-10-03, then none
+in 264 `main` JIT logs read across the following month and none in 240 local
+runs, 200 of them twice oversubscribed. Nothing here points at a defect that
+can be fixed, and the report said from the start that it was filed so a second
+occurrence would be recognised. This archived copy keeps that job: if
+`r7rs-threads-lifecycle` exits 1 on a JIT leg again, reopen it from here with
+that run's `jit-ctest-log-*` artifact read first (see "Next step").
+
+**Severity (was):** low -- one occurrence in 26 Linux JIT runs, unreproduced, no
 product impact known. Filed so a second occurrence is recognised, not to
 claim a bug.
 
@@ -13,7 +21,7 @@ jit fixture summary: 3415 passed, 1 failed, 61 skipped
 ```
 
 That commit already carries #1050's fork skip
-([jit-fork-child-inherits-asan-allocator-lock](../archive/jit-fork-child-inherits-asan-allocator-lock.md)),
+([jit-fork-child-inherits-asan-allocator-lock](jit-fork-child-inherits-asan-allocator-lock.md)),
 and the symptom is not that one: a failed fork check prints
 `(fork-failures 1)` and still exits 0, which `run-jit.sh` reports as a `stdout
 mismatch`. Exit status 1 from a sanitized `tur jit` with
@@ -41,7 +49,7 @@ not reachable from that sandbox, so it is still unread.
 38186563013) were read: `r7rs-threads-lifecycle` failed in none of them. The
 step's filter keeps every `FAIL` line, so its absence is a pass. The only
 failures in those runs were the aborting-fixture timeouts of
-[jit-linux-aborting-fixtures-time-out](../archive/jit-linux-aborting-fixtures-time-out.md).
+[jit-linux-aborting-fixtures-time-out](jit-linux-aborting-fixtures-time-out.md).
 Still one occurrence in all.
 
 **Re-checked on CI 2026-11-05.** The `JIT engine (ubuntu-latest)` logs of

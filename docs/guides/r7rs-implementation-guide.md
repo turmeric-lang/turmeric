@@ -743,7 +743,7 @@ From `docs/reported/` on 2026-10-16:
   -- one library per file, named by its path; held by decision.
 - [r7rs-prelude-split-wrong-symbols-on-windows](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md)
   -- fix landed; the split stays off on Windows until a Windows run confirms.
-- [jit-r7rs-threads-lifecycle-exited-1-once](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/jit-r7rs-threads-lifecycle-exited-1-once.md)
+- [jit-r7rs-threads-lifecycle-exited-1-once](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-r7rs-threads-lifecycle-exited-1-once.md)
   -- one unreproduced JIT failure of `r7rs-threads-lifecycle`.
 
 Recursion past the 1 GiB stack graduated on 2026-10-25 (segments mapped as
