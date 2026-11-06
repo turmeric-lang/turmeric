@@ -2,6 +2,27 @@
 
 **Severity: low (32 B per call, at a narrow shape).**
 
+**Narrowed a third time 2026-11-06: the sum-wrapped shape.** `(match (some d)
+(Some f) (f 10) (None) 0)` gives the box the stack when every arm only
+invokes what it binds (`mark_sum_wrapped_boxes_stack`, `src/compiler/elab_call.c`,
+called where the match is built in `elab_structs.c`): the scrutinee is a call
+written in place, its callee puts the parameter in a constructor in its tail
+and nowhere else (`param_only_in_result_ctor` -- `some`, `ok`, `err`), or the
+scrutinee is the constructor itself; no arm binds the whole value, and no
+binder escapes its arm (`closure_binding_escapes`). Found on the way,
+pre-existing: the constructor written in place did not COMPILE --
+`(match (Some d) (Some f) (f 5) ...)`, or the same with a user
+`(defdata Bx [a] (MkBx a))`, refused `f` as "ptr<void> ... not directly
+callable". The arg loop had already put the poly carrier through the int64
+carrier (`EX_REINTERPRET`), which hid it from the constructor's fat-field box,
+so the type parameter bound to `ptr<void>`; the fat-field loop now looks
+through that reinterpret. Pinned by
+`tests/fixtures/fn-param-tyvar-slot-sum-wrapped-stack-box` (leak-checked:
+`some`, `Some`, a user constructor and a float signature, 100 turns; 32 B a
+call before) and `fn-param-through-type-variable-slot`'s new `match-escape`,
+whose match hands the binder back and is called after its frame is gone.
+Left: the stored shape (`vec-push!`), which is a real owner question.
+
 **Narrowed again 2026-11-06: the let-bound shape.** `(let [f (ident d)] (f
 10))` gives the box the stack too when the local is only ever invoked: the
 let elaboration (`src/compiler/elab_forms.c`) asks `closure_binding_escapes`

@@ -2860,5 +2860,7 @@ static inline bool elab_form_ids_implib(const Elab *e, const Form *f) {
  * the enclosing expression ends: invoked on the spot (elab_call.c), or bound
  * by a let to a local that is only invoked (elab_forms.c). */
 void mark_invoked_passthrough_boxes_stack(Expr *head);
+void mark_sum_wrapped_boxes_stack(Expr *scrutinee, const struct MatchArm *arms,
+                                  uint32_t n_arms);
 
 #endif

@@ -42,6 +42,10 @@
 ;; must keep the malloc'd form -- it is called after this frame is gone.
 (defn let-escape [d : (fn [int] int)] : (fn [int] int)
   (let [f (ident d)] f))
+;; ...and its sum-wrapped twin: the match hands the binder back, so the box
+;; is the caller's, called after this frame is gone (must stay malloc'd).
+(defn match-escape [d : (fn [int] int)] : (fn [int] int)
+  (match (Some d) (Some f) f (None) d))
 (defn clobber [n : int] : int (if (= n 0) 0 (+ 1 (clobber (- n 1)))))
 
 (defn main [] : int
@@ -63,4 +67,7 @@
   (let [ef (let-escape plus1)]
     (println (clobber 50))
     (println (ef 41)))
+  (let [mf (match-escape plus1)]
+    (println (clobber 50))
+    (println (mf 41)))
   0)

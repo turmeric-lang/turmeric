@@ -3910,6 +3910,110 @@ void mark_invoked_passthrough_boxes_stack(Expr *head) {
     }
 }
 
+/* fn-param-at-type-variable-slot-boxed-per-call, the sum-wrapped shape:
+ * `(match (some d) (Some f) (f 10) (None) 0)`.  The box `d` was given for
+ * `some`'s type-variable slot rides into the sum's payload and out again as
+ * the arm binder `f`; when every arm only invokes what it binds -- returns,
+ * stores, captures and passes on none of it -- nothing holds the box once the
+ * match is done, so it may live on the stack, as `((ident d) 10)`'s does.
+ *
+ * The callee must put the parameter in its result and nowhere else: its
+ * body's tail is a constructor call with the parameter as a direct argument
+ * (through `if` / `match` / `let` / `do` tails, as param_used_only_as_result
+ * reads them), and the parameter appears in no other position.  stdlib's
+ * `some` / `ok` / `err` are that shape; a callee that keeps the argument is
+ * not.  The scrutinee is a temporary (a call written in place), so the
+ * match is the sum's only reader.  An arm that binds the whole value (a
+ * bare variable pattern) answers no. */
+bool closure_binding_escapes(const Expr *e, const Binding *b);
+static bool param_only_in_result_ctor(const Expr *x, const Binding *p, int depth);
+typedef struct { const Binding *p; int depth; } ParamCtorUd;
+static bool param_only_in_result_ctor_visit(const Expr *c, void *ud) {
+    const ParamCtorUd *u = (const ParamCtorUd *)ud;
+    return !param_used_only_as_result(c, u->p, false, u->depth);
+}
+static bool param_only_in_result_ctor(const Expr *x, const Binding *p, int depth) {
+    if (!x) return true;
+    if (depth > 200) return false;
+    switch (x->kind) {
+    case EX_ASCRIBE:
+        return param_only_in_result_ctor(x->as.ascribe_.inner, p, depth + 1);
+    case EX_IF:
+        return param_used_only_as_result(x->as.if_.cond, p, false, depth + 1) &&
+               param_only_in_result_ctor(x->as.if_.then_, p, depth + 1) &&
+               param_only_in_result_ctor(x->as.if_.else_or_null, p, depth + 1);
+    case EX_DO:
+        for (uint32_t i = 0; i + 1 < x->as.do_.n; i++)
+            if (!param_used_only_as_result(x->as.do_.items[i], p, false, depth + 1))
+                return false;
+        return x->as.do_.n == 0 ||
+               param_only_in_result_ctor(x->as.do_.items[x->as.do_.n - 1], p, depth + 1);
+    case EX_LET:
+        for (uint32_t i = 0; i < x->as.let_.n; i++)
+            if (!param_used_only_as_result(x->as.let_.bindings[i].init, p, false, depth + 1))
+                return false;
+        return param_only_in_result_ctor(x->as.let_.body, p, depth + 1);
+    case EX_CALL:
+        if (x->as.call_.ctor) {
+            for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
+                const Expr *a = x->as.call_.args ? x->as.call_.args[i] : NULL;
+                while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+                if (a && a->kind == EX_VAR && a->as.var.binding == p) continue;
+                if (!param_used_only_as_result(a, p, false, depth + 1)) return false;
+            }
+            return true;
+        }
+        break;
+    default:
+        break;
+    }
+    /* Any other tail: the parameter may not appear at all. */
+    ParamCtorUd u = { p, depth + 1 };
+    return !cps_visit_children(x, param_only_in_result_ctor_visit, &u) &&
+           !(x->kind == EX_VAR && x->as.var.binding == p);
+}
+
+void mark_sum_wrapped_boxes_stack(Expr *scrutinee, const MatchArm *arms,
+                                  uint32_t n_arms) {
+    Expr *s = scrutinee;
+    while (s && s->kind == EX_ASCRIBE) s = s->as.ascribe_.inner;
+    if (!s || s->kind != EX_CALL || s->as.call_.dict_arg) return;
+    bool any_box = false;
+    for (uint32_t a = 0; a < s->as.call_.n_args; a++)
+        if (s->as.call_.args[a] && s->as.call_.args[a]->kind == EX_POLY_TO_FAT)
+            any_box = true;
+    if (!any_box || !arms || n_arms == 0) return;
+    for (uint32_t ai = 0; ai < n_arms; ai++) {
+        const MatchArm *arm = &arms[ai];
+        if (arm->pattern.is_var) return;
+        for (uint32_t bi = 0; bi < arm->pattern.n_bindings; bi++) {
+            const Binding *b = arm->pattern.bindings ? arm->pattern.bindings[bi] : NULL;
+            if (!b) continue;
+            if (closure_binding_escapes(arm->body, b)) return;
+            if (arm->guard && closure_binding_escapes(arm->guard, b)) return;
+        }
+    }
+    if (s->as.call_.ctor) {
+        /* `(Some d)` written in place: the constructor puts the box straight
+         * into the payload, and nothing else. */
+        for (uint32_t i = 0; i < s->as.call_.n_args; i++) {
+            Expr *a = s->as.call_.args[i];
+            if (a && a->kind == EX_POLY_TO_FAT) a->as.poly_to_fat_.stack_ok = true;
+        }
+        return;
+    }
+    const Binding *cb = s->as.call_.fn_binding;
+    if (cb && cb->source_binding) cb = cb->source_binding;
+    const FnDef *fd = cb ? cb->source_fn_def : NULL;
+    if (!fd || !fd->body || !fd->params || cb->body_is_inline_c) return;
+    for (uint32_t i = 0; i < s->as.call_.n_args && i < fd->n_params; i++) {
+        Expr *a = s->as.call_.args[i];
+        if (!a || a->kind != EX_POLY_TO_FAT || !fd->params[i]) continue;
+        if (param_only_in_result_ctor(fd->body, fd->params[i], 0))
+            a->as.poly_to_fat_.stack_ok = true;
+    }
+}
+
 /* ---- general elab ---- */
 
 /* SZ7: static size checking (-Xsized-types).
@@ -6520,6 +6624,24 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                         arg_expr = arg_expr->as.reinterpret_.expr;
                     }
                     Type concrete = arg_expr ? arg_expr->type : call_expr->as.call_.args[fi]->type;
+                    /* fn-param-at-type-variable-slot-boxed-per-call: a `(fn ...)`
+                     * PARAMETER is the ptr<void> poly carrier, which the
+                     * fat-field loop below boxes into a fat handle of the
+                     * parameter's signature.  Bind the type parameter to that
+                     * signature, as the arg loop does for a generic's slot --
+                     * bound to ptr<void>, `(match (Some d) (Some f) (f 5) ...)`
+                     * typed `f` as a raw pointer, which is not callable. */
+                    if (concrete.kind == TY_PTR_VOID && arg_expr) {
+                        const Expr *pv = arg_expr;
+                        while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+                        const Binding *pb = (pv && pv->kind == EX_VAR) ? pv->as.var.binding : NULL;
+                        if (pb && pb->is_param && pb->is_poly_fn && pb->poly_type &&
+                            pb->poly_type->kind == TY_FN && !pb->poly_type->as.fn.cfnptr &&
+                            pb->poly_type->as.fn.arity <= TUR_FAT_SHIM_MAX_ARITY) {
+                            concrete = *pb->poly_type;
+                            concrete.as.fn.boxed = true;
+                        }
+                    }
                     bool found = false;
                     for (uint8_t bi = 0; bi < n_bound; bi++) {
                         if (strcmp(param_bindings[bi].name, pname) == 0) {
@@ -6577,6 +6699,26 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                                             (ft->kind == TY_FN && ft->as.fn.boxed));
                     if (!fat_field) continue;
                     Expr *fa = call_expr->as.call_.args[fi];
+                    /* fn-param-at-type-variable-slot-boxed-per-call: at a
+                     * type-variable field the arg loop has already put the
+                     * poly carrier through the int64 carrier
+                     * (EX_REINTERPRET), which hid it from the box below:
+                     * `(MkBx d)` stored the carrier, typed the field ptr<void>,
+                     * and `(match (MkBx d) (MkBx f) (f 5) ...)` refused `f` as
+                     * not callable.  Look through that reinterpret, so the box
+                     * replaces the whole argument. */
+                    if (fa && fa->kind == EX_REINTERPRET &&
+                        fa->as.reinterpret_.target_kind == TY_INT &&
+                        fa->as.reinterpret_.expr &&
+                        fa->as.reinterpret_.expr->type.kind == TY_PTR_VOID) {
+                        const Expr *pv = fa->as.reinterpret_.expr;
+                        while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+                        const Binding *pb = (pv && pv->kind == EX_VAR) ? pv->as.var.binding : NULL;
+                        if (pb && pb->is_param && pb->is_poly_fn && pb->poly_type &&
+                            pb->poly_type->kind == TY_FN && !pb->poly_type->as.fn.cfnptr &&
+                            pb->poly_type->as.fn.arity <= TUR_FAT_SHIM_MAX_ARITY)
+                            fa = fa->as.reinterpret_.expr;
+                    }
                     /* fn-param-stored-in-struct-field-miscompiles: a `(fn ...)`
                      * PARAMETER not marked `^fat` is the two-word poly carrier
                      * (tur_poly_fn_t, typed ptr<void>), not a TY_FN value, so
