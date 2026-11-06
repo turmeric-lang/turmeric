@@ -1255,7 +1255,17 @@ static const char *catch_thunk_box_shim(EmitCtx *ctx, const Expr *thunk, int *ow
                    ? *fnty.as.fn.result_full_type
                    : emit_type_from_kind(fnty.as.fn.result_kind);
     Type rr = emit_resolve_type(ctx, ret);
-    if (rr.kind == TY_FLOAT || rr.kind == TY_FLOAT32 || rr.kind == TY_FLOAT64) {
+    /* ...and a cstr result: slot 0 of such a thunk is the typed
+     * `const char * (*)(void *)` fat shim, so the generic
+     * `int64_t (*)(void *)` call is an indirect call through the wrong
+     * function type -- a -fsanitize=function trap on
+     * `(catch-unwind (fn [] : cstr "fine"))`, the catch-unwind-match-in-place
+     * fixture's last line.  The bits trampoline calls it at its real type and
+     * returns the word, which is what the box stores anyway.  (A bool
+     * thunk's slot 0 is already word-typed: calling it at `bool` traps the
+     * other way, so bool keeps the generic path.) */
+    if (rr.kind == TY_FLOAT || rr.kind == TY_FLOAT32 || rr.kind == TY_FLOAT64 ||
+        rr.kind == TY_CSTR) {
         if (owns) *owns = 0;
         return ensure_catch_bits_shim(ctx, rr);
     }

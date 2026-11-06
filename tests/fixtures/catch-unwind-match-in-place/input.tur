@@ -19,4 +19,10 @@
                (Ok v) "no"
                (Err e) "caught")))                                         ;; caught
   (println (match (catch-unwind (fn [] : cstr "fine")) (Ok s) s (Err e) "no"))  ;; fine
+  ;; A cstr thunk's fat shim is `const char * (*)(void *)`: the catch calls it
+  ;; through a typed trampoline, not the int64 one (a -fsanitize=function trap).
+  (let [k "cap"]
+    (println (match (catch-unwind (fn [] : cstr k)) (Ok s) s (Err e) "no")))  ;; cap
+  (let [n 3]
+    (println (match (catch-unwind (fn [] : bool (> n 2))) (Ok b) b (Err e) false))) ;; true
   0)
