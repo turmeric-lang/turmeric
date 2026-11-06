@@ -1,5 +1,16 @@
 # Eleven Try Turmeric specs have never run in CI
 
+**Narrowed 2026-11-06: seven promoted.** `ci-api`, `docs-highlight`,
+`docs-restore`, `editor-highlight`, `pwa-update`, `sw-kill` and
+`theme-toggle` are on the desktop path list now; all 42 of their tests passed
+locally (Chromium, `npx playwright test --project=desktop`, no wasm bundle --
+none of them waits for the evaluator). Left: `run-session` and
+`toolbar-overflow`, which wait for `Ready` and so need a bundle the local run
+had no Emscripten to build, and `share-link`, two of whose three tests failed
+locally for want of the bundle (`window.turmericApp` never came up). Each keeps
+its line in `specs-not-in-ci.txt` with that reason; the next step is to
+promote them in a PR whose CI builds the bundle and read what it reports.
+
 **Severity:** low-medium (test coverage gap; a spec nobody runs cannot fail).
 
 Found 2026-11-06 by `tests/check-web-specs-in-ci.py`'s first run, while
