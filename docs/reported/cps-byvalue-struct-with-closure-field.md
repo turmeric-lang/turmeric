@@ -1,5 +1,34 @@
 # A by-value struct with a closure field keeps its function out of the CPS backend
 
+**Narrowed 2026-11-05: the repro below compiles and runs (`100`, `101`,
+`102`).** Fix direction 1, extended one step. `fn_sig_ok`'s param gate
+(`fn_byval_agg_param_ok`, `src/compiler/emit_cps_ir.c`) now also admits a
+by-value product whose only owning fields are closures
+(`byval_fnfield_only_product`: every other field a slot scalar) when the body
+only READS it -- every use is `(.f h)`, a call through a field included, or
+`h` handed whole, by value, to a plain function whose parameter there is the
+same type and is itself only read (`agg_param_only_field_reads` /
+`agg_param_handed_to_reader`, bounded for recursion). Such a struct is
+borrowed on the direct path too: the caller's `drop_fnfields_<T>` (or the CPS
+entry's reap) frees its closures, the callee never does. A cps->cps call may
+then pass it as an argument to such a parameter (`fnfield_param_handed_on`
+in `call_args_ok`); the `__cps` entry takes it by value and nothing crosses a
+one-word slot. Pinned by `tests/fixtures/cps-byvalue-struct-closure-field-param`
+(the repro, a call through the handler field across the perform, and a
+function that hands the struct to one that reads it; leak-checked, both
+engines agree).
+
+**Still open:** a body that stores, returns, rebinds or captures the struct
+keeps evicting, as does one handing it to an inline-C, closure or generic
+callee; and the closure exception in `adt_is_byvalue_product_d`
+(`src/compiler/types.c`) stays, so a struct with an opaque field beside a
+closure (the SAX parsers) is still on the carrier ABI and still leaks its box
+once per parser. Lifting it wants turmeric-spices' `html` `sax_tokens` and
+`xml` SAX suites as the regression check; they need lexbor / the xml spice's
+C libraries, which the 2026-11-05 session's container did not have, so it was
+not attempted blind. A struct with an opaque field would also need
+`byval_fnfield_only_product` to admit the opaque word.
+
 **Severity: medium** (compile failure: a diagnostic, or emitted C that does not
 compile).
 

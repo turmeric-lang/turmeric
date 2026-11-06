@@ -1119,6 +1119,11 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
     }
     const Symbol *name = name_form->as.sym;
     Binding *existing_b = scope_lookup(e->scope, name);
+    /* list-typed-load-collides-with-frame-ownstr-string: a module that came
+     * first yields the bare name to a top-level declaration. */
+    if (existing_b && !elab_is_forward_type(e, name) &&
+        elab_module_yield_type_name(e, existing_b))
+        existing_b = scope_lookup(e->scope, name);
     if (existing_b && !elab_is_forward_type(e, name)) {
         diag_emit(DIAG_ERROR, name_form->span,
                   "defopaque: '%s' is already defined", name->name);

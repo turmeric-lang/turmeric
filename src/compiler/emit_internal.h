@@ -1875,6 +1875,12 @@ bool emit_let_init_is_erased_word_to_ptr(struct EmitCtx *ctx,
  * Defined in emit_expr.c. */
 bool emit_spec_arg_type_for_binding(EmitCtx *ctx, const struct Binding *b,
                                     Type *out);
+/* generic-affine-local-never-dropped: the body an EX_DEFER runs in the active
+ * specialization -- its own body, or for a type-variable local's scope-exit
+ * drop (defer_.spec_drop_of) the spec's Drop-method call, or NULL when there is
+ * nothing to run here.  Every emit site that runs a defer body goes through it.
+ * Defined in emit_core.c. */
+const struct Expr *emit_defer_body(EmitCtx *ctx, const struct Expr *d);
 /* G6: true when a call's result type and a candidate spec's result type are
  * distinct PRIMITIVE kinds, or (capturing-thunk-returning-heap-field-record-
  * garbles-int) are both concrete and spell different C types -- a return-

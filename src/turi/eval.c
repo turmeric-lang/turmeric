@@ -1649,6 +1649,67 @@ static bool frame_lookup_tyvar(EvalFrame *f, const char *name, Type *out) {
     return false;
 }
 
+/* generic-affine-local-never-dropped: the body of a type-variable local's
+ * scope-exit drop (defer_.spec_drop_of) in this activation.  The emitter
+ * decides it per specialization (emit_defer_body); here the activation's pin
+ * of the tyvar names the type.  When it is a move-only Drop opaque the body is
+ * a call of its Drop method on the binding, else NULL (nothing to run).  The
+ * synthesized call is built once per (defer, instance) and kept for the
+ * process, like the interpreter's other program-lifetime structures. */
+typedef struct SpecDropBody {
+    const Expr *defer;
+    const struct TypeClassInstance *inst;
+    Expr *call;
+    struct SpecDropBody *next;
+} SpecDropBody;
+static SpecDropBody *g_spec_drop_bodies;
+
+static const Expr *turi_spec_drop_body(TuriEnv *env, EvalFrame *frame,
+                                       const Expr *d) {
+    Binding *b = d->as.defer_.spec_drop_of;
+    TypeClassEnv *tce = env->last_tc_env ? (TypeClassEnv *)env->last_tc_env : NULL;
+    if (!b || !tce || b->type.kind != TY_TYVAR || !b->type.as.tyvar_.name) return NULL;
+    Type t;
+    if (!frame_lookup_tyvar(frame, b->type.as.tyvar_.name, &t)) return NULL;
+    if (t.kind != TY_ADT || !t.as.adt_.def || !t.as.adt_.def->is_opaque) return NULL;
+    TypeClass *drop_tc = NULL, *clone_tc = NULL;
+    for (TypeClass *c = tce->typeclasses; c; c = c->next) {
+        if (!c->name) continue;
+        if (strcmp(c->name->name, "Drop") == 0) drop_tc = c;
+        else if (strcmp(c->name->name, "Clone") == 0) clone_tc = c;
+    }
+    if (!drop_tc) return NULL;
+    struct TypeClassInstance *di = typeclass_env_lookup_instance(tce, drop_tc, &t, 1);
+    if (!di || di->n_method_impls == 0 || !di->method_impls[0] ||
+        !di->method_impls[0]->binding)
+        return NULL;
+    if (clone_tc && typeclass_env_lookup_instance(tce, clone_tc, &t, 1)) return NULL;
+    for (SpecDropBody *s = g_spec_drop_bodies; s; s = s->next)
+        if (s->defer == d && s->inst == di) return s->call;
+    SpecDropBody *s = (SpecDropBody *)calloc(1, sizeof *s);
+    Expr *var = (Expr *)calloc(1, sizeof(Expr));
+    Expr *call = (Expr *)calloc(1, sizeof(Expr));
+    Expr **args = (Expr **)calloc(1, sizeof(Expr *));
+    if (!s || !var || !call || !args) { fprintf(stderr, "turi: oom\n"); abort(); }
+    var->kind = EX_VAR;
+    var->type = t;
+    var->span = d->span;
+    var->as.var.binding = b;
+    call->kind = EX_CALL;
+    call->type = TYPE_NIL;
+    call->span = d->span;
+    call->as.call_.fn_binding = di->method_impls[0]->binding;
+    call->as.call_.n_args = 1;
+    args[0] = var;
+    call->as.call_.args = args;
+    s->defer = d;
+    s->inst = di;
+    s->call = call;
+    s->next = g_spec_drop_bodies;
+    g_spec_drop_bodies = s;
+    return call;
+}
+
 /* turi-call-pins-and-side-frames-not-reclaimed: a frame's tyvar and dictionary
  * pins come from free lists frame_release_one fills, so a generic or
  * constrained call in a loop no longer leaves its pins in value_scratch.  Each
@@ -14518,8 +14579,16 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             TuriValue v = eval_lookup(env, frame, b->name->name);
             frame_bind(env, snap, b->name->name, v);
         }
+        const Expr *dbody = e->as.defer_.body;
+        if (e->as.defer_.spec_drop_of) {
+            dbody = turi_spec_drop_body(env, frame, e);
+            if (!dbody) {   /* this instantiation's type has no sole-owner Drop */
+                frame_release(env, snap);
+                return turi_nil();
+            }
+        }
         DeferItem *item = (DeferItem *)malloc(sizeof(DeferItem));
-        item->body     = e->as.defer_.body;
+        item->body     = (Expr *)dbody;
         item->snapshot = snap;
         item->next     = (DeferItem *)env->defer_stack;
         env->defer_stack = item;

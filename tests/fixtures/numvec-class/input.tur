@@ -2,9 +2,10 @@
 ;; over F64Vec, F32Vec, I64Vec, I32Vec and U8Vec.  Each generic below is
 ;; written once and specialized per type; every method is called through it,
 ;; and the results (fractional floats, wrapping integers) are the per-type
-;; functions'.  na-copy's result is freed by hand: a generic-typed local is
-;; not dropped at scope exit yet (docs/reported/generic-affine-local-never-
-;; dropped.md).  Leak-checked.
+;; functions'.  na-copy's result is a generic-typed local that only ^borrow
+;; parameters see, so each specialization drops it at scope exit through its
+;; type's Drop instance (docs/archive/generic-affine-local-never-dropped.md).
+;; Leak-checked.
 (load "stdlib/numvec.tur")
 
 (defn mean [V] [(NumArray V) (NumCast (Sum V))] [^borrow a : V] : float
@@ -53,8 +54,7 @@
     (show-it c)
     (na-fill! c (from-int 3))
     (na-copy! a c)
-    (show-it a)
-    (na-free c)))
+    (show-it a)))
 
 (defn main [] : int
   (let [a (f64vec-of 7.1 -3.25 2.5)

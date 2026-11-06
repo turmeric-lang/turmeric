@@ -5937,7 +5937,7 @@
 ;;;   na-sum -- the sum (eight-lane order for floats; integers wrap)
 ;;;   na-min -- the smallest element (an empty array panics)
 ;;;   na-max -- the largest element (an empty array panics)
-;;;   na-copy -- a fresh copy, owned by the caller -- free it with `na-free` (a generic local is not dropped yet)
+;;;   na-copy -- a fresh copy, owned by the caller (a `let` of it that only `^borrow` parameters see is dropped at scope exit)
 ;;;   na-free -- release an array now, consuming it
 ;;;   na-show -- an owned "#P[a b c]" String
 ;;;

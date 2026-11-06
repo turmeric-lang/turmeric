@@ -1,0 +1,6 @@
+;; Imported after lib/own: its top-level load brings in stdlib/string.tur,
+;; whose global String meets lib/own's.
+(load "stdlib/list-typed.tur")
+(defmodule lib/lt
+  (export one)
+  (defn one [] : (List int) (list-of 1)))

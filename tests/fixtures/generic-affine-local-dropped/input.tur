@@ -1,0 +1,61 @@
+;; generic-affine-local-dropped: a let-bound value of a generic's type
+;; variable is dropped at scope exit in the specializations where that type is
+;; a move-only Drop opaque (Res), and left alone where it is not (int).  Only
+;; a local whose every use is a ^borrow argument gets the drop: one returned or
+;; handed to an owning parameter belongs to someone else
+;; (docs/archive/generic-affine-local-never-dropped.md).  Leak-checked.
+(defopaque ^affine Res :int)
+(defn res-free [r : Res] : nil (println "freed"))
+(definstance Drop [Res] (drop [x] : void (res-free x)))
+(defclass Mk [v]
+  (mk-copy [^borrow a : v] : v)
+  (peek [^borrow a : v] : int)
+  (eat [a : v] : int))
+(definstance Mk [Res]
+  (mk-copy [a] (:: 7 Res))
+  (peek [a] 40)
+  (eat [a] (do (res-free a) 2)))
+(definstance Mk [int]
+  (mk-copy [a] (+ a 1))
+  (peek [a] a)
+  (eat [a] a))
+
+;; unused -> dropped
+(defn use-copy [V] [(Mk V)] [^borrow a : V] : int
+  (let [c (mk-copy a)]
+    1))
+;; borrowed twice, under a builtin -> dropped once
+(defn twice [V] [(Mk V)] [^borrow a : V] : int
+  (let [c (mk-copy a)]
+    (+ (peek c) (peek c))))
+;; handed to an owning parameter -> eat frees it, not the scope
+(defn handed [V] [(Mk V)] [^borrow a : V] : int
+  (let [c (mk-copy a)]
+    (eat c)))
+;; returned -> the caller owns it
+(defn returned [V] [(Mk V)] [^borrow a : V] : V
+  (let [c (mk-copy a)]
+    c))
+;; read under an if and a nested let -> dropped on both paths
+(defn branchy [V] [(Mk V)] [^borrow a : V n : int] : int
+  (let [c (mk-copy a)]
+    (if (> n 0)
+      (let [p (peek c)] p)
+      0)))
+
+(defn main [] : int
+  (let [r (:: 3 Res)]
+    (println (use-copy r))
+    (println (twice r))
+    (println "--")
+    (println (handed r))
+    (println "--")
+    (let [x (returned r)] (res-free x))
+    (println "--")
+    (println (branchy r 1))
+    (println (branchy r 0))
+    (println (use-copy 5))
+    (println (twice 5))
+    (println (handed 5))
+    (println (returned 5))
+    0))

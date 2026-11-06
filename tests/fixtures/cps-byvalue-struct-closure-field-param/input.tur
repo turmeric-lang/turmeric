@@ -1,0 +1,37 @@
+;; cps-byvalue-struct-with-closure-field: a function taking a by-value struct
+;; with a closure field stays on the CPS backend when it only reads the
+;; struct's fields (or hands it on, by value, to a function that does), so a
+;; perform under it lowers.  The struct is borrowed, as on the direct path:
+;; the caller's scope frees its closure.  Leak-checked.
+(defeffect Log [x : int] : nil)
+(defstruct ^copy H [raw : int handler : (fn [int] int)])
+
+(defn feed! [r : int s : int] : (Result int int)
+  (perform (Log (+ r s)))
+  (ok 0))
+
+;; the report's shape: a field read in a performing loop
+(defn feed-n [h : H n : int] : nil
+  (let [^mut i 0]
+    (while (< i n)
+      (feed! (.raw h) i)
+      (set! i (+ i 1)))))
+
+;; the handler called through its field, across the perform
+(defn feed-via [h : H n : int] : nil
+  (let [^mut i 0]
+    (while (< i n)
+      (feed! ((.handler h) (.raw h)) i)
+      (set! i (+ i 1)))))
+
+;; handed on whole, by value, to a function that only reads it
+(defn run [h : H] : nil
+  (handle (feed-via h 2)
+    (Log [x] k) (do (println x) (resume k nil))))
+
+(defn main [] : int
+  (let [h (H 100 (fn [x : int] : int (* x 10)))]
+    (handle (feed-n h 3)
+      (Log [x] k) (do (println x) (resume k nil)))
+    (run h))
+  0)

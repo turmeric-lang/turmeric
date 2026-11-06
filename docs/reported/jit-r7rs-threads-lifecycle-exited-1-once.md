@@ -41,8 +41,17 @@ not reachable from that sandbox, so it is still unread.
 38186563013) were read: `r7rs-threads-lifecycle` failed in none of them. The
 step's filter keeps every `FAIL` line, so its absence is a pass. The only
 failures in those runs were the aborting-fixture timeouts of
-[jit-linux-aborting-fixtures-time-out](jit-linux-aborting-fixtures-time-out.md).
+[jit-linux-aborting-fixtures-time-out](../archive/jit-linux-aborting-fixtures-time-out.md).
 Still one occurrence in all.
+
+**Re-checked on CI 2026-11-05.** The `JIT engine (ubuntu-latest)` logs of
+every `main` run of `ci.yml` from 2026-10-12 to 2026-11-05 (237 with a JIT
+log) hold no `FAIL` line for `r7rs-threads-lifecycle` -- none for anything
+but the 10-12 aborting-fixture timeouts and one slow-runner run (10-21,
+39630203081) of seven non-aborting timeouts. Still one occurrence in all.
+The artifact named below could not be read from that session either: the
+GitHub API hands out a `productionresultssa2.blob.core.windows.net` link,
+which the container's egress proxy refused.
 
 **Next step.** The full output is in that run's `jit-ctest-log-ubuntu-latest`
 artifact (ID 11283599190, 90-day retention): look for the

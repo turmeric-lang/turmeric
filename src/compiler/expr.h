@@ -1859,6 +1859,12 @@ struct Expr {
              * and hoisting it would reorder output.  Set at each synthesis site
              * in elab_forms.c; read by emit_fns.c's tail grammar. */
             bool is_drop_glue;
+            /* generic-affine-local-never-dropped: non-NULL for the scope-exit
+             * drop of a local typed by a generic's type variable.  The body is
+             * a nil placeholder; the emitter resolves this binding's type in
+             * the active specialization and runs that type's Drop method when
+             * it is a move-only Drop opaque (emit_defer_body), else nothing. */
+            struct Binding *spec_drop_of;
         } defer_;
         /* Phase 3/4: (return) or (return expr) - early return with defer firing */
         struct { Expr *value; } return_;

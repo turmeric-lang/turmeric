@@ -5963,7 +5963,8 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
  * (proper-tail-calls T4), which all open a frame the same way. */
 void emit_frame_push_defer(EmitCtx *ctx, Buf *body, const char *frame_var,
                            const Expr *it) {
-    const Expr *defer_expr = it->as.defer_.body;
+    const Expr *defer_expr = emit_defer_body(ctx, it);
+    if (!defer_expr) return;   /* a per-spec drop with nothing to drop here */
     const uint8_t n_captures = it->as.defer_.n_captures;
     Binding **captures = it->as.defer_.captures;
 

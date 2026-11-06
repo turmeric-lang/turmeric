@@ -595,6 +595,13 @@ void scope_add(Scope *s, Binding *b) {
     }
 }
 
+/* list-typed-load-collides-with-frame-ownstr-string: give binding `b` of
+ * scope `s` a new name, keeping the scope's index in step. */
+void scope_rename_binding(Scope *s, Binding *b, const Symbol *name) {
+    b->name = name;
+    if (s->idx) scope_idx_rebuild(s, s->idx_cap);
+}
+
 /* `index + 1` of the newest binding of `name` in indexed scope `s`, 0 if it
  * has none.  Older ones follow s->prev. */
 uint32_t scope_idx_newest(const Scope *s, const Symbol *name) {

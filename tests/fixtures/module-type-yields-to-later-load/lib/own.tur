@@ -1,0 +1,6 @@
+;; A module's own String, elaborated before anything loads stdlib/string.tur.
+(defmodule lib/own
+  (export String make-s s-len)
+  (defopaque String :int)
+  (defn make-s [n : int] : String (:: n String))
+  (defn s-len [s : String] : int (:: s int)))
