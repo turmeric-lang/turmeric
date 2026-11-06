@@ -391,6 +391,38 @@ export function createLspClient(opts) {
         });
     }
 
+    /* Push an attached document after its prefix grew (the session accepted
+     * a prompt line or a Run), so that the server's index has the new names
+     * even while the line being typed does not analyze.
+     *
+     * The server keeps a document's last good index when its text fails to
+     * compile, and a half-typed prompt line (`(zzz-ed`) never compiles. So a
+     * Run that happened while the prompt held one pushed `prefix + "\n(zzz-ed"`,
+     * the analysis failed, and the index the server kept was the one from
+     * before the Run: the Run's definitions were never offered at the prompt
+     * until the line was cleared (try-turmeric-specs-outside-the-ci-path-list-
+     * have-rotted, failure 3).  A submitted line clears the prompt first,
+     * which is why a name defined AT the prompt was offered.
+     *
+     * So the prefix goes alone first, with an empty line, and a
+     * documentSymbol request makes the server analyze it now (analysis is
+     * deferred to the next request that reads the index); then the real text
+     * follows, and its failure keeps that fresh index. */
+    async function seedExtraDoc(uri) {
+        const entry = extraDocs.get(uri);
+        if (!entry || !available || entry.model.isDisposed()) return;
+        const prefix = entry.getPrefix ? (entry.getPrefix() || '') : '';
+        if (prefix && entry.model.getValue().trim()) {
+            entry.version++;
+            await notify('textDocument/didChange', {
+                textDocument: { uri, version: entry.version },
+                contentChanges: [{ text: prefix + '\n' }],
+            });
+            await request('textDocument/documentSymbol', { textDocument: { uri } });
+        }
+        return sendExtraChange(uri);
+    }
+
     /**
      * Register a Monaco model as an LSP document in its own right, with an
      * optional prefix that precedes it in what the server is told.
@@ -443,7 +475,7 @@ export function createLspClient(opts) {
         return {
             /* Push the document now -- after the session accepts a line, so the
              * next completion sees the name it just defined. */
-            refresh: () => sendExtraChange(uri),
+            refresh: () => seedExtraDoc(uri),
             detach: () => detachDocument(uri),
         };
     }

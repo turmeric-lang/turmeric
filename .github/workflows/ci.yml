@@ -2273,6 +2273,9 @@ jobs:
         working-directory: web
         run: npm run build
 
+      # Every spec is on this list (or the deploy-gate / mobile / perf steps)
+      # or named in web/tests/specs-not-in-ci.txt with a reason; Docs lint's
+      # tests/check-web-specs-in-ci.py fails otherwise.
       # Paths, not bare filenames: Playwright treats a positional argument as a
       # regex over the test file path, so `smoke.spec.js` also matches
       # `prod-smoke.spec.js` -- which tests the *live* turmeric-lang.com, has
@@ -2322,6 +2325,7 @@ jobs:
           tests/minimap.spec.js tests/footer.spec.js
           tests/lang-picker.spec.js tests/sw-dev.spec.js tests/trace.spec.js
           tests/security.spec.js tests/ci.spec.js tests/jit-engine.spec.js
+          tests/repl-intelligence.spec.js
 
       # Not the default `success()`, because the desktop step above now
       # BLOCKS: a desktop failure would skip this step, mobile would produce no
