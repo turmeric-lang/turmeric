@@ -8,6 +8,21 @@ can use, and since the JIT became the default build (v0.60.0, `923b803a`) no
 CI leg builds the interpreter the way iOS would need it. Anything turi picks
 up that assumes a JIT, a subprocess or `dlopen` reaches `main` unnoticed.
 
+**Narrowed 2026-11-06: items 3 and 6 are compiled out, and the nightly reaches
+the compiler.** `nightly-ios.yml` had never compiled a line: every run since
+it landed stopped at configure, `install TARGETS given no BUNDLE DESTINATION
+for MACOSX_BUNDLE executable target "tur"` (CMake makes every iOS executable a
+bundle; run 42045786533 on 2026-11-05 is one). `install(TARGETS tur)` now
+names a `BUNDLE DESTINATION` (`src/CMakeLists.txt`), so the next run lists the
+real compiler errors. `platform_proc.h` defines `TUR_NO_SUBPROCESS` from
+`TARGET_OS_IPHONE` (iOS, tvOS, watchOS, visionOS): `process/spawn-raw` answers
+`-ENOSYS` there as it does under Emscripten, `process/wait-raw` `-ECHILD`, and
+spice auto-discovery finds no project, with `run_build`'s `system()` calls
+compiled out (`src/turi/spice_loader.c`). Checked only by compiling both files
+with `-DTARGET_OS_IPHONE=1` on Linux; the nightly is the real check. Left:
+item 2 (ucontext), items 4-5 (FFI shape limit, inline C), and whatever the
+first real nightly error list adds.
+
 **Status: OPEN -- research.** Filed 2026-10-04 while reviewing whether the
 default JIT build puts the tree-walking interpreter at risk of rot. Nothing
 here has been compiled against an iOS SDK. Every claim about Apple's SDK below
@@ -64,6 +79,11 @@ the compiled runtime already ships (`src/async/fiber_ctx_arm64.S`,
 
 ### 3. Spice loading builds a dylib in a subprocess and `dlopen`s it
 
+**Compiled out 2026-11-06** (`TUR_NO_SUBPROCESS`, above): on iOS
+`tur_spice_image_load` reports no project and never reaches `system()`. The
+static-link design below is still open.
+
+
 `src/turi/spice_loader.c:366/374` runs `system()` to invoke
 `tur build --shared`, then `dlopen`s the result (`spice_loader.c:788`). iOS
 has no `tur` binary to call and does not allow loading a dylib built at
@@ -99,6 +119,12 @@ inline-C, so the suite does not measure this gap -- see "Finding the turi
 gaps" below.
 
 ### 6. `process/spawn` forks
+
+**Fixed 2026-11-06:** under `TUR_NO_SUBPROCESS` the native returns `-ENOSYS`,
+which `process/spawn` already reports as an error, and no `fork()` is
+compiled. The capability row stays; an embedder that wants the native absent
+can still leave `TURI_CAP_PROC` out.
+
 
 `src/turi/interpreter_natives.c:5026-5028` implements `process/spawn` with
 `fork()` + `execvp`. Sandboxed iOS apps cannot fork. The native is already
