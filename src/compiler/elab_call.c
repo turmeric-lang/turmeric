@@ -3116,8 +3116,30 @@ static Binding *hoist_borrowed_drop_temp(Elab *e, Expr **slot, Span span,
     return tb;
 }
 
-/* Bind a plain-scalar argument to a `__borrowa` temp ahead of a hoisted
- * borrowed temporary, so the two keep their written evaluation order. */
+/* borrowed-drop-temporary-leaks-outside-the-hoist, the last shape: may a
+ * NON-scalar argument before the temporary be hoisted into a `__borrowa`
+ * temp to keep the evaluation order?  Only when the temp then owns nothing: a
+ * by-value product whose every field is a plain scalar, with no Drop
+ * instance and nothing affine or linear about it -- a plain-data struct such
+ * as `(Pt 1 2)`, which a copy duplicates whole.  An owning value (a closure's
+ * env, a Vec, a Drop opaque) would make the hoist's let its owner beside the
+ * callee that consumes it, so it keeps the old behaviour, a leak. */
+static bool hoist_arg_is_plain_copy(Elab *e, const Expr *a) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    if (!a || a->type.kind != TY_ADT || type_is_heap_struct(a->type)) return false;
+    if (ty_is_affine(a->type) || ty_is_sublinear(a->type) || ty_is_relevant(a->type))
+        return false;
+    const AdtDef *def = a->type.as.adt_.def;
+    if (!def || def->n_ctors != 1 || !def->ctors[0]) return false;
+    const CtorDef *c = def->ctors[0];
+    for (uint32_t fi = 0; fi < c->n_fields; fi++)
+        if (!type_kind_is_plain_scalar(c->fields[fi].kind)) return false;
+    return elab_fresh_sole_owner_drop_inst(e, &a->type, a) == NULL;
+}
+
+/* Bind a plain-scalar argument (or a plain-copy one, above) to a `__borrowa`
+ * temp ahead of a hoisted borrowed temporary, so the two keep their written
+ * evaluation order. */
 static void hoist_ordered_arg_temp(Elab *e, Expr **slot, Span span,
                                    HoistList *hl) {
     Expr *a = *slot;
@@ -3287,7 +3309,8 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
                         strncmp(aj->as.var.binding->name->name, "__borrow", 8) == 0)
                         continue;                 /* already a hoist temp */
                     if (!arg_is_literal(args[j]) &&
-                        !type_kind_is_plain_scalar(args[j]->type.kind))
+                        !type_kind_is_plain_scalar(args[j]->type.kind) &&
+                        !hoist_arg_is_plain_copy(e, args[j]))
                         order_ok = false;
                 }
             }
