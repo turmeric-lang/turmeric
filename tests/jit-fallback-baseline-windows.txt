@@ -4,7 +4,7 @@
 #   TUR_JIT_FALLBACK_UPDATE=1 TUR=./build-win-jit/tur.exe bash tests/run-jit.sh
 # or tighten it from the windows-jit-corpus CI job: each shard prints the
 # fallbacks it saw, and this file is their union less the shared file
-# (docs/reported/windows-jit-corpus-not-in-ci.md).
+# (docs/archive/windows-jit-corpus-not-in-ci.md).
 #
 # Measured 2026-11-06 on that job's first run (windows-latest, UCRT64): 70
 # names from the shards' lists, plus 7 that fell back and then failed only

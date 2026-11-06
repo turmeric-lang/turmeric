@@ -7,8 +7,10 @@ leaky carries `requires.no-sanitize` (first line: its report count) and runs
 as before, with a warning annotation. Measured locally (Debug `tur`, Linux,
 the 30 spices with no `:cmake-deps`): `math`, `simd`, `test` and `ws-core`
 are clean; 21 carry the marker, mostly for strings and records their tests
-never free. The native-dep spices are measured by spices CI itself. What is
-left is the markers: leak-cleaning each suite and deleting its file.
+never free. Spices CI measured the native-dep ones on turmeric-spices#135:
+14 more fail on LeakSanitizer reports alone (no AddressSanitizer or UBSan
+error in any log) and carry the marker too -- 35 in all. What is left is the
+markers: leak-cleaning each suite and deleting its file.
 
 **Narrowed 2026-11-06: fix direction 2 is in `tur`.** `TUR_SANITIZE_PROGRAMS=1`
 compiles and links every program `tur` builds with

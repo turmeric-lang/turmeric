@@ -5,6 +5,7 @@
 # line here for a spec CI does run.  A spec off every list passes by not
 # running -- docs/archive/try-turmeric-specs-outside-the-ci-path-list-have-rotted.md.
 #
+# Tracked as docs/reported/web-specs-never-run-in-ci.md.
 # Promoting one: add it to the desktop path list in .github/workflows/ci.yml
 # ("Run broader smoke suite (desktop)"), delete its line here, and fix what CI
 # then reports.

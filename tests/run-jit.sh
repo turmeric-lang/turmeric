@@ -801,7 +801,7 @@ if [ "${TUR_JIT_FALLBACK_UPDATE:-0}" = "1" ] && [ -n "$_overlay" ]; then
         echo "# on Windows (MSYS2) ONLY, on top of $JIT_FALLBACK_BASELINE.  One name per"
         echo "# line.  Same rules as the shared file.  Regenerate on an MSYS2 shell:"
         echo "#   TUR_JIT_FALLBACK_UPDATE=1 TUR=./build-win-jit/tur.exe bash tests/run-jit.sh"
-        echo "# (docs/reported/windows-jit-corpus-not-in-ci.md)"
+        echo "# (docs/archive/windows-jit-corpus-not-in-ci.md)"
         comm -23 <(printf '%s\n' "$_observed") <(printf '%s\n' "$_shared") | sed '/^$/d'
     } > "$_overlay"
     echo "  wrote $_overlay"

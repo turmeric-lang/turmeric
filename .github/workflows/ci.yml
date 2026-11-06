@@ -1844,7 +1844,7 @@ jobs:
     # runner time (shard it like `windows` above -- a third of the corpus
     # takes ~5.5 min on a 12-core box), and the fallback ratchet, whose
     # baseline is Linux-generated and would fail on the ~47 fixtures that fall
-    # back to cc only on Windows.  See docs/reported/windows-jit-corpus-not-in-ci.md.
+    # back to cc only on Windows.  See docs/archive/windows-jit-corpus-not-in-ci.md.
     #
     # Separate job so it runs in parallel with `windows:` rather than adding its
     # smoke checks onto that job's ~30 minutes.
@@ -1988,7 +1988,7 @@ jobs:
     # above (build + smoke) never ran: the last Windows corpus run before this
     # job was 2026-09-05, and the fallback ratchet landed after it, so 47
     # Windows-only cc fallbacks (MinGW headers c2mir cannot parse) sat
-    # unrecorded (docs/reported/windows-jit-corpus-not-in-ci.md).  They are
+    # unrecorded (docs/archive/windows-jit-corpus-not-in-ci.md).  They are
     # allowed by tests/jit-fallback-baseline-windows.txt, an overlay on the
     # shared baseline that run-jit.sh reads when MSYSTEM is a Windows
     # environment; a NEW Windows fallback fails this job.  Each shard prints

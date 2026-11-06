@@ -5,6 +5,11 @@ fixture on the list below still gets the right answer on Windows, through the
 cc fallback. But nothing in CI would notice a Windows JIT regression beyond
 the smoke tests.
 
+**RESOLVED 2026-11-06** (#1462): the `windows-jit-corpus` job is green --
+4128 passed, 0 failed across its three shards on windows-latest, with the
+77-name overlay and `jit-inline-c-thread-local` taking the cc fallback as on
+Linux. A new Windows-only fallback now fails the job.
+
 **Worked 2026-11-06: fix direction 1, and the corpus is in CI.**
 `tests/run-jit.sh` reads `tests/jit-fallback-baseline-windows.txt` as an
 overlay on the shared baseline when `MSYSTEM` is a Windows environment
