@@ -5,6 +5,16 @@ fixture on the list below still gets the right answer on Windows, through the
 cc fallback. But nothing in CI would notice a Windows JIT regression beyond
 the smoke tests.
 
+**Worked 2026-11-06: fix direction 1, and the corpus is in CI.**
+`tests/run-jit.sh` reads `tests/jit-fallback-baseline-windows.txt` as an
+overlay on the shared baseline when `MSYSTEM` is a Windows environment
+(`TUR_JIT_FALLBACK_UPDATE=1` there rewrites only the overlay), and a sharded
+run now prints the fallbacks it saw, so the union of the shards is the
+host's whole set. `ci.yml`'s new `windows-jit-corpus` job runs the corpus in
+three shards on every code PR. The overlay was seeded from this report's
+grouping (61 names, wider than the 47 measured) and is tightened from the
+job's per-shard lists; the report closes when it is exact and the job green.
+
 **Status: open.** Split out 2026-09-26 from section 4 of
 [jit-windows-support-spike](../archive/jit-windows-support-spike.md) when that
 spike was archived.

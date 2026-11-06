@@ -1,0 +1,71 @@
+# tests/jit-fallback-baseline-windows.txt -- fixtures run-jit.sh ALLOWS to fall back to cc
+# on Windows (MSYS2) ONLY, on top of tests/jit-fallback-baseline.txt.  One name per
+# line.  Same rules as the shared file.  Regenerate on an MSYS2 shell:
+#   TUR_JIT_FALLBACK_UPDATE=1 TUR=./build-win-jit/tur.exe bash tests/run-jit.sh
+# (docs/reported/windows-jit-corpus-not-in-ci.md)
+#
+# PROVISIONAL: built 2026-11-06 from the report's 2026-09-26 grouping (every
+# httpd-* fixture plus the 17 it names), which is wider than the 47 it
+# measured.  The windows-jit-corpus CI job prints each shard's observed
+# fallbacks; tighten this list to their union.
+async-echo-server
+async-file
+httpd-async-echo
+httpd-async-mw-attr
+httpd-async-mw-compose
+httpd-bind-addr
+httpd-conn-upgrade
+httpd-conn-upgrade-async
+httpd-conn-upgrade-tls
+httpd-h1-basic
+httpd-h2-reactor
+httpd-h3-pool
+httpd-h4-keepalive
+httpd-h5-tls
+httpd-h6-routing
+httpd-h7-middleware
+httpd-mw-basic-auth
+httpd-mw-basic-auth-attr
+httpd-mw-basic-auth-noncapture
+httpd-mw-body-size
+httpd-mw-compose
+httpd-mw-compose-of
+httpd-mw-cookie
+httpd-mw-cors
+httpd-mw-cors-opts
+httpd-mw-cors-origins
+httpd-mw-etag
+httpd-mw-fold-many
+httpd-mw-form
+httpd-mw-json
+httpd-mw-log
+httpd-mw-multipart
+httpd-mw-rate-limit
+httpd-mw-recover
+httpd-mw-req-header
+httpd-mw-request-id
+httpd-mw-resp-header
+httpd-mw-secure-headers
+httpd-mw-static
+httpd-mw-timeout
+httpd-mw-trust-proxy
+httpd-new-pool-fail-drops-handler
+httpd-pool-pending-limit
+httpd-read-deadline
+httpd-req-string-opt
+httpd-static-index-listing
+image-globals-roundtrip
+image-hooks-tracked
+image-reload-hook
+image-roundtrip
+io-stdlib-roundtrip
+r7rs-eval
+r7rs-file-ports
+r7rs-system-libraries
+recursive-linear-borrow-branch
+rwlock-basic
+term-string
+tmpfile-linear
+tmpfile-linear-borrow
+warn-image-global-unregistered
+with-lock-scoped
