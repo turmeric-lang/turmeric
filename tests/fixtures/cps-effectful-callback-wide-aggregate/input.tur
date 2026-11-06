@@ -1,0 +1,34 @@
+;; cps-effectful-callback-wide-aggregate -- an effectful callback whose
+;; argument is a by-value aggregate wider than 16 bytes threads through a fn
+;; parameter: the perform inside it reaches the handler around the caller
+;; (cps-effectful-callback-through-multi-arg-or-untyped-param).  The report
+;; listed it as refused at compile time (fn_sig_ok); re-measured 2026-11-06 it
+;; builds and agrees with --interpret, captureless and capturing, for a struct
+;; (40 B) and a multi-variant ADT argument.
+
+(defeffect Ask [] : int)
+
+(defstruct P5 [a : int b : int c : int d : int e : float])
+(defdata Sh (Rect [w : int h : int d : int]) (Dot))
+
+(defn app [h : (fn [P5] #fx{Ask} int) p : P5] #fx{Ask} : int (h p))
+(defn app-sh [h : (fn [Sh] #fx{Ask} int) s : Sh] #fx{Ask} : int (h s))
+
+(defn plain [] : int
+  (app (fn [p : P5] : int (+ (.a p) (.d p) (perform (Ask)))) (P5 1 2 3 4 7.1)))
+
+(defn capturing [m : int] : int
+  (app (fn [p : P5] : int (+ m (.c p) (perform (Ask)))) (P5 1 2 3 4 7.1)))
+
+(defn shape [m : int] : int
+  (app-sh (fn [s : Sh] : int
+            (match s
+              (Rect w h d) (+ m w h d (perform (Ask)))
+              (Dot) (perform (Ask))))
+          (Rect 2 3 4)))
+
+(defn main [] : int
+  (println (handle (plain) (Ask [] k) (resume k 100)))         ;; 105
+  (println (handle (capturing 10) (Ask [] k) (resume k 100)))  ;; 113
+  (println (handle (shape 1) (Ask [] k) (resume k 100)))       ;; 110
+  0)
