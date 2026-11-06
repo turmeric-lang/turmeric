@@ -6533,6 +6533,11 @@ struct __tur_sym {
 };
 #endif
 
+typedef int64_t (*tur_fnptr_int64_t_int64_t_void___t)(int64_t, void *);
+typedef bool (*tur_fnptr_bool_int64_t_int64_t_void___t)(int64_t, int64_t, void *);
+typedef int64_t (*tur_fnptr_int64_t_int64_t_int64_t_int64_t_void___t)(int64_t, int64_t, int64_t, void *);
+typedef int64_t (*tur_fnptr_int64_t_int64_t_int64_t_void___t)(int64_t, int64_t, void *);
+
 #if !defined(TUR_FWD_tur_adt_Cons__int) && !defined(TUR_TY_tur_adt_Cons__int)
 #define TUR_FWD_tur_adt_Cons__int
 typedef struct tur_adt_Cons__int tur_adt_Cons__int;
@@ -6982,10 +6987,10 @@ static int64_t hamt_sliter_hycur_hyval(void *);
 static void * hamt_slkeyeq(void *);
 static int64_t hamt_slget_hydynamic(void *, int64_t, int64_t, void *);
 static bool hamt_slhas_hydynamic_qu(void *, int64_t, int64_t, void *);
-static void * hamt_slmap(void *, void *, void *);
-static void * hamt_slfilter(void *, void *, void *);
-static int64_t hamt_slreduce(void *, void *, int64_t, void *);
-static void * hamt_slmerge_hywith(void *, void *, void *, void *);
+static void * hamt_slmap(void *, tur_fnptr_int64_t_int64_t_void___t, void *);
+static void * hamt_slfilter(void *, tur_fnptr_bool_int64_t_int64_t_void___t, void *);
+static int64_t hamt_slreduce(void *, tur_fnptr_int64_t_int64_t_int64_t_int64_t_void___t, int64_t, void *);
+static void * hamt_slmerge_hywith(void *, void *, tur_fnptr_int64_t_int64_t_int64_t_void___t, void *);
 static const char * hamt_slshow(void *);
 static void hamt_sldump(void *);
 static void * hamt_sltransient(void *);
@@ -8406,19 +8411,19 @@ static bool hamt_slhas_hydynamic_qu(void * m, int64_t hash, int64_t key, void * 
         return tur_hamt_has_dynamic((void *)(intptr_t)(m), hash, key, (void *)(intptr_t)(keyeq));
 }
 
-static void * hamt_slmap(void * m, void * fn, void * ctx) {
+static void * hamt_slmap(void * m, tur_fnptr_int64_t_int64_t_void___t fn, void * ctx) {
         return tur_hamt_map((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx));
 }
 
-static void * hamt_slfilter(void * m, void * fn, void * ctx) {
+static void * hamt_slfilter(void * m, tur_fnptr_bool_int64_t_int64_t_void___t fn, void * ctx) {
         return tur_hamt_filter((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx));
 }
 
-static int64_t hamt_slreduce(void * m, void * fn, int64_t init, void * ctx) {
+static int64_t hamt_slreduce(void * m, tur_fnptr_int64_t_int64_t_int64_t_int64_t_void___t fn, int64_t init, void * ctx) {
         return tur_hamt_reduce((void *)(intptr_t)(m), (void *)(intptr_t)(fn), init, (void *)(intptr_t)(ctx));
 }
 
-static void * hamt_slmerge_hywith(void * a, void * b, void * fn, void * ctx) {
+static void * hamt_slmerge_hywith(void * a, void * b, tur_fnptr_int64_t_int64_t_int64_t_void___t fn, void * ctx) {
         return tur_hamt_merge_with((void *)(intptr_t)(a), (void *)(intptr_t)(b), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx));
 }
 

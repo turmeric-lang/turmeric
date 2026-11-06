@@ -1,0 +1,9 @@
+;; hamt-map-callback-wrong-arity -- hamt/map's callback is the C-ABI function
+;; `(c-fn [int ptr<void>] int)` its runtime calls (src/runtime/hamt.h), not a
+;; `ptr<void>`: a one-argument function used to compile and then be called
+;; with two (stdlib-int-stand-in-audit, S1).
+(defn bad-map [val : int] : int val)
+(defn main [] : int
+  (let [m (hamt/new)]
+    (hamt/map m bad-map m))
+  0)
