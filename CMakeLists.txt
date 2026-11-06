@@ -1662,6 +1662,14 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_split_lib_cache PROPERTIES TIMEOUT 720)
+# spice-suites-without-libturi-run-unsanitized: TUR_SANITIZE_PROGRAMS=1
+# builds every program with ASan/UBSan, libturi or not.
+add_test(
+  NAME tur_sanitize_programs
+  COMMAND bash tests/check-sanitize-programs.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_sanitize_programs PROPERTIES TIMEOUT 720)
 # turi-call-frames-never-reclaimed: `tur --interpret` hands an activation's
 # call frame (and its let / match-arm frames) back when it returns uncaptured.
 # Runs one program with and without reclamation and asserts peak RSS halves.

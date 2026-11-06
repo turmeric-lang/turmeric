@@ -47,6 +47,9 @@ if ! grep -q "40 byte(s) leaked in 1 allocation" "$WORK/san.err"; then
     echo "FAIL check-sanitize-programs: TUR_SANITIZE_PROGRAMS=1 did not catch the leak"
     head -20 "$WORK/san.err"; fail=1
 fi
+# LeakSanitizer _exits on a leak before stdio is flushed, so read the
+# sanitized program's answer from a run with leak detection off.
+ASAN_OPTIONS=detect_leaks=0 "$WORK/san" > "$WORK/san.out" 2>/dev/null
 if [ "$(cat "$WORK/san.out")" != "1" ] || [ "$(cat "$WORK/plain.out")" != "1" ]; then
     echo "FAIL check-sanitize-programs: wrong output"; fail=1
 fi
