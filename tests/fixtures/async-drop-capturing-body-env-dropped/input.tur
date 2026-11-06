@@ -1,0 +1,87 @@
+;; async-drop-capturing-body-env-dropped: a lambda spawned with `(async ...)`
+;; that captures a Drop-instance value has an env whose drop glue releases
+;; something, so the spawn used to leave it alone -- the body's result might
+;; still reference the capture -- and the env and the captured value both
+;; leaked, one of each per spawn.  A plain scalar result cannot reference it,
+;; so the spawn owns that env now and drops it, capture included, when the body
+;; settles, inline or after parking (async-capturing-body-env-never-freed).
+;; Leak-checked, and the live count pins that each value is released exactly
+;; once: 101 were never released before.
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
+(defn ctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+(defopaque ^affine Res :int)
+(defn mk [v : int] : Res (ctr 0) (:: v Res))
+(defn rel [r : Res] : void (ctr 1) (:: r int) nil)
+(definstance Drop [Res] (drop [x] : void (rel x)))
+(defn peek [^borrow r : Res] : int (:: r int))
+(defn live [] : int (- (ctr 2) (ctr 3)))
+
+(defn spawn-inline [k : int] : int
+  (let [w (mk k)]
+    (drive (async (fn [] : int (+ 1 (peek w)))))))
+(defn spawn-parking [k : int] : int
+  (let [w (mk k)]
+    (drive (async (fn [] : int (+ (peek w) (sum-values 0 3 0)))))))
+
+(defn main [] : nil
+  (cur-cell true)
+  (println (spawn-inline 4))     ; 5
+  (println (spawn-parking 4))    ; 10
+  (println (live))               ; 0
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i 100)
+      (set! acc (+ acc (spawn-inline i) (spawn-parking i)))
+      (set! i (+ i 1)))
+    (println acc))               ; 10600
+  (println (live))               ; 0
+  (free-future (cur-cell false)))

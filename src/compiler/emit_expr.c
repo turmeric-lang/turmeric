@@ -9867,7 +9867,22 @@ static bool async_spawn_owns_env(const Expr *fn_expr) {
         lit->as.var.binding->spawn_owns_env)
         return true;
     const struct Closure *lc = (lit && lit->kind == EX_CLOSURE) ? lit->as.closure_.closure : NULL;
-    return lc && (closure_env_drop_is_shallow(lc) || closure_env_drop_frees_box_only(lc));
+    if (!lc) return false;
+    if (closure_env_drop_is_shallow(lc) || closure_env_drop_frees_box_only(lc)) return true;
+    /* A capture whose drop releases something -- an rc, an owned `^fat`
+     * closure, a Drop instance -- was refused because the body's result may
+     * still reference it.  A plain scalar result cannot, so the env's full
+     * glue may run once the body settles, as it would at a let-bound
+     * closure's scope exit. */
+    TypeKind rk = fn_expr->type.as.fn.result_kind;
+    bool scalar = rk == TY_INT || rk == TY_INT64 || rk == TY_FLOAT ||
+                  rk == TY_FLOAT64 || rk == TY_FLOAT32 || rk == TY_BOOL ||
+                  rk == TY_NIL || rk == TY_INT8 || rk == TY_INT16 ||
+                  rk == TY_INT32 || rk == TY_UINT8 || rk == TY_UINT16 ||
+                  rk == TY_UINT32 || rk == TY_UINT64;
+    if (!scalar || !lc->fn || lc->n_captures == 0) return false;
+    if (lc->is_shift_receiver || lc->is_effect_payload) return false;
+    return !closure_body_inline_c_touches_env(lc);
 }
 
 /* borrow-checks-gaps: a borrow of a literal has no place to point at --
