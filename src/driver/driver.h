@@ -249,6 +249,12 @@ int locate_runtime_lib(char *libdir, size_t dcap,
                        char *libname, size_t ncap);
 void apply_runtime_lib_mode(Buf *autolink);
 void autolink_regions_off(Buf *autolink);
+/* spice-suites-without-libturi-run-unsanitized: TUR_SANITIZE_PROGRAMS=1 asks
+ * that every program tur builds be compiled and linked with
+ * -fsanitize=address,undefined, whether or not it links a sanitized libturi
+ * (the autodetect that otherwise decides).  For test runs that want
+ * LeakSanitizer on every suite, not only the libturi ones. */
+bool drv_sanitize_programs_requested(void);
 void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
                              bool *out_needs_asan);
 bool drv_buf_put_quoted(Buf *b, const char *s);

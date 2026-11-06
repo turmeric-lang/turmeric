@@ -381,6 +381,8 @@ bool preamble_split_auto_applies(void) {
     if (g_emit_debug_lines) return false;
     const char *f = getenv("TUR_CC_FLAGS");
     if (f && strstr(f, "-fsanitize")) return false;
+    /* ...and so does a sanitize-everything run: the archive is not. */
+    if (drv_sanitize_programs_requested()) return false;
     if (!emit_rcgc_from_archive()) return false;
     char libdir[4096], libname[128];
     if (!locate_runtime_lib(libdir, sizeof(libdir), libname, sizeof(libname)) ||
