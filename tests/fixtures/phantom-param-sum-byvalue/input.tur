@@ -1,0 +1,29 @@
+;; phantom-param-sum-byvalue -- a sum whose type parameter no constructor field
+;; mentions (a phantom) has one layout, so its BARE name goes by value like a
+;; parameterless sum (parametric-sum-stays-on-carrier, gate 1).  Before, `mkb`
+;; malloc'd a `tur_adt_Bnd` per call and returned the int64 carrier while the
+;; applied `(Bnd int)` was already by value.  Both spellings, matched in place,
+;; through a parameter, and across 1000 constructions.
+
+(defdata ^copy Bnd [A] (Incl int) (Excl int) (Unb))
+
+(defn mk  [x : int] : (Bnd int) (Incl x))
+(defn mkb [x : int] : Bnd       (Incl x))
+(defn exb [x : int] : Bnd       (if (> x 0) (Excl x) (Unb)))
+
+(defn show  [b : Bnd]       : int (match b (Incl x) x (Excl x) (- 0 x) (Unb) 0))
+(defn showa [b : (Bnd int)] : int (match b (Incl x) x (Excl x) (- 0 x) (Unb) 0))
+
+(defn main [] : int
+  (println (show (mkb 4)))     ;; 4
+  (println (showa (mk 5)))     ;; 5
+  (println (show (exb 3)))     ;; -3
+  (println (show (exb 0)))     ;; 0
+  (match (mkb 6) (Incl x) (println x) (Excl x) (println x) (Unb) (println 0))
+  (let [^mut i 0
+        ^mut s 0]
+    (while (< i 1000)
+      (set! s (+ s (show (mkb i)) (show (exb i))))
+      (set! i (+ i 1)))
+    (println s))               ;; 0
+  0)

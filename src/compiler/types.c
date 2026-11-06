@@ -4109,8 +4109,33 @@ static bool adt_graph_reaches(const AdtDef *from, const AdtDef *target,
 static bool adt_sr1_sum_candidate(const AdtDef *def) {
     if (!g_sr1_sum_byvalue) return false;
     if (!def || def->is_refined || def->is_heap) return false;
-    if (def->n_ctors < 2 || def->n_type_params != 0) return false;
-    if (!def->ctors) return false;
+    if (def->n_ctors < 2 || !def->ctors) return false;
+    /* parametric-sum-stays-on-carrier (gate 1): a PHANTOM parameter -- one no
+     * constructor field mentions -- leaves the type a single layout, so its
+     * bare name goes by value like a parameterless sum. */
+    if (def->n_type_params != 0) {
+        /* Kind-`*` parameters only.  A higher-kinded phantom (stdlib/free.tur's
+         * `(defdata Free [^f a] ...)`) is a library type whose API carries the
+         * value as the int64 carrier on purpose. */
+        if (!def->type_param_kinds) return false;
+        for (uint8_t pi = 0; pi < def->n_type_params; pi++)
+            if (def->type_param_kinds[pi] != KIND_STAR) return false;
+        for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+            const CtorDef *c = def->ctors[ci];
+            if (!c) return false;
+            for (uint32_t i = 0; i < c->n_fields; i++) {
+                const Type *ft = c->fields[i].full_type;
+                /* Conservative: only a field of a closed, non-compound type
+                 * (a scalar, a cstr, a concrete ADT/struct) is known not to
+                 * mention a parameter. */
+                TypeKind fk = ft ? ft->kind : c->fields[i].kind;
+                if (fk == TY_TYVAR || fk == TY_APP || fk == TY_FN ||
+                    fk == TY_FORALL || fk == TY_EXISTS || fk == TY_REC ||
+                    fk == TY_UNKNOWN)
+                    return false;
+            }
+        }
+    }
     /* SR4 measurement seam (2026-08-27): TUR_SR4_RECURSIVE_BYVALUE=1 admitted
      * recursive sums to the by-value path (the default since RM4, below).  The suite is GREEN with it on --
      * every codegen blocker is fixed (the fat-dispatch ABI disagreement,

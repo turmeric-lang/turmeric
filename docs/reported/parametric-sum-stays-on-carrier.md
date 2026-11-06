@@ -1,5 +1,21 @@
 # A parametric sum stays on the malloc'd carrier where its non-parametric twin goes by value
 
+**Narrowed 2026-11-06: gate 1's phantom half.** `adt_sr1_sum_candidate`
+(`src/compiler/types.c`) admits a parametric def whose kind-`*` parameters no
+constructor field mentions -- every field a scalar, a cstr or a closed
+ADT/struct, never a type variable, an application or a function -- so the bare
+name `Bnd` of `(defdata ^copy Bnd [A] (Incl int) (Excl int) (Unb))` is the
+by-value `tur_adt_Bnd` now, not a malloc'd box on the int64 carrier.
+Higher-kinded phantoms stay on the carrier: stdlib/free.tur's
+`(defdata Free [^f a] ...)` is carried as `int` by its own API, and admitting
+it failed the four `free-*` fixtures with TUR-E0709. Pinned by
+`tests/fixtures/phantom-param-sum-byvalue` (leak-checked; bare and applied
+spellings, 1000 constructions; both engines). `tests/run-sr4-seam.sh` passes
+(24/0). **Left:** gate 1's other half (every constructor pinning the
+parameters to one closed instantiation -- `GVec`, `SizedVec`), and gate 2
+(an applied self-recursive monomorph, `(L int)`), which needs the spine-pointer
+field machinery the non-parametric side has.
+
 **Severity: low (performance; no wrong results).** Every constructor call
 `malloc`s a box and the value rides the int64 carrier, where the same type
 written without a type parameter is a by-value struct. Since the ADT/GADT
