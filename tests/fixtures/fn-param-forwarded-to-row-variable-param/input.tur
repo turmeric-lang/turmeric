@@ -1,0 +1,20 @@
+;; fn-param-not-forwardable-to-effect-rowed-param: a plain `(fn [int] int)`
+;; parameter is passed on to a parameter whose type carries a row variable,
+;; `#fx{e}`.  The two have different representations (the poly carrier and a
+;; fat handle); the call boxes the carrier.  A top-level fn, an effectful one,
+;; a lambda and a capturing closure all cross, on both engines.
+(defn inc1 [x : int] : int (+ x 1))
+(defn noisy [x : int] : int (println "noise") x)
+(defn rowed [g : (fn [int] #fx{e} int) x : int] #fx{e} : int (g x))
+(defn rowed-io [g : (fn [int] #fx{IO e} int) x : int] #fx{IO e} : int (g x))
+(defn forward [g : (fn [int] int)] : int (rowed g 1))
+(defn forward-io [g : (fn [int] int)] : int (rowed-io g 2))
+
+(defn main [] : int
+  (println (forward inc1))                          ; 2
+  (println (forward noisy))                         ; noise, 1
+  (println (forward (fn [x : int] : int (* x 10)))) ; 10
+  (let [y 5]
+    (println (forward (fn [x : int] : int (+ x y)))))   ; 6
+  (println (forward-io inc1))                       ; 3
+  0)

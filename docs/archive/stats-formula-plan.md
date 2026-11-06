@@ -655,4 +655,4 @@ Turmeric bugs found on the way, each worked around in the spice and filed
 and a one-module repro added to
 [monomorph-emitted-before-its-type-argument](monomorph-emitted-before-its-type-argument.md).
 Fitting through tur-stats also showed its p-values are computed wrongly:
-[stats-ols-pvalues-wrong-continued-fraction](../reported/stats-ols-pvalues-wrong-continued-fraction.md).
+[stats-ols-pvalues-wrong-continued-fraction](stats-ols-pvalues-wrong-continued-fraction.md).

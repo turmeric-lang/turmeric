@@ -3,10 +3,14 @@
 ;; has no owner: the callee only borrows it and no binding holds it.  It is now
 ;; bound to a temp and released after the call, when that is plainly safe: the
 ;; call's result is a scalar (it cannot point into the temp) and every argument
-;; before it is effect-free (hoisting it reorders nothing).  The last line is
-;; the case outside that rule, pinned as it stands: an effectful argument
-;; precedes the temporary, so it is not hoisted and stays live (a leak, never a
-;; dangling borrow).
+;; before it is effect-free (hoisting it reorders nothing).  An effectful
+;; argument before it no longer leaves it unowned when every non-literal
+;; argument before it is a plain scalar: those are hoisted ahead of it, in
+;; order (borrowed-drop-temporary-leaks-outside-the-hoist), and the `peek3`
+;; line pins that a variable an effectful neighbour assigns is still read
+;; first.  A move-only Drop result (`dup`) owns its own resource, so it cannot
+;; point into the temp either: the temp is released, and the result goes to
+;; the let that binds it, or to a further hoist.
 ;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
 (defn ctr [op : int] : int
   ```c
@@ -22,6 +26,8 @@
 (definstance Drop [Widget] (drop [x] : void (rel x)))
 (defn peek [^borrow w : Widget] : int 1)
 (defn peek2 [k : int ^borrow w : Widget] : int k)
+(defn peek3 [k : int j : int ^borrow w : Widget] : int (+ (* 10 k) j))
+(defn dup [^borrow w : Widget] : Widget (mk))
 (defn peekc [^borrow w : Widget] : int
   ```c
   return 5;
@@ -34,5 +40,12 @@
   (let [k 3]
     (println (peek2 k (mk))))  (live)   ;; 3 0
   (println (+ (peek (mk)) (peek (mk)))) (live)   ;; 2 0
-  (println (peek2 (ctr 2) (mk))) (live) ;; 5 1 -- effectful prefix: not hoisted
+  (println (peek2 (ctr 2) (mk))) (live) ;; 5 0 -- effectful prefix, hoisted in order
+  (let [^mut x 1]
+    (println (peek3 x (do (set! x 7) (ctr 2)) (mk))) (live))   ;; 16 0
+  (let [c (dup (mk))]
+    (live)                               ;; 1 -- c alone is live
+    (println (peek c)))                  ;; 1
+  (live)                                 ;; 0
+  (println (peek (dup (dup (mk))))) (live)   ;; 1 0
   0)

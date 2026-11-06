@@ -3072,6 +3072,19 @@ static bool arg_is_effect_free(const Expr *a) {
     }
 }
 
+/* A literal: reading it later than written is unobservable. */
+static bool arg_is_literal(const Expr *a) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    if (!a) return true;
+    switch (a->kind) {
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        return true;
+    default:
+        return false;
+    }
+}
+
 /* borrowed-temporary-never-dropped: a fresh move-only Drop value (a
  * `defopaque ^affine` with a Drop instance -- stdlib/numvec.tur's arrays,
  * httpd's Handler) passed straight to a `^borrow` parameter has no owner: the
@@ -3103,6 +3116,29 @@ static Binding *hoist_borrowed_drop_temp(Elab *e, Expr **slot, Span span,
     return tb;
 }
 
+/* Bind a plain-scalar argument to a `__borrowa` temp ahead of a hoisted
+ * borrowed temporary, so the two keep their written evaluation order. */
+static void hoist_ordered_arg_temp(Elab *e, Expr **slot, Span span,
+                                   HoistList *hl) {
+    Expr *a = *slot;
+    char nm[48];
+    snprintf(nm, sizeof nm, "__borrowa_%u", elab_fresh_id(e));
+    const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+    Binding *tb = binding_new(e, sym, a->type, false, false, span);
+    if (hl->n == hl->cap) {
+        uint32_t nc = hl->cap ? hl->cap * 2 : 4;
+        LetBinding *nv = (LetBinding *)arena_alloc(e->arena, nc * sizeof(LetBinding));
+        if (hl->n) memcpy(nv, hl->v, hl->n * sizeof(LetBinding));
+        hl->v = nv; hl->cap = nc;
+    }
+    hl->v[hl->n].binding = tb;
+    hl->v[hl->n].init = a;
+    hl->n++;
+    Expr *v = expr_new(e->arena, EX_VAR, a->type, span);
+    v->as.var.binding = tb;
+    *slot = v;
+}
+
 static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     if (!call || call->kind != EX_CALL) return call;
     const Binding *fb = call->as.call_.fn_binding;
@@ -3115,17 +3151,60 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     struct TypeClassInstance *drop_inst[8];
     uint32_t n_drop = 0;
     bool prefix_effect_free = true;
-    bool scalar_result = type_kind_is_plain_scalar(call->type.kind);
+    /* borrowed-drop-temporary-leaks-outside-the-hoist: an effectful argument
+     * before the temporary no longer keeps it unowned when every non-literal
+     * argument before it is a plain scalar.  Those are hoisted into
+     * `__borrowa` temps ahead of it, in order -- variables too, since an
+     * effectful neighbour may assign one -- so the call reads them all from
+     * temps and evaluation order is kept.  `hoisted_upto` is the first
+     * argument not yet moved into the let. */
+    uint32_t hoisted_upto = 0;
+    /* A scalar result cannot point into the temp.  Nor can a move-only Drop
+     * opaque one (borrowed-drop-temporary-leaks-outside-the-hoist): it owns
+     * its own resource -- its Drop releases it -- so it is not a view of the
+     * argument's (a view type like F64View is neither affine nor Drop).
+     * `(f64vec-copy (f64vec-new 4 7.1))` releases the temporary, and the copy
+     * goes to whatever owns the call's value, as a `let` init or a further
+     * hoist (init_yields_fresh_owner sees through the let this builds). */
+    bool scalar_result = type_kind_is_plain_scalar(call->type.kind) ||
+        elab_fresh_sole_owner_drop_inst(e, &call->type, call) != NULL;
     for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
         Expr **slot = &args[i];
         HOIST_PEEL_SLOT(slot);
         if (arg_is_freeable_closure_source(fb, i, *slot)) {
             (void)hoist_fresh_closure(e, slot, span, &hl);
-        } else if (scalar_result && prefix_effect_free && n_drop < 8 &&
+        } else if (scalar_result && n_drop < 8 &&
                    FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW)) {
-            struct TypeClassInstance *di =
-                elab_fresh_sole_owner_drop_inst(e, &(*slot)->type, *slot);
+            bool order_ok = prefix_effect_free;
+            if (!order_ok) {
+                order_ok = true;
+                for (uint32_t j = hoisted_upto; j < i && order_ok; j++) {
+                    const Expr *aj = args[j];
+                    while (aj && aj->kind == EX_ASCRIBE) aj = aj->as.ascribe_.inner;
+                    if (aj && aj->kind == EX_VAR && aj->as.var.binding &&
+                        strncmp(aj->as.var.binding->name->name, "__borrow", 8) == 0)
+                        continue;                 /* already a hoist temp */
+                    if (!arg_is_literal(args[j]) &&
+                        !type_kind_is_plain_scalar(args[j]->type.kind))
+                        order_ok = false;
+                }
+            }
+            struct TypeClassInstance *di = order_ok
+                ? elab_fresh_sole_owner_drop_inst(e, &(*slot)->type, *slot)
+                : NULL;
             if (di) {
+                if (!prefix_effect_free) {
+                    for (uint32_t j = hoisted_upto; j < i; j++) {
+                        const Expr *aj = args[j];
+                        while (aj && aj->kind == EX_ASCRIBE) aj = aj->as.ascribe_.inner;
+                        if (arg_is_literal(aj)) continue;
+                        if (aj->kind == EX_VAR && aj->as.var.binding &&
+                            strncmp(aj->as.var.binding->name->name, "__borrow", 8) == 0)
+                            continue;
+                        hoist_ordered_arg_temp(e, &args[j], span, &hl);
+                    }
+                }
+                hoisted_upto = i + 1;
                 drop_tmp[n_drop] = hoist_borrowed_drop_temp(e, slot, span, &hl);
                 drop_inst[n_drop++] = di;
             }
@@ -8180,6 +8259,55 @@ void elab_stamp_self_call_sum_drops(Binding *b, Expr *body) {
     stamp_self_call_sum_drops(b, body);
 }
 
+/* fn-param-not-forwardable-to-effect-rowed-param: does this row name a row
+ * variable?  Before PASS_EFFECT_ENV a row is still symbolic, and a lowercase
+ * name is a variable there (effect_row_resolve). */
+static bool effect_row_is_open(const EffectRow *r) {
+    if (!r) return false;
+    switch (r->kind) {
+    case ERK_VAR:   return true;
+    case ERK_UNION: return effect_row_is_open(r->as.union_.left) ||
+                           effect_row_is_open(r->as.union_.right);
+    case ERK_UNRESOLVED:
+        for (uint32_t k = 0; k < r->as.unresolved.n_sym_names; k++) {
+            const Symbol *nm = r->as.unresolved.sym_names[k];
+            if (nm && nm->name && nm->name[0] >= 'a' && nm->name[0] <= 'z')
+                return true;
+        }
+        return false;
+    default:
+        return false;
+    }
+}
+
+/* A row as the program spells it, `#fx{IO}`, for a diagnostic. */
+static void fx_row_print_surface(Buf *b, const EffectRow *r) {
+    if (r && r->kind == ERK_UNRESOLVED) {
+        buf_puts(b, "#fx{");
+        for (uint32_t k = 0; k < r->as.unresolved.n_sym_names; k++) {
+            if (k) buf_putc(b, ' ');
+            const Symbol *nm = r->as.unresolved.sym_names[k];
+            buf_puts(b, nm && nm->name ? nm->name : "?");
+        }
+        buf_putc(b, '}');
+    } else if (!r || r->kind == ERK_EMPTY) {
+        buf_puts(b, "#fx{}");
+    } else {
+        effect_row_print(b, (EffectRow *)r);
+    }
+}
+
+/* Two function types with the same arity, parameter kinds and result kind --
+ * the shape check a carrier-to-nominal bridge needs; rows are compared by
+ * the caller. */
+static bool fn_sig_kinds_match(const Type *a, const Type *b) {
+    if (a->as.fn.arity != b->as.fn.arity) return false;
+    if (a->as.fn.result_kind != b->as.fn.result_kind) return false;
+    for (uint32_t k = 0; k < a->as.fn.arity; k++)
+        if (a->as.fn.arg_kinds[k] != b->as.fn.arg_kinds[k]) return false;
+    return true;
+}
+
 static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
@@ -9468,6 +9596,57 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             if (fn_type.kind == TY_FN && fn_arg_idx_fp < fn_type.as.fn.arity &&
                 FN_ARG_FLAG(fn_type.as.fn, fn_arg_idx_fp, FA_FAT)) {
                 arg_ok = true;
+            }
+        }
+        /* fn-param-not-forwardable-to-effect-rowed-param: a plain, effect-free
+         * `(fn [A] R)` PARAMETER rides the poly carrier (ptr<void>, signature
+         * in poly_type), while a parameter whose type carries an effect row
+         * keeps its nominal TY_FN and takes a fat handle.  When the slot's row
+         * is open -- `#fx{e}`, the row-polymorphic idiom -- accept the
+         * carrier: the nominal-slot conversion below boxes it
+         * (EX_POLY_TO_FAT), and the row variable binds to whatever the
+         * parameter carries, as a direct call through it would.  A CLOSED row
+         * (`#fx{}`, `#fx{IO}`) is refused: a row-less parameter may carry any
+         * effects, and the ER4 check would read it as carrying none. */
+        if (!arg_ok && expected_arg_kind == TY_FN && args[i]->type.kind == TY_PTR_VOID &&
+            fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+            const Expr *pv = args[i];
+            while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+            const Binding *pb = (pv && pv->kind == EX_VAR) ? pv->as.var.binding : NULL;
+            uint32_t rfi = fn_binding->closure_fn_binding ? i + 1 : i;
+            const Type *rpt = (rfi < fn_type.as.fn.arity)
+                ? fn_type.as.fn.arg_full_types[rfi] : NULL;
+            const Type *ppt = (pb && pb->is_param && pb->is_poly_fn) ? pb->poly_type : NULL;
+            if (rpt && rpt->kind == TY_FN && rpt->as.fn.effect_row &&
+                !rpt->as.fn.cfnptr && ppt && ppt->kind == TY_FN &&
+                !ppt->as.fn.cfnptr && !ppt->as.fn.effect_row &&
+                fn_sig_kinds_match(ppt, rpt)) {
+                if (effect_row_is_open(rpt->as.fn.effect_row)) {
+                    arg_ok = true;
+                } else {
+                    Buf eb; buf_init(&eb);
+                    fx_row_print_surface(&eb, rpt->as.fn.effect_row);
+                    buf_putc(&eb, '\0');
+                    Buf ab; buf_init(&ab);
+                    type_print(&ab, *ppt);
+                    buf_putc(&ab, '\0');
+                    diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                        TUR_E0009_EFFECT_ROW_MISMATCH,
+                        "function '%s' arg %u: '%s' is a parameter typed %s, "
+                        "with no effect row, so it may carry any effects; it "
+                        "cannot be passed where '%s' declares the closed row "
+                        "%s",
+                        fn_binding->name->name, i + 1, pb->name->name, ab.data,
+                        fn_binding->name->name, eb.data);
+                    diag_emit(DIAG_HELP, args[i]->span,
+                        "give '%s' a row as well -- `(fn [...] #fx{e} R)`, with "
+                        "#fx{e} on the function that declares it -- or declare "
+                        "the row the callee allows on it",
+                        pb->name->name);
+                    buf_free(&eb);
+                    buf_free(&ab);
+                    return NULL;
+                }
             }
         }
         /* TS4P1: For a polymorphic ADT constructor, the field is stored as TY_INT

@@ -1,0 +1,9 @@
+;; fn-param-not-forwardable-to-effect-rowed-param: a plain `(fn [int] int)`
+;; parameter has no effect row, so it may carry any effects.  Passing it where
+;; the callee declares a CLOSED row (`#fx{}`) would let the ER4 check read "no
+;; row" as "no effects" and admit `noisy` into a pure slot, so it is refused,
+;; naming the parameter and the row.
+(defn noisy [x : int] : int (println "noise") x)
+(defn pure-hof [g : (fn [int] #fx{} int) x : int] : int (g x))
+(defn forward [g : (fn [int] int)] : int (pure-hof g 1))
+(defn main [] : int (println (forward noisy)) 0)

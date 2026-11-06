@@ -1,0 +1,17 @@
+;; assoc-typed-receiver-not-a-dispatch-arg: `(peek h)` with `h : AHandle`
+;; dispatches on the instance whose `Handle` is `AHandle`.  Two instances
+;; binding it to the same type leave the call ambiguous; that is refused
+;; rather than resolved by the order the instances were declared in.
+(defopaque AHandle :int)
+(defstruct A [x : int])
+(defstruct B [y : float])
+(defclass Store [c]
+  (type Handle : Type)
+  (peek [h : Handle] : float))
+(definstance Store [A] (type Handle = AHandle)
+  (peek [h] 1.5))
+(definstance Store [B] (type Handle = AHandle)
+  (peek [h] 2.5))
+(defn main [] : int
+  (println (peek (:: 3 AHandle)))
+  0)

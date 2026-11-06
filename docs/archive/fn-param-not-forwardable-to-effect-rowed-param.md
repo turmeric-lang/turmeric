@@ -1,5 +1,7 @@
 # A plain function-typed parameter cannot be passed to one whose type has an effect row
 
+**RESOLVED 2026-11-05** -- see "Resolution" at the end.
+
 **Severity:** medium-low (expressiveness; misleading message). A higher-order
 function cannot hand its callback on to another one that declares an effect
 row, including the documented row-polymorphic idiom.
@@ -58,3 +60,41 @@ closed the same hole for `let` aliases by following them to their
 initializer. A parameter has no initializer to follow, so a row-less
 function type flowing into a rowed slot has to be refused or need an
 annotation.
+
+## Resolution (2026-11-05)
+
+Both halves of the note above, split by whether the slot's row is open.
+
+- **An open row** -- one that names a row variable, `#fx{e}` or `#fx{IO e}`
+  (`effect_row_is_open`, `src/compiler/elab_call.c`) -- accepts a poly-carrier
+  parameter whose signature matches the slot's (`fn_sig_kinds_match`). The
+  nominal-slot conversion that already ran for fat-normalized parameters boxes
+  it (`EX_POLY_TO_FAT`). The row variable binds to whatever the parameter
+  carries, so this admits nothing a direct `(g x)` call through the same
+  parameter does not already admit.
+- **A closed row** -- `#fx{}`, `#fx{IO}` -- is refused, TUR-E0009, naming the
+  parameter and the row, with a help line that says to give the parameter a
+  row:
+
+  ```
+  error [TUR-E0009]: function 'pure-hof' arg 1: 'g' is a parameter typed
+  (fn [int] : int), with no effect row, so it may carry any effects; it cannot
+  be passed where 'pure-hof' declares the closed row #fx{}
+  ```
+
+  That keeps the hole the 2026-10-29 note warned about closed: `noisy` cannot
+  reach a `#fx{}` slot through a row-less parameter.
+
+Pinned by `tests/fixtures/fn-param-forwarded-to-row-variable-param` (both
+engines: a top-level fn, an `IO` one, a lambda, a capturing closure, a
+`#fx{IO e}` slot) and `tests/fixtures/errors/fn-param-forwarded-to-closed-row-param`.
+
+Left as it was:
+
+- The box is the malloc'd one, 32 B per call, as at a type-variable slot
+  ([fn-param-at-type-variable-slot-boxed-per-call](../reported/fn-param-at-type-variable-slot-boxed-per-call.md)).
+- A callback that performs a user effect and is forwarded through a row
+  variable does not compile ("this effect operation has no lowering here").
+  That is not the bridge: the documented workaround, a `#fx{e}` row on the
+  forwarding parameter, fails the same way on the same program, while a
+  direct call through the plain parameter works.

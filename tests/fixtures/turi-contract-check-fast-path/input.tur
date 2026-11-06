@@ -1,0 +1,25 @@
+;; turi-contract-check-is-a-full-native-call: the interpreter answers a
+;; holding contract check without evaluating its message and site arguments
+;; or making the native call.  This pins what that must not change: a
+;; condition that performs (driven on the work stack, then skipped), a
+;; condition that calls a function, a check in tail position, and a failing
+;; check, whose panic names the site exactly as the native does.
+(defeffect Ask [] : int)
+
+(defn pos? [x : int] : bool (> x 0))
+
+(defn tail-check [x : int] : nil
+  (tur-contract-check-at (pos? x) "tail check" "input.tur" 12))
+
+(defn asked [] : int
+  (tur-contract-check-at (> (perform (Ask)) 0) "ask must be positive" "input.tur" 15)
+  7)
+
+(defn main [] : int
+  (tur-contract-check (> 2 1) "never")
+  (tail-check 3)
+  (println (handle (asked) (Ask [] k) (resume k 5)))
+  (println "ok")
+  (tur-contract-check-at (pos? (- 1 (list-length *args*) 1)) "x must be positive" "input.tur" 23)
+  (println "unreached")
+  0)
