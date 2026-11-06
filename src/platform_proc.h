@@ -40,7 +40,7 @@
  * process/spawn-raw native answers -ENOSYS (as it does under Emscripten) and
  * the REPL's spice auto-discovery, which builds a dylib in a `tur`
  * subprocess and dlopens it, finds no project.  See
- * docs/archive/turi-ios-readiness-unverified.md, items 3 and 6. */
+ * docs/reported/turi-ios-readiness-unverified.md, items 3 and 6. */
 #if defined(__APPLE__)
 #  include <TargetConditionals.h>
 #endif
