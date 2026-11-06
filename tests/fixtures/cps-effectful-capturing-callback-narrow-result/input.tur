@@ -1,0 +1,33 @@
+;; cps-effectful-capturing-callback-narrow-result: an effectful CAPTURING
+;; lambda with a `bool` or narrow-integer result, passed to a typed fn
+;; parameter.  Its env's slot 0 is the widening wrapper (a narrow result comes
+;; back widened), not the lambda's own entry, and the fat dispatcher keys the
+;; direct -> CPS registry on slot 0 -- so the lookup missed and the function
+;; was refused (cps-effectful-callback-through-multi-arg-or-untyped-param).
+;; The lambda's registration names the wrapper too now.  Every line equals
+;; `tur --interpret`.
+(defeffect Ask [] :int)
+
+(defn appb [h : (fn [int] bool) x : int] : int (if (h x) 1 0))
+(defn app8 [h : (fn [int] int8) x : int] : int (+ 100 (as int (h x))))
+(defn app32 [h : (fn [float] int32) x : float] : int (* 2 (as int (h x))))
+(defn appu [h : (fn [int int] uint16) x : int] : int (as int (h x 7)))
+
+(defn f1 [m : int] : int
+  (appb (fn [n : int] : bool (> (+ m n (perform (Ask))) 10)) 3))
+(defn f2 [m : int] : int
+  (appb (fn [n : int] : bool (> (+ m n (perform (Ask))) 100)) 3))
+(defn f3 [m : int] : int
+  (app8 (fn [n : int] : int8 (as int8 (- (+ m n) (perform (Ask))))) 2))
+(defn f4 [m : float] : int
+  (app32 (fn [y : float] : int32 (as int32 (+ (perform (Ask)) (as int {m * y})))) 4.0))
+(defn f5 [m : int] : int
+  (appu (fn [a : int b : int] : uint16 (as uint16 (+ m a b (perform (Ask))))) 1))
+
+(defn main [] : int
+  (println (handle (f1 5) (Ask [] k) (resume k 10)))      ; 1
+  (println (handle (f2 5) (Ask [] k) (resume k 10)))      ; 0
+  (println (handle (f3 5) (Ask [] k) (resume k 10)))      ; 97
+  (println (handle (f4 1.5) (Ask [] k) (resume k 10)))    ; 32
+  (println (handle (f5 2) (Ask [] k) (resume k 10)))      ; 20
+  0)

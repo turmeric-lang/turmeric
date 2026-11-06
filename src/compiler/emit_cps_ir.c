@@ -5906,6 +5906,10 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
             ptc_walk(e->as.if_.else_or_null, p, tail, val, tailc, ntc);
             return;
         case EX_ASCRIBE: ptc_walk(e->as.ascribe_.inner, p, tail, val, tailc, ntc); return;
+        /* `(as int (h x))`: the conversion runs after the call, so the call is
+         * non-tail (cps-effectful-callback-through-multi-arg-or-untyped-param:
+         * a narrow result is usually widened this way). */
+        case EX_CAST:    ptc_walk(e->as.cast_.expr, p, false, val, tailc, ntc); return;
         case EX_RETURN:  ptc_walk(e->as.return_.value, p, false, val, tailc, ntc); return;
         case EX_BUILTIN:  /* arithmetic / operator args are non-tail */
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
@@ -16238,10 +16242,43 @@ entry_wrapper_done:
             }
             buf_puts(file, "__k);\n}\n");
         }
+        /* cps-effectful-callback-through-multi-arg-or-untyped-param: a
+         * capturing lambda with a narrow result (`bool`, int8..int32, the
+         * unsigned widths) does not sit in its env's slot 0 itself -- the
+         * widening wrapper does (ensure_closure_slot0_widen) -- and the fat
+         * dispatcher keys the registry on slot 0.  Register the wrapper's
+         * address for the same twin.  It is declared here and defined (once)
+         * where the closure is built, or right here if nothing else asks. */
+        char *e2widen = NULL;
+        if (fd->closure && fd->n_params >= 1 && fd->n_params - 1 <= 255 &&
+            ctx->pending_handler_fns) {
+            const char *rcn = type_c_name(fd->return_type);
+            if (rcn && strcmp(thunk_result_slot_c_spelling(rcn), rcn) != 0) {
+                uint8_t wn = (uint8_t)(fd->n_params - 1);
+                Type *wpt = (Type *)calloc(wn ? wn : 1, sizeof(Type));
+                if (!wpt) { fprintf(stderr, "tur: oom\n"); abort(); }
+                for (uint8_t i = 0; i < wn; i++) wpt[i] = fd->params[i + 1]->type;
+                e2widen = ensure_closure_slot0_widen(ctx, ctx->pending_handler_fns,
+                                                     cn, fd->return_type, wpt, wn);
+                if (e2widen) {
+                    buf_printf(file, "__attribute__((unused)) static %s %s(void *",
+                               thunk_result_slot_c_spelling(rcn), e2widen);
+                    for (uint8_t i = 0; i < wn; i++)
+                        buf_printf(file, ", %s", thunk_param_slot_c_name(wpt[i]));
+                    buf_puts(file, ");\n");
+                }
+                free(wpt);
+            }
+        }
         buf_printf(file,
             "static void __tur_e2reg_%s(void) {\n"
-            "    __tur_cps_register((tur_dkw)%s, (__tur_cps_fn)%s%s);\n"
-            "}\n", cn, cn, cn, (e2_ok && e2_adapt) ? "__e2w" : "__cps");
+            "    __tur_cps_register((tur_dkw)%s, (__tur_cps_fn)%s%s);\n",
+            cn, cn, cn, (e2_ok && e2_adapt) ? "__e2w" : "__cps");
+        if (e2widen)
+            buf_printf(file, "    __tur_cps_register((tur_dkw)%s, (__tur_cps_fn)%s%s);\n",
+                       e2widen, cn, (e2_ok && e2_adapt) ? "__e2w" : "__cps");
+        buf_puts(file, "}\n");
+        free(e2widen);
         /* S1b: the direct->CPS registry must be populated before a threaded
          * call site looks up its CPS variant.  A dropped constructor here was
          * the SIGSEGV in findings 3.1. */
