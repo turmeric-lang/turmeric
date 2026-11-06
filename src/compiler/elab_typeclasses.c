@@ -6130,6 +6130,23 @@ static Expr *elab_dot_return_dispatch(Elab *e, const Form *call,
  * arm whose instance can only be picked from an expected result type, so a
  * concrete sibling arm can supply that type (return-directed-methods-pure-empty-
  * inference, fix direction #2). */
+/* Is some parameter of `m` typed by one of `c`'s associated types (a bare
+ * `Handle`, as the class declares it)?  Such a parameter selects the instance
+ * through that instance's binding (assoc-typed-receiver-not-a-dispatch-arg). */
+static bool method_has_assoc_param(const TypeClass *c, const TypeClassMethod *m) {
+    if (!c || !m || c->n_assoc_types == 0 || !m->param_types) return false;
+    for (uint32_t pi = 0; pi < m->n_params; pi++) {
+        const Type *pt = &m->param_types[pi];
+        if (pt->kind != TY_TYVAR || !pt->as.tyvar_.name || pt->as.tyvar_.assoc_of)
+            continue;
+        for (uint8_t a = 0; a < c->n_assoc_types; a++)
+            if (c->assoc_type_names[a] &&
+                strcmp(c->assoc_type_names[a]->name, pt->as.tyvar_.name) == 0)
+                return true;
+    }
+    return false;
+}
+
 bool elab_symbol_is_return_dispatch_method(Elab *e, const Symbol *name) {
     if (!name) return false;
     /* A user/local defn of the same name wins (mirrors the `!fn_binding` gate
@@ -6157,6 +6174,7 @@ bool elab_symbol_is_return_dispatch_method(Elab *e, const Symbol *name) {
                 }
             }
             if (any_tp_in_param) continue;
+            if (method_has_assoc_param(c, m)) continue;
             for (uint8_t ti = 0; ti < c->n_type_params; ti++) {
                 const Symbol *tp = c->type_params[ti];
                 if (!tp) continue;
@@ -6243,6 +6261,12 @@ static Expr *elab_try_return_dispatch_impl(Elab *e, const Form *call, const Symb
                 }
             }
             if (any_tp_in_param) continue;
+            /* assoc-typed-receiver-not-a-dispatch-arg: a parameter typed by one
+             * of the class's associated types -- `(bump [h : Handle] : Handle)`
+             * -- pins the instance as surely as a class-typed one (the
+             * instance that binds `Handle` to the argument's type), so argument
+             * dispatch takes it; it is not return-only. */
+            if (method_has_assoc_param(c, m)) continue;
             const char *dtv = NULL;
             for (uint8_t ti = 0; ti < c->n_type_params; ti++) {
                 const Symbol *tp = c->type_params[ti];
@@ -8690,6 +8714,72 @@ static Expr *elab_method_call_impl(Elab *e, const Form *call) {
         }
     }
 
+    /* assoc-typed-receiver-not-a-dispatch-arg: a method whose first parameter
+     * is one of its class's ASSOCIATED types -- `(peek [h : Handle] ...)` --
+     * is not dispatched on the receiver's own instance (no instance is keyed
+     * on the handle type), but on the instance whose binding of that
+     * associated type IS the receiver's type: `(peek h)` with `h : AHandle`
+     * runs `Store [A]`'s `peek` when that instance says
+     * `(type Handle = AHandle)`.  Two instances binding it to the same type
+     * leave the call ambiguous, and that is said rather than resolved by
+     * registration order. */
+    if (obj && !ambig_watch && obj->type.kind != TY_TYVAR &&
+        obj->type.kind != TY_UNKNOWN && obj->type.kind != TY_ANY) {
+        TypeClassInstance *ahit = NULL, *ahit2 = NULL;
+        uint8_t ahit_i = 0;
+        const char *aname = NULL;
+        for (TypeClass *c = e->typeclass_env.typeclasses; c; c = c->next) {
+            if (c->n_assoc_types == 0) continue;
+            for (uint8_t mi = 0; mi < c->n_methods; mi++) {
+                const TypeClassMethod *m = &c->methods[mi];
+                if (!m->name || m->name->len != method_name_len ||
+                    memcmp(m->name->name, method_name, method_name_len) != 0)
+                    continue;
+                if (m->n_params == 0 || !m->param_types) break;
+                const Type *pt = &m->param_types[0];
+                if (pt->kind != TY_TYVAR || !pt->as.tyvar_.name ||
+                    pt->as.tyvar_.assoc_of)
+                    break;
+                int ak = -1;
+                for (uint8_t a = 0; a < c->n_assoc_types && ak < 0; a++)
+                    if (c->assoc_type_names[a] &&
+                        strcmp(c->assoc_type_names[a]->name, pt->as.tyvar_.name) == 0)
+                        ak = a;
+                if (ak < 0) break;
+                for (TypeClassInstance *inst = e->typeclass_env.instances; inst;
+                     inst = inst->next) {
+                    if (!typeclass_same_class(inst->typeclass, c) ||
+                        mi >= inst->typeclass->n_methods ||
+                        (uint8_t)ak >= inst->n_assoc_types || !inst->assoc_types ||
+                        tc_type_mentions_tyvar(&inst->assoc_types[ak]) ||
+                        !type_eq(inst->assoc_types[ak], obj->type))
+                        continue;
+                    if (!ahit) { ahit = inst; ahit_i = mi; aname = pt->as.tyvar_.name; }
+                    else if (!ahit2) ahit2 = inst;
+                }
+                break;
+            }
+        }
+        if (ahit && ahit2) {
+            const char *cn = ahit->typeclass && ahit->typeclass->name
+                                 ? ahit->typeclass->name->name : "?";
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0020_AMBIGUOUS_DISPATCH,
+                "ambiguous method dispatch: '%.*s' dispatches on its first "
+                "argument's associated type '%s', and more than one '%s' "
+                "instance binds '%s' to '%s', so the call cannot say which "
+                "instance's method runs. Give each instance its own '%s' type.",
+                (int)method_name_len, method_name, aname, cn, aname,
+                type_name(obj->type), aname);
+            return NULL;
+        }
+        if (ahit) {
+            best_method = ahit->method_impls[ahit_i];
+            best_inst = ahit;
+            exact_match_found = true;
+            goto found_method;
+        }
+    }
+
     /* Search instances — prefer the one whose type_args[0] matches obj's type. */
     for (TypeClassInstance *inst = e->typeclass_env.instances; inst != NULL; inst = inst->next) {
         for (uint8_t i = 0; i < inst->typeclass->n_methods; i++) {
@@ -10051,7 +10141,40 @@ resolved_user_fallback:;
             bool res_is_cv = cm->return_type.kind == TY_TYVAR &&
                 cm->return_type.as.tyvar_.name &&
                 strcmp(cm->return_type.as.tyvar_.name, cv) == 0;
-            if (recv_is_cv && res_is_cv) result_type = obj->type;
+            /* assoc-typed-receiver-not-a-dispatch-arg: a receiver declared
+             * as one of the class's associated types -- `(bump [h : Handle]
+             * : Handle)` -- holding the projection `(Handle C)` dispatches on
+             * `C`, so the result is read at `C` too: the same projection, a
+             * different one, or `C` itself.  It took the representative's
+             * binding before (`BHandle` in every spec), and a later
+             * `(peek h2)` then dispatched on that concrete type. */
+            const Type *assoc_disp = NULL;
+            if (!recv_is_cv && cm->n_params >= 1 && cm->param_types &&
+                cm->param_types[0].kind == TY_TYVAR &&
+                cm->param_types[0].as.tyvar_.name &&
+                !cm->param_types[0].as.tyvar_.assoc_of &&
+                obj->type.as.tyvar_.assoc_of && obj->type.as.tyvar_.assoc_arg &&
+                obj->type.as.tyvar_.assoc_of->name &&
+                strcmp(obj->type.as.tyvar_.assoc_of->name,
+                       cm->param_types[0].as.tyvar_.name) == 0)
+                assoc_disp = obj->type.as.tyvar_.assoc_arg;
+            if (assoc_disp) {
+                if (res_is_cv) {
+                    result_type = *assoc_disp;
+                } else if (cm->return_type.kind == TY_TYVAR &&
+                           cm->return_type.as.tyvar_.name) {
+                    for (uint8_t ak = 0; ak < rtc->n_assoc_types; ak++) {
+                        const Symbol *an = rtc->assoc_type_names[ak];
+                        if (!an || strcmp(an->name, cm->return_type.as.tyvar_.name) != 0)
+                            continue;
+                        Type proj;
+                        if (elab_assoc_projection(e, an, assoc_disp, 1, &proj))
+                            result_type = proj;
+                        break;
+                    }
+                }
+            }
+            else if (recv_is_cv && res_is_cv) result_type = obj->type;
             /* associated-type-unusable-nullary-and-generic (half 2): a result
              * that is one of the class's ASSOCIATED types -- `(unwrap [x : a]
              * : Inner)` -- is the projection at the receiver, `(Inner A)`, not

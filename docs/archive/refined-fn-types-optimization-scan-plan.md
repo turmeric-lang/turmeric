@@ -97,9 +97,9 @@ optimization scan" in `docs/reported/README.md`.
    reaches a `#fx{}` slot through a `let`
    ([effect-row-check-skips-let-bound-fn-values](effect-row-check-skips-let-bound-fn-values.md)).
    That is the precondition R-1's fix already names. Found next to it:
-   [fn-param-not-forwardable-to-effect-rowed-param](../reported/fn-param-not-forwardable-to-effect-rowed-param.md).
+   [fn-param-not-forwardable-to-effect-rowed-param](fn-param-not-forwardable-to-effect-rowed-param.md).
 2. **The interpreter's contract-check cost.** Filed:
-   [turi-contract-check-is-a-full-native-call](../reported/turi-contract-check-is-a-full-native-call.md).
+   [turi-contract-check-is-a-full-native-call](turi-contract-check-is-a-full-native-call.md).
    A check costs a full native call (+0.21 us, +0.29 us for the `-at` form)
    against +0.10 us for an inline `if` + `panic`.
 3. **Compile-time cost of the refinement work.** Measured, nothing worth

@@ -94,6 +94,7 @@
 #include "../passes/effect_check.h"
 #include "../passes/borrow_check.h"
 #include "../runtime/globals.h"  /* Gap 7: g_interpret_mode (per-env snapshot) */
+#include "interpreter_natives.h" /* native_contract_check(-at): the driver's fast path */
 #include "ffi_thunk.h"  /* jit-ffi-c2mir-plan F2: thunk-backed extern-c */
 #include "jit_ffi.h"    /* jit-ffi-c2mir-plan: provider + sig vocabulary */
 #include "inline_c_jit.h"  /* aot-compiled-repl-plan C1 */
@@ -3623,6 +3624,24 @@ static Span leaf_panic_site(const Expr *x, Span saved) {
     }
     if (saved.line && own.line && diag_file_is_stdlib(own.file_id)) return saved;
     return own;
+}
+/* turi-contract-check-is-a-full-native-call: every refinement, `:pre`/`:post`,
+ * loop-invariant and refined-fn-type check is a `tur-contract-check(-at)`
+ * call, and its condition holds on almost every execution.  The driver
+ * recognises the two natives and, once the condition is in hand and true,
+ * returns nil without evaluating the message / file / line arguments or
+ * making the native call.  A false condition takes the ordinary path, so the
+ * panic text and location are the native's own. */
+static inline bool contract_check_native(const TuriClosure *cl) {
+    return cl && (cl->native == native_contract_check ||
+                  cl->native == native_contract_check_at);
+}
+/* The natives' own truth test (native_contract_check). */
+static inline bool contract_cond_holds(TuriValue a) {
+    if (a.tag == TURI_BOOL) return a.as_bool;
+    if (a.tag == TURI_INT)  return a.as_int != 0;
+    if (a.tag == TURI_NIL)  return false;
+    return true;
 }
 static const char *panic_site_base(Span sp) {
     const char *path = sp.line ? diag_file_path(sp.file_id) : NULL;
@@ -11217,6 +11236,36 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     descending = false; break;
                 }
                 uint32_t n = control->as.call_.n_args;
+                /* turi-contract-check-is-a-full-native-call: a contract check
+                 * whose condition cannot perform evaluates it here, with no
+                 * argument buffer or work-stack frame, and returns nil when
+                 * it holds.  A failing check evaluates the rest and calls the
+                 * native as DK_CALL_ARG would, naming the same panic site. */
+                if (n >= 1 && n <= 4 && contract_check_native(fn_val.as_closure) &&
+                    !ws_has_perform(control->as.call_.args[0])) {
+                    TuriValue cav[4];
+                    cav[0] = eval_expr(env, cf, control->as.call_.args[0]);
+                    if (turi_is_error(cav[0]) || env_signaled(env)) {
+                        cur = cav[0]; descending = false; break;
+                    }
+                    if (contract_cond_holds(cav[0])) {
+                        cur = turi_nil(); descending = false; break;
+                    }
+                    bool cbad = false;
+                    for (uint32_t ci = 1; ci < n && !cbad; ci++) {
+                        cav[ci] = eval_expr(env, cf, control->as.call_.args[ci]);
+                        if (turi_is_error(cav[ci]) || env_signaled(env)) {
+                            cur = cav[ci]; cbad = true;
+                        }
+                    }
+                    if (!cbad) {
+                        Span saved_site = g_panic_site;
+                        g_panic_site = leaf_panic_site(control, saved_site);
+                        cur = eval_apply(env, fn_val.as_closure, cav, n);
+                        g_panic_site = saved_site;
+                    }
+                    descending = false; break;
+                }
                 /* T3.2c: zero-arg calls flow through DK_CALL_ARG too (acc==NULL),
                  * so a zero-arg tail call reuses the enclosing activation and a
                  * zero-arg non-tail call folds -- both stay off the C stack. */
@@ -12387,6 +12436,15 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (n > 0) {
                     acc[top->index] = cur;
                     top->index++;
+                    /* A contract check whose condition was driven here (it
+                     * may perform) and holds: skip the rest and the call. */
+                    if (top->index == 1 && !is_dyn &&
+                        contract_check_native(top->last.as_closure) &&
+                        contract_cond_holds(cur)) {
+                        TURI_DRIVE_FREE_OWN(acc_epoch, acc, acc_own); len--;
+                        cur = turi_nil();
+                        break;
+                    }
                     if (top->index < n) {
                         control = (Expr *)drive_call_arg(top->expr, top->index);
                         cf = top->frame; tail = false; descending = true;  /* args non-tail */

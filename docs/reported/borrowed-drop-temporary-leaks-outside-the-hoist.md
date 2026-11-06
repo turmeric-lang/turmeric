@@ -2,6 +2,12 @@
 
 **Severity: low (a leak, one value per evaluation; binding it with `let` avoids it).**
 
+**Narrowed 2026-11-05: the effectful-earlier-argument half is fixed, and a
+move-only Drop result is admitted.** What is left is a call whose result is
+neither a scalar nor a move-only Drop value -- a `cstr`, a `Vec`, a struct --
+and an earlier argument that is not a plain scalar when one before the
+temporary has an effect. See "Fixed 2026-11-05" at the end.
+
 Found 2026-10-28, landing the partial fix
 (`hoist_borrowed_closure_args`, `src/compiler/elab_call.c`; fixture
 `tests/fixtures/borrowed-drop-temporary-released`) during
@@ -65,3 +71,28 @@ does not.
   lifetime check that the result type cannot carry a borrow of the argument
   (no `cstr`, `ptr<T>` or borrowed reference in it). Until then the module
   header of `stdlib/numvec.tur` tells users to bind first.
+
+## Fixed 2026-11-05
+
+- **Effectful earlier argument.** When an argument before the temporary has an
+  effect and every non-literal argument before it is a plain scalar, those are
+  hoisted into `__borrowa_N` temps ahead of it, in order
+  (`hoist_ordered_arg_temp`, `src/compiler/elab_call.c`). Variables are hoisted
+  too, because an effectful neighbour may assign one: `(peek3 x (do (set! x 7)
+  (ctr 2)) (mk))` still reads `x` as 1. `(peek2 (ctr 2) (mk))` releases its
+  temporary. A non-scalar earlier argument (a struct, a closure) keeps the old
+  behaviour, a leak.
+- **Move-only Drop result.** A result whose type is a move-only Drop opaque
+  owns its own resource -- its Drop releases it -- so it is not a view of the
+  argument (`F64View` is neither affine nor Drop). `(f64vec-copy (f64vec-new 4
+  7.1))` releases the temporary; the copy goes to the `let` that binds it, or
+  to a further hoist, since `init_yields_fresh_owner` sees through the let the
+  hoist builds. `(peek (dup (dup (mk))))` frees all three.
+
+Pinned by `tests/fixtures/borrowed-drop-temporary-released` (both engines
+agree; the fixture's inline C keeps it out of `run-turi.sh`).
+
+Still open: `(f64vec-show (f64vec-new 4 7.1))` (a `cstr` result) and
+`(f64vec->vec ...)` (a `Vec`). Either could point into the argument as far as
+the elaborator knows, so they need a callee-side "fresh result" fact or a
+lifetime check, as the fix directions above say.

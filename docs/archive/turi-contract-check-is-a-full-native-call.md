@@ -2,6 +2,21 @@
 
 **Severity:** low (performance, `tur --interpret` and the REPL only).
 
+**RESOLVED 2026-11-05.** The driver recognises the two natives (`contract_check_native`,
+`src/turi/eval.c`). At `EX_CALL` setup, a condition that cannot perform
+(`ws_has_perform`) is evaluated on the spot -- no argument buffer, no
+work-stack frame -- and a holding check returns nil without evaluating the
+message, file and line or making the call. A condition that may perform is
+driven on the work stack as before, and `DK_CALL_ARG` skips the remaining
+arguments and the call once it holds. A failing check takes the native, so the
+panic text and site are unchanged. Pinned by
+`tests/fixtures/turi-contract-check-fast-path` (both engines).
+
+Re-measured with the Debug `tur` on the same shape (3e5 iterations): the loop
+with `(tur-contract-check-at (> r 0) ...)` went from +0.73 s over the bare loop
+to +0.30 s, the same as `(if (> r 0) 0 (panic "x"))` (+0.30 s) and `(> r 0)`
+alone (+0.27 s) -- the report's target.
+
 ## Measurement
 
 `tur --interpret`, a 1e6-iteration loop around one call to a trivial function,

@@ -1,5 +1,7 @@
 # tur-stats: `ols` / `ols-frame` p-values come from a wrong continued fraction (one is negative)
 
+**RESOLVED 2026-11-05** in turmeric-spices [#134](https://github.com/turmeric-lang/turmeric-spices/pull/134) -- see "Resolution" at the end.
+
 **Severity: medium (wrong numbers in a fitted model's summary).** Found
 2026-10-29 executing stats-formula-plan, fitting iris through
 `spices/stats-formula`.
@@ -38,3 +40,17 @@ the bad fraction.
   `ols-frame`.
 - A regression test with R's p-values for mtcars `mpg ~ wt * hp` and the
   iris row above.
+
+## Resolution (2026-11-05)
+
+Fix direction 1, with the helper local to the module instead of shared:
+`ols` and `ols-frame` now call `__stats_rg_p2(t, df)`, which is
+`__stats_rg_ibeta(df/(df+t^2), df/2, 1/2)`, in `regress.tur`'s module-level C
+block. The fraction has the same terms as `stats/dist`'s `__ibeta`; inline C
+cannot call that one, and `regress.tur` should not depend on another module's
+C block being emitted first.
+
+`tests/stats/regress_test.tur` pins a 5-point fit's two p-values against a
+Simpson integration of the t density. It fails on the old fraction. The same
+integration gives 0.12029 for the iris row above (R: 0.1203), and it matches
+every p-value the `stats-formula` tour prints for `mpg ~ wt + fuel`.

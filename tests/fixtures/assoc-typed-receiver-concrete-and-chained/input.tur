@@ -1,0 +1,65 @@
+;; assoc-typed-receiver-not-a-dispatch-arg: a class method whose only
+;; class-typed parameter is one of the class's associated types --
+;; `(peek [h : Handle] ...)` -- is dispatched by that argument.
+;;
+;; - At a concrete type, `(peek (:: 3 AHandle))` runs the instance whose
+;;   `Handle` is `AHandle` (it was TUR-E0015, "no instance ... for AHandle").
+;; - Such a method is not return-directed: `(bump h)` in a generic was
+;;   "cannot infer type for return-directed method 'bump'".
+;; - In a generic its result is read at the projection's variable, so a chain
+;;   `(peek (bump h))` keeps dispatching per specialization.  A result of a
+;;   second associated type (`size-of`, `: Size`) and of the class variable
+;;   (`owner`, `: c`) are read there too.
+
+(defopaque AHandle :int)
+(defopaque BHandle :int)
+
+(defstruct A [x : int])
+(defstruct B [y : float])
+
+(defclass Store [c]
+  (type Handle : Type)
+  (type Size : Type)
+  (grab [^borrow s : c] : Handle)
+  (peek [h : Handle] : float)
+  (bump [h : Handle] : Handle)
+  (size-of [h : Handle] : Size)
+  (owner [h : Handle] : c))
+
+(definstance Store [A]
+  (type Handle = AHandle)
+  (type Size = int)
+  (grab [s] (:: (.x s) AHandle))
+  (peek [h] {(as float (:: h int)) + 0.25})
+  (bump [h] (:: (+ (:: h int) 1) AHandle))
+  (size-of [h] (* 10 (:: h int)))
+  (owner [h] (A (:: h int))))
+
+(definstance Store [B]
+  (type Handle = BHandle)
+  (type Size = float)
+  (grab [s] (:: 7 BHandle))
+  (peek [h] {(as float (:: h int)) * 1.5})
+  (bump [h] (:: (* (:: h int) 2) BHandle))
+  (size-of [h] {(as float (:: h int)) / 4.0})
+  (owner [h] (B (as float (:: h int)))))
+
+(defn look [C] [(Store C)] [^borrow s : C] : float
+  (let [h  (grab s)
+        h2 (bump h)]
+    (peek h2)))
+
+(defn look-owner [C] [(Store C)] [^borrow s : C] : float
+  (peek (grab (owner (bump (grab s))))))
+
+(defn main [] : int
+  (println (peek (:: 3 AHandle)))           ; 3.25
+  (println (peek (bump (:: 3 BHandle))))    ; 9
+  (println (size-of (:: 3 AHandle)))        ; 30
+  (println (size-of (:: 3 BHandle)))        ; 0.75
+  (println (.x (owner (:: 5 AHandle))))     ; 5
+  (println (look (A 3)))                    ; 4.25
+  (println (look (B 9.1)))                  ; 21
+  (println (look-owner (A 3)))              ; 4.25
+  (println (look-owner (B 9.1)))            ; 10.5
+  0)
