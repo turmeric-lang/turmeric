@@ -3152,7 +3152,7 @@ static void hoist_ordered_arg_temp(Elab *e, Expr **slot, Span span,
  * `(f64vec->vec ...)` qualify: their String / Vec is built from the floats
  * they read out. */
 bool expr_subtree_has_inline_c(const Expr *e);   /* emit_core.c */
-static void mark_invoked_passthrough_boxes_stack(Expr *head);   /* below */
+void mark_invoked_passthrough_boxes_stack(Expr *head);   /* below; elab_internal.h */
 static bool borrow_param_result_may_view(const Binding *fb, uint32_t pi, int depth);
 
 static bool borrow_param_use_may_view(const Expr *x, const Binding *p, int depth);
@@ -3872,7 +3872,7 @@ static bool param_used_only_as_result(const Expr *x, const Binding *p, bool tail
     return !cps_visit_children(x, param_used_only_as_result_visit, &u);
 }
 
-static void mark_invoked_passthrough_boxes_stack(Expr *head) {
+void mark_invoked_passthrough_boxes_stack(Expr *head) {
     while (head && head->kind == EX_ASCRIBE) head = head->as.ascribe_.inner;
     if (!head || head->kind != EX_CALL || head->as.call_.dict_arg) return;
     const Binding *cb = head->as.call_.fn_binding;

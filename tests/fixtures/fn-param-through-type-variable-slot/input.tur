@@ -37,6 +37,11 @@
 (defn keep [A] [v : (Vec A) a : A] : A (do (vec-push! v a) a))
 (defn via-keep [v : (Vec (fn [int] int)) d : (fn [int] int)] : int
   ((keep v d) 1))
+;; The let-bound twin (fn-param-tyvar-slot-let-bound-stack-box): a local
+;; that is only invoked lets the box live on the stack, so one the let RETURNS
+;; must keep the malloc'd form -- it is called after this frame is gone.
+(defn let-escape [d : (fn [int] int)] : (fn [int] int)
+  (let [f (ident d)] f))
 (defn clobber [n : int] : int (if (= n 0) 0 (+ 1 (clobber (- n 1)))))
 
 (defn main [] : int
@@ -55,4 +60,7 @@
     (println (via-keep kv plus1))
     (println (clobber 50))
     (println ((vec-get kv 0) 41)))
+  (let [ef (let-escape plus1)]
+    (println (clobber 50))
+    (println (ef 41)))
   0)

@@ -2,6 +2,16 @@
 
 **Severity: low (32 B per call, at a narrow shape).**
 
+**Narrowed again 2026-11-06: the let-bound shape.** `(let [f (ident d)] (f
+10))` gives the box the stack too when the local is only ever invoked: the
+let elaboration (`src/compiler/elab_forms.c`) asks `closure_binding_escapes`
+of the body and the later inits, and on "no" runs the same passthrough
+marking (`mark_invoked_passthrough_boxes_stack`, now in `elab_internal.h`).
+Pinned by `fn-param-tyvar-slot-let-bound-stack-box` (leak-checked: 16192 B in
+506 allocations before, 0 after); `fn-param-through-type-variable-slot` gained
+`let-escape`, whose let returns the local, called after its frame is gone.
+Left: the sum-wrapped and stored shapes.
+
 **Narrowed 2026-11-06: a box whose call is invoked on the spot, by a callee
 that only hands the argument back, lives on the stack.** `((ident d) 10)`,
 `((pick d d) "there")` and `((unwrap-or (none) d) 5)` no longer leak. What is

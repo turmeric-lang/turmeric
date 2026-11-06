@@ -2853,4 +2853,11 @@ static inline bool elab_form_ids_implib(const Elab *e, const Form *f) {
     return !e->in_stdlib_load && f && diag_file_is_imported_stdlib(f->span.file_id);
 }
 
+/* fn-param-at-type-variable-slot-boxed-per-call: give each EX_POLY_TO_FAT
+ * argument of the call `head` the stack box when the callee only hands that
+ * parameter back as its value.  Sound only where the call's VALUE is dead when
+ * the enclosing expression ends: invoked on the spot (elab_call.c), or bound
+ * by a let to a local that is only invoked (elab_forms.c). */
+void mark_invoked_passthrough_boxes_stack(Expr *head);
+
 #endif
