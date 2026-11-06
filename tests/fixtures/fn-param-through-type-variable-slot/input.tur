@@ -30,6 +30,15 @@
     (vec-push! v d)
     ((vec-get v 0) 3.3)))
 
+;; keep stores its argument as well as returning it, so the box a call of it
+;; makes must outlive the call: it stays the malloc'd form even though the
+;; value is invoked on the spot (fn-param-tyvar-slot-invoked-stack-box has
+;; the callees that only hand it back).
+(defn keep [A] [v : (Vec A) a : A] : A (do (vec-push! v a) a))
+(defn via-keep [v : (Vec (fn [int] int)) d : (fn [int] int)] : int
+  ((keep v d) 1))
+(defn clobber [n : int] : int (if (= n 0) 0 (+ 1 (clobber (- n 1)))))
+
 (defn main [] : int
   (println (via-int plus1))
   (let [k 100]
@@ -42,4 +51,8 @@
   (println (via-unwrap-or plus1))
   (println (via-opt plus1))
   (println (via-vec halve))
+  (let [kv : (Vec (fn [int] int)) (vec-new)]
+    (println (via-keep kv plus1))
+    (println (clobber 50))
+    (println ((vec-get kv 0) 41)))
   0)

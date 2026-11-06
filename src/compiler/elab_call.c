@@ -3152,6 +3152,7 @@ static void hoist_ordered_arg_temp(Elab *e, Expr **slot, Span span,
  * `(f64vec->vec ...)` qualify: their String / Vec is built from the floats
  * they read out. */
 bool expr_subtree_has_inline_c(const Expr *e);   /* emit_core.c */
+static void mark_invoked_passthrough_boxes_stack(Expr *head);   /* below */
 static bool borrow_param_result_may_view(const Binding *fb, uint32_t pi, int depth);
 
 static bool borrow_param_use_may_view(const Expr *x, const Binding *p, int depth);
@@ -3784,6 +3785,11 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
      * concrete niche option, which IS the payload word. */
     mark_direct_apply_niche_word_params(e, head_expr, call_expr);
 
+    /* fn-param-at-type-variable-slot-boxed-per-call: `((ident d) 10)` --
+     * a fn parameter boxed for a type-variable slot (EX_POLY_TO_FAT) by a
+     * callee that only hands it back, the result invoked on the spot.  The
+     * box is dead once this call returns, so it may live on the stack. */
+    mark_invoked_passthrough_boxes_stack(head_expr);
     tmp_b->closure_head_init = head_expr;
     LetBinding *let_bs = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
     let_bs->binding = tmp_b;
@@ -3794,6 +3800,91 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
     let_expr->as.let_.n = 1;
     let_expr->as.let_.body = call_expr;
     return let_expr;
+}
+
+/* fn-param-at-type-variable-slot-boxed-per-call: does the body of `fd` use
+ * parameter `p` only as its value -- a bare `p` in tail position (through
+ * `if` / `match` arms / `let` and `do` bodies / an ascription), and nowhere
+ * else?  `ident`, `pick`'s second argument and `unwrap-or`'s default qualify:
+ * the value the call returns is then the argument or something else, and the
+ * callee kept nothing of it. */
+static bool param_used_only_as_result(const Expr *x, const Binding *p, bool tail,
+                                      int depth);
+
+typedef struct { const Binding *p; int depth; } ParamResultUd;
+
+static bool param_used_only_as_result_visit(const Expr *c, void *ud) {
+    const ParamResultUd *u = (const ParamResultUd *)ud;
+    return !param_used_only_as_result(c, u->p, false, u->depth);
+}
+
+static bool param_used_only_as_result(const Expr *x, const Binding *p, bool tail,
+                                      int depth) {
+    if (!x) return true;
+    if (depth > 200) return false;
+    switch (x->kind) {
+    case EX_VAR:
+        return x->as.var.binding != p || tail;
+    case EX_INLINE_C:
+    case EX_FN_DEF:
+        return false;
+    case EX_FN:
+        return true;
+    case EX_CLOSURE: {
+        const struct Closure *c = x->as.closure_.closure;
+        if (!c) return false;
+        for (uint32_t i = 0; i < c->n_captures; i++)
+            if (c->captures[i] == p) return false;
+        return true;
+    }
+    case EX_ASCRIBE:
+        return param_used_only_as_result(x->as.ascribe_.inner, p, tail, depth + 1);
+    case EX_IF:
+        return param_used_only_as_result(x->as.if_.cond, p, false, depth + 1) &&
+               param_used_only_as_result(x->as.if_.then_, p, tail, depth + 1) &&
+               param_used_only_as_result(x->as.if_.else_or_null, p, tail, depth + 1);
+    case EX_DO:
+        for (uint32_t i = 0; i < x->as.do_.n; i++)
+            if (!param_used_only_as_result(x->as.do_.items[i], p,
+                                           tail && i + 1 == x->as.do_.n, depth + 1))
+                return false;
+        return true;
+    case EX_LET:
+        for (uint32_t i = 0; i < x->as.let_.n; i++)
+            if (!param_used_only_as_result(x->as.let_.bindings[i].init, p, false,
+                                           depth + 1))
+                return false;
+        return param_used_only_as_result(x->as.let_.body, p, tail, depth + 1);
+    case EX_MATCH:
+        if (!param_used_only_as_result(x->as.match_.scrutinee, p, false, depth + 1))
+            return false;
+        for (uint32_t i = 0; i < x->as.match_.n_arms; i++) {
+            const MatchArm *arm = &x->as.match_.arms[i];
+            if (!param_used_only_as_result(arm->guard, p, false, depth + 1) ||
+                !param_used_only_as_result(arm->body, p, tail, depth + 1))
+                return false;
+        }
+        return true;
+    default:
+        break;
+    }
+    ParamResultUd u = { p, depth + 1 };
+    return !cps_visit_children(x, param_used_only_as_result_visit, &u);
+}
+
+static void mark_invoked_passthrough_boxes_stack(Expr *head) {
+    while (head && head->kind == EX_ASCRIBE) head = head->as.ascribe_.inner;
+    if (!head || head->kind != EX_CALL || head->as.call_.dict_arg) return;
+    const Binding *cb = head->as.call_.fn_binding;
+    if (cb && cb->source_binding) cb = cb->source_binding;
+    const FnDef *fd = cb ? cb->source_fn_def : NULL;
+    if (!fd || !fd->body || !fd->params || cb->body_is_inline_c) return;
+    for (uint32_t i = 0; i < head->as.call_.n_args && i < fd->n_params; i++) {
+        Expr *a = head->as.call_.args[i];
+        if (!a || a->kind != EX_POLY_TO_FAT || !fd->params[i]) continue;
+        if (param_used_only_as_result(fd->body, fd->params[i], true, 0))
+            a->as.poly_to_fat_.stack_ok = true;
+    }
 }
 
 /* ---- general elab ---- */
