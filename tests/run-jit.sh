@@ -586,6 +586,22 @@ case "${MSYSTEM:-}" in
 esac
 export TUR_HOST_WINDOWS
 
+# A writable scratch directory for fixtures, exactly as tests/run.sh provides
+# one (see its long note): fixtures write under $TUR_TEST_TMPDIR, falling back to
+# /tmp when it is unset.  A native Windows fixture binary resolves "/tmp" to
+# <drive>:\tmp, which a fresh CI runner does not have, so without this every
+# file-writing fixture printed nothing on the windows-jit-corpus job (fs-read-
+# string, io-stdlib-roundtrip, async-file, the image-* round trips, ...).  Kept
+# inside RESULTS_DIR so the EXIT trap removes it.
+if [ -z "${TUR_TEST_TMPDIR:-}" ]; then
+    TUR_TEST_TMPDIR="$RESULTS_DIR/fixture-tmp"
+fi
+mkdir -p "$TUR_TEST_TMPDIR" 2>/dev/null || true
+if [ "$TUR_HOST_WINDOWS" = "1" ] && command -v cygpath >/dev/null 2>&1; then
+    TUR_TEST_TMPDIR=$(cygpath -m "$TUR_TEST_TMPDIR")
+fi
+export TUR_TEST_TMPDIR
+
 JIT_FILTER="${JIT_FILTER:-${TUR_TEST_FILTER:-}}"
 
 # Optional sharding, so N runners can split the corpus.  Parsed exactly as

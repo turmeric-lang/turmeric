@@ -11,9 +11,24 @@ overlay on the shared baseline when `MSYSTEM` is a Windows environment
 (`TUR_JIT_FALLBACK_UPDATE=1` there rewrites only the overlay), and a sharded
 run now prints the fallbacks it saw, so the union of the shards is the
 host's whole set. `ci.yml`'s new `windows-jit-corpus` job runs the corpus in
-three shards on every code PR. The overlay was seeded from this report's
-grouping (61 names, wider than the 47 measured) and is tightened from the
-job's per-shard lists; the report closes when it is exact and the job green.
+three shards on every code PR. Its first run (on #1462) set the overlay
+to what Windows measured: 77 names, up from this report's 47 as the corpus
+grew. It also found two more gaps, both fixed in the same PR:
+
+- **`run-jit.sh` gave fixtures no Windows scratch directory.** `run.sh`
+  exports a `cygpath -m` `TUR_TEST_TMPDIR`; `run-jit.sh` exported none, so a
+  native fixture binary fell back to `/tmp`, which it resolves to `C:\tmp`,
+  absent on a fresh runner. Nine fixtures printed nothing (`fs-read-string`,
+  `io-stdlib-roundtrip`, `serial-typed-surface`, the `image-*` round trips,
+  ...). It exports the same variable now, under its results directory.
+- **The engine compiled `_Thread_local` as one shared global on Windows.**
+  The refusal of jit-inline-c-thread-local-collapses-to-global reads c2mir's
+  warnings through `open_memstream`, which MinGW lacks, so it was POSIX-only
+  and `jit-inline-c-thread-local` printed 99 there. Windows collects the
+  messages in a delete-on-close temp file instead (`jit_msg_capture_open`,
+  `src/jit_engine.c`), and the program falls back to cc as on Linux.
+
+The report closes when the job is green.
 
 **Status: open.** Split out 2026-09-26 from section 4 of
 [jit-windows-support-spike](../archive/jit-windows-support-spike.md) when that
