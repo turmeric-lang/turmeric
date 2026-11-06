@@ -2817,6 +2817,7 @@ bool any_expr_is_owned_temp(const Expr *x, int depth);
  * in elab_fns.c; the owned-temp and freshness rules share it so they cannot
  * drift apart. */
 bool any_widen_payload_owns_droppable(const Expr *payload);
+bool any_widen_payload_deeply_fresh(const Expr *payload);
 
 /* RM1 (reclamation-plan): the per-callee freshness analysis -- see the walker
  * in elab_fns.c and the flag's comment in expr.h. */
@@ -2859,5 +2860,7 @@ static inline bool elab_form_ids_implib(const Elab *e, const Form *f) {
  * the enclosing expression ends: invoked on the spot (elab_call.c), or bound
  * by a let to a local that is only invoked (elab_forms.c). */
 void mark_invoked_passthrough_boxes_stack(Expr *head);
+void mark_sum_wrapped_boxes_stack(Expr *scrutinee, const struct MatchArm *arms,
+                                  uint32_t n_arms);
 
 #endif

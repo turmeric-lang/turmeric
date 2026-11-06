@@ -5364,6 +5364,8 @@ Expr *elab_match(Elab *e, const Form *call) {
         }
     }
 
+    /* fn-param-at-type-variable-slot-boxed-per-call: the sum-wrapped shape. */
+    mark_sum_wrapped_boxes_stack(scrutinee, arms, n_arms);
     Expr *out = expr_new(e->arena, EX_MATCH, result_type, call->span);
     out->as.match_.scrutinee = scrutinee;
     out->as.match_.arms = arms;

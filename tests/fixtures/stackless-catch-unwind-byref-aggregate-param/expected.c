@@ -2454,6 +2454,7 @@ struct DK {
     bool k_last;          /* a resume site: the case's last use of this k (emit_resume) */
     bool copy_last;       /* dk_resume_into's copy ends at this node: body_env is its head */
     bool catch_reap;      /* catch prompt: reap the Ok / Err box it makes */
+    uint32_t cell_mask;   /* env words that are by-reference cells */
 };
 /* Is the chain from `n` on (n included) single-shot?  See the `ss` field. */
 static bool __dk_ss_after(const DK *n) {
@@ -2636,6 +2637,12 @@ __attribute__((unused)) static DK *dk_env_sized(DK *k, size_t size) {
     if (k->env && !k->env_clone && size <= 0xFFFF) k->env_size = (uint16_t)size;
     return k;
 }
+__attribute__((unused)) static DK *dk_env_cells(DK *k, size_t size, uint32_t mask) {
+    if (k->env && !k->env_clone && size <= 0xFFFF && size <= 32 * sizeof(void *)) {
+        k->env_size = (uint16_t)size; k->cell_mask = mask;
+    }
+    return k;
+}
 static DK *dk_copy_node(const DK *n);
 static DK *dk_copy_node(const DK *n) {
     if (n->ncopy != 255) ((DK *)n)->ncopy++;
@@ -2655,6 +2662,7 @@ static DK *dk_copy_node(const DK *n) {
     c->resume_once = n->resume_once;
     c->resume_once_dyn = n->resume_once_dyn; c->multishot = n->multishot; c->ss = n->ss;
     c->k_copied_only = n->k_copied_only;
+    c->cell_mask = n->cell_mask;
     c->rfn = n->rfn; return c;
 }
 static DK *dk_copy_enclosing_handlers(const DK *from) {
@@ -3245,8 +3253,30 @@ static tur_dkw dk_run_root(DK *k, tur_dkw v) { return dk_run_impl(k, v, true); }
  * dk_invoke consults g_dk_driver (defined with the reap registry above) to
  * know whether running the invoked chain might tail-resume out. */
 static tur_dkw __dk_drive_bounded(DK *first, tur_dkw firstv);
+__attribute__((unused)) static void __dk_cells_fresh(DK *c, const DK *stop) {
+    void *from[32], *to[32]; int nm = 0;
+    for (DK *p = c; p && p != stop; p = p->next) {
+        if (!p->cell_mask || !p->env || !p->env_size) continue;
+        if (!p->env_owned) { p->env = __dk_env_dup(p->env, p->env_size); p->env_owned = true; }
+        void **w = (void **)(intptr_t)p->env;
+        for (int i = 0; i < 32; i++) {
+            if (!(p->cell_mask & (1u << i)) || (size_t)(i + 1) * sizeof(void *) > p->env_size) continue;
+            void *old = w[i], *nw = NULL;
+            if (!old) continue;
+            for (int j = 0; j < nm; j++) if (from[j] == old) { nw = to[j]; break; }
+            if (!nw) {
+                if (nm >= 32) continue;   /* table full: this cell stays shared */
+                nw = malloc(sizeof(int64_t)); memcpy(nw, old, sizeof(int64_t));
+                __dk_reap_ptr((tur_dkw)nw);
+                from[nm] = old; to[nm] = nw; nm++;
+            }
+            w[i] = nw;
+        }
+    }
+}
 static tur_dkw dk_invoke(DK *sub, tur_dkw w) {
     DK *c = dk_copy_range(sub, NULL);
+    __dk_cells_fresh(c, NULL);
     /* A tail-resume inside the invoked chain longjmps to whichever landing
      * g_dk_driver names.  That landing must be THIS ONE, not the program entry:
      * dk_invoke is how a NON-tail `resume` runs, so its caller is a handler case
@@ -3334,6 +3364,7 @@ static tur_dkw dk_resume_into(DK *sub, tur_dkw v, DK *tail, int borrow) {
     const DK *cut = sub;
     while (cut && !cut->resume_cut) cut = cut->next;
     DK *c = cut && cut != sub ? dk_copy_range(sub, cut) : NULL;
+    if (c) __dk_cells_fresh(c, NULL);
     if (!c) {   /* not dk_perform's sub: resume it on the C stack */
         if (!borrow) __dk_reap_keep(tail);   /* one node (borrow_next); frees an owned env */
         return dk_run(tail, dk_invoke(sub, v));
@@ -6501,6 +6532,11 @@ struct __tur_sym {
 };
 #endif
 
+typedef int64_t (*tur_fnptr_int64_t_int64_t_void___t)(int64_t, void *);
+typedef bool (*tur_fnptr_bool_int64_t_int64_t_void___t)(int64_t, int64_t, void *);
+typedef int64_t (*tur_fnptr_int64_t_int64_t_int64_t_int64_t_void___t)(int64_t, int64_t, int64_t, void *);
+typedef int64_t (*tur_fnptr_int64_t_int64_t_int64_t_void___t)(int64_t, int64_t, void *);
+
 #if !defined(TUR_FWD_tur_adt_Cons__int) && !defined(TUR_TY_tur_adt_Cons__int)
 #define TUR_FWD_tur_adt_Cons__int
 typedef struct tur_adt_Cons__int tur_adt_Cons__int;
@@ -6968,10 +7004,10 @@ static int64_t hamt_sliter_hycur_hyval(void *);
 static void * hamt_slkeyeq(void *);
 static int64_t hamt_slget_hydynamic(void *, int64_t, int64_t, void *);
 static bool hamt_slhas_hydynamic_qu(void *, int64_t, int64_t, void *);
-static void * hamt_slmap(void *, void *, void *);
-static void * hamt_slfilter(void *, void *, void *);
-static int64_t hamt_slreduce(void *, void *, int64_t, void *);
-static void * hamt_slmerge_hywith(void *, void *, void *, void *);
+static void * hamt_slmap(void *, tur_fnptr_int64_t_int64_t_void___t, void *);
+static void * hamt_slfilter(void *, tur_fnptr_bool_int64_t_int64_t_void___t, void *);
+static int64_t hamt_slreduce(void *, tur_fnptr_int64_t_int64_t_int64_t_int64_t_void___t, int64_t, void *);
+static void * hamt_slmerge_hywith(void *, void *, tur_fnptr_int64_t_int64_t_int64_t_void___t, void *);
 static const char * hamt_slshow(void *);
 static void hamt_sldump(void *);
 static void * hamt_sltransient(void *);
@@ -8403,19 +8439,19 @@ static bool hamt_slhas_hydynamic_qu(void * m, int64_t hash, int64_t key, void * 
         return tur_hamt_has_dynamic((void *)(intptr_t)(m), hash, key, (void *)(intptr_t)(keyeq));
 }
 
-static void * hamt_slmap(void * m, void * fn, void * ctx) {
+static void * hamt_slmap(void * m, tur_fnptr_int64_t_int64_t_void___t fn, void * ctx) {
         return tur_hamt_map((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx));
 }
 
-static void * hamt_slfilter(void * m, void * fn, void * ctx) {
+static void * hamt_slfilter(void * m, tur_fnptr_bool_int64_t_int64_t_void___t fn, void * ctx) {
         return tur_hamt_filter((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx));
 }
 
-static int64_t hamt_slreduce(void * m, void * fn, int64_t init, void * ctx) {
+static int64_t hamt_slreduce(void * m, tur_fnptr_int64_t_int64_t_int64_t_int64_t_void___t fn, int64_t init, void * ctx) {
         return tur_hamt_reduce((void *)(intptr_t)(m), (void *)(intptr_t)(fn), init, (void *)(intptr_t)(ctx));
 }
 
-static void * hamt_slmerge_hywith(void * a, void * b, void * fn, void * ctx) {
+static void * hamt_slmerge_hywith(void * a, void * b, tur_fnptr_int64_t_int64_t_int64_t_void___t fn, void * ctx) {
         return tur_hamt_merge_with((void *)(intptr_t)(a), (void *)(intptr_t)(b), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx));
 }
 

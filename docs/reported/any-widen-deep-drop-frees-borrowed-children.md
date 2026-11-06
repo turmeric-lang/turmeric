@@ -99,6 +99,23 @@ now dereferences). Pinned by `any-widen-explicit-arg-frame-box`
 (leak-checked; the widened `one` is a parameter in `twice`, and is read again
 after every call).
 
+## Narrowed 2026-11-06: a fully fresh constructor tree is dropped deep
+
+Fix direction 1 below. `any_widen_payload_deeply_fresh` (`src/compiler/elab_fns.c`)
+admits the drop when the payload is a constructor call whose every argument is
+a plain scalar or cstr, a widen (not frame-boxed) of one, or -- recursively --
+another such constructor (directly, or under a widen). Both freshness rules ask
+it beside `any_widen_payload_owns_droppable`: `any_expr_is_owned_temp` (so
+`(llen (:: (Cons (:: i any) (:: (Nil) any)) any))` frees its tree at the call)
+and `returns_fresh_any` (so a function whose tail widens such a tree is fresh).
+A variable, a parameter, an opaque call or a closure anywhere in an owned field
+still declines. Pinned by `any-widen-deep-fresh-tree-dropped` (leak-checked:
+100 turns of an inline tree, a returned one and a cstr leaf; 2-3 boxes a turn
+leaked before) and its must-keep twin `any-widen-deep-fresh-tree-kept` (a
+variable child and a parameter child, each read after the consuming call;
+`known-leak`). The residue below is unchanged: neither fixture there builds
+its tree in one expression.
+
 ## Open: the leak residue
 
 Declining the drop leaks the box (and, for shape 3, `inner`'s spine when
@@ -109,7 +126,7 @@ these; plain Turmeric and `--shared` do not.
 
 Fix directions:
 
-1. **Deep freshness.** Admit the drop when every owned child of the payload
+1. ~~**Deep freshness.**~~ Done 2026-11-06, above. Admit the drop when every owned child of the payload
    was itself minted in the same expression -- `(:: (Cons (:: 1 any) (:: (Nil) any)) any)`
    is fully fresh. Cannot help a constructor filled from a parameter or an
    opaque call's result.

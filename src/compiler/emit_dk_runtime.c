@@ -833,7 +833,12 @@ void emit_cps_runtime_prelude(Buf *out) {
 /* cps-catch-unwind-cannot-cross-an-effect-capture: a catch prompt whose
  * Result is bound by a let it provably does not escape -- the box it makes
  * (and an Err's payload) goes on the reap list for the boundary free. */
-"    bool catch_reap;      /* catch prompt: reap the Ok / Err box it makes */\n");
+"    bool catch_reap;      /* catch prompt: reap the Ok / Err box it makes */\n"
+/* cps-cell-promoted-mut-shared-across-multishot-resumes: the env words that
+ * are one-word by-reference cells (bit i = word i), set by dk_env_cells.  A
+ * resume copy re-cells them (__dk_cells_fresh), so each run of a `^multishot`
+ * k has its own.  Copied by dk_copy_node. */
+"    uint32_t cell_mask;   /* env words that are by-reference cells */\n");
     buf_puts(out,
 "};\n"
 "/* Is the chain from `n` on (n included) single-shot?  See the `ss` field. */\n"
@@ -1068,6 +1073,14 @@ void emit_cps_runtime_prelude(Buf *out) {
 "__attribute__((unused)) static DK *dk_env_sized(DK *k, size_t size) {\n"
 "    if (k->env && !k->env_clone && size <= 0xFFFF) k->env_size = (uint16_t)size;\n"
 "    return k;\n"
+"}\n"
+/* cps-cell-promoted-mut-shared-across-multishot-resumes: dk_env_sized, and
+ * which of the env's words are by-reference cells. */
+"__attribute__((unused)) static DK *dk_env_cells(DK *k, size_t size, uint32_t mask) {\n"
+"    if (k->env && !k->env_clone && size <= 0xFFFF && size <= 32 * sizeof(void *)) {\n"
+"        k->env_size = (uint16_t)size; k->cell_mask = mask;\n"
+"    }\n"
+"    return k;\n"
 "}\n");
     buf_puts(out,
 "static DK *dk_copy_node(const DK *n);\n");
@@ -1100,6 +1113,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    c->resume_once = n->resume_once;\n"
 "    c->resume_once_dyn = n->resume_once_dyn; c->multishot = n->multishot; c->ss = n->ss;\n"
 "    c->k_copied_only = n->k_copied_only;\n"
+"    c->cell_mask = n->cell_mask;\n"
 "    c->rfn = n->rfn; return c;\n"
 "}\n"
 "static DK *dk_copy_enclosing_handlers(const DK *from) {\n"
@@ -1878,8 +1892,38 @@ void emit_cps_runtime_prelude(Buf *out) {
 " * dk_invoke consults g_dk_driver (defined with the reap registry above) to\n"
 " * know whether running the invoked chain might tail-resume out. */\n"
 "static tur_dkw __dk_drive_bounded(DK *first, tur_dkw firstv);\n"
+/* cps-cell-promoted-mut-shared-across-multishot-resumes: give the copy `c`
+ * (up to `stop`) cells of its own.  Each masked env word names a one-word
+ * cell; the first frame of the copy to name a cell allocates its replacement,
+ * holding the value the cell has now (what the `perform` left: the originals
+ * never run once copied), and every later frame of the same copy naming that
+ * cell gets the same replacement.  A frame's env is shared with the frame it
+ * was copied from, so it is duplicated first (env_owned: freed with the copy).
+ * The new cells are reaped like the originals. */
+"__attribute__((unused)) static void __dk_cells_fresh(DK *c, const DK *stop) {\n"
+"    void *from[32], *to[32]; int nm = 0;\n"
+"    for (DK *p = c; p && p != stop; p = p->next) {\n"
+"        if (!p->cell_mask || !p->env || !p->env_size) continue;\n"
+"        if (!p->env_owned) { p->env = __dk_env_dup(p->env, p->env_size); p->env_owned = true; }\n"
+"        void **w = (void **)(intptr_t)p->env;\n"
+"        for (int i = 0; i < 32; i++) {\n"
+"            if (!(p->cell_mask & (1u << i)) || (size_t)(i + 1) * sizeof(void *) > p->env_size) continue;\n"
+"            void *old = w[i], *nw = NULL;\n"
+"            if (!old) continue;\n"
+"            for (int j = 0; j < nm; j++) if (from[j] == old) { nw = to[j]; break; }\n"
+"            if (!nw) {\n"
+"                if (nm >= 32) continue;   /* table full: this cell stays shared */\n"
+"                nw = malloc(sizeof(int64_t)); memcpy(nw, old, sizeof(int64_t));\n"
+"                __dk_reap_ptr((tur_dkw)nw);\n"
+"                from[nm] = old; to[nm] = nw; nm++;\n"
+"            }\n"
+"            w[i] = nw;\n"
+"        }\n"
+"    }\n"
+"}\n"
 "static tur_dkw dk_invoke(DK *sub, tur_dkw w) {\n"
 "    DK *c = dk_copy_range(sub, NULL);\n"
+"    __dk_cells_fresh(c, NULL);\n"
 "    /* A tail-resume inside the invoked chain longjmps to whichever landing\n"
 "     * g_dk_driver names.  That landing must be THIS ONE, not the program entry:\n"
 "     * dk_invoke is how a NON-tail `resume` runs, so its caller is a handler case\n"
@@ -2013,6 +2057,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    const DK *cut = sub;\n"
 "    while (cut && !cut->resume_cut) cut = cut->next;\n"
 "    DK *c = cut && cut != sub ? dk_copy_range(sub, cut) : NULL;\n"
+"    if (c) __dk_cells_fresh(c, NULL);\n"
 "    if (!c) {   /* not dk_perform's sub: resume it on the C stack */\n"
 "        if (!borrow) __dk_reap_keep(tail);   /* one node (borrow_next); frees an owned env */\n"
 "        return dk_run(tail, dk_invoke(sub, v));\n"

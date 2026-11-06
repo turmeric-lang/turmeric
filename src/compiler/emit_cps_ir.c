@@ -7919,6 +7919,72 @@ static const char *byref_cell_ptr_ctype(EmitCtx *ctx, const Binding *b) {
     return s;
 }
 
+/* cps-cell-promoted-mut-shared-across-multishot-resumes: a by-reference cell
+ * is allocated once, where its binding is introduced, so a `^multishot`
+ * resume -- which copies the captured frames, not the cells they point at --
+ * ran every copy of the rest of the body on ONE cell, and a write before the
+ * second `perform` leaked into the next run.  A frame whose env holds such a
+ * cell now says which env words are cell pointers (dk_env_cells: the word
+ * mask, beside the size), and the copy a resume runs (dk_resume_into /
+ * dk_invoke) gives that copy its own cells, initialised from the cells as the
+ * `perform` left them (__dk_cells_fresh).  One copy maps one old cell to one
+ * new one, so two frames that shared a cell still share it within a run.
+ *
+ * Only where that is the whole of the cell's world: a function with no
+ * `handle` / reset / call/cc of its own and no closure literal
+ * (g_cells_fresh_ok).  Then every frame naming the cell is one of this
+ * activation's, all of them on the chain between the `perform` and any
+ * handler outside the function, so all of them are in the copy.  A function
+ * that installs a handler has frames past that handler naming the cell (the
+ * clause, the code after the `handle`), which are not copied and must keep
+ * sharing it; a closure's env is not a DK env and cannot be remapped.  Only
+ * one-word cells (an int64, a double, a pointer) are masked; anything else
+ * stays shared, as before. */
+static bool g_cells_fresh_ok;
+#define CELLS_ENV_MAX 256
+static char *g_cells_env_names[CELLS_ENV_MAX];
+static int   g_cells_env_n;
+static bool cells_env_registered(const char *name) {
+    for (int i = 0; i < g_cells_env_n; i++)
+        if (strcmp(g_cells_env_names[i], name) == 0) return true;
+    return false;
+}
+static bool cells_boundary_visit(const Expr *e, void *ud) {
+    (void)ud;
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_HANDLE: case EX_WITH_HANDLER: case EX_COMPOSE_HANDLERS:
+        case EX_RESET: case EX_SERIAL_RESET: case EX_CLONEABLE_RESET:
+        case EX_CALLCC:
+        case EX_FN: case EX_FN_DEF: case EX_CLOSURE:
+            return true;
+        default:
+            return cps_visit_children(e, cells_boundary_visit, NULL);
+    }
+}
+static bool fn_cells_fresh_ok(const FnDef *fd) {
+    if (!fd || !fd->body || fd->closure) return false;
+    return !cells_boundary_visit(fd->body, NULL);
+}
+static bool byref_cell_is_one_word(EmitCtx *ctx, const Binding *b) {
+    const char *t = byref_cell_ctype(ctx, b);
+    if (!t) return false;
+    if (strcmp(t, "int64_t") == 0 || strcmp(t, "double") == 0 ||
+        strcmp(t, "uint64_t") == 0 || strcmp(t, "intptr_t") == 0) return true;
+    size_t n = strlen(t);
+    return n > 0 && t[n - 1] == '*';
+}
+/* `dk_env_sized(<node>, sizeof(<name>_env))` -- or, for an env that holds a
+ * maskable cell, `dk_env_cells(<node>, sizeof(<name>_env), <name>_env_CELLS)`.
+ * Returns the opening and the closing text around the node expression. */
+static const char *cells_sized_open(const char *name) {
+    return cells_env_registered(name) ? "dk_env_cells(" : "dk_env_sized(";
+}
+static void cells_sized_close(char *buf, size_t n, const char *name) {
+    if (cells_env_registered(name)) snprintf(buf, n, ", sizeof(%s_env), %s_env_CELLS)", name, name);
+    else snprintf(buf, n, ", sizeof(%s_env))", name);
+}
+
 /* If Expr `e` (ascribe-peeled) is `(set! <mut> _)` -- a store into a mutable --
  * return the mutable target, else NULL. */
 static const Binding *set_mut_target(const Expr *e) {
@@ -12101,6 +12167,23 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         for (int i = 0; i < caps->n; i++)
             buf_printf(ce->helpers, " %s f%d;", cap_ctype(ce->ctx, caps, i), i);
         buf_printf(ce->helpers, " } %s_env;\n", name);
+        /* cps-cell-promoted-mut-shared-across-multishot-resumes: which env
+         * words are one-word cells a resume copy must re-cell. */
+        if (g_cells_fresh_ok && g_cells_env_n < CELLS_ENV_MAX) {
+            bool any = false;
+            for (int i = 0; i < caps->n; i++) {
+                const Binding *cb = caps->e[i].b;
+                if (!cb || caps->e[i].polyfn || !is_byref_mut(cb) ||
+                    !byref_cell_is_one_word(ce->ctx, cb)) continue;
+                if (!any) buf_printf(ce->helpers, "#define %s_env_CELLS (0u", name);
+                buf_printf(ce->helpers, " | (1u << (offsetof(%s_env, f%d) / 8))", name, i);
+                any = true;
+            }
+            if (any) {
+                buf_puts(ce->helpers, ")\n");
+                g_cells_env_names[g_cells_env_n++] = strdup(name);
+            }
+        }
     }
 
     switch (mode) {
@@ -12210,10 +12293,12 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         char *envexpr = emit_cont_env(ce, jname, caps);   /* caps-only env */
         /* async-repeated-park-holds-frames-until-settle: a sized env, so a
          * parked copy of the join owns a copy of it (dk_env_sized). */
-        if (caps)
+        if (caps) {
+            char cz[160]; cells_sized_close(cz, sizeof cz, jname);
             snprintf(frame, sizeof frame,
-                     "%s__dk_reap_node(dk_env_sized(dk_frame_resume_join(%s, %s, %s), sizeof(%s_env)))%s",
-                     uw, jname, envexpr, ce->cur_k, jname, uwc);
+                     "%s__dk_reap_node(%sdk_frame_resume_join(%s, %s, %s)%s)%s",
+                     uw, cells_sized_open(jname), jname, envexpr, ce->cur_k, cz, uwc);
+        }
         else
             snprintf(frame, sizeof frame,
                      "%s__dk_reap_node(dk_frame_resume_join(%s, %s, %s))%s", uw, jname, envexpr, ce->cur_k, uwc);
@@ -12331,8 +12416,12 @@ static void emit_escaping_join(CE *ce, const CTerm *t) {
     snprintf(fv, sizeof fv, "__ej%d", id);
     /* Single spliced node, reaped at the outermost entry boundary like every
      * other structural node (docs/archive/cps-delimited-dk-node-leak.md). */
-    ce_line(ce, "DK *%s = %s__dk_reap_node(dk_frame_resume(%s, %s, %s))%s;",
-            fv, uw, jname, envexpr, ce->cur_k, uwc);
+    if (caps && cells_env_registered(jname))
+        ce_line(ce, "DK *%s = %s__dk_reap_node(dk_env_cells(dk_frame_resume(%s, %s, %s), sizeof(%s_env), %s_env_CELLS))%s;",
+                fv, uw, jname, envexpr, ce->cur_k, jname, jname, uwc);
+    else
+        ce_line(ce, "DK *%s = %s__dk_reap_node(dk_frame_resume(%s, %s, %s))%s;",
+                fv, uw, jname, envexpr, ce->cur_k, uwc);
     free(envexpr);
     if (ce->n_hjoins >= MAX_JOINS) {
         /* Table full: fall back to a plain label join (the term was admitted,
@@ -14330,8 +14419,9 @@ static void emit_perform(CE *ce, const CTerm *t) {
              * boundary (__dk_reap_node: kind=0, a bare free that does not walk into
              * cur_k) -- reached on both the normal-return and the tail-resume-yield
              * paths -- exactly like the Track-B resume-frame sibling below. */
-            ce_line(ce, "return dk_perform(%d, %s, %s, %s__dk_reap_node(dk_env_sized(dk_frame_join(%s, (tur_dkw)%s, %s), sizeof(%s_env)))%s);",
-                    tag, en, sa, uw, pname, envv, ce->cur_k, pname, uwc);
+        {   char cz[160]; cells_sized_close(cz, sizeof cz, pname);
+            ce_line(ce, "return dk_perform(%d, %s, %s, %s__dk_reap_node(%sdk_frame_join(%s, (tur_dkw)%s, %s)%s)%s);",
+                    tag, en, sa, uw, cells_sized_open(pname), pname, envv, ce->cur_k, cz, uwc); }
         } else {
             ce_line(ce, "return dk_perform(%d, %s, %s, %s__dk_reap_node(dk_frame_join(%s, 0, %s))%s);",
                     tag, en, sa, uw, pname, ce->cur_k, uwc);
@@ -14373,9 +14463,11 @@ static void emit_perform(CE *ce, const CTerm *t) {
          * free that does not walk into cur_k), matching the reset/handle
          * structural-node reaping discipline (docs/archive/cps-resume-frame-node-leak.md,
          * docs/archive/cps-delimited-dk-node-leak.md). */
-        if (caps)
-            ce_line(ce, "return dk_perform(%d, %s, %s, %s__dk_reap_node(dk_env_sized(dk_frame_resume_join(%s, %s, %s), sizeof(%s_env)))%s);",
-                    tag, en, sa, uw, pname, envexpr, ce->cur_k, pname, uwc);
+        if (caps) {
+            char cz[160]; cells_sized_close(cz, sizeof cz, pname);
+            ce_line(ce, "return dk_perform(%d, %s, %s, %s__dk_reap_node(%sdk_frame_resume_join(%s, %s, %s)%s)%s);",
+                    tag, en, sa, uw, cells_sized_open(pname), pname, envexpr, ce->cur_k, cz, uwc);
+        }
         else
             ce_line(ce, "return dk_perform(%d, %s, %s, %s__dk_reap_node(dk_frame_resume_join(%s, %s, %s))%s);",
                     tag, en, sa, uw, pname, envexpr, ce->cur_k, uwc);
@@ -15386,6 +15478,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     memcpy(pend_saved, g_pend, sizeof(const Expr *) * (size_t)g_n_pend);
     g_n_pend = 0; g_pend_unfirable = 0; g_pend_downstream = 0;
     g_pend_k_ok = true;   /* a `__cps` body holds its chain in `__kont` */
+    bool cells_saved = g_cells_fresh_ok;
+    g_cells_fresh_ok = false;   /* set by the render once it knows the fn */
     bool erased_saved = g_cps_erased_base;
     g_cps_erased_base = e && e->kind == EX_FN_DEF
         && fn_erased_base(e->as.fn_def_.fn);
@@ -15431,6 +15525,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         memcpy(ctx->dict_dispatch_params, dd_saved_params, sizeof dd_saved_params);
         for (uint8_t k = 0; k < MAX_FN_CONSTRAINTS; k++) free(dd_owned[k]);
     }
+    g_cells_fresh_ok = cells_saved;
     g_cps_erased_base = erased_saved;
     g_n_pend = pend_saved_n; g_pend_unfirable = pend_saved_mask;
     g_pend_downstream = pend_saved_down; g_pend_out = pend_saved_out;
@@ -15777,6 +15872,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
      * decides, since a loop can enclose the handle whose clause reads one. */
     loop_carried_scan(se->term);
     byref_scan(se->term);
+    g_cells_fresh_ok = fn_cells_fresh_ok(fd);
     g_cell_init_n = 0;
     cell_init_rewrite(se->term);
     /* The term's own binders are `__t0` .. `__t<fresh_n-1>`, and the direct

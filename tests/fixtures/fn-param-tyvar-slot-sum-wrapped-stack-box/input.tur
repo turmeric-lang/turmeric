@@ -1,0 +1,37 @@
+;; fn-param-tyvar-slot-sum-wrapped-stack-box -- a `(fn ...)` parameter boxed
+;; for a sum's type-variable slot, matched straight back out and only invoked,
+;; is dead when the match ends, so its box lives on the stack
+;; (fn-param-at-type-variable-slot-boxed-per-call, the sum-wrapped shape).
+;; Leak-checked: `(match (some d) ...)` leaked its 32 B box every call before.
+;;
+;; The constructor written in place -- `(Some d)`, or a user `(MkBx d)` -- did
+;; not compile at all before: the int64 carrier the argument rode hid it from
+;; the fat-field box, so the field read back as ptr<void>, "not directly
+;; callable".  The must-keep half (a match that
+;; hands the binder back) is `match-escape` in fn-param-through-type-variable-slot.
+
+(defdata Bx [a] (MkBx a) (NoBx))
+
+(defn via-some [d : (fn [int] int)] : int
+  (match (some d) (Some f) (f 10) (None) 0))
+
+(defn via-ctor [d : (fn [int] int)] : int
+  (match (Some d) (Some f) (f 5) (None) 0))
+
+(defn via-user [d : (fn [int] int)] : int
+  (match (MkBx d) (MkBx f) (f 3) (NoBx) 0))
+
+(defn via-float [d : (fn [float] float)] : float
+  (match (some d) (Some f) (f 7.1) (None) 0.0))
+
+(defn main [] : int
+  (let [^mut i 0
+        ^mut s 0]
+    (while (< i 100)
+      (set! s (+ s (via-some (fn [x : int] : int (+ x 1)))
+                   (via-ctor (fn [x : int] : int (* x 2)))
+                   (via-user (fn [x : int] : int (- x 1)))))
+      (set! i (+ i 1)))
+    (println s))                                   ;; 100 * (11 + 10 + 2) = 2300
+  (println (via-float (fn [x : float] : float (* x 2.0))))   ;; 14.2
+  0)

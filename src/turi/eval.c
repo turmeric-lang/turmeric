@@ -3837,24 +3837,23 @@ static TuriValue native_panic_type(TuriEnv *env, TuriValue *args, uint32_t n, vo
  * carrier-ABI fixtures depend on.  `result_field` reads both shapes, so every
  * accessor stays uniform. */
 static TuriValue turi_ok_result_box(TuriEnv *env, TuriValue ok_val) {
-    if (ok_val.tag == TURI_STRUCT || ok_val.tag == TURI_CSTR ||
-        ok_val.tag == TURI_CLOSURE || ok_val.tag == TURI_FLOAT) {
-        TuriValue fields[3] = { turi_bool(true), ok_val, turi_int(0) };
-        return turi_make_struct(env, "Result", fields, 3);
-    }
-    /* Escaping payload: the box is returned as a Result carrier. */
-    int64_t *box = (int64_t *)turi_val_alloc(env, 3 * sizeof(int64_t));
-    box[0] = 1; box[1] = ok_val.as_int; box[2] = 0;
-    turi_prov_register(env, TURI_HK_RESULTBOX, box);   /* S-5: a minted box */
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
-    return v;
+    /* turi-catch-unwind-result-unmatchable: the ctor-named representation
+     * native_ok builds (interpreter_natives.c), so a `match` written on the
+     * catch's value finds its `Ok` arm.  The int64[3] box this used to build
+     * for a scalar payload is not a struct, and eval_match_resolve tests a
+     * constructor pattern against a struct's name only: every
+     * `(match (catch-unwind ...) (Ok v) ... (Err e) ...)` died with "match:
+     * no arm matched" under --interpret, while ok? / ok-val (result_field,
+     * which reads both shapes) worked. */
+    TuriValue fields[1] = { ok_val };
+    return turi_make_struct(env, "Ok", fields, 1);
 }
 
-/* Build the Err shape of the Result box, with err_val pointing at a heap
+/* Build the Err shape of the Result, its payload the handle of a heap
  * TuriPanicPayload snapshotted from the env's in-flight panic fields. */
 static TuriValue turi_err_result_box(TuriEnv *env) {
-    /* Escaping payload: the payload + box are returned as a Result carrier and
-     * read back by the panic-payload-* accessors; pool-owned, never freed. */
+    /* Escaping payload: the payload is returned in the Result and read back by
+     * the panic-payload-* accessors; pool-owned, never freed. */
     TuriPanicPayload *pp = (TuriPanicPayload *)turi_val_alloc(env, sizeof(TuriPanicPayload));
     pp->type_tag = env->catch_panic_type;
     pp->value    = env->catch_panic_value;
@@ -3865,14 +3864,11 @@ static TuriValue turi_err_result_box(TuriEnv *env) {
     pp->file     = env->catch_panic_file
                    ? turi_val_strdup(env, env->catch_panic_file) : NULL;
     pp->line     = env->catch_panic_line;
-    int64_t *box = (int64_t *)turi_val_alloc(env, 3 * sizeof(int64_t));
-    box[0] = 0; box[1] = 0; box[2] = (int64_t)(intptr_t)pp;
-    /* S-5: the box and the payload it points at are minted handles; the
-     * panic-payload-* forms read a whole TuriValue out of the payload. */
-    turi_prov_register(env, TURI_HK_RESULTBOX, box);
+    /* S-5: the payload is a minted handle; the panic-payload-* forms read a
+     * whole TuriValue out of it.  Ctor-named, as turi_ok_result_box. */
     turi_prov_register(env, TURI_HK_PANIC, pp);
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
-    return v;
+    TuriValue fields[1] = { turi_int((int64_t)(intptr_t)pp) };
+    return turi_make_struct(env, "Err", fields, 1);
 }
 
 /* -------------------------------------------------------------------------
@@ -5313,7 +5309,14 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
             break;
         }
         if (cur->kind == EX_LET) {
-            EvalFrame *nf = eval_frame_new(env, cur_frame);
+            /* turi-call-pins-and-side-frames-not-reclaimed: a call frame of
+             * its own, handed back when the capture is done with it (below,
+             * or serial_receiver_resume after the deferred work).  A closure
+             * over it -- the receiver, a context call's fn -- marks it
+             * escaped and frame_release then keeps it, as before; a call/cc
+             * capture since it was made defers it to the sweep.  Nothing else
+             * holds it: a reified TsFrame keeps values, not frames. */
+            EvalFrame *nf = eval_frame_new_call(env, cur_frame);
             let_frames[n_let++] = nf;
             bool err = false;
             for (uint32_t i = 0; i < cur->as.let_.n; i++) {
@@ -5544,7 +5547,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
         }
     }
 
-    for (int32_t i = (int32_t)n_let - 1; i >= 0; i--) eval_frame_free(let_frames[i]);
+    for (int32_t i = (int32_t)n_let - 1; i >= 0; i--) frame_release(env, let_frames[i]);
     return result;
 }
 
@@ -9524,12 +9527,11 @@ typedef struct { EvalFrame **let_frames; uint32_t n_let; } SerialReceiverState;
  * frames (kept alive across the receiver, which may close over one of them). */
 static TuriValue serial_receiver_resume(TuriEnv *env, void *state, TuriValue applied,
                                         bool *done, TuriValue *out) {
-    (void)env;
     SerialReceiverState *s = (SerialReceiverState *)state;
     *done = true;
     *out  = applied;
     for (int32_t i = (int32_t)s->n_let - 1; i >= 0; i--)
-        eval_frame_free(s->let_frames[i]);
+        frame_release(env, s->let_frames[i]);
     free(s->let_frames);
     free(s);
     return applied;

@@ -1,0 +1,38 @@
+;; any-widen-deep-fresh-tree-dropped -- a widen whose payload is a constructor
+;; tree written out in full owns everything a deep `__tur_any_drop` walks, so
+;; the drop is licensed (any-widen-deep-drop-frees-borrowed-children, fix
+;; direction 1).  Leak-checked: before, every `fresh-*` call below leaked its
+;; spine (2 or 3 boxes a turn).
+;;
+;; The must-keep half -- a tree with a variable or a parameter in an owned
+;; field -- is any-widen-deep-fresh-tree-kept.
+
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+
+(defn llen [xs : any] : int
+  (match (cast xs Lst)
+    (Cons h t) (+ 1 (llen t))
+    (Nil)      0))
+
+;; returns_fresh_any: the tail widens a fully fresh tree.
+(defn mk [i : int] : any
+  (:: (Cons (:: i any) (:: (Cons (:: 7.1 any) (:: (Nil) any)) any)) any))
+
+;; A cstr leaf is inert: the glue never walks into it.
+(defn mk-s [s : cstr] : any (:: (Cons (:: s any) (:: (Nil) any)) any))
+
+(defn fresh-inline [i : int] : int
+  (llen (:: (Cons (:: i any) (:: (Cons (:: 2 any) (:: (Nil) any)) any)) any)))
+
+(defn fresh-call [i : int] : int (llen (mk i)))
+
+(defn fresh-str [] : int (llen (mk-s "x")))
+
+(defn main [] : int
+  (let [^mut i 0
+        ^mut s 0]
+    (while (< i 100)
+      (set! s (+ s (fresh-inline i) (fresh-call i) (fresh-str)))
+      (set! i (+ i 1)))
+    (println s))            ;; 100 * (2 + 2 + 1) = 500
+  0)

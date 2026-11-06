@@ -1,0 +1,25 @@
+;; turi-reset-capture-frames-released -- the `let` frames a cloneable-reset's
+;; capture walk makes (ts_capture_and_run, src/turi/eval.c) are handed back to
+;; the interpreter's free list when the capture is done with them
+;; (turi-call-pins-and-side-frames-not-reclaimed).  A frame a closure captured
+;; -- here the receiver, which reads the context's `a` -- must be kept: it is
+;; called after the free list has been reused by later resets.
+
+(defn one [k] : int (tur_cloneable_cont_resume k 1))
+
+(defn plain [i : int] : int
+  (cloneable-reset (let [a i b 2] (+ a (+ b (cloneable-shift one 0))))))
+
+(defn keeps [i : int] : int
+  (cloneable-reset
+    (let [a i]
+      (+ a (cloneable-shift (fn [k] : int (+ (* 100 a) (tur_cloneable_cont_resume k 1))) 0)))))
+
+(defn lp [i : int acc : int] : int
+  (if (= i 0) acc (lp (- i 1) (+ acc (plain i) (keeps i)))))
+
+(defn main [] : int
+  (println (plain 10))     ;; 10 + 2 + 1 = 13
+  (println (keeps 7))      ;; 700 + 7 + 1 = 708
+  (println (lp 1000 0))    ;; sum of (i+3) + (101i+1) over 1..1000
+  0)

@@ -1,5 +1,21 @@
 # Carrier-riding sum Option/Result boxes have no automatic owner
 
+**Narrowed 2026-11-06: a `match` written at the use site owns a fresh
+carrier cell.** `(match (ok i) (Ok x) x (Err e) 0)` over an erased
+`(Result int E)` -- the E nothing pins, the commonest way to write it -- leaked
+`ok`'s 16 B cell on every call: the match hoists the fresh producer into its
+own temp and nothing else sees it, but only the by-value monomorph's payload
+box had a free there (sum-payload-box-leaks-at-match). The arm that answers
+now frees the cell once its binders are copied out
+(`match_scrut_owns_carrier_cell`, `src/compiler/emit_expr.c`), when the
+scrutinee is a fresh producer call not already stamped for a
+drop-after-consumer free, no arm binds the whole value or matches a literal,
+the live arm holds no boxed value-struct payload, and every binder is a word
+(a scalar, a cstr, a raw pointer, or an unpinned type parameter's erased
+carrier). Pinned by `tests/fixtures/match-fresh-carrier-cell-freed`
+(leak-checked: `ok`, `err`, a float payload, beside by-value producers; 100
+turns, 1600 B per shape before).
+
 **Severity: low-medium -- downgraded from medium 2026-10-08** (see the
 re-measurement at the end). What is left is 408 B across 9 fixtures, from three
 consumers the compiler cannot see through. Only one of them grows with a

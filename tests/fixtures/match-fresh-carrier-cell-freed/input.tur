@@ -1,0 +1,41 @@
+;; match-fresh-carrier-cell-freed -- a `match` whose scrutinee is a fresh
+;; erased-sum producer -- `(ok i)` over a `(Result int E)` whose E nothing
+;; pins, `(some s)` of a cstr, a user function returning `(ok ...)` -- owns
+;; the carrier cell the producer malloc'd, and frees it in the arm that
+;; answers, once the binders are copied out
+;; (carrier-sum-option-boxes-have-no-owner, the match consumer).
+;; Leak-checked: every call below leaked its 16 B cell before.
+;;
+;; Each binder is read after the free, so a binder that pointed INTO the cell
+;; would show as a use-after-free here.
+
+(defn a1 [i : int] : int
+  (match (ok i) (Ok x) x (Err e) 0))
+
+(defn a2 [i : int] : int
+  (match (err i) (Ok x) 0 (Err e) {e * 2}))
+
+(defn mk [i : int] : (Result int int) (if (< i 50) (ok i) (err {i + 100})))
+
+(defn a3 [i : int] : int
+  (match (mk i)
+    (Ok x) x
+    (Err e) e))
+
+(defn a4 [i : int] : int
+  (match (mk i)
+    (Ok x) (if (> x 50) x 0)
+    (Err _) 1))
+
+(defn a5 [f : float] : float
+  (match (ok f) (Ok x) {x * 2.0} (Err e) 0.0))
+
+(defn main [] : int
+  (let [^mut i 0
+        ^mut s 0]
+    (while (< i 100)
+      (set! s (+ s (a1 i) (a2 i) (a3 i) (a4 i)))
+      (set! i (+ i 1)))
+    (println s))
+  (println (a5 7.1))
+  0)

@@ -1,0 +1,32 @@
+;; any-widen-deep-fresh-tree-kept -- the must-keep half of
+;; any-widen-deep-fresh-tree-dropped.  A widen whose constructor tree holds a
+;; variable or a parameter in an owned field is NOT deeply fresh: those children
+;; are someone else's, and each is read again after the consuming call.  A deep
+;; drop licensed here would be a use-after-free, which `known-leak` does not
+;; excuse; the leak it does excuse is the residue of
+;; any-widen-deep-drop-frees-borrowed-children.
+
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+
+(defn llen [xs : any] : int
+  (match (cast xs Lst)
+    (Cons h t) (+ 1 (llen t))
+    (Nil)      0))
+
+;; A variable in an owned field: the tree is not deeply fresh.
+(defn kept-var [] : int
+  (let [tl (:: (Cons (:: 2 any) (:: (Nil) any)) any)]
+    (let [a (llen (:: (Cons (:: 1 any) tl) any))]
+      (+ a (llen tl)))))
+
+;; A parameter in an owned field.
+(defn wrap [x : any] : any (:: (Cons x (:: (Nil) any)) any))
+(defn kept-param [] : int
+  (let [inner (Cons (:: 7 any) (:: (Nil) any))]
+    (let [a (llen (wrap (:: inner any)))]
+      (+ a (llen (:: inner any))))))
+
+(defn main [] : int
+  (println (kept-var))      ;; 2 + 1 = 3
+  (println (kept-param))    ;; 1 + 1 = 2
+  0)

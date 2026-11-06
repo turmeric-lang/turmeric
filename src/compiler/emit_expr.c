@@ -1255,7 +1255,17 @@ static const char *catch_thunk_box_shim(EmitCtx *ctx, const Expr *thunk, int *ow
                    ? *fnty.as.fn.result_full_type
                    : emit_type_from_kind(fnty.as.fn.result_kind);
     Type rr = emit_resolve_type(ctx, ret);
-    if (rr.kind == TY_FLOAT || rr.kind == TY_FLOAT32 || rr.kind == TY_FLOAT64) {
+    /* ...and a cstr result: slot 0 of such a thunk is the typed
+     * `const char * (*)(void *)` fat shim, so the generic
+     * `int64_t (*)(void *)` call is an indirect call through the wrong
+     * function type -- a -fsanitize=function trap on
+     * `(catch-unwind (fn [] : cstr "fine"))`, the catch-unwind-match-in-place
+     * fixture's last line.  The bits trampoline calls it at its real type and
+     * returns the word, which is what the box stores anyway.  (A bool
+     * thunk's slot 0 is already word-typed: calling it at `bool` traps the
+     * other way, so bool keeps the generic path.) */
+    if (rr.kind == TY_FLOAT || rr.kind == TY_FLOAT32 || rr.kind == TY_FLOAT64 ||
+        rr.kind == TY_CSTR) {
         if (owns) *owns = 0;
         return ensure_catch_bits_shim(ctx, rr);
     }
@@ -7249,6 +7259,48 @@ static bool match_scrut_owns_vsp_box(EmitCtx *ctx, const Expr *m, Type scrut_ty)
     if (!adt_app_has_boxed_struct_payload(ctx, scrut_ty)) return false;
     for (uint32_t i = 0; i < m->as.match_.n_arms; i++)
         if (m->as.match_.arms[i].pattern.is_var) return false;
+    return true;
+}
+
+/* carrier-sum-option-boxes-have-no-owner, the match consumer: does this
+ * match own its CARRIER scrutinee's cell?  `(match (ok i) (Ok x) x (Err e) 0)`
+ * over an erased `(Result int E)` hoists the fresh cell `ok` mallocs into the
+ * match's own temp, and nothing else sees it, so it is dead once the arm that
+ * answers has copied its binders out -- 16 B a call that leaked before.
+ *
+ * Only where every binder is a word copied out of the cell (a scalar, a cstr,
+ * a raw pointer, a fn value): then nothing can still point INTO the cell.  No
+ * arm binds the whole scrutinee, and the live arm holds no boxed value-struct
+ * payload (that box is the vsp walk's question, and a binder would be a copy
+ * of it).  A call already stamped for the drop-after-consumer free is someone
+ * else's to release. */
+static bool match_binder_is_word(const Binding *b) {
+    if (!b) return true;
+    switch (b->type.kind) {
+        case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_CSTR:
+        case TY_PTR_VOID: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        /* An unpinned type parameter -- `(Err e)` of an `(ok i)` whose E
+         * nothing fixes -- is the erased carrier word, copied like an int. */
+        case TY_TYVAR:
+            return true;
+        default:
+            return false;
+    }
+}
+static bool match_scrut_owns_carrier_cell(EmitCtx *ctx, const Expr *m, Type scrut_ty) {
+    const Expr *s = m->as.match_.scrutinee;
+    while (s && s->kind == EX_ASCRIBE) s = s->as.ascribe_.inner;
+    if (!s || s->kind != EX_CALL) return false;
+    if (emit_call_drop_after_stamped(ctx, s)) return false;
+    if (!emit_call_returns_fresh_sum_box(ctx, s)) return false;
+    if (adt_app_has_boxed_struct_payload(ctx, scrut_ty)) return false;
+    for (uint32_t i = 0; i < m->as.match_.n_arms; i++) {
+        const MatchPattern *pat = &m->as.match_.arms[i].pattern;
+        if (pat->is_var || pat->is_literal) return false;
+        for (uint32_t bi = 0; bi < pat->n_bindings; bi++)
+            if (!match_binder_is_word(pat->bindings ? pat->bindings[bi] : NULL))
+                return false;
+    }
     return true;
 }
 
@@ -21946,6 +21998,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool vsp_owned = adt_byval && !adt_byval_pbp && !adt_niche &&
                              !scrut_bridged &&
                              match_scrut_owns_vsp_box(ctx, e, scrut_ty);
+            bool cell_owned = !adt_byval && !adt_byval_pbp && !adt_flat &&
+                              match_scrut_owns_carrier_cell(ctx, e, scrut_ty);
 
             if (has_any_guard || adt_flat || adt_niche) {
                 /* Phase G4: Emit as if-chain with goto for guard fallthrough */
@@ -22343,6 +22397,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
 
                     if (vsp_owned)
                         emit_match_arm_vsp_free(ctx, body, scrut_ty, "__scrut.");
+                    if (cell_owned) {
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "if (__scrut) %s((void *)__scrut);\n", region_free_fn());
+                    }
 
                     /* Emit body */
                     /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
@@ -22821,6 +22879,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * the box. */
                     if (vsp_owned)
                         emit_match_arm_vsp_free(ctx, body, scrut_ty, "__scrut->");
+                    if (cell_owned) {
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "if (__scrut) %s((void *)__scrut);\n", region_free_fn());
+                    }
 
                     /* Emit body */
                     /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it

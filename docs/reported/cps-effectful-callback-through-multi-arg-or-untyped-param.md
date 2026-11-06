@@ -1,5 +1,15 @@
 # An effectful callback through a multi-argument or untyped fn parameter is refused
 
+**Narrowed 2026-11-06 (re-measured): an aggregate argument wider than 16
+bytes threads.** The item below that says it is refused at compile time no
+longer reproduces on `main`: a 40-byte struct argument and a three-field
+multi-variant ADT argument, through a captureless lambda and a capturing one,
+reach the handler around the caller and print what `tur --interpret` prints,
+leak-clean and with no `tur jit` fallback. Which change lifted it was not
+bisected. Pinned by `tests/fixtures/cps-effectful-callback-wide-aggregate`
+(leak-checked). Left: an untyped `^fat` parameter, and a capturing closure
+with an untyped `ptr<void>` argument.
+
 **Narrowed 2026-11-06: a capturing closure with a `bool` or narrow-integer
 result threads.** See "Fixed 2026-11-06" at the end. Left: an untyped `^fat`
 parameter, an aggregate argument wider than 16 bytes, and a capturing
@@ -67,8 +77,8 @@ All three fixtures are leak-checked, pass the JIT harness and run clean under
 `-fsanitize=function`. **What is left:**
 
 - shape 2, an untyped `^fat` parameter;
-- an aggregate (struct or ADT) argument wider than 16 bytes (narrower ones
-  thread since 2026-10-12, above);
+- ~~an aggregate (struct or ADT) argument wider than 16 bytes~~ -- threads,
+  re-measured 2026-11-06 (top);
 - a capturing closure with an untyped `ptr<void>` argument (its narrow-
   integer / `bool` result half was fixed 2026-11-06, see the end).
 

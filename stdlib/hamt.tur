@@ -573,7 +573,7 @@
 ;;;
 ;;; Parameters:
 ;;;   m   -- source HAMT pointer
-;;;   fn  -- C function pointer (val :int, ctx :ptr) -> :ptr
+;;;   fn  -- a C-ABI function `(c-fn [int ptr<void>] int)`: (val, ctx) -> new val
 ;;;   ctx -- caller-supplied context passed to fn
 ;;;
 ;;; Returns:
@@ -585,7 +585,7 @@
 ;;; Since: Phase P1
 ;; Map: return a new HAMT with each value replaced by fn(val, ctx).
 
-(defn hamt/map [m : ptr<void> fn : ptr<void> ctx : ptr<void>]
+(defn hamt/map [m : ptr<void> fn : (c-fn [int ptr<void>] int) ctx : ptr<void>]
   #fx{}
   : ptr<void>
   (tur_hamt_map m fn ctx))
@@ -593,7 +593,7 @@
 ;;;
 ;;; Parameters:
 ;;;   m   -- source HAMT pointer
-;;;   fn  -- C predicate pointer (key :int, val :int, ctx :ptr) -> bool
+;;;   fn  -- a C-ABI predicate `(c-fn [int int ptr<void>] bool)`: (key, val, ctx)
 ;;;   ctx -- caller-supplied context passed to fn
 ;;;
 ;;; Returns:
@@ -605,7 +605,9 @@
 ;;; Since: Phase P1
 ;; Filter: return a new HAMT with only entries where fn(key, val, ctx) is true.
 
-(defn hamt/filter [m : ptr<void> fn : ptr<void> ctx : ptr<void>]
+(defn hamt/filter [m : ptr<void>
+                   fn : (c-fn [int int ptr<void>] bool)
+                   ctx : ptr<void>]
   #fx{}
   : ptr<void>
   (tur_hamt_filter m fn ctx))
@@ -613,7 +615,7 @@
 ;;;
 ;;; Parameters:
 ;;;   m    -- source HAMT pointer
-;;;   fn   -- C function pointer (acc :ptr, key :int, val :int, ctx :ptr) -> :ptr
+;;;   fn   -- a C-ABI function `(c-fn [int int int ptr<void>] int)`: (acc, key, val, ctx) -> acc
 ;;;   init -- initial accumulator pointer
 ;;;   ctx  -- caller-supplied context passed to fn
 ;;;
@@ -626,7 +628,10 @@
 ;;; Since: Phase P1
 ;; Reduce: fold all entries; returns final accumulator (as ptr).
 
-(defn hamt/reduce [m : ptr<void> fn : ptr<void> init : int ctx : ptr<void>]
+(defn hamt/reduce [m : ptr<void>
+                   fn : (c-fn [int int int ptr<void>] int)
+                   init : int
+                   ctx : ptr<void>]
   #fx{}
   : int
   (tur_hamt_reduce m fn init ctx))
@@ -635,7 +640,7 @@
 ;;; Parameters:
 ;;;   a   -- first HAMT pointer
 ;;;   b   -- second HAMT pointer
-;;;   fn  -- C function pointer (val_a :ptr, val_b :ptr, ctx :ptr) -> :ptr
+;;;   fn  -- a C-ABI function `(c-fn [int int ptr<void>] int)`: (val-a, val-b, ctx) -> val
 ;;;   ctx -- caller-supplied context passed to fn
 ;;;
 ;;; Returns:
@@ -649,7 +654,7 @@
 
 (defn hamt/merge-with [a : ptr<void>
                        b : ptr<void>
-                       fn : ptr<void>
+                       fn : (c-fn [int int ptr<void>] int)
                        ctx : ptr<void>]
   #fx{}
   : ptr<void>

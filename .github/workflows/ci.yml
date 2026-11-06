@@ -2406,6 +2406,10 @@ jobs:
           tests/lang-picker.spec.js tests/sw-dev.spec.js tests/trace.spec.js
           tests/security.spec.js tests/ci.spec.js tests/jit-engine.spec.js
           tests/repl-intelligence.spec.js
+          tests/ci-api.spec.js tests/docs-highlight.spec.js
+          tests/docs-restore.spec.js tests/editor-highlight.spec.js
+          tests/pwa-update.spec.js tests/sw-kill.spec.js
+          tests/theme-toggle.spec.js
 
       # Not the default `success()`, because the desktop step above now
       # BLOCKS: a desktop failure would skip this step, mobile would produce no

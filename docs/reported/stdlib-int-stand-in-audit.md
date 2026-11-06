@@ -9,10 +9,22 @@ parameter has an unchecked shape any more (see "Done 2026-09-28"). S2 landed
 `either.tur`). What is left, none of it a silent wrong answer:
 
 - **S1, the `ptr<void>` callbacks** (`timer-set`, `scheduler-timeout`,
-  `once-call`, `hamt/map` / `hamt/filter`, `fiber-new`, `register-test`) --
-  raw C code pointers handed to C APIs, not Turmeric closures. They want a C
-  function-pointer type or a fat-to-C trampoline: a design item, not a
-  signature pass.
+  `once-call`, `fiber-new`, `register-test`) -- raw C code pointers handed to
+  C APIs, not Turmeric closures. They want a C function-pointer type or a
+  fat-to-C trampoline. **The C function-pointer type exists now** --
+  `(c-fn [A...] R)` (typed-c-abi-function-pointers): an argument must be a
+  captureless fn of exactly that signature, and a capturing closure or a wrong
+  arity is a compile error. **2026-11-06: the four HAMT higher-order
+  operations use it** -- `hamt/map` `(c-fn [int ptr<void>] int)`,
+  `hamt/filter` `(c-fn [int int ptr<void>] bool)`, `hamt/reduce`
+  `(c-fn [int int int ptr<void>] int)` and `hamt/merge-with`
+  `(c-fn [int int ptr<void>] int)`, the signatures `src/runtime/hamt.h`
+  declares, so `(hamt/map m one-arg-fn m)` is refused ("wrong arity for C
+  function pointer parameter") where it used to compile and call garbage.
+  `hamt-lisp-map-filter` / `hamt-lisp-merge-with` pass their inline-C
+  callbacks unchanged. The other five each want their C signature read
+  (and `fiber-new`'s and `register-test`'s callers checked) before the same
+  pass.
 - **S2, 6 sites**: `dfs-set` (unblocked 2026-09-25, but `(BtCell A)` breaks
   every caller that spells bare `BtCell`), `future.tur`'s 4 (a 34-`defn`
   module redesign -- `(Future A E)`, `future-get` returning `(Result A E)`),

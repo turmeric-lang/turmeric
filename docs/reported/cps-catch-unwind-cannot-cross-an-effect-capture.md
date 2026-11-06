@@ -1,5 +1,18 @@
 # Compiled: an effect capture cannot cross a `catch-unwind`
 
+**Narrowed 2026-11-06: a `never`-typed thunk takes the catch prompt.**
+`(catch-unwind (fn [] : int (panic "x")))` -- a body of type `!` -- is
+translated inline under a catch prompt at the type the thunk declares
+(`catch_delim_type`, `src/passes/cps_ir.c`; int, bool, cstr or nil), instead
+of keeping the delegated lowering that evicted a function also holding a
+`handle` (its performs then had no lowering). Pinned by
+`tests/fixtures/cps-catch-unwind-never-thunk` (leak-checked; int and bool
+thunks beside a handle; all three engines). Found on the way, and fixed in its
+own change: under `--interpret` no `match` on a `catch-unwind` result ever
+matched
+([turi-catch-unwind-result-unmatchable](../archive/turi-catch-unwind-result-unmatchable.md)).
+Left: the capturing performing thunk below, and the other thunk shapes.
+
 **Narrowed again 2026-10-24: the clause shape is fixed too; what is left are
 thunk shapes the inline lowering does not take.** A handler case body now
 admits a catch prompt (`handle_case_ok_rec`'s CT_RESET,
