@@ -220,7 +220,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [spice-readmes-fail-strict-guide-pairs-check](spice-readmes-fail-strict-guide-pairs-check.md) | low | `check-guide-pairs.tur --spices` fails: 57 Turmeric blocks have no sweet-exp companion and 3 pairs (glsl, nng, sdf-raylib) do not parse-check. No CI job in either repo runs the check, and turmeric-spices still carries the old Python checker |
+| ~~[spice-readmes-fail-strict-guide-pairs-check](../archive/spice-readmes-fail-strict-guide-pairs-check.md)~~ | low | **RESOLVED 2026-11-06** (archived): turmeric-spices#135 pairs or marks every README block (111 pairs ok, 0 unpaired) and gates the strict check in spices CI |
 
 ## Found executing rank2-argument-genericity-plan (filed 2026-10-22)
 
