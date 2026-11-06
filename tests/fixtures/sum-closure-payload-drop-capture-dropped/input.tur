@@ -1,0 +1,45 @@
+;; sum-closure-payload-drop-capture-dropped: a capturing closure held in a
+;; by-value Option local is dropped at scope exit when every use only invokes
+;; it -- but only when its env's drop frees the box alone.  One that captures
+;; a Drop-instance value has glue that releases the capture too, and it was
+;; left alone, so the env and the captured value leaked, one of each per call
+;; (sum-closure-payload-never-dropped item 4).  With a plain scalar result
+;; nothing the closure returns can reference the capture, so the local now
+;; runs the full glue: matched out and called, and `unwrap`ped and called on
+;; the spot.  Leak-checked; the live count pins that each value is released
+;; exactly once (202 never were before).
+;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
+(defn ctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+(defopaque ^affine Res :int)
+(defn mk [v : int] : Res (ctr 0) (:: v Res))
+(defn rel [r : Res] : void (ctr 1) (:: r int) nil)
+(definstance Drop [Res] (drop [x] : void (rel x)))
+(defn peek [^borrow r : Res] : int (:: r int))
+(defn live [] : int (- (ctr 2) (ctr 3)))
+
+(defn run [k : int] : int
+  (let [w  (mk k)
+        cb (some (fn [x : int] : int (+ x (peek w))))]
+    (match cb
+      (Some f) (f 1)
+      (None) 0)))
+(defn run-unwrap [k : int] : int
+  (let [w  (mk k)
+        cb (some (fn [x : int] : int (+ x (peek w))))]
+    ((unwrap cb) 2)))
+(defn lp [i : int acc : int] : int
+  (if (= i 0) acc (lp (- i 1) (+ acc (run i) (run-unwrap i)))))
+(defn main [] : int
+  (println (run 4))           ; 5
+  (println (run-unwrap 4))    ; 6
+  (println (live))            ; 0
+  (println (lp 100 0))        ; 10400
+  (println (live))            ; 0
+  0)

@@ -2451,6 +2451,29 @@ bool closure_env_drop_frees_box_only(const struct Closure *c) {
     return heap_caps > 0 && !closure_body_inline_c_touches_env(c);
 }
 
+/* async-capturing-body-env-never-freed / sum-closure-payload-never-dropped
+ * item 4: may whoever alone owns this fresh closure run its env's FULL drop
+ * glue -- releasing a Drop-instance or owned `^fat` capture too -- once it is
+ * done with it?  When its result is a plain scalar, nothing the closure
+ * computes can reference a capture, so yes, exactly as a let-bound closure's
+ * scope exit does.  Inline C that names a capture could still have taken an
+ * address in the box; a shift receiver and an effect payload are reaped
+ * elsewhere. */
+bool closure_env_drop_ok_under_scalar_result(const struct Closure *c) {
+    if (!c || !c->fn || c->n_captures == 0) return false;
+    if (c->is_shift_receiver || c->is_effect_payload) return false;
+    TypeKind rk = c->fn->return_type.kind;
+    switch (rk) {
+    case TY_INT: case TY_INT64: case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+    case TY_BOOL: case TY_NIL: case TY_INT8: case TY_INT16: case TY_INT32:
+    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        break;
+    default:
+        return false;
+    }
+    return !closure_body_inline_c_touches_env(c);
+}
+
 /* dynamic-returned-closure-env-is-never-freed: does `x` evaluate to an `any`
  * holding a capturing closure's env that nothing but this value owns?  Two
  * shapes: a widen of a capturing lambda written right here, and a call to a
