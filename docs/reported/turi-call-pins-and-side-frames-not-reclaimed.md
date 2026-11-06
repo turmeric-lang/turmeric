@@ -1,5 +1,23 @@
 # `tur --interpret`: a call's tyvar/dictionary pins, and frames made off the driver's call path, are never handed back
 
+**Narrowed 2026-11-06: the `reset`/`shift` capture frames are handed back.**
+The `let` frames `ts_capture_and_run` makes while it walks a
+`cloneable-reset` / `serial-reset` body to its shift are call frames now
+(`eval_frame_new_call`), released with `frame_release` where they used to go
+to the no-op `eval_frame_free`: after the capture, or in
+`serial_receiver_resume` once the deferred receiver has run. A closure over
+one (the receiver, a context call's fn) marks it escaped and it is kept; a
+call/cc capture since defers it to the sweep; a reified `TsFrame` holds values,
+never frames. Measured on a Debug `tur --interpret` (ASan quarantine off):
+200,000 resets with a two-binding `let` in the context grew peak RSS by 54 MB
+and now by 27 MB. The rest is the `TuriCont` and its frame array, which
+`turi_val_alloc` keeps for the life of the run (the continuation is handed to
+the receiver as a handle, with no owner to say it is done) -- that is
+continuation lifetime, not a side frame, and this report's list is now empty
+of frames. Pinned by `tests/fixtures/turi-reset-capture-frames-released`
+(both engines: a receiver closure over a context `let`, called after 1000
+further resets have reused the free list).
+
 **Narrowed 2026-11-06: both handler case frames are handed back.** The
 work-stack perform's escaping-`k` case frame (`hf`) is a call frame now,
 released when its prompt delivers the case body's value (`DK_PROMPT`, through

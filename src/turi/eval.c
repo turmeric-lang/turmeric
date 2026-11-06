@@ -5313,7 +5313,14 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
             break;
         }
         if (cur->kind == EX_LET) {
-            EvalFrame *nf = eval_frame_new(env, cur_frame);
+            /* turi-call-pins-and-side-frames-not-reclaimed: a call frame of
+             * its own, handed back when the capture is done with it (below,
+             * or serial_receiver_resume after the deferred work).  A closure
+             * over it -- the receiver, a context call's fn -- marks it
+             * escaped and frame_release then keeps it, as before; a call/cc
+             * capture since it was made defers it to the sweep.  Nothing else
+             * holds it: a reified TsFrame keeps values, not frames. */
+            EvalFrame *nf = eval_frame_new_call(env, cur_frame);
             let_frames[n_let++] = nf;
             bool err = false;
             for (uint32_t i = 0; i < cur->as.let_.n; i++) {
@@ -5544,7 +5551,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
         }
     }
 
-    for (int32_t i = (int32_t)n_let - 1; i >= 0; i--) eval_frame_free(let_frames[i]);
+    for (int32_t i = (int32_t)n_let - 1; i >= 0; i--) frame_release(env, let_frames[i]);
     return result;
 }
 
@@ -9524,12 +9531,11 @@ typedef struct { EvalFrame **let_frames; uint32_t n_let; } SerialReceiverState;
  * frames (kept alive across the receiver, which may close over one of them). */
 static TuriValue serial_receiver_resume(TuriEnv *env, void *state, TuriValue applied,
                                         bool *done, TuriValue *out) {
-    (void)env;
     SerialReceiverState *s = (SerialReceiverState *)state;
     *done = true;
     *out  = applied;
     for (int32_t i = (int32_t)s->n_let - 1; i >= 0; i--)
-        eval_frame_free(s->let_frames[i]);
+        frame_release(env, s->let_frames[i]);
     free(s->let_frames);
     free(s);
     return applied;
