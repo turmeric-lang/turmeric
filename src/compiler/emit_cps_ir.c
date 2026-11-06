@@ -354,14 +354,13 @@ static bool mono_erased_tyvar(const Type *r) {
  * capture), or a DICT-CLONE that may await: the copy of a constrained generic
  * a constrained rank-2 parameter calls, which takes its dictionaries as
  * leading int64 params and its `T` params as the carrier word, and returns
- * the carrier (emit_fns.c, MB2.5).  Not one whose result is a float: the
- * carrier return would convert the value. */
+ * the carrier (emit_fns.c, MB2.5).  A float result is the carrier word
+ * holding the value's bits (forall-dict-float-result-truncated), which is
+ * what the `__cps` body delivers to its return continuation anyway, so the
+ * entry wrapper hands the word back as it is (see its `__ret`). */
 static bool fn_erased_base(const FnDef *fd) {
     if (!fd || !cps_fn_may_await(fd)) return false;
-    if (fd->n_dict_clone) {
-        TypeKind rk = fn_ret_type(fd)->kind;
-        return rk != TY_FLOAT && rk != TY_FLOAT64 && rk != TY_FLOAT32;
-    }
+    if (fd->n_dict_clone) return true;
     if (!fd->closure) return false;
     for (uint8_t ci = 0; ci < fd->closure->n_captures; ci++) {
         const Binding *cap = fd->closure->captures[ci];
@@ -1004,7 +1003,14 @@ static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
  * wider atom_ok admits the by-value aggregate there -- as it does for an E2a
  * `via_registry` call, which reaches a `__cps` entry too. */
 static bool tailcall_args_ok(const CTerm *t) {
-    bool cps_to_direct = !binding_cps_reachable(t->as.tailcall.fn);
+    /* A via_fncps call's callee is the fat PARAM, never a CPS-emitted function,
+     * so it reads as cps->direct here -- but its slot call boxes a by-value
+     * aggregate atom into a reaped box (fncps_arg_word), and its fallback is
+     * the direct emitter's own rendering of the call, which boxes it too.  Such
+     * an atom crosses exactly as into a `__cps` entry
+     * (await-parks-only-to-the-nearest-c-frame, a rank-2 struct position). */
+    bool cps_to_direct = !t->as.tailcall.via_fncps
+        && !binding_cps_reachable(t->as.tailcall.fn);
     return call_args_ok(t->as.tailcall.fn, t->as.tailcall.args, t->as.tailcall.n,
                         cps_to_direct, t->as.tailcall.via_registry);
 }
@@ -6243,7 +6249,11 @@ static bool arg_fat_has_fn_cps(const Expr *arg) {
         return emit_poly_wrap_fncps_closure(a) != NULL;
     const Binding *ib = (inner && inner->kind == EX_VAR) ? inner->as.var.binding : NULL;
     if (ib && ib->source_binding) ib = ib->source_binding;
-    return ib && ib->is_global && cps_ir_fncps_sig_ok(&ib->type);
+    /* A value for a forall sink (boxes_aggregate) may carry a struct position
+     * through the slot too (cps_ir_fncps_sig_ok_agg); the fill asks the same. */
+    return ib && ib->is_global
+        && (a->as.poly_wrap_.boxes_aggregate ? cps_ir_fncps_sig_ok_agg(&ib->type)
+                                             : cps_ir_fncps_sig_ok(&ib->type));
 }
 
 /* Does every call through param `p` in `fd`'s body thread the caller's
@@ -9275,15 +9285,29 @@ static char *fncps_fallback_value(CE *ce, const Binding *fnb, const char *pf,
  * a twin of another arity was stored through a cast (emit_expr.c, EX_POLY_WRAP)
  * and is called back at its own type here.  Every argument crosses as its word
  * (cps_ir_fncps_word_of): a pointer through intptr_t, a float as its bits. */
-static void fncps_slot_call(Buf *out, const char *pf, char *const *args,
+/* The word for argument `i`: its bits or pointer, or -- for an owning-free
+ * by-value aggregate (cps_ir_fncps_agg_ty, a rank-2 call's struct position) --
+ * a pointer to a reaped heap box, the DK slot's own Tier-C protocol
+ * (slot_store_reap).  The value's twin reads the struct back through it
+ * (await-parks-only-to-the-nearest-c-frame). */
+static char *fncps_arg_word(CE *ce, const Expr *call, uint32_t i, const char *arg) {
+    const Expr *a = (call && call->kind == EX_CALL && i < call->as.call_.n_args)
+        ? call->as.call_.args[i] : NULL;
+    if (a && cps_ir_fncps_agg_ty(&a->type))
+        return slot_store_reap(ce->ctx, a->type.kind, &a->type, arg);
+    return cps_ir_fncps_word_of(fncps_arg_kind(call, i), arg);
+}
+static void fncps_slot_call(CE *ce, Buf *out, const char *pf, char *const *args,
                             uint32_t n, const char *thread, const Expr *call) {
     if (n == 1) {
         TypeKind k = fncps_arg_kind(call, 0);
-        if (strcmp(cps_ir_fncps_arg_ctype(k), "int64_t") == 0) {
+        const Expr *a0 = (call && call->kind == EX_CALL && call->as.call_.n_args) ? call->as.call_.args[0] : NULL;
+        if (strcmp(cps_ir_fncps_arg_ctype(k), "int64_t") == 0
+            && !(a0 && cps_ir_fncps_agg_ty(&a0->type))) {
             buf_printf(out, "%s.fn_cps(%s.env, (int64_t)(%s), %s)", pf, pf, args[0], thread);
             return;
         }
-        char *w = cps_ir_fncps_word_of(k, args[0]);
+        char *w = fncps_arg_word(ce, call, 0, args[0]);
         buf_printf(out, "%s.fn_cps(%s.env, %s, %s)", pf, pf, w, thread);
         free(w);
         return;
@@ -9292,7 +9316,7 @@ static void fncps_slot_call(Buf *out, const char *pf, char *const *args,
     for (uint32_t i = 0; i < n; i++) buf_puts(out, "int64_t, ");
     buf_printf(out, "DK *))%s.fn_cps)(%s.env, ", pf, pf);
     for (uint32_t i = 0; i < n; i++) {
-        char *w = cps_ir_fncps_word_of(fncps_arg_kind(call, i), args[i]);
+        char *w = fncps_arg_word(ce, call, i, args[i]);
         buf_printf(out, "%s, ", w);
         free(w);
     }
@@ -10255,7 +10279,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
                     ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
                 Buf sc; buf_init(&sc);
-                fncps_slot_call(&sc, pf, av, na, thread, t->as.tailcall.call_expr);
+                fncps_slot_call(ce, &sc, pf, av, na, thread, t->as.tailcall.call_expr);
                 buf_putc(&sc, '\0');
                 ce_line(ce, "if (%s.fn_cps) return %s; /* E2 threaded fat fn-value */",
                         pf, sc.data);
@@ -12319,17 +12343,24 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         uint32_t na = call->as.tailcall.n;
         char **av = fncps_args_str(ce, call->as.tailcall.args, na);
         Buf sc; buf_init(&sc);
-        fncps_slot_call(&sc, pf, av, na, frame, call->as.tailcall.call_expr);
+        fncps_slot_call(ce, &sc, pf, av, na, frame, call->as.tailcall.call_expr);
         buf_putc(&sc, '\0');
         ce_line(ce, "if (%s.fn_cps) return %s; /* E2 threaded fat fn-value heap join */",
                 pf, sc.data);
         buf_free(&sc);
         char *dc = fncps_fallback_value(ce, call->as.tailcall.fn, pf, av, na,
                                         call->as.tailcall.call_expr);
-        /* The join reads its parameter out of the slot: a float by its bits. */
-        TypeKind drk = call->as.tailcall.call_expr
-            ? call->as.tailcall.call_expr->type.kind : TY_INT;
-        if (drk == TY_FLOAT || drk == TY_FLOAT64 || drk == TY_FLOAT32) {
+        /* The join reads its parameter out of the slot: a float by its bits,
+         * a by-value aggregate (a rank-2 call's struct result, re-rendered
+         * by fncps_fallback_value at its own type) through a reaped box. */
+        const Expr *dce = call->as.tailcall.call_expr;
+        TypeKind drk = dce ? dce->type.kind : TY_INT;
+        if (dce && fncps_callee_is_forall(call->as.tailcall.fn)
+            && cps_ir_fncps_agg_ty(&dce->type)) {
+            char *dw = slot_store_reap(ce->ctx, drk, &dce->type, dc);
+            ce_line(ce, "return dk_run(%s, %s);", frame, dw);
+            free(dw);
+        } else if (drk == TY_FLOAT || drk == TY_FLOAT64 || drk == TY_FLOAT32) {
             char *dw = cps_ir_fncps_word_of(drk, dc);
             ce_line(ce, "return dk_run(%s, (tur_dkw)(%s));", frame, dw);
             free(dw);
@@ -15736,11 +15767,11 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
 
     /* await-parks-only-to-the-nearest-c-frame: this function is on the
      * backend, but a call in it through a rank-2 parameter that may receive an
-     * awaiting function can still leave the chain: a struct position or more
-     * than CPS_FNCPS_MAX_ARGS arguments has no threaded lowering
-     * (fncps_forall_call_ok_as), so
-     * it calls the value's direct entry and an await below it is refused at
-     * run time.  Say so at the call, once per function. */
+     * awaiting function can still leave the chain: a position the slot does
+     * not carry -- an owning aggregate, a heap handle with drop glue, an `any`
+     * -- has no threaded lowering (fncps_forall_call_ok_as), so it calls the
+     * value's direct entry and an await below it is refused at run time.  Say
+     * so at the call, once per function. */
     if (!fd->await_evict_warned && cps_fn_may_await(fd) && fd->async_reachable) {
         const Expr *bad = rank2_awaiter_call_unthreaded(fd->body);
         if (bad) {
@@ -15749,10 +15780,10 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
             diag_emit_with_code(DIAG_WARNING, bad->span,
                 TUR_W0044_AWAITER_COMPILED_DIRECT,
                 "`%s` calls `%s`, a rank-2 parameter that may be handed a "
-                "function that awaits, through its direct entry: a call with a "
-                "struct argument or result, or more than eight arguments, has "
-                "no threaded lowering. Inside an async body, a "
-                "pending future awaited "
+                "function that awaits, through its direct entry: a call with an "
+                "argument or result the continuation slot does not carry (an "
+                "owning aggregate, an `any`) has no threaded lowering. Inside an "
+                "async body, a pending future awaited "
                 "through it would park at that function's root instead of the "
                 "body's, so the program refuses the park at run time (`await: "
                 "a pending future would park below a direct-style call`); a "
@@ -16255,7 +16286,16 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
          * reached the boundary that was waiting to catch it.  A zero value
          * goes back instead, and the caller's own panic check propagates. */
         Type _rr; const Type *rrt = cps_resolve_ty(rt, &_rr);
-        if (slot_box_ty(rrt))
+        /* A dict-clone returns the carrier (rety above): for a float result
+         * that is the value's BITS, exactly the word the body delivered to
+         * `__r` -- loading it as a double and assigning that to `int64_t`
+         * would convert the value (await-parks-only-to-the-nearest-c-frame,
+         * the float-result dict-clone). */
+        bool dc_float = fd->n_dict_clone
+            && (rrt->kind == TY_FLOAT || rrt->kind == TY_FLOAT64 || rrt->kind == TY_FLOAT32);
+        if (dc_float)
+            buf_printf(file, "    %s __ret = __r;\n", rety);
+        else if (slot_box_ty(rrt))
             buf_printf(file, "    %s __ret = __r ? %s : (%s){0};\n", rety, ld, rety);
         else
             buf_printf(file, "    %s __ret = %s;\n", rety, ld);

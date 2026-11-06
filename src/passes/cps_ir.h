@@ -457,14 +457,25 @@ bool cps_ir_param_call_threads(const Binding *p, const Expr *call);
  * argument, up to this many.  cps_ir_fncps_sig_ok says whether a fn of type
  * `fn_ty` fits it: every argument a scalar -- an integer of any width, a
  * `bool`, a float, a `cstr` or a `ptr<void>` -- carried as its word
- * (cps_ir_fncps_word_of / cps_ir_fncps_value_of), and a result of the same
- * kinds or unit.  The poly-wrap that FILLS the slot (emit_expr.c) and the
- * analysis that relies on it being filled (arg_fat_has_fn_cps) ask this one
- * question, so the two cannot drift apart. */
-#define CPS_FNCPS_MAX_ARGS 8
+ * (cps_ir_fncps_word_of / cps_ir_fncps_value_of), or an owning-free by-value
+ * aggregate carried as a pointer to a reaped box (the DK slot's own Tier-C
+ * protocol), and a result of the same kinds or unit.  The poly-wrap that FILLS
+ * the slot (emit_expr.c) and the analysis that relies on it being filled
+ * (arg_fat_has_fn_cps) ask this one question, so the two cannot drift apart.
+ * The cap is the language's own arity ceiling: every site that spells the slot
+ * call or its twin (fncps_slot_call, ensure_poly_wrap_cps_thunk) builds its
+ * text in a growable buffer, so nothing below it is sized by this number
+ * (await-parks-only-to-the-nearest-c-frame: it was 8, and a rank-2 call with
+ * nine arguments was refused at run time for it). */
+#define CPS_FNCPS_MAX_ARGS MAX_FN_ARITY
 bool cps_ir_fncps_sig_ok(const Type *fn_ty);
 /* The same for a dict-clone's type, whose `T` positions are the int64 word. */
 bool cps_ir_fncps_sig_ok_erased(const Type *fn_ty);
+/* The same admitting an owning-free by-value aggregate position, carried as a
+ * pointer to a reaped box; for a value handed to a forall sink. */
+bool cps_ir_fncps_sig_ok_agg(const Type *fn_ty);
+/* Is `t` such an aggregate? */
+bool cps_ir_fncps_agg_ty(const Type *t);
 /* await-parks-only-to-the-nearest-c-frame: does the call `call` through the
  * fat (is_poly_fn) parameter `fn` thread the continuation through the value's
  * `fn_cps` slot?  False means the translator delegates it to the value's

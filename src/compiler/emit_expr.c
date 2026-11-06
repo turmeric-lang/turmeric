@@ -19675,6 +19675,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * it through a carrier-spill shim that boxes the aggregate. */
             const Binding *wbnd = e->as.poly_wrap_.wrapper_binding;
             char *spill = NULL;
+            bool agg_spill = false;   /* `spill` is the aggregate-result shim */
             /* Slice 3 (constrained-hkt-forall codegen): only a FORALL carrier sink
              * boxes an aggregate return (the generic int64 carrier consumer
              * unboxes it).  A typed `:fn` carrier / monad continuation is consumed
@@ -19702,6 +19703,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 for (uint8_t i = 1; i < warity && nwp < MAX_FN_ARITY; i++)
                     wparams[nwp++] = emit_fn_arg_type_from_type(wbnd->type, i);
                 spill = ensure_aggregate_spill_shim(ctx, wn, wres, wparams, nwp);
+                agg_spill = spill != NULL;
             }
             /* erased-float-carrier: the sink is an erased typeclass-method
              * `:fn` param (`g : (fn [a] b)`) that invokes the thunk through
@@ -19739,11 +19741,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * DK-threading slot, so a call through a fat-closure poly-fn param
              * dispatches the callback onto the caller's trampoline instead of a
              * fresh root (which would leave the effect unhandled).  Restricted to
-             * the slot's word ABI (cps_ir_fncps_sig_ok); an aggregate-result
-             * carrier (spill) is excluded. */
+             * the slot's word ABI (cps_ir_fncps_sig_ok) -- or, for a forall sink,
+             * the word ABI plus owning-free by-value aggregate positions carried
+             * as reaped boxes (cps_ir_fncps_sig_ok_agg): the aggregate-result
+             * spill is `.fn`'s business, the twin has its own protocol
+             * (await-parks-only-to-the-nearest-c-frame).  A float-carrier shim
+             * stays excluded. */
             char *fn_cps_name = NULL;
             uint32_t fn_cps_arity = 1;
-            if (!spill) {
+            if (!spill || agg_spill) {
                 const Expr *inner = e->as.poly_wrap_.inner;
                 while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
                 const Binding *ib = (inner && inner->kind == EX_VAR)
@@ -19788,7 +19794,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * decl and stays on the delegated direct path. */
                 if (ib && ib->is_global && effectful
                     && (dcb ? cps_ir_fncps_sig_ok_erased(&ib->type)
-                            : cps_ir_fncps_sig_ok(&ib->type))) {
+                        : e->as.poly_wrap_.boxes_aggregate ? cps_ir_fncps_sig_ok_agg(&ib->type)
+                                                           : cps_ir_fncps_sig_ok(&ib->type))) {
                     char *iname = raw_name_for_binding(ib);
                     /* The wrapper's leading dictionary slots: its arity is the
                      * env, then those, then the inner's arguments. */

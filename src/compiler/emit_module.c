@@ -3132,11 +3132,38 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
      * type (e2a_cast) and the entry, or its `__e2w` word adapter, declares so;
      * `dir` converts each word to the direct entry's own C parameter type. */
     Buf dir; buf_init(&dir);
+    /* await-parks-only-to-the-nearest-c-frame: an owning-free by-value
+     * aggregate position (cps_ir_fncps_agg_ty; a forall sink's struct
+     * argument or result) crosses the slot as a pointer to a reaped box, the
+     * DK slot's own Tier-C protocol.  The registered `__cps` entry takes the
+     * struct BY VALUE (its entry wrapper dereferences a by-pointer parameter
+     * back to that signature), so `fwd` reads the box; the direct entry takes
+     * it as the direct emitter declares it -- `const T *` past 16 bytes
+     * (type_struct_pass_by_ptr), the value otherwise -- so `dir` passes the
+     * box pointer or reads it.  A struct result of the direct entry is boxed
+     * and reaped for the continuation, as a `__cps` body delivers one. */
+    const Type *rft = inner_ty->as.fn.result_full_type;
+    bool agg_res = !carrier_result && cps_ir_fncps_agg_ty(rft);
+    const char *agg_rc = agg_res ? emit_type_c_name(ctx, emit_resolve_type(ctx, *rft)) : NULL;
     for (uint32_t i = 0; i < n; i++) {
         char an[24];
         if (n == 1) snprintf(an, sizeof an, "__pwx");
         else        snprintf(an, sizeof an, "__pwx%u", i);
         TypeKind ak = (TypeKind)inner_ty->as.fn.arg_kinds[i];
+        const Type *aft = inner_ty->as.fn.arg_full_types ? inner_ty->as.fn.arg_full_types[i] : NULL;
+        if (cps_ir_fncps_agg_ty(aft)) {
+            Type rt_ = emit_resolve_type(ctx, *aft);
+            const char *tc = emit_type_c_name(ctx, rt_);
+            bool by_ptr = type_struct_pass_by_ptr(rt_);
+            if (by_ptr) buf_printf(&decl, "%sconst %s *", i ? ", " : "", tc);
+            else        buf_printf(&decl, "%s%s", i ? ", " : "", tc);
+            buf_printf(&prm, ", int64_t %s", an);
+            buf_printf(&fwd, "%s(*(%s *)(intptr_t)%s)", i ? ", " : "", tc, an);
+            if (by_ptr) buf_printf(&dir, "%s(const %s *)(intptr_t)%s", i ? ", " : "", tc, an);
+            else        buf_printf(&dir, "%s(*(%s *)(intptr_t)%s)", i ? ", " : "", tc, an);
+            buf_printf(&cast, "%s, ", tc);
+            continue;
+        }
         const char *pc = cps_ir_fncps_arg_ctype(ak);
         size_t pL = strlen(pc);
         bool word = strcmp(pc, "int64_t") == 0;
@@ -3167,6 +3194,7 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
     for (uint32_t i = 0; i < n_lead_ignore; i++)
         buf_printf(&lead, ", int64_t __pwd%u", i);
     buf_putc(&lead, '\0');
+    if (agg_res) rc = agg_rc;
     buf_printf(target, "static %s %s(%s);\n", rc, inner_fn, n ? decl.data : "void");
     buf_printf(target, "static int64_t %s(void *__pwe%s%s, struct DK *__kont) {\n",
                name, lead.data, prm.data);
@@ -3177,7 +3205,11 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
     buf_printf(target, "    __tur_cps_fn __c = __tur_cps_lookup((tur_dkw)%s);\n", inner_fn);
     buf_printf(target, "    if (__c) return ((int64_t(*)(%sstruct DK *))__c)(%s%s__kont);\n",
                cast.data, fwd.data, n ? ", " : "");
-    if (rk == TY_NIL)
+    if (agg_res)
+        buf_printf(target, "    %s __r = %s(%s);\n"
+                           "    return dk_run(__kont, __dk_reap_ptr((tur_dkw)({ %s *__bx = (%s *)malloc(sizeof(%s)); *__bx = __r; __bx; })));\n",
+                   agg_rc, inner_fn, dir.data, agg_rc, agg_rc, agg_rc);
+    else if (rk == TY_NIL)
         buf_printf(target, "    %s(%s);\n    return dk_run(__kont, (tur_dkw)0);\n",
                    inner_fn, dir.data);
     else if (rk == TY_FLOAT || rk == TY_FLOAT64 || rk == TY_FLOAT32) {
@@ -19123,7 +19155,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        fprintf(stderr, \"await: a pending future would park below a direct-style call "
                   "(a function on the path to this await that the CPS backend could not compile), "
                   "losing the rest of the async body; refusing to continue. See "
-                  "docs/reported/await-parks-only-to-the-nearest-c-frame.md\\n\");\n");
+                  "docs/archive/await-parks-only-to-the-nearest-c-frame.md\\n\");\n");
     buf_puts(out, "        fflush(stderr);\n");
     buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
