@@ -230,7 +230,7 @@ METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8,ccall,cwrap,FS,ENV,wasmTable,a
 # signature mismatch; checked, it aborts with "stack overflow" on stderr (under
 # wasm EH the exception JavaScript sees is a plain `unreachable`, so the page
 # reads the stderr line, web/public/jit-worker.js).  See
-# docs/reported/wasm-linear-stack-overflow-unchecked.md.
+# docs/archive/wasm-linear-stack-overflow-unchecked.md.
 # The check also turns on CHECK_NULL_WRITES, which plants a canary word at
 # address 0, so a program that READS through a null pointer sees that word
 # instead of the 0 it saw before and its answer changes.  The reads it found

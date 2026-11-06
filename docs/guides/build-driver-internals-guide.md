@@ -403,7 +403,7 @@ CC: cc -O2 -std=c99 -Wall -fno-strict-aliasing -Wno-misleading-indentation
 | `$CC` | `getenv("CC")`, default `cc`; always `emcc` for `--target wasm` |
 | `cc_flags` | `TUR_CC_FLAGS` replaces the default **entirely**. Defaults: `-O2 -std=c99 -Wall -fno-strict-aliasing`; under `--debug` `-g -Og ...` (not `-O0`: the build relies on dead-code elimination to drop preloaded stdlib functions that reference libturi-only symbols); wasm adds `-s WASM=1` |
 | `TUR_EMITTED_C_CC_FLAGS` | `-Wno-misleading-indentation -fwrapv`, appended **after** `cc_flags` so an override cannot drop them. `-fwrapv` is semantics: Turmeric `int` arithmetic wraps |
-| `-fsanitize=address,undefined` | added only when `resolve_autolink_flags` finds `__asan_init` in a `libturi.a` on a `-L` path (`nm` probe). A sanitized `tur` does **not** sanitize the programs it builds |
+| `-fsanitize=address,undefined` | added when `resolve_autolink_flags` finds `__asan_init` in a `libturi.a` on a `-L` path (`nm` probe), or always under `TUR_SANITIZE_PROGRAMS=1`. A sanitized `tur` does **not** otherwise sanitize the programs it builds |
 | runtime archive / sources | `apply_runtime_lib_mode`; full detail in the [runtime preamble and linkage guide](runtime-preamble-and-linkage-guide.md) and the [compile/link guide](tur-compile-link-guide.md#tur-build---runtime----how-the-runtime-gets-linked) |
 
 `--runtime=` (or `TUR_RUNTIME`) sets `g_runtime_mode`: `auto` (default),
@@ -629,6 +629,7 @@ refresh the list). Variables read only elsewhere are noted.
 |---|---|
 | `CC` | the C compiler (default `cc`) |
 | `TUR_CC_FLAGS` | replaces the default `cc` flags; `-fsanitize` in it disables the preamble swap |
+| `TUR_SANITIZE_PROGRAMS` | `1`: compile and link every program with `-fsanitize=address,undefined` (appended, unlike `TUR_CC_FLAGS`), and skip the preamble swap; for test runs that want LeakSanitizer on every suite, not only the ones that link libturi |
 | `TUR_RUNTIME` | `auto`/`lib`/`source`/`split`; `--runtime=` wins |
 | `TUR_RUNTIME_LIB` | directory or archive path for `locate_runtime_lib` |
 | `TUR_SDK_ROOT` | the SDK prefix for `-lturi` anchoring |

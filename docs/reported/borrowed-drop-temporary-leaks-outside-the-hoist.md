@@ -2,6 +2,13 @@
 
 **Severity: low (a leak, one value per evaluation; binding it with `let` avoids it).**
 
+**Narrowed 2026-11-06: a `cstr`, `Vec` or other non-scalar result is
+released too, when the callee's body cannot hand back a view of the
+argument.** `(f64vec-show (f64vec-new 4 7.1))` and `(f64vec->vec ...)` free
+their temporary. What is left is one shape: an effectful argument before the
+temporary while a NON-scalar argument (a struct, a closure) also precedes it.
+See "Fixed 2026-11-06" at the end.
+
 **Narrowed 2026-11-05: the effectful-earlier-argument half is fixed, and a
 move-only Drop result is admitted.** What is left is a call whose result is
 neither a scalar nor a move-only Drop value -- a `cstr`, a `Vec`, a struct --
@@ -96,3 +103,32 @@ Still open: `(f64vec-show (f64vec-new 4 7.1))` (a `cstr` result) and
 `(f64vec->vec ...)` (a `Vec`). Either could point into the argument as far as
 the elaborator knows, so they need a callee-side "fresh result" fact or a
 lifetime check, as the fix directions above say.
+
+## Fixed 2026-11-06
+
+- **Non-scalar result.** The callee-side fact the fix directions asked for,
+  read off the callee's body (`borrow_param_result_may_view`,
+  `src/compiler/elab_call.c`). The result cannot hold anything of the
+  `^borrow` parameter when every use of the parameter in the body is an
+  argument of a call that returns a plain scalar (`(f64vec-ref v i)`,
+  `(f64vec-len v)`), or one handed to a `^borrow` parameter of a callee of
+  which the same holds. Recursion is read as "holds" (the greatest fixpoint:
+  an alias needs some finite use the walk refuses), and an answer that leaned
+  on a question still in progress is withdrawn when that question answers
+  "may". A bare use, a capture, an ascription to another type, a
+  dictionary-dispatched callee, and inline C anywhere in the body answer
+  "may", so those keep the old leak. `f64vec-show` (a `String` built from the
+  floats it reads) and `f64vec->vec` (a `Vec` likewise) qualify; 152 B in 4
+  allocations leaked by the three-line repro before, 0 now.
+- `stdlib/numvec.tur`'s module header no longer tells users to bind before
+  `P-copy`, `P->vec` or `P-show`.
+
+Pinned by `tests/fixtures/borrowed-drop-temporary-released`: `label` (a
+`cstr` result) and `tagv` (a `Vec` built by a recursive helper) release the
+temporary; `viewc` (inline C with a `cstr` result) and `viewt` (a body that
+hands the parameter to `viewc`) keep it.
+
+Still open: an effectful earlier argument next to a non-scalar earlier
+argument. Hoisting the non-scalar one into a temp would make the `let`
+an owner of a value the call consumes, which needs the same ownership care as
+any other hoisted owner; it is left as a leak.

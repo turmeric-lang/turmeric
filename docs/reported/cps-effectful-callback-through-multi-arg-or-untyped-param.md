@@ -1,5 +1,10 @@
 # An effectful callback through a multi-argument or untyped fn parameter is refused
 
+**Narrowed 2026-11-06: a capturing closure with a `bool` or narrow-integer
+result threads.** See "Fixed 2026-11-06" at the end. Left: an untyped `^fat`
+parameter, an aggregate argument wider than 16 bytes, and a capturing
+closure with an untyped `ptr<void>` argument.
+
 **Narrowed 2026-10-12: a by-value aggregate argument or result threads.**
 That shape was worse than this report said: it was not refused, the program
 did not BUILD (on `main` too). A lambda with a struct or sum parameter was
@@ -64,8 +69,8 @@ All three fixtures are leak-checked, pass the JIT harness and run clean under
 - shape 2, an untyped `^fat` parameter;
 - an aggregate (struct or ADT) argument wider than 16 bytes (narrower ones
   thread since 2026-10-12, above);
-- a capturing closure with an untyped `ptr<void>` argument or a
-  narrow-integer / `bool` result.
+- a capturing closure with an untyped `ptr<void>` argument (its narrow-
+  integer / `bool` result half was fixed 2026-11-06, see the end).
 
 **Narrowed 2026-10-08: shapes 1, 3 and 4 are fixed.** That covers a callback
 of up to eight arguments (word integers, `cstr` or `ptr<void>`), a capturing
@@ -226,3 +231,29 @@ Pinned by `tests/fixtures/cps-effectful-callback-scalar-kinds`. It covers:
 Every line equals `tur --interpret`. The fixture is leak-checked, passes the
 JIT harness, runs clean under `-fsanitize=function`, and has no finding from
 `check-emitted-float-conversions.py`.
+
+## Fixed 2026-11-06: a capturing closure's `bool` / narrow-integer result
+
+A narrow result comes back from slot 0 widened, so slot 0 holds the widening
+wrapper (`__tur_widen_<thunk>`, `ensure_closure_slot0_widen`), not the lifted
+entry, and the fat dispatcher keys the direct -> CPS registry on slot 0: it
+missed, so `cps_ir_fncps_closure_sig_ok` refused the shape. Four changes:
+
+- The lifted entry's E2a registration (`src/compiler/emit_cps_ir.c`) declares
+  the wrapper, has it defined once (deduplicated with the closure's own
+  construction site), and registers its address for the same twin.
+- `cps_ir_fncps_closure_sig_ok` (`src/passes/cps_ir.c`) admits `bool`,
+  int8..int32 and the unsigned widths.
+- The dispatcher's miss path (`ensure_fncps_env_dispatch`,
+  `src/compiler/emit_module.c`) calls slot 0 at its widened type and narrows
+  the result, instead of calling an `int64_t`-returning wrapper as `int8_t`.
+- Found on the way: `(as int (h x))` -- the usual way to widen such a result
+  -- made the parameter read as escaping. `ptc_walk` had no `EX_CAST` case,
+  so every use under a conversion counted as a value use. It is a non-tail
+  call now. And `cps_closure_env_freeable` took `bool` but no other narrow
+  integer, so those closures leaked their env (24 B a call).
+
+Pinned by `tests/fixtures/cps-effectful-capturing-callback-narrow-result`
+(leak-checked: `bool` both ways, `int8`, `int32` from a float argument, a
+2-ary `uint16`), which equals `tur --interpret`, runs under `tur jit`, and
+runs clean under clang's `-fsanitize=function`.

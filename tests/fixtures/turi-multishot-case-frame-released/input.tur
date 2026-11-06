@@ -1,0 +1,37 @@
+;; turi-multishot-case-frame-released: a handler case that does more than
+;; `(resume k v)` binds its parameters and `k` in a case frame, which
+;; `tur --interpret` now hands back when the case body's prompt delivers --
+;; unless a closure over it escaped, as both closures here do (one over the
+;; case parameter, one over a let inside the case body).  Each must still
+;; read its own value after the stack and the frame free list have been
+;; reused (turi-call-pins-and-side-frames-not-reclaimed).  Interpreter-only:
+;; the compiled backend refuses a perform in this position.
+(defeffect Ask [x : int] : int)
+(defn mk-param [n : int] : (fn [int] int)
+  (handle (do (perform (Ask n)) (fn [y : int] : int y))
+    (Ask [x] k) (do (resume k 1) (fn [y : int] : int (+ x y)))))
+(defn clob [n : int] : int (if (= n 0) 0 (+ 1 (clob (- n 1)))))
+(defn main1 [] : int
+  (let [f (mk-param 5)]
+    (println (clob 100))
+    (let [g (mk-param 7)]
+      (println (f 10))
+      (println (g 20))))
+  0)
+(defn mk-let [n : int] : (fn [int] int)
+  (handle (do (perform (Ask n)) (fn [y : int] : int y))
+    (Ask [x] k) (let [a (* x 2)] (do (resume k 1) (fn [y : int] : int (+ a y))))))
+(defn sum-asks [i : int acc : int] : int
+  (if (= i 0)
+    acc
+    (sum-asks (- i 1)
+              (+ acc (handle (+ 1 (perform (Ask i)))
+                       (Ask [x] k) (let [b x] (+ b (resume k 1))))))))
+(defn main2 [] : int
+  (let [f (mk-let 5)]
+    (println (sum-asks 1000 0))
+    (let [g (mk-let 7)]
+      (println (f 10))
+      (println (g 20))))
+  0)
+(defn main [] : int (main1) (main2))

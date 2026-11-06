@@ -1279,6 +1279,7 @@ bool closure_env_drop_frees_box_only(const struct Closure *c);
 /* An inline-C block in the closure's body names one of its captures -- an
  * lvalue into the env box (emit_core.c). */
 bool closure_body_inline_c_touches_env(const struct Closure *c);
+bool closure_env_drop_ok_under_scalar_result(const struct Closure *c);
 /* closure_binding_escapes for an owner that frees at the outermost DK entry's
  * exit (the CPS reap list): a `perform` in the scope is not an escape. */
 bool closure_binding_escapes_reaped(const Expr *e, const Binding *b);

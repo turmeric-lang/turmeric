@@ -123,7 +123,7 @@ The one red run in that window (`37149022036`, `dde72b1fd`, 2026-10-03 20:24Z)
 did fail on this fixture, but with a different symptom: `exited 1 (expected
 0)`, not the `stdout mismatch` a fork failure produces (the fork check prints a
 count; it does not change the exit status). That is a separate finding, filed
-as [jit-r7rs-threads-lifecycle-exited-1-once](../reported/jit-r7rs-threads-lifecycle-exited-1-once.md).
+as [jit-r7rs-threads-lifecycle-exited-1-once](jit-r7rs-threads-lifecycle-exited-1-once.md).
 40 local runs of the CI configuration (Debug + `TUR_JIT`, `detect_leaks=0`,
 4 at a time) were all clean.
 

@@ -10,7 +10,12 @@
 ;; line pins that a variable an effectful neighbour assigns is still read
 ;; first.  A move-only Drop result (`dup`) owns its own resource, so it cannot
 ;; point into the temp either: the temp is released, and the result goes to
-;; the let that binds it, or to a further hoist.
+;; the let that binds it, or to a further hoist.  A non-scalar result (a
+;; `cstr`, a `Vec`) is released too when the callee's body uses the borrowed
+;; parameter only as an argument of calls that return a scalar or that borrow
+;; it on the same terms (`label`, `tagv`); a callee that may hand back a view
+;; of it -- inline C (`viewc`), or a body that passes it to one (`viewt`) --
+;; keeps the old behaviour, a leak rather than a dangling result.
 ;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
 (defn ctr [op : int] : int
   ```c
@@ -33,6 +38,16 @@
   return 5;
   ```)
 (defn live [] : nil (println (- (ctr 2) (ctr 3))))
+(defn label [^borrow w : Widget] : cstr (if (> (peek w) 0) "w" "v"))
+(defn tagv-go [^borrow w : Widget v : (Vec int) n : int] : (Vec int)
+  (if (= n 0) v (do (vec-push! v (peek w)) (tagv-go w v (- n 1)))))
+(defn tagv [^borrow w : Widget] : (Vec int) (tagv-go w (:: (vec-new) (Vec int)) 2))
+(defn viewc [^borrow w : Widget] : cstr
+  ```c
+  (void)w;
+  return "c";
+  ```)
+(defn viewt [^borrow w : Widget] : cstr (viewc w))
 
 (defn main [] : int
   (println (peek (mk)))        (live)   ;; 1 0
@@ -48,4 +63,10 @@
     (println (peek c)))                  ;; 1
   (live)                                 ;; 0
   (println (peek (dup (dup (mk))))) (live)   ;; 1 0
+  (println (label (mk))) (live)              ;; w 0 -- cstr result, released
+  (let [v (tagv (mk))]
+    (live)                                   ;; 0
+    (println (vec-len v)))                   ;; 2
+  (println (viewc (mk))) (live)              ;; c 1 -- inline C may view it: kept
+  (println (viewt (mk))) (live)              ;; c 2 -- so may a body that hands it there
   0)

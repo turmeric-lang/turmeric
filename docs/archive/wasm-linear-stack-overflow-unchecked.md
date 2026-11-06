@@ -1,10 +1,15 @@
 # The wasm link has no stack-overflow check, so a linear-stack overflow corrupts memory instead of stopping
 
-**Severity:** low, for the stock `tur_wasm` only; unknown whether it is
+**RESOLVED 2026-11-06: both wasm links carry the check.** `tur_wasm`
+(`src/CMakeLists.txt`) now links with `-sSTACK_OVERFLOW_CHECK=2
+-sCHECK_NULL_WRITES=0`, the same pair as the JIT module; see "Fixed for
+`tur_wasm`" at the end.
+
+**Severity (was):** low, for the stock `tur_wasm` only; unknown whether it is
 reachable there. **The browser JIT module is fixed (2026-10-29):** it links with
 `-sSTACK_OVERFLOW_CHECK=2` (`tools/wasm-jit/build-module.sh`), and the page
 reports the abort as `stack overflow: recursion too deep` (see "Fixed for the
-JIT module" below). Move this to `docs/archive/` once `tur_wasm` is decided.
+JIT module" below). (Archived once `tur_wasm` was decided, below.)
 
 Originally: medium for the planned wasm JIT (wasm-jit-plan); unknown for
 today's `tur_wasm`, which has the same link posture. `tur_wasm` links at `-O2`
@@ -24,8 +29,8 @@ measured below.
 | --- | --- | --- |
 | Plain non-tail recursion, small frames | JS `RangeError` near depth 1,800, using 2.7 of 16 MiB. The JS limit binds first, as claimed | same |
 | Non-tail recursion with a 16 KiB local array | `memory access out of bounds` near depth 1,000, *before* the JS limit; the module is dead afterwards | `Aborted(stack overflow (Attempt to set SP to ...))` |
-| Tail-call chain through a function with a local aggregate ([wasm-mir-interp-tail-call-keeps-allocas](wasm-mir-interp-tail-call-keeps-allocas.md)) | `memory access out of bounds` after about 24k calls | `Aborted(stack overflow ...)` |
-| `printf` in a loop, 2e6 iterations ([c2mir-wasm-vararg-buffer-allocas-per-call](c2mir-wasm-vararg-buffer-allocas-per-call.md)) | `null function or function signature mismatch`: memory was corrupted before anything trapped | `Aborted(stack overflow ...)` |
+| Tail-call chain through a function with a local aggregate ([wasm-mir-interp-tail-call-keeps-allocas](../reported/wasm-mir-interp-tail-call-keeps-allocas.md)) | `memory access out of bounds` after about 24k calls | `Aborted(stack overflow ...)` |
+| `printf` in a loop, 2e6 iterations ([c2mir-wasm-vararg-buffer-allocas-per-call](../reported/c2mir-wasm-vararg-buffer-allocas-per-call.md)) | `null function or function signature mismatch`: memory was corrupted before anything trapped | `Aborted(stack overflow ...)` |
 
 So the linear stack is reachable today, by anything that grows it without
 nesting a JS frame per step: large frames, allocas kept by tail calls, and
@@ -64,10 +69,25 @@ emcc 6.0.10 / node 22:
 - `CHECK_NULL_WRITES` is off because the check turns it on by default, and its
   canary at address 0 changed the answer of programs that read through a null
   pointer and used to see 0 there. That found a real defect, recorded as shape
-  4 of [ilp32-word-slots-truncate-64-bit-carriers](ilp32-word-slots-truncate-64-bit-carriers.md);
+  4 of [ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md);
   it is not this flag's to change.
 
 Still open: the stock `tur_wasm` (reader, elaborator, formatter, LSP and the
 tree-walker on user input) links without the check. Its interpreter folds
 recursion onto a heap work-stack, so the linear stack is less exposed there,
 but that is not measured.
+
+## Fixed for `tur_wasm` (2026-11-06)
+
+Decided the same way as the JIT module: `tur_wasm` links with
+`-sSTACK_OVERFLOW_CHECK=2 -sCHECK_NULL_WRITES=0` (`src/CMakeLists.txt`, the
+`turmeric.js` link). Whether its reader, elaborator, formatter, LSP or
+tree-walker ever reaches the bottom of the 16 MiB stack is still not measured,
+but that is no longer the question that matters: if anything does, the eval
+fails with `Aborted(stack overflow ...)`, which `web/public/eval-worker.js`
+already catches and reports as the request's error, instead of writing below
+the stack. The canary stays off for the reason given above. The JIT module's
+measurement (no cost above noise on a 10-million-step loop, +97 KB) is the
+evidence for the cost; this link was not re-measured here, since no Emscripten
+toolchain was available in the session that made the change. CI's
+`build-wasm` job builds the module and runs the browser suite against it.

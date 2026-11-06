@@ -116,11 +116,24 @@ settles. Pinned by `tests/fixtures/async-capturing-body-env-dropped`
 (leak-checked: inline, parking every turn, and 200 spawns in a loop -- 4848 B
 in 202 allocations before, 0 now).
 
-**What is left:** a capture whose drop glue releases something -- an `rc`, an
-owned `^fat` closure, a Drop instance -- since the body's result may still
-reference it (a scalar result could not, which would admit those too); a
+**What is left:** a capture whose drop glue releases something -- an owned
+`^fat` closure, a Drop instance -- under a NON-scalar result, since that
+result may still reference it (a scalar result admits them since 2026-11-06,
+below; an `rc` cannot be captured by an async body at all, TUR-E0010); a
 lambda bound to a local that is spawned more than once, or in a let the CPS
 backend lowers; an inline-C block in the body that names a capture.
+
+**Narrowed 2026-11-06: a scalar result admits a capture whose drop releases
+something.** `async_spawn_owns_env` (`src/compiler/emit_expr.c`) takes a
+fresh lambda written at the spawn whose result is a plain scalar (an integer
+of any width, a float, `bool`, unit) even when its env's glue releases a
+Drop-instance or owned `^fat` capture: the result cannot point at either, so
+the full glue runs when the body settles, as it would at a let-bound
+closure's scope exit. Still refused: a shift receiver, an effect payload, and
+a body whose inline C names a capture. Pinned by
+`tests/fixtures/async-drop-capturing-body-env-dropped` (leak-checked; a
+`Res` Drop value captured by inline and parking bodies, 100 spawns of each;
+its live count was 202 at the end before, 0 now).
 
 **Severity: low (was low-medium; a leak per spawn).** `(async (fn [] ... captured ...))`
 mallocs the lambda's env box, hands it to `tur_async_fiber_closure`, and

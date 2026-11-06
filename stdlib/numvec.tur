@@ -52,10 +52,10 @@
 ;;; passing it to a consumer) hands that duty on.  The accessors take it
 ;;; `^borrow`.  `P-free` consumes an array early.
 ;;;
-;;; A temporary handed straight to an accessor that returns a number --
-;;; `(f64vec-len (f64vec-new 4 0.0))` -- is freed after the call.  One handed to
-;;; anything else (`P-copy`, `P->vec`, `P-show`, or after an argument with side
-;;; effects) has no owner and is not freed, so bind it first:
+;;; A temporary handed straight to an accessor -- `(f64vec-len (f64vec-new 4
+;;; 0.0))`, and `P-copy`, `P->vec` and `P-show` too -- is freed after the call.
+;;; One handed after a non-scalar argument with side effects has no owner and
+;;; is not freed, so bind it first:
 ;;; `(let [v (f64vec-new 4 0.0)] (f64vec-show v))`
 ;;; (docs/reported/borrowed-drop-temporary-leaks-outside-the-hoist.md).
 ;;;

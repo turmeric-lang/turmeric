@@ -1271,6 +1271,11 @@ void drv_replay_to_stderr(const char *path) {
  * caller that may retry decides later whether the output is worth showing,
  * and must replay it when it is (drv_replay_to_stderr) -- a warning is the
  * user's either way. */
+bool drv_sanitize_programs_requested(void) {
+    const char *v = getenv("TUR_SANITIZE_PROGRAMS");
+    return v && strcmp(v, "1") == 0;
+}
+
 int drv_link_command_run(const char *cc, const char *cc_flags,
                          const char *inputs,
                          const Buf *aux_includes, const Buf *aux_sources,
@@ -1291,7 +1296,8 @@ int drv_link_command_run(const char *cc, const char *cc_flags,
     if (aux_includes && aux_includes->len > 0) buf_puts(&cmd, aux_includes->data);
     if (aux_sources  && aux_sources->len  > 0) buf_puts(&cmd, aux_sources->data);
     if (autolink && autolink->len > 0) buf_printf(&cmd, " %s", autolink->data);
-    if (needs_asan) buf_puts(&cmd, " -fsanitize=address,undefined");
+    if (needs_asan || drv_sanitize_programs_requested())
+        buf_puts(&cmd, " -fsanitize=address,undefined");
     if (cmake_flags && cmake_flags->len > 0) buf_puts(&cmd, cmake_flags->data);
     for (int _i = 0; _i < n_include_dirs; _i++) {
         if (include_dirs[_i] && include_dirs[_i][0]) {

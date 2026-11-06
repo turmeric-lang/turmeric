@@ -1,5 +1,16 @@
 # A spice suite that does not link libturi runs without LeakSanitizer
 
+**Narrowed 2026-11-06: fix direction 2 is in `tur`.** `TUR_SANITIZE_PROGRAMS=1`
+compiles and links every program `tur` builds with
+`-fsanitize=address,undefined` -- appended to the flags, so unlike
+`TUR_CC_FLAGS` it keeps the defaults -- and skips the preamble swap, whose
+archive is not sanitized (`drv_sanitize_programs_requested`,
+`src/driver/cc.c`; the link, the preamble-split library unit and
+`preamble_split_auto_applies` read it). A program that leaks 40 B in inline C
+reports it under the knob and is silent without it; `tests/check-sanitize-programs.sh` (ctest `tur_sanitize_programs`) pins both. What is left is the
+spices side: turning it on in turmeric-spices' `scripts/run-shard.sh`, after
+the test-side leaks below are fixed or marked.
+
 **Severity:** low-medium (test coverage gap, silent). A sanitized Debug `tur`
 adds `-fsanitize=address,undefined` to a program it builds only when that
 program links `libturi`. Spices CI runs every spice with a Debug `tur` from

@@ -3283,8 +3283,15 @@ char *ensure_fncps_env_dispatch(EmitCtx *ctx, const Type *lifted_ty) {
                            "    return dk_run(__kont, (tur_dkw)0);\n", ss.data, sa.data);
     } else {
         const char *rc = cps_ir_fncps_arg_ctype(rk);
+        /* A narrow result comes back from slot 0 widened (the widening
+         * wrapper, thunk_result_slot_c_name): call it at that type. */
+        const char *src = thunk_result_slot_c_spelling(rc);
         Buf cl; buf_init(&cl);
-        buf_printf(&cl, "((%s(*)(void *%s))(intptr_t)__pwf)(__pwe%s)", rc, ss.data, sa.data);
+        if (strcmp(src, rc) != 0)
+            buf_printf(&cl, "(%s)((%s(*)(void *%s))(intptr_t)__pwf)(__pwe%s)",
+                       rc, src, ss.data, sa.data);
+        else
+            buf_printf(&cl, "((%s(*)(void *%s))(intptr_t)__pwf)(__pwe%s)", rc, ss.data, sa.data);
         buf_putc(&cl, '\0');
         char *w = cps_ir_fncps_word_of(rk, cl.data);
         buf_printf(target, "    return dk_run(__kont, (tur_dkw)(%s));\n", w);

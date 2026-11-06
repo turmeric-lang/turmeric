@@ -1,5 +1,14 @@
 # `tur --interpret`: a call's tyvar/dictionary pins, and frames made off the driver's call path, are never handed back
 
+**Narrowed 2026-11-06: both handler case frames are handed back.** The
+work-stack perform's escaping-`k` case frame (`hf`) is a call frame now,
+released when its prompt delivers the case body's value (`DK_PROMPT`, through
+the continuation's `case_frame`); the fiber path's (`eval_handle_inner`) is
+released when its synchronous body returns. Both are skipped by
+`frame_release` when a closure over them escaped or a capture since may run
+them again. Left: the `reset`/`shift` capture frames. See "Fixed 2026-11-06"
+at the end.
+
 **Narrowed 2026-10-09: the defer snapshot is fixed.** `EX_DEFER`'s snapshot
 is a call frame now (`eval_frame_new_call`, parentless), and both places a
 `DeferItem` fires release it after its body (`frame_release`, a no-op if the
@@ -93,3 +102,33 @@ they stay.
 `tests/check-turi-frame-reclaim.py`: its third program (a generic function
 called 300,000 times, the tyvar pins) and its fifth (a `defer` called
 300,000 times, the snapshot). The three frames still open have no check yet.
+
+## Fixed 2026-11-06: the handler case frames
+
+- **The work-stack perform's `hf`** (the clause of a handler whose `k` is not
+  a one-shot `(resume k v)`). `k` names the handled BODY's frames, not the
+  case frame, so the case frame lives exactly as long as the case body runs,
+  which ends when the prompt that ran it (`st[pidx]`, `pend_wc` = the
+  continuation) delivers. It comes from `eval_frame_new_call` now, the
+  continuation records it (`case_frame`, which the one-shot path already
+  used), and `DK_PROMPT` releases it there and clears the pointer, so a
+  second pop of a copied prompt does nothing. `frame_release` declines a
+  frame that escaped -- a closure over a case parameter, a closure over a
+  `let` the case frame owns, a capture of the case body's frames by a
+  perform inside it all mark it -- and defers one made before a call/cc
+  capture.
+- **The fiber path's case frame** (`eval_handle_inner`). Its body runs on the
+  same C frame, synchronously; it is a call frame released when the body
+  returns, with the same two guards.
+
+Measured on a Debug `tur --interpret`, ASan quarantine off: 200,000 handles
+whose clause is `(let [a 5] (+ a (resume k 1)))` peaked at 673 MB, against
+723 MB before. The rest of that growth is the escaping continuation itself
+(its pool-owned slice copy and `k` value), which
+[turi-effect-perform-keeps-its-continuation](../archive/turi-effect-perform-keeps-its-continuation.md)
+fixed only for the one-shot clause.
+
+Pinned by `tests/fixtures/turi-multishot-case-frame-released`
+(`requires.interp-only`): closures over a case parameter and over a case
+`let` read their own values after the free list has been reused, and 1000
+handles with a non-trivial clause sum right. `run-turi.sh` passes in full.

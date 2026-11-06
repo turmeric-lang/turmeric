@@ -1,5 +1,9 @@
 # A capturing closure held in a by-value Option/Result local is released only in its simplest shapes
 
+**Narrowed 2026-11-06: item 4's scalar-result half.** A closure whose glue
+releases a Drop-instance or owned `^fat` capture is dropped too when its
+result is a plain scalar; see item 4.
+
 **Severity: low-medium (24 B per construction, in ordinary programs).**
 `(let [cb (some (fn [x] (+ x k)))] ...)` mallocs the closure's env and hands
 it to the sum. Before 2026-10-08 nothing released it at scope exit, unlike
@@ -137,6 +141,16 @@ Each of these still leaks the env, as before. None is freed early.
 4. **A closure whose drop releases something** -- one capturing an `rc`, a
    fat closure or a Drop instance, or with inline C -- would need its deep
    drop glue and the ownership questions that come with it. (**Narrowed
+   2026-11-06:** when the closure's result is a plain scalar, nothing it
+   returns can reference a capture, and every use of the local only invokes
+   it, so the local runs the full glue at scope exit
+   (`closure_env_drop_ok_under_scalar_result`, `src/compiler/emit_core.c`,
+   asked by `let_binding_sum_closure_freeable`). A captured Drop value is
+   released exactly once; it was never released before. Pinned by
+   `sum-closure-payload-drop-capture-dropped` (leak-checked: matched out and
+   called, `unwrap`ped and called on the spot, 100 calls of each; 4848 B in
+   202 allocations before, 0 now). Left: such a closure with a non-scalar
+   result, and inline C naming a capture.) (**Narrowed
    2026-10-09:** a closure whose env drop frees the box alone is dropped now,
    `closure_env_drop_frees_box_only` -- a struct capture is a copy in the box,
    and the glue releases only rc, owned fat and Drop-instance captures.

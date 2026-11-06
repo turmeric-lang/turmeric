@@ -1,0 +1,41 @@
+;; fn-param-tyvar-slot-invoked-stack-box: a `(fn ...)`-typed parameter passed
+;; into a generic's type-variable slot is boxed into a fat handle
+;; (fn-param-through-type-variable-slot).  When the generic only hands the
+;; argument back -- `ident`, `pick`'s second argument, `unwrap-or`'s default --
+;; and the call's value is invoked on the spot, the box is dead once that call
+;; returns, so it lives on the caller's stack instead of a malloc nothing
+;; freed (docs/reported/fn-param-at-type-variable-slot-boxed-per-call.md).
+;; Leak-checked: 32 B a call before, over 100 turns of each.
+(defn ident [A] [a : A] : A a)
+(defn pick [A] [a : A b : A] : A b)
+(defn first-if [A] [c : bool a : A b : A] : A (if c a b))
+(defn plus1 [x : int] : int (+ x 1))
+(defn halve [x : float] : float (/ x 2.0))
+(defn greet [s : cstr] : cstr s)
+(defn add [a : int b : int] : int (+ a b))
+
+(defn via-int [d : (fn [int] int)] : int ((ident d) 10))
+(defn via-float [d : (fn [float] float)] : float ((ident d) 7.1))
+(defn via-cstr [d : (fn [cstr] cstr)] : cstr ((pick d d) "there"))
+(defn via-2 [d : (fn [int int] int)] : int ((ident d) 3 4))
+(defn via-if [d : (fn [int] int) e : (fn [int] int) c : bool] : int
+  ((first-if c d e) 20))
+(defn via-unwrap-or [d : (fn [int] int)] : int
+  ((unwrap-or (none) d) 5))
+
+(defn turns [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (turns (- n 1)
+           (+ acc (via-int plus1) (via-2 add) (via-unwrap-or plus1)
+              (via-if plus1 plus1 (= 0 (mod n 2)))))))
+
+(defn main [] : int
+  (println (via-int plus1))          ; 11
+  (println (via-float halve))        ; 3.55
+  (println (via-cstr greet))         ; there
+  (println (via-2 add))              ; 7
+  (println (via-if plus1 plus1 true)) ; 21
+  (println (via-unwrap-or plus1))    ; 6
+  (println (turns 100 0))            ; 100 * (11 + 7 + 6 + 21)
+  0)

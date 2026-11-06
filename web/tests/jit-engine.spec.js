@@ -91,7 +91,7 @@ test.describe('The Compile engine', () => {
         // depth 250, still met Chromium's worker limit first).  Unchecked, that
         // wrote below the stack and trapped as "memory access out of bounds";
         // the link's STACK_OVERFLOW_CHECK=2 makes it an abort the worker
-        // reports as the overflow (docs/reported/wasm-linear-stack-overflow-unchecked.md).
+        // reports as the overflow (docs/archive/wasm-linear-stack-overflow-unchecked.md).
         await gotoTry(page);
         await pickEngine(page, 'compile');
         await clearConsole(page);

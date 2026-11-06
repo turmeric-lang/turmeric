@@ -404,6 +404,13 @@ bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty) {
         case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
         case TY_CSTR: case TY_PTR_VOID:
             return true;
+        /* cps-effectful-callback-through-multi-arg-or-untyped-param: a narrow
+         * result's slot 0 is the widening wrapper, and the lifted entry's
+         * E2a registration registers that wrapper too (emit_cps_ir.c), so
+         * the dispatcher's lookup on slot 0 finds the twin. */
+        case TY_BOOL: case TY_INT8: case TY_INT16: case TY_INT32:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32:
+            return true;
         default:
             return false;
     }
@@ -1274,6 +1281,12 @@ static bool cps_closure_env_freeable(const Expr *let, uint32_t idx) {
     switch (b->type.as.fn.result_kind) {
         case TY_INT: case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
         case TY_BOOL: case TY_NIL: break;
+        /* A narrow integer is a scalar too (its closure threads since the
+         * slot-0 widening wrapper was registered: cps-effectful-callback-
+         * through-multi-arg-or-untyped-param). */
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            break;
         /* As the direct emitter's let_binding_env_freeable (RM1): a by-value
          * aggregate is copied out, a carrier box is a malloc of its own, and a
          * cstr points at characters -- none points into the env unless the

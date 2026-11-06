@@ -309,7 +309,8 @@ int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc_flags,
      * fake stack a conservative collector cannot scan. */
     Buf flags; buf_init(&flags);
     buf_printf(&flags, "%s" TUR_EMITTED_C_CC_FLAGS, cc_flags);
-    if (needs_asan) buf_puts(&flags, " -fsanitize=address,undefined");
+    if (needs_asan || drv_sanitize_programs_requested())
+        buf_puts(&flags, " -fsanitize=address,undefined");
     const Buf *srcs[3] = { aux_includes, autolink, cmake_flags };
     for (int k = 0; k < 3; k++) {
         const Buf *b = srcs[k];

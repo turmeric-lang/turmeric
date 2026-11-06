@@ -3022,7 +3022,8 @@ static bool let_sole_use_is_spawn_impl(const Expr *e, uint32_t idx, bool later_o
     if (b->type.kind != TY_FN || !b->type.as.fn.boxed) return false;
     const struct Closure *c = init->as.closure_.closure;
     if (!c || c->n_captures == 0) return false;
-    if (!(closure_env_drop_is_shallow(c) || closure_env_drop_frees_box_only(c))) return false;
+    if (!(closure_env_drop_is_shallow(c) || closure_env_drop_frees_box_only(c) ||
+          closure_env_drop_ok_under_scalar_result(c))) return false;
     SpawnUseUd u = { b, 0, 0, 0, false };
     spawn_use_walk(e->as.let_.body, &u);
     for (uint32_t j = later_only ? idx + 1 : 0; j < e->as.let_.n; j++)
@@ -4718,9 +4719,14 @@ static bool let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e,
     /* The drop frees the env box alone (a struct or `^mut` capture leaves
      * nothing for its glue to release), which no value the closure computes
      * points into -- the shallow case and more. */
+    /* sum-closure-payload-never-dropped item 4: a closure whose glue
+     * releases a capture qualifies too when its result is a plain scalar --
+     * every use here only invokes it, so nothing it returns can reference
+     * the capture once the local is dropped. */
     if (!a || a->kind != EX_CLOSURE ||
         !(closure_env_drop_is_shallow(a->as.closure_.closure) ||
-          closure_env_drop_frees_box_only(a->as.closure_.closure)) ||
+          closure_env_drop_frees_box_only(a->as.closure_.closure) ||
+          closure_env_drop_ok_under_scalar_result(a->as.closure_.closure)) ||
         !fndef_cannot_suspend(a->as.closure_.closure->fn))
         return false;
     if (sum_closure_payload_escapes(e->as.let_.body, b, 0)) return false;
@@ -9867,7 +9873,13 @@ static bool async_spawn_owns_env(const Expr *fn_expr) {
         lit->as.var.binding->spawn_owns_env)
         return true;
     const struct Closure *lc = (lit && lit->kind == EX_CLOSURE) ? lit->as.closure_.closure : NULL;
-    return lc && (closure_env_drop_is_shallow(lc) || closure_env_drop_frees_box_only(lc));
+    if (!lc) return false;
+    /* A capture whose drop releases something -- an owned `^fat` closure, a
+     * Drop instance -- was refused because the body's result may still
+     * reference it; a plain scalar result cannot, so the env's full glue may
+     * run once the body settles. */
+    return closure_env_drop_is_shallow(lc) || closure_env_drop_frees_box_only(lc) ||
+           closure_env_drop_ok_under_scalar_result(lc);
 }
 
 /* borrow-checks-gaps: a borrow of a literal has no place to point at --

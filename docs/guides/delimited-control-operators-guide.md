@@ -98,6 +98,46 @@ cloneable-reset
 ;; => 12
 ```
 
+### Who frees a cloneable `k`
+
+A cloneable continuation is a heap object: a small wrapper and a copy of the
+captured chain, about 500 bytes. When the receiver only calls `k` -- as above
+-- the compiler frees it once the receiver returns. When `k` leaves the
+receiver (returned, stored, captured by a closure), the compiler cannot see
+its last use, and **the program owns it**: drop it with
+`tur_cloneable_cont_drop` when you are done, and drop every clone
+`tur_cloneable_cont_clone` made. Undropped, it leaks; nothing else frees it.
+
+```turmeric
+(defn k-id [k] : int k)                ; the receiver hands k back
+(defn make [base : int] : int
+  (cloneable-reset (+ base (cloneable-shift k-id 0))))
+
+(defn main [] : int
+  (let [c (make 5)]
+    (println (tur_cloneable_cont_resume c 1))   ; 6
+    (println (tur_cloneable_cont_resume c 2))   ; 7
+    (tur_cloneable_cont_drop c))
+  0)
+```
+```sweet-exp
+defn k-id [k] : int k
+defn make [base : int] : int
+  cloneable-reset {base + cloneable-shift(k-id 0)}
+
+defn main [] : int
+  let [c make(5)]
+    println $ tur_cloneable_cont_resume c 1   ; 6
+    println $ tur_cloneable_cont_resume c 2   ; 7
+    tur_cloneable_cont_drop(c)
+  0
+```
+
+The same holds for `call/cc*`, which is built on `cloneable-shift`. Pinned by
+the leak-checked `cloneable-cont-escaped-dropped` fixture; giving an escaped
+`k` an automatic owner is open in
+[cloneable-cont-escaped-chain-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cloneable-cont-escaped-chain-leaks.md).
+
 Either way, the delimiter is static:
 
 - When a `shift` captures, the surrounding `reset` **stays in place**.
