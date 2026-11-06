@@ -63,6 +63,69 @@ bool any_widen_payload_owns_droppable(const Expr *payload) {
     return def && adt_def_has_localowned_glue(def);
 }
 
+/* any-widen-deep-drop-frees-borrowed-children, fix direction 1 ("deep
+ * freshness"): may a deep `__tur_any_drop` of a widen of `payload` free
+ * everything it walks, because every owned child was minted in this very
+ * expression?
+ *
+ * `any_widen_payload_owns_droppable` declines the drop whenever the payload
+ * owns anything, since a constructor usually fills its owned fields from a
+ * value someone else still holds.  But a constructor tree written out in full
+ * -- `(:: (Cons (:: 1 any) (:: (Nil) any)) any)` -- holds nothing anyone else
+ * can reach: each `:any` child is a widen minted right there, and each
+ * recursive child is another constructor of the same kind.  The deep drop then
+ * frees exactly what the expression allocated.
+ *
+ * Accepted, recursively (`depth` bounds it):
+ *   - a constructor call (not a transparent int newtype, which mints nothing)
+ *     whose every argument is accepted;
+ *   - an argument of a plain scalar or cstr type, whatever its expression --
+ *     the glue never walks into one;
+ *   - a widen to `any` (not frame-boxed) of a scalar, a cstr, or a payload that
+ *     is itself accepted -- the widen mints the child box here;
+ *   - an argument of an owning ADT type that is an accepted constructor call.
+ * Anything else -- a variable, a parameter, an opaque call, a closure, a widen
+ * of an `any` -- answers false, the leak-not-free direction.  The caller
+ * still requires the outermost widen not to be frame-boxed. */
+static bool deep_fresh_type_is_inert(const Type *t) {
+    switch (t->kind) {
+        case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_CSTR:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+            return true;
+        default:
+            return false;
+    }
+}
+static bool deep_fresh_ctor(const Expr *e, int depth);
+static bool deep_fresh_arg(const Expr *a, int depth) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    if (!a) return false;
+    if (deep_fresh_type_is_inert(&a->type)) return true;
+    if (a->kind == EX_UNION_INJECT) {
+        if (a->type.kind != TY_ANY || a->as.union_inject_.frame_box) return false;
+        const Expr *v = a->as.union_inject_.value;
+        while (v && v->kind == EX_ASCRIBE) v = v->as.ascribe_.inner;
+        if (!v) return false;
+        if (deep_fresh_type_is_inert(&v->type)) return true;
+        return deep_fresh_ctor(v, depth - 1);
+    }
+    return deep_fresh_ctor(a, depth - 1);
+}
+static bool deep_fresh_ctor(const Expr *e, int depth) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e || depth <= 0) return false;
+    if (e->kind != EX_CALL || !e->as.call_.ctor) return false;
+    if (type_is_transparent_int_newtype(e->type)) return false;
+    if (e->type.kind != TY_ADT && e->type.kind != TY_APP) return false;
+    for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+        if (!e->as.call_.args || !deep_fresh_arg(e->as.call_.args[i], depth))
+            return false;
+    return true;
+}
+bool any_widen_payload_deeply_fresh(const Expr *payload) {
+    return deep_fresh_ctor(payload, 16);
+}
+
 /* RM1 (reclamation-plan): the freshness analysis, on the elaborated body.
  * True iff every VALUE PATH ends in a sum-constructor application or a call
  * to a binding already proven fresh.  Callees elaborate before callers within
@@ -14259,7 +14322,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * the box where the payload really was deeply fresh -- the status-quo
          * direction this family falls in. */
         if (_fa && _fa->kind == EX_UNION_INJECT && _fa->type.kind == TY_ANY &&
-            !any_widen_payload_owns_droppable(_fa->as.union_inject_.value))
+            !_fa->as.union_inject_.frame_box &&
+            (!any_widen_payload_owns_droppable(_fa->as.union_inject_.value) ||
+             any_widen_payload_deeply_fresh(_fa->as.union_inject_.value)))
             b->returns_fresh_any = true;
         /* dynamic-returned-closure-env-is-never-freed: which of those widen a
          * capturing closure built right here (expr_is_fresh_any_closure, which

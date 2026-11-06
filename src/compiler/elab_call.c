@@ -8000,7 +8000,8 @@ bool any_expr_is_owned_temp(const Expr *x, int depth) {
      * nothing is unaffected, which is every case the temp-drop fixtures pin. */
     if (x->kind == EX_UNION_INJECT)
         return !x->as.union_inject_.frame_box &&
-               !any_widen_payload_owns_droppable(x->as.union_inject_.value);
+               (!any_widen_payload_owns_droppable(x->as.union_inject_.value) ||
+                any_widen_payload_deeply_fresh(x->as.union_inject_.value));
     if (x->kind != EX_CALL || !x->as.call_.fn_binding) return false;
     const Binding *fb = x->as.call_.fn_binding;
     if (fb->returns_fresh_any) return true;

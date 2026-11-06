@@ -2817,6 +2817,7 @@ bool any_expr_is_owned_temp(const Expr *x, int depth);
  * in elab_fns.c; the owned-temp and freshness rules share it so they cannot
  * drift apart. */
 bool any_widen_payload_owns_droppable(const Expr *payload);
+bool any_widen_payload_deeply_fresh(const Expr *payload);
 
 /* RM1 (reclamation-plan): the per-callee freshness analysis -- see the walker
  * in elab_fns.c and the flag's comment in expr.h. */
