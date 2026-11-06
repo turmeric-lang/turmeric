@@ -605,7 +605,9 @@
 ;;; Since: Phase P1
 ;; Filter: return a new HAMT with only entries where fn(key, val, ctx) is true.
 
-(defn hamt/filter [m : ptr<void> fn : (c-fn [int int ptr<void>] bool) ctx : ptr<void>]
+(defn hamt/filter [m : ptr<void>
+                   fn : (c-fn [int int ptr<void>] bool)
+                   ctx : ptr<void>]
   #fx{}
   : ptr<void>
   (tur_hamt_filter m fn ctx))
@@ -626,7 +628,10 @@
 ;;; Since: Phase P1
 ;; Reduce: fold all entries; returns final accumulator (as ptr).
 
-(defn hamt/reduce [m : ptr<void> fn : (c-fn [int int int ptr<void>] int) init : int ctx : ptr<void>]
+(defn hamt/reduce [m : ptr<void>
+                   fn : (c-fn [int int int ptr<void>] int)
+                   init : int
+                   ctx : ptr<void>]
   #fx{}
   : int
   (tur_hamt_reduce m fn init ctx))
