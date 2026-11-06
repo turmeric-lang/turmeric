@@ -38,7 +38,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [cps-cell-promoted-mut-shared-across-multishot-resumes](cps-cell-promoted-mut-shared-across-multishot-resumes.md) | low (engine disagreement, `^multishot` only) | A `^mut` the CPS backend promotes to a shared heap cell (a loop's cell-carried variable, or one a suspending `if`/`match` arm assigns) is one cell for every copy a `^multishot` resume runs, so a write before the `perform` is seen by the next run: compiled `12032`, the guide and `tur --interpret` `12022` |
+| [cps-cell-promoted-mut-shared-across-multishot-resumes](cps-cell-promoted-mut-shared-across-multishot-resumes.md) | low (engine disagreement, `^multishot` only) | **Narrowed 2026-11-06**: a resume copy re-cells the one-word cells of a function with no handler or closure of its own, so both repro shapes agree on every engine; left are `bool`/narrow/struct cells and a function that also builds a closure. As filed: A `^mut` the CPS backend promotes to a shared heap cell (a loop's cell-carried variable, or one a suspending `if`/`match` arm assigns) is one cell for every copy a `^multishot` resume runs, so a write before the `perform` is seen by the next run: compiled `12032`, the guide and `tur --interpret` `12022` |
 
 ## Found graduating simd-and-vectorization-plan S1 (filed 2026-10-30)
 

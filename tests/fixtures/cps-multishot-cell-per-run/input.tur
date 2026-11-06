@@ -1,0 +1,56 @@
+;; cps-multishot-cell-per-run -- a `^mut` the CPS backend keeps in a shared
+;; heap cell (a loop's cell-carried variable, or one a suspending branch of a
+;; join assigns) gets a cell of its own in every run of a `^multishot` k
+;; (cps-cell-promoted-mut-shared-across-multishot-resumes).  Each run starts
+;; from the value the `perform` saw, as the effects guide says and
+;; `tur --interpret` does.  Before, the second run started from the first
+;; run's result: 12032 and 16036.
+;;
+;; `outer` is the other half: its `^mut` is bound OUTSIDE the handled body, in
+;; the function that installs the handler, so every run shares it -- the
+;; clause reads what the runs wrote.
+
+(defeffect Choose [] : int)
+
+(defn lp [] : int                       ; loop cell: x is cell-carried
+  (let [^mut i 0
+        ^mut x 1]
+    (while (< i 1)
+      (when (= i 0) (set! x (+ x 1)))
+      (let [v (perform (Choose))] (set! x (+ x v)))
+      (set! i (+ i 1)))
+    x))
+
+(defn br [c : bool] : int               ; join cell
+  (let [^mut s 5]
+    (if c
+      (do (set! s (+ s 1))
+          (let [v (perform (Choose))] (set! s (+ s v))))
+      nil)
+    s))
+
+(defn two [] : int                      ; two performs: four runs, each its own
+  (let [^mut i 0
+        ^mut x 0]
+    (while (< i 2)
+      (when (= i 0) (set! x (+ x 1)))
+      (let [v (perform (Choose))] (set! x (+ (* x 10) v)))
+      (set! i (+ i 1)))
+    x))
+
+(defn via [] : int {(lp) + 1})           ; the cell's function is a callee
+
+(defn outer [] : int
+  (let [^mut n 0]
+    (+ (handle (do (set! n (+ n 1)) (perform (Choose)) n)
+         (Choose [] ^multishot k) (+ (resume k 0) (resume k 0) (* 100 n)))
+       0)))
+
+(defn main [] : int
+  (println (handle (lp) (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (br true) (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (two) (Choose [] ^multishot k) (+ (* 1000 (resume k 1)) (resume k 2))))
+  (println (handle (via) (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (lp) (Choose [] k) (resume k 10)))
+  (println (outer))
+  0)

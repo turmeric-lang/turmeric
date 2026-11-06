@@ -1,5 +1,32 @@
 # A `^mut` the CPS backend keeps in a shared cell is shared by every `^multishot` run
 
+**Narrowed 2026-11-06: both repro shapes agree now (`12022`, `16026` on all
+three engines).** Fix direction 2, at the DK runtime. A frame whose env holds
+a one-word by-reference cell (an `int64_t`, a `double`, a pointer) records
+which env words those are (`dk_env_cells`, a `cell_mask` beside `env_size`;
+the `<name>_env_CELLS` word mask the emitter writes after the env typedef,
+`src/compiler/emit_cps_ir.c`). The copy a resume runs -- `dk_resume_into`'s
+and `dk_invoke`'s -- then gets cells of its own (`__dk_cells_fresh`,
+`src/compiler/emit_dk_runtime.c`): each cell the copy names is replaced, once
+per copy, by a fresh cell holding the value the `perform` left, so frames that
+shared a cell still share it within a run. The env is duplicated first
+(`env_owned`), and the new cells are reaped like the originals.
+
+Only where every frame naming the cell is in the copy: the emitter masks
+cells of a function with no `handle` / reset / call/cc of its own and no
+closure literal (`fn_cells_fresh_ok`). A `^mut` bound in the function that
+installs the handler stays shared by every run, as it should -- the clause and
+the code after the `handle` read it. Pinned by
+`tests/fixtures/cps-multishot-cell-per-run` (leak-checked; `lp`, `br`, a loop
+with two performs and four runs, the cell's function as a callee, a one-shot
+handler, and `outer`, whose shared `^mut` must stay shared; every line equals
+`tur --interpret` and `tur jit`).
+
+**Still open:** a cell that is not one word (a `bool` or narrow-int `^mut`, a
+by-value struct), and a cell in a function that also builds a closure literal
+(the closure's env is not a DK env and cannot be re-celled), keep sharing one
+cell across runs.
+
 **Severity:** low (engine disagreement, `^multishot` only; a silent wrong
 value in the shapes below). One-shot handlers are unaffected.
 
