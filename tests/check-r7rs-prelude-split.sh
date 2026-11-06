@@ -21,7 +21,7 @@
 # Read-only data (R/r) may be duplicated freely.  The keyword records are
 # read-only too, but they must NOT be weak: PE/COFF has no weak data that
 # folds, so the library unit defines each record and the program unit
-# declares it (docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md).
+# declares it (docs/archive/r7rs-prelude-split-wrong-symbols-on-windows.md).
 # A weak `__tur_sym_` symbol (V/v) in either unit fails.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -36,9 +36,10 @@ case "$(uname -m)" in
     x86_64|amd64|aarch64|arm64) ;;
     *) echo "SKIP check-r7rs-prelude-split: 64-bit targets only"; exit 0 ;;
 esac
-# The split is on by default on Linux and Darwin (prelude_split_applies,
-# src/driver/pipeline.c); Windows keeps one unit until its report closes
-# (docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md).
+# The split is on by default on Linux, Darwin and Windows (prelude_split_applies,
+# src/driver/pipeline.c).  This nm-based check runs on the first two; on
+# Windows the `windows` CI suite's r7rs fixtures are what cover the split
+# (docs/archive/r7rs-prelude-split-wrong-symbols-on-windows.md).
 case "$(uname -s)" in
     Linux|Darwin) ;;
     *) echo "SKIP check-r7rs-prelude-split: the split is off by default on $(uname -s)"; exit 0 ;;

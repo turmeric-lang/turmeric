@@ -409,10 +409,8 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * r7rs-callcc-memory-never-freed (the interpreter retains re-entrant
      * stack images for the life of the process, by design elsewhere too),
      * r7rs-conformance-program-emits-megabytes-of-c (build cost; nothing is
-     * miscompiled), r7rs-library-file-shape-and-export-rename (a decided
-     * design question held as a report) and
-     * r7rs-prelude-split-wrong-symbols-on-windows (fix landed; the split
-     * stays off on Windows pending one run on a Windows host).  The plan is
+     * miscompiled), and r7rs-library-file-shape-and-export-rename (a decided
+     * design question held as a report).  The plan is
      * archived at docs/archive/r7rs-lang-plan.md. */
     /* reflected-measures -- `^reflect` on a defn opts a pure, structurally
      * recursive, exhaustively matching function INTO the refinement logic: its

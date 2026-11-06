@@ -645,7 +645,7 @@ hidden at `-O2` because dead-code elimination removed the only reference).
 | [fiber-tls-address-reuse](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/fiber-tls-address-reuse.md) | clang and Windows gcc reused a thread-local's address after a fiber migrated threads | `TUR_TLS_FRESH` for fiber-owned thread-locals |
 | [run-sh-stamp-cache-ignores-the-preamble-split-mode](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/run-sh-stamp-cache-ignores-the-preamble-split-mode.md) | an A/B of the two preamble paths stamp-skipped the second run | measure which path a run took; do not assume it |
 | [r7rs-split-units-each-compile-the-runtime](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-split-units-each-compile-the-runtime.md) | every r7rs unit compiled the collector and the DK machine | `emit_split_once_fns` |
-| [r7rs-prelude-split-wrong-symbols-on-windows](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md) (open) | weak data records resolved to the wrong bytes under GNU ld for PE | no weak data in the r7rs split; `selectany` on PE. The r7rs split stays off on Windows until a Windows run confirms the fix |
+| [r7rs-prelude-split-wrong-symbols-on-windows](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-prelude-split-wrong-symbols-on-windows.md) (resolved) | weak data records resolved to the wrong bytes under GNU ld for PE | no weak data in the r7rs split; `selectany` on PE. On by default on Windows since 2026-11-06 |
 
 ---
 
