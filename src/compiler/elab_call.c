@@ -3139,6 +3139,106 @@ static void hoist_ordered_arg_temp(Elab *e, Expr **slot, Span span,
     *slot = v;
 }
 
+/* borrowed-drop-temporary-leaks-outside-the-hoist, the non-scalar result:
+ * can the value a call of `fb` returns hold anything of its `^borrow`
+ * parameter `pi`?  Asked of the callee's body.  It cannot when every use of
+ * the parameter there is an argument of a call that returns a plain scalar
+ * (`(f64vec-ref v i)`), or one handed to a `^borrow` parameter of a callee of
+ * which the same holds -- recursion read as "holds", the greatest fixpoint: an
+ * alias would have to come from some finite use the walk refuses.  Anything
+ * else -- a bare use, a capture, an ascription to another type, a
+ * dictionary-dispatched callee -- and a callee whose body is or contains
+ * inline C (opaque) answer "it may".  `(f64vec-show (f64vec-new 4 7.1))` and
+ * `(f64vec->vec ...)` qualify: their String / Vec is built from the floats
+ * they read out. */
+bool expr_subtree_has_inline_c(const Expr *e);   /* emit_core.c */
+static bool borrow_param_result_may_view(const Binding *fb, uint32_t pi, int depth);
+
+static bool borrow_param_use_may_view(const Expr *x, const Binding *p, int depth);
+
+typedef struct { const Binding *p; int depth; } BorrowViewUd;
+
+static bool borrow_param_use_may_view_visit(const Expr *c, void *ud) {
+    const BorrowViewUd *u = (const BorrowViewUd *)ud;
+    return borrow_param_use_may_view(c, u->p, u->depth);
+}
+
+static bool borrow_param_use_may_view(const Expr *x, const Binding *p, int depth) {
+    if (!x) return false;
+    if (depth > 200) return true;
+    switch (x->kind) {
+    case EX_VAR:
+        return x->as.var.binding == p;          /* a bare use nothing vouched for */
+    case EX_CLOSURE: {
+        const struct Closure *c = x->as.closure_.closure;
+        if (!c) return true;
+        for (uint32_t i = 0; i < c->n_captures; i++)
+            if (c->captures[i] == p) return true;
+        return false;
+    }
+    case EX_FN:
+        return false;                           /* a captureless lambda names no local */
+    case EX_FN_DEF:
+    case EX_INLINE_C:
+        return true;
+    case EX_CALL: {
+        const Binding *cb = x->as.call_.fn_binding;
+        if (cb && cb->source_binding) cb = cb->source_binding;
+        if (borrow_param_use_may_view(x->as.call_.fn_expr, p, depth + 1)) return true;
+        if (borrow_param_use_may_view(x->as.call_.dict_arg, p, depth + 1)) return true;
+        for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
+            const Expr *a = x->as.call_.args[i];
+            while (a && a->kind == EX_ASCRIBE && type_eq(a->type, p->type))
+                a = a->as.ascribe_.inner;
+            if (!(a && a->kind == EX_VAR && a->as.var.binding == p)) {
+                if (borrow_param_use_may_view(x->as.call_.args[i], p, depth + 1))
+                    return true;
+                continue;
+            }
+            if (x->as.call_.dict_arg || !cb) return true;
+            if (type_kind_is_plain_scalar(x->type.kind)) continue;
+            if (cb->type.kind == TY_FN && cb->type.as.fn.arg_flags &&
+                i < cb->type.as.fn.arity &&
+                FN_ARG_FLAG(cb->type.as.fn, i, FA_BORROW) &&
+                !borrow_param_result_may_view(cb, i, depth + 1))
+                continue;
+            return true;
+        }
+        return false;
+    }
+    default:
+        break;
+    }
+    BorrowViewUd u = { p, depth + 1 };
+    return cps_visit_children(x, borrow_param_use_may_view_visit, &u);
+}
+
+static bool borrow_param_result_may_view(const Binding *fb, uint32_t pi, int depth) {
+    /* (callee, parameter) pairs asked so far; state 1 = in progress or "it
+     * cannot", 2 = "it may".  The answer is a fact of the callee's body, so it
+     * holds for the whole compile. */
+    static struct { const FnDef *fd; uint32_t pi; uint8_t st; } memo[256];
+    static uint32_t n_memo = 0;
+    if (fb && fb->source_binding) fb = fb->source_binding;
+    const FnDef *fd = fb ? fb->source_fn_def : NULL;
+    if (!fd || !fd->body || !fd->params || pi >= fd->n_params || !fd->params[pi])
+        return true;
+    if (fb->body_is_inline_c) return true;
+    for (uint32_t k = 0; k < n_memo; k++)
+        if (memo[k].fd == fd && memo[k].pi == pi) return memo[k].st != 1;
+    if (n_memo == sizeof memo / sizeof memo[0]) return true;
+    uint32_t slot = n_memo++;
+    memo[slot].fd = fd; memo[slot].pi = pi; memo[slot].st = 1;
+    bool may = expr_subtree_has_inline_c(fd->body) ||
+               borrow_param_use_may_view(fd->body, fd->params[pi], depth + 1);
+    memo[slot].st = may ? 2 : 1;
+    /* Every answer reached after this one was asked may have leaned on its
+     * in-progress "cannot"; a "may" withdraws them. */
+    if (may) n_memo = slot + 1;
+    if (depth == 0) n_memo = 0;      /* one question's memo; no stale FnDefs */
+    return may;
+}
+
 static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     if (!call || call->kind != EX_CALL) return call;
     const Binding *fb = call->as.call_.fn_binding;
@@ -3173,8 +3273,9 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
         HOIST_PEEL_SLOT(slot);
         if (arg_is_freeable_closure_source(fb, i, *slot)) {
             (void)hoist_fresh_closure(e, slot, span, &hl);
-        } else if (scalar_result && n_drop < 8 &&
-                   FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW)) {
+        } else if (n_drop < 8 && FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW) &&
+                   (scalar_result ||
+                    !borrow_param_result_may_view(fb, i, 0))) {
             bool order_ok = prefix_effect_free;
             if (!order_ok) {
                 order_ok = true;
