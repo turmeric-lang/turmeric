@@ -243,6 +243,29 @@ downloads (blob storage was unreachable from the measuring session), so the
 (2026-09-28) followed ~41 quiet days and 227+ `main` commits after the
 2026-08-18 fix; five days does not beat that. Re-measure from mid-November.
 
+## 2026-11-06: re-measured -- 29 more quiet days
+
+From the Actions API, every `ci.yml` run on `main` created 2026-10-08 through
+2026-11-05 (327 runs; 123 of them ran this leg, the rest skipped it by path):
+
+| result | jobs |
+| --- | --- |
+| success | 121 |
+| failure | 1 -- run 38447348763 (2026-10-13): `FAIL cps-capturing-letrec-loop-deep -- timed out (>15s under the JIT engine)`, `3653 passed, 1 failed`; a named per-fixture timeout, the step finished in 1663 s |
+| cancelled | 1 -- run 38865691199, 13 min in, before `Run JIT suites` |
+
+`Run JIT suites` over the 122 jobs that reached it: p50 1082 s, p90 1366 s,
+max 1840 s (run 38178964042, 2026-10-11). Nothing reached the 2550 s alarm
+or `timeout-minutes: 60`. The p50 is up from the 952 s of 2026-10-08, with the
+corpus (3484 -> 3653 passing); the worst draw's headroom under `TIMEOUT` is
+about 1.3x now, down from ~1.45x.
+
+The last blind stall was 2026-09-28; this is 39 days without one, against the
+~41 quiet days that preceded it. **Still open** on the closure condition:
+re-check after 2026-11-08, when the quiet period beats the gap that preceded
+the last stall. If it holds then, this can close as "not reproduced since the
+instrumentation landed", with the headroom trend above as the thing to watch.
+
 ## What would close this
 
 A named stall with a cause, or a long enough quiet period on a leg that now
