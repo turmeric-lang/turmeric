@@ -1,0 +1,30 @@
+;; any-widen-explicit-arg-frame-box -- `(llen (:: one any))`: an EXPLICIT widen
+;; of a named local whose payload owns children, passed to a callee that keeps
+;; nothing of it and cannot suspend.  The deep drop is refused (the children are
+;; `one`'s), and the box used to have no owner at all: one malloc leaked per
+;; call.  It lives in the caller's frame now, as an implicit widen's does
+;; (docs/reported/any-widen-deep-drop-frees-borrowed-children.md, leak residue).
+;; Leak-checked over 100 turns; `one` is read again after every call, so a
+;; free of its children through the copy would be a use-after-free under ASan.
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+
+(defn llen [xs : any] : int
+  (match (cast xs Lst)
+    (Cons h t) (+ 1 (llen t))
+    (Nil)      0))
+
+(defn twice [one : Lst] : int
+  (+ (llen (:: one any)) (llen (:: one any))))
+
+(defn turns [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (let [one (Cons (:: n any) (:: (Cons (:: 2 any) (:: (Nil) any)) any))]
+      (turns (- n 1) (+ acc (twice one))))))
+
+(defn main [] : int
+  (let [one (Cons (:: 1 any) (:: (Cons (:: 2 any) (:: (Nil) any)) any))]
+    (println (llen (:: one any)))    ; 2
+    (println (twice one)))           ; 4
+  (println (turns 100 0))            ; 400
+  0)

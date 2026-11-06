@@ -310,6 +310,13 @@ fi
 #     not a count: a count rots into a rubber-stamp as fixtures come and go.
 #     Regenerate deliberately: TUR_JIT_FALLBACK_UPDATE=1 bash tests/run-jit.sh
 JIT_FALLBACK_BASELINE="tests/jit-fallback-baseline.txt"
+# A host's own extra allowances, ON TOP of the shared baseline: on Windows
+# (MSYSTEM, the TUR_HOST_WINDOWS test below) c2mir cannot parse a few MinGW
+# headers the prelude does not guard-stuff, so those programs fall back there
+# only (windows-jit-corpus-not-in-ci).  The shared file stays the Linux truth;
+# TUR_JIT_FALLBACK_UPDATE=1 on Windows rewrites only the overlay, with what
+# the host falls back on beyond the shared list.
+JIT_FALLBACK_BASELINE_WINDOWS="tests/jit-fallback-baseline-windows.txt"
 
 # Known latent MISCOMPILES, discovered by this harness being the first to
 # COMPILE the nested typed/* fixtures (run.sh scans only tests/fixtures/*/;
@@ -579,6 +586,22 @@ case "${MSYSTEM:-}" in
 esac
 export TUR_HOST_WINDOWS
 
+# A writable scratch directory for fixtures, exactly as tests/run.sh provides
+# one (see its long note): fixtures write under $TUR_TEST_TMPDIR, falling back to
+# /tmp when it is unset.  A native Windows fixture binary resolves "/tmp" to
+# <drive>:\tmp, which a fresh CI runner does not have, so without this every
+# file-writing fixture printed nothing on the windows-jit-corpus job (fs-read-
+# string, io-stdlib-roundtrip, async-file, the image-* round trips, ...).  Kept
+# inside RESULTS_DIR so the EXIT trap removes it.
+if [ -z "${TUR_TEST_TMPDIR:-}" ]; then
+    TUR_TEST_TMPDIR="$RESULTS_DIR/fixture-tmp"
+fi
+mkdir -p "$TUR_TEST_TMPDIR" 2>/dev/null || true
+if [ "$TUR_HOST_WINDOWS" = "1" ] && command -v cygpath >/dev/null 2>&1; then
+    TUR_TEST_TMPDIR=$(cygpath -m "$TUR_TEST_TMPDIR")
+fi
+export TUR_TEST_TMPDIR
+
 JIT_FILTER="${JIT_FILTER:-${TUR_TEST_FILTER:-}}"
 
 # Optional sharding, so N runners can split the corpus.  Parsed exactly as
@@ -762,7 +785,27 @@ fi
 # the ratchet hold across a sharded CI job: every name is in exactly one shard,
 # so their union checks every name exactly once.
 _observed="$(printf '%s\n' "${FALLBACK_NAMES[@]+"${FALLBACK_NAMES[@]}"}" | sed '/^$/d' | sort -u)"
-if [ "${TUR_JIT_FALLBACK_UPDATE:-0}" = "1" ]; then
+_overlay=""
+[ "$TUR_HOST_WINDOWS" = "1" ] && _overlay="$JIT_FALLBACK_BASELINE_WINDOWS"
+# A shard cannot tell reclaimed from unexercised (below), so it lists what it
+# saw instead: the union of the shards' lists is the host's whole set, which
+# is how an overlay is tightened from a sharded CI job.
+if [ "$SHARD_TOTAL" -gt 1 ] && [ -n "$_observed" ]; then
+    echo "  cc fallbacks observed in this shard ($TUR_TEST_SHARD):"
+    printf '%s\n' "$_observed" | sed 's/^/    /'
+fi
+if [ "${TUR_JIT_FALLBACK_UPDATE:-0}" = "1" ] && [ -n "$_overlay" ]; then
+    _shared="$(grep -v '^#' "$JIT_FALLBACK_BASELINE" 2>/dev/null | sed '/^$/d' | sort -u)"
+    {
+        echo "# $JIT_FALLBACK_BASELINE_WINDOWS -- fixtures run-jit.sh ALLOWS to fall back to cc"
+        echo "# on Windows (MSYS2) ONLY, on top of $JIT_FALLBACK_BASELINE.  One name per"
+        echo "# line.  Same rules as the shared file.  Regenerate on an MSYS2 shell:"
+        echo "#   TUR_JIT_FALLBACK_UPDATE=1 TUR=./build-win-jit/tur.exe bash tests/run-jit.sh"
+        echo "# (docs/archive/windows-jit-corpus-not-in-ci.md)"
+        comm -23 <(printf '%s\n' "$_observed") <(printf '%s\n' "$_shared") | sed '/^$/d'
+    } > "$_overlay"
+    echo "  wrote $_overlay"
+elif [ "${TUR_JIT_FALLBACK_UPDATE:-0}" = "1" ]; then
     {
         echo "# tests/jit-fallback-baseline.txt -- fixtures run-jit.sh ALLOWS to pass via"
         echo "# the cc fallback (TUR-W0070) instead of the MIR engine.  One name per line."
@@ -775,7 +818,9 @@ if [ "${TUR_JIT_FALLBACK_UPDATE:-0}" = "1" ]; then
     } > "$JIT_FALLBACK_BASELINE"
     echo "  wrote $JIT_FALLBACK_BASELINE ($FALLBACK name(s))"
 elif [ -f "$JIT_FALLBACK_BASELINE" ]; then
-    _allowed="$(grep -v '^#' "$JIT_FALLBACK_BASELINE" | sed '/^$/d' | sort -u)"
+    _allowed="$( { grep -v '^#' "$JIT_FALLBACK_BASELINE"
+                   [ -n "$_overlay" ] && [ -f "$_overlay" ] && grep -v '^#' "$_overlay"
+                 } | sed '/^$/d' | sort -u)"
     _new="$(comm -23 <(printf '%s\n' "$_observed") <(printf '%s\n' "$_allowed") | sed '/^$/d')"
     if [ -n "$_new" ]; then
         echo "FAIL run-jit -- fixture(s) fell back to cc that $JIT_FALLBACK_BASELINE does not allow:"

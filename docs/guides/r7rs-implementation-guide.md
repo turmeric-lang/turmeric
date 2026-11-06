@@ -390,10 +390,10 @@ in the library unit. `emit_split_pieces` compiles a cold library unit as
 several pieces in parallel.
 
 When it applies: `prelude_split_applies` (`src/driver/pipeline.c`) -- a `#lang r7rs`
-entry, a 64-bit host, not `--debug`, not writing a manifest, on Linux and
-macOS by default (`TUR_PRELUDE_SPLIT=1` opts in elsewhere; Windows is off
-until [r7rs-prelude-split-wrong-symbols-on-windows](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md)
-closes). `TUR_PRELUDE_SPLIT=0` and `TUR_IMPORT_SPLIT=0` turn the two splits
+entry, a 64-bit host, not `--debug`, not writing a manifest, on Linux,
+macOS and Windows by default (`TUR_PRELUDE_SPLIT=1` opts in elsewhere;
+Windows joined 2026-11-06,
+[r7rs-prelude-split-wrong-symbols-on-windows](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-prelude-split-wrong-symbols-on-windows.md)). `TUR_PRELUDE_SPLIT=0` and `TUR_IMPORT_SPLIT=0` turn the two splits
 off.
 
 Two caches sit on top:
@@ -741,8 +741,6 @@ From `docs/reported/` on 2026-10-16:
 
 - [r7rs-library-file-shape-and-export-rename](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-library-file-shape-and-export-rename.md)
   -- one library per file, named by its path; held by decision.
-- [r7rs-prelude-split-wrong-symbols-on-windows](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md)
-  -- fix landed; the split stays off on Windows until a Windows run confirms.
 - [jit-r7rs-threads-lifecycle-exited-1-once](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-r7rs-threads-lifecycle-exited-1-once.md)
   -- one unreproduced JIT failure of `r7rs-threads-lifecycle`; closed
   unreproduced 2026-11-06.

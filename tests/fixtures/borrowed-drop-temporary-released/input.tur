@@ -32,6 +32,10 @@
 (defn peek [^borrow w : Widget] : int 1)
 (defn peek2 [k : int ^borrow w : Widget] : int k)
 (defn peek3 [k : int j : int ^borrow w : Widget] : int (+ (* 10 k) j))
+;; A plain-data struct before an effectful argument is hoisted in order too:
+;; a copy of it owns nothing.  `p` is read before the effect reassigns it.
+(defstruct Pt [x : int y : int])
+(defn peekp [p : Pt k : int ^borrow w : Widget] : int (.x p))
 (defn dup [^borrow w : Widget] : Widget (mk))
 (defn peekc [^borrow w : Widget] : int
   ```c
@@ -67,6 +71,9 @@
   (let [v (tagv (mk))]
     (live)                                   ;; 0
     (println (vec-len v)))                   ;; 2
+  (let [^mut q (Pt 10 20)]
+    (println (peekp q (do (set! q (Pt 7 0)) (ctr 2)) (mk))) (live))   ;; 10 0
+  (println (peekp (Pt 100 0) (ctr 2) (mk))) (live)                    ;; 100 0
   (println (viewc (mk))) (live)              ;; c 1 -- inline C may view it: kept
   (println (viewt (mk))) (live)              ;; c 2 -- so may a body that hands it there
   0)

@@ -31,6 +31,25 @@
 #include <stddef.h>
 #include <string.h>
 
+/* TUR_NO_SUBPROCESS: the platform forbids starting another program.
+ *
+ * iOS, tvOS, watchOS and visionOS (TARGET_OS_IPHONE covers all four) mark
+ * fork() and system() unavailable in their SDKs, and a sandboxed app may not
+ * spawn a process anyway.  Code that would shell out or fork tests this and
+ * reports the operation unsupported instead: the interpreter's
+ * process/spawn-raw native answers -ENOSYS (as it does under Emscripten) and
+ * the REPL's spice auto-discovery, which builds a dylib in a `tur`
+ * subprocess and dlopens it, finds no project.  See
+ * docs/reported/turi-ios-readiness-unverified.md, items 3 and 6. */
+#if defined(__APPLE__)
+#  include <TargetConditionals.h>
+#endif
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+#  define TUR_NO_SUBPROCESS 1
+#else
+#  define TUR_NO_SUBPROCESS 0
+#endif
+
 /* The null device, as the platform's shell spells it.  Use in a redirect:
  *   snprintf(cmd, sizeof cmd, "git ... 2>" TUR_DEVNULL);
  * It is a string literal so it concatenates into a format string. */

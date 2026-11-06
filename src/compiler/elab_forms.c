@@ -2413,6 +2413,29 @@ Expr *elab_let(Elab *e, const Form *call) {
             }
         }
 
+        /* fn-param-at-type-variable-slot-boxed-per-call, the let-bound
+         * shape: `(let [f (ident d)] (f 10))`.  A fn parameter boxed for a
+         * type-variable slot by a callee that only hands it back is dead when
+         * the let ends if the local holding the result is only ever INVOKED
+         * -- never returned, stored, captured or passed on, here or in a later
+         * binding's init -- so its box may live on the stack, as it does for
+         * `((ident d) 10)`. */
+        for (uint32_t r = 0; rc == 0 && body && r < n_binds; r++) {
+            Binding *lb = binds[r].binding;
+            Expr *init = binds[r].init;
+            while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+            if (!lb || !init || init->kind != EX_CALL) continue;
+            bool any_box = false;
+            for (uint32_t a = 0; a < init->as.call_.n_args; a++)
+                if (init->as.call_.args[a] &&
+                    init->as.call_.args[a]->kind == EX_POLY_TO_FAT) any_box = true;
+            if (!any_box) continue;
+            bool escapes = closure_binding_escapes(body, lb);
+            for (uint32_t k = r + 1; !escapes && k < n_binds; k++)
+                if (binds[k].init) escapes = closure_binding_escapes(binds[k].init, lb);
+            if (!escapes) mark_invoked_passthrough_boxes_stack(init);
+        }
+
         /* EXG4-1/EXG4-4: ownership transfer through let-tail position.
          *
          * If the body's tail expression is a direct EX_VAR of one of this

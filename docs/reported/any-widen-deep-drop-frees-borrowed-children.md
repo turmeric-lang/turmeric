@@ -78,6 +78,27 @@ Turmeric), `any-widen-fresh-payload-aliases` and `any-widen-of-a-borrowed-local`
 `any-widen-frame-box-dyn-call-operand`. Each of the first three is a
 use-after-free under `tests/run-leak-check.sh` on the unfixed compiler.
 
+## Narrowed 2026-11-06: an explicit widen argument lives in the frame
+
+`(llen (:: one any))` -- the `peek-it` shape -- leaks nothing now. The
+frame-box rule (the widen's header copy goes in the caller's frame when the
+callee keeps nothing of it and cannot suspend, `src/compiler/elab_call.c`) ran
+only for an IMPLICIT widen, at a parameter that wanted `any`. An explicit
+`(:: one any)` argument is already an `any`, so it went to the owned-temp rule
+alone, which declines for exactly this payload. Under the same conditions it
+is frame-boxed now, when the owned-temp rule declines. Fix direction 2's
+"shallow drop" falls out: there is no box to drop.
+`any-widen-deep-drop-plain-turmeric` went from 400 B in 10 allocations to 200 B
+in 5; what is left there is `wrap-it` (its callee does keep the widen) and
+`store-it` (shape 3).
+
+Found on the way, pre-existing: widening a large by-value ADT PARAMETER
+(passed as `const T *`) did not compile -- both arms of the by-value
+widen copied the pointer (`expr_is_pbp_param`, `src/compiler/emit_expr.c`,
+now dereferences). Pinned by `any-widen-explicit-arg-frame-box`
+(leak-checked; the widened `one` is a parameter in `twice`, and is read again
+after every call).
+
 ## Open: the leak residue
 
 Declining the drop leaks the box (and, for shape 3, `inner`'s spine when

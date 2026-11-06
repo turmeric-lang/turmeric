@@ -1,0 +1,22 @@
+# Specs that no CI workflow runs, one per line: `<file> -- <reason>`.
+#
+# tests/check-web-specs-in-ci.py (part of tests/check-docs-lint.sh) fails on a
+# web/tests/*.spec.js that CI does not run and that has no line here, and on a
+# line here for a spec CI does run.  A spec off every list passes by not
+# running -- docs/archive/try-turmeric-specs-outside-the-ci-path-list-have-rotted.md.
+#
+# Tracked as docs/reported/web-specs-never-run-in-ci.md.
+# Promoting one: add it to the desktop path list in .github/workflows/ci.yml
+# ("Run broader smoke suite (desktop)"), delete its line here, and fix what CI
+# then reports.
+prod-smoke.spec.js -- drives the live turmeric-lang.com, not this checkout; its own config (`npm run test:prod`)
+ci-api.spec.js -- never run in CI; not yet checked against a built bundle
+docs-highlight.spec.js -- never run in CI; not yet checked against a built bundle
+docs-restore.spec.js -- never run in CI; not yet checked against a built bundle
+editor-highlight.spec.js -- never run in CI; not yet checked against a built bundle
+pwa-update.spec.js -- never run in CI; not yet checked against a built bundle
+run-session.spec.js -- never run in CI; not yet checked against a built bundle
+share-link.spec.js -- never run in CI; not yet checked against a built bundle
+sw-kill.spec.js -- never run in CI; not yet checked against a built bundle
+theme-toggle.spec.js -- never run in CI; not yet checked against a built bundle
+toolbar-overflow.spec.js -- never run in CI; not yet checked against a built bundle

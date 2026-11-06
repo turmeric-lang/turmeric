@@ -3,6 +3,16 @@
 **Severity:** low-medium (test rot that hides REPL regressions; no product bug
 established). CI is green because it does not run these specs.
 
+**RESOLVED 2026-11-06** (#1462): all ten `repl-intelligence` tests pass in
+CI's blocking desktop step on the first attempt, the four rotted ones
+included. The eleven other specs CI never ran are their own report now:
+[web-specs-never-run-in-ci](../reported/web-specs-never-run-in-ci.md).
+
+**Worked 2026-11-06: all four fixed or diagnosed, and the spec is on CI's list.**
+No bundle could be built in that session (Emscripten was not installable), so
+CI's desktop step is the first run of these fixes; see "Worked 2026-11-06" at
+the end.
+
 **Status:** open. Found 2026-10-26, the first time the whole desktop suite could
 run in a sandbox with a real WASM bundle (see
 [the archived bundle report](../archive/web-specs-fail-instead-of-skipping-without-the-wasm-bundle.md)).
@@ -77,3 +87,43 @@ cmake --build build-wasm -j --target tur_wasm      # ~2.5 min -> web/public/turm
 cd web && npm ci
 npx playwright test --project=desktop tests/repl-intelligence.spec.js --workers=1
 ```
+
+## Worked 2026-11-06
+
+1. **`:doc co`** -- the spec now asserts no *meta-command* is offered
+   (`/^:[a-z]/`), since `::` is a documented symbol. Found on the way: the
+   `:doc` / `:type` provider capped the doc table at 500 names *before*
+   narrowing (`web/repl.js`), so a name past the 500th was never offered
+   whatever was typed. It narrows by the typed prefix first now, and the spec
+   checks every label starts with `co` and that `cons` is among them.
+2. **The failed line** is a type error now, `(+ x "a")` (TUR-E0001), which
+   `tur --interpret` refuses; `(nope x)` was a TUR-W0040 runtime dispatch.
+3. **A real bug, fixed in `web/lsp-client.js`.** The server keeps a
+   document's last good index when its text does not compile
+   (`run_doc_analysis`, `src/lsp/lsp.c`), and the prompt's document is the
+   accepted session source plus the line being typed. A Run while the prompt
+   held a half-typed line pushed `prefix + "\n(zzz-ed"`, which does not
+   compile, so the index kept was the one from before the Run and its
+   definitions were not offered until the line was cleared. A name defined
+   *at* the prompt was offered because submitting clears the prompt first.
+   Reproduced with the native `tur lsp` (open `""`, change to `(zzz-ed`,
+   change to `prefix + "\n(zzz-ed"`, complete at `zzz-ed`: no items).
+   `refresh()` now pushes the prefix alone, forces its analysis with a
+   `documentSymbol` request, and then the real text (`seedExtraDoc`); the
+   same native sequence then offers `zzz-editor-only-fn`.
+4. **The Escape timeout** was the click, not the key: `typeAtPrompt` clicks
+   `#repl-input`, and `#docs-overlay` is a full-window backdrop over it, so
+   Playwright waited the test's 60 s for the prompt to become clickable. The
+   test now focuses the prompt through `window._turiRepl` (submitting
+   `:docs` left the focus there, the state the test is about).
+
+`repl-intelligence.spec.js` is on the blocking desktop path list in
+`ci.yml`, and `tests/check-web-specs-in-ci.py` (in Docs lint) closes the
+hole itself: every `web/tests/*.spec.js` is run by a workflow's
+`npx playwright test` command or named in `web/tests/specs-not-in-ci.txt`
+with a reason. Its first run found **eleven more specs CI never ran**
+(`ci-api`, `docs-highlight`, `docs-restore`, `editor-highlight`,
+`pwa-update`, `run-session`, `share-link`, `sw-kill`, `theme-toggle`,
+`toolbar-overflow`, plus `prod-smoke`, which is meant to run against the live
+site). They are on the exclusion list as unverified; promoting each is the
+work left.

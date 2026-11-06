@@ -326,8 +326,14 @@ export function initReplInput() {
                     startColumn: word.startColumn,
                     endColumn: word.endColumn,
                 };
+                /* Narrow by what is typed BEFORE capping: the doc table is
+                 * longer than the cap, so capping first meant a name past the
+                 * 500th was never offered, whatever was typed. */
+                const typed = withArg[2].toLowerCase();
+                const named = (docNames || []).filter(d =>
+                    d && d.name && String(d.name).toLowerCase().startsWith(typed));
                 return {
-                    suggestions: (docNames || []).slice(0, 500).map(d => ({
+                    suggestions: named.slice(0, 500).map(d => ({
                         label: d.name,
                         kind: getMonaco().languages.CompletionItemKind.Function,
                         insertText: d.name,

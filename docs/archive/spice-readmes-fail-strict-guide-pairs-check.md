@@ -6,7 +6,16 @@ that would catch them (`--spices`, which implies `--strict-unpaired`) runs
 in no CI job in either repo, so both numbers can only grow. turmeric-spices
 still carries the old Python checker as well.
 
-**Status: OPEN.** Filed 2026-10-23, measured against turmeric `main` @
+**RESOLVED 2026-11-06** by turmeric-spices#135: the 3 pairs are fixed, the 65
+unpaired blocks (57 by the time of the fix, plus later READMEs) have
+companions (57) or `no-check` markers (8), and the strict checker reports 111
+pairs ok, 0 failed, 0 unpaired. It is gated in turmeric-spices CI
+(`spices-leg.yml`'s `build-tur` job, which has both checkouts and a built
+`tur`), and `tools/check-guide-pairs.py` is gone: `just check-docs` runs the
+`.tur` checker. Fix directions 1-4 all done; direction 3 took the spices-CI
+option.
+
+**Status (as filed): OPEN.** Filed 2026-10-23, measured against turmeric `main` @
 `43bee293` (Release `tur` built from source) and turmeric-spices `main` @
 `ac688be`.
 

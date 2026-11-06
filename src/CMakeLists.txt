@@ -899,8 +899,13 @@ install(FILES
     COMPONENT libturi
 )
 
+# BUNDLE: on iOS (and tvOS/watchOS/visionOS) CMake makes every executable a
+# MACOSX_BUNDLE, and install(TARGETS) of a bundle without a BUNDLE
+# DESTINATION is a configure error -- which is what stopped nightly-ios.yml at
+# configure, before it compiled anything (turi-ios-readiness-unverified).
 install(TARGETS tur
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    BUNDLE  DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT tur
 )
 

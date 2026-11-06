@@ -310,7 +310,6 @@ static int jit_getc (void *data) {
  * out of inline-C the emitter does not own, and shipping them would trade a
  * clean compile error for silent corruption under spawn.  Inline C that uses
  * them fails c2mir loudly and takes the step-6 fallback to cc instead. */
-#if !defined(_WIN32)
 /* jit-inline-c-thread-local-collapses-to-global: write c2mir's collected
  * messages to stderr (when `write`), one line each, leaving out the warnings
  * when `quiet` (what ignore_warnings_p did before they were collected).
@@ -337,6 +336,47 @@ static bool jit_relay_c2mir_messages (const char *buf, size_t len, bool quiet,
     i += n;
   }
   return tls;
+}
+
+/* Where c2mir's messages are collected for the relay above.  POSIX has
+ * open_memstream.  MinGW does not, which is why the `_Thread_local` refusal
+ * used to be POSIX-only and the Windows engine compiled one global every
+ * thread shared (jit-inline-c-thread-local printed 99 on the
+ * windows-jit-corpus job): there the messages go to a delete-on-close temp
+ * file, read back when the compile is done.  A NULL stream means "not
+ * collected"; the caller then writes straight to stderr as before. */
+#if defined(_WIN32)
+static FILE *jit_msg_capture_open (char **buf, size_t *len) {
+  *buf = NULL;
+  *len = 0;
+  char dir[MAX_PATH], path[MAX_PATH];
+  DWORD n = GetTempPathA ((DWORD) sizeof dir, dir);
+  if (n == 0 || n >= sizeof dir) return NULL;
+  if (GetTempFileNameA (dir, "tjm", 0, path) == 0) return NULL;
+  FILE *f = fopen (path, "w+bD");   /* D: _O_TEMPORARY, removed at fclose */
+  if (f == NULL) DeleteFileA (path);
+  return f;
+}
+static void jit_msg_capture_close (FILE *f, char **buf, size_t *len) {
+  fflush (f);
+  long sz = fseek (f, 0, SEEK_END) == 0 ? ftell (f) : -1;
+  if (sz > 0 && fseek (f, 0, SEEK_SET) == 0) {
+    *buf = (char *) malloc ((size_t) sz + 1);
+    if (*buf != NULL) {
+      *len = fread (*buf, 1, (size_t) sz, f);
+      (*buf)[*len] = '\0';
+    }
+  }
+  fclose (f);
+}
+#else
+static FILE *jit_msg_capture_open (char **buf, size_t *len) {
+  return open_memstream (buf, len);
+}
+static void jit_msg_capture_close (FILE *f, char **buf, size_t *len) {
+  (void) buf;
+  (void) len;
+  fclose (f);   /* publishes *buf / *len */
 }
 #endif
 
@@ -1773,7 +1813,6 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
     memset (&ops, 0, sizeof ops);
     ops.message_file = stderr;
     ops.ignore_warnings_p = g_jit_quiet_warnings;
-#if !defined(_WIN32)
     /* jit-inline-c-thread-local-collapses-to-global: c2mir only WARNS on
      * `_Thread_local` and compiles one global every thread shares, so inline
      * C that declared one ran with silent cross-thread corruption.  Collect
@@ -1784,20 +1823,18 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
      * the refusal would depend on the quiet flag. */
     char *msg_buf = NULL;
     size_t msg_len = 0;
-    FILE *msg_f = open_memstream (&msg_buf, &msg_len);
+    FILE *msg_f = jit_msg_capture_open (&msg_buf, &msg_len);
     if (msg_f != NULL) {
       ops.message_file = msg_f;
       ops.ignore_warnings_p = 0;
     }
-#endif
 
     ops.include_dirs_num = (size_t) (n_include_dirs > 0 ? n_include_dirs : 0);
     ops.include_dirs = include_dirs;
 
     int ok = c2mir_compile (ctx, &ops, jit_getc, NULL, "<tur-jit>", NULL);
-#if !defined(_WIN32)
     if (msg_f != NULL) {
-      fclose (msg_f);
+      jit_msg_capture_close (msg_f, &msg_buf, &msg_len);
       if (jit_relay_c2mir_messages (msg_buf, msg_len, g_jit_quiet_warnings, true) && ok) {
         fprintf (stderr,
                  "<tur-jit>: inline C declares a `_Thread_local` variable, which "
@@ -1807,7 +1844,6 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
       }
       free (msg_buf);
     }
-#endif
     if (!ok) {
       g_jit_err_active = 0;
       c2mir_finish (ctx);

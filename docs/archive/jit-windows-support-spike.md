@@ -7,7 +7,7 @@
 > of them also hit variadic definitions on the default split path. The one
 > item left, section 4 (the Windows JIT corpus is not in CI), is a
 > runner-time decision rather than a defect. It is tracked on its own as
-> [windows-jit-corpus-not-in-ci](../reported/windows-jit-corpus-not-in-ci.md).
+> [windows-jit-corpus-not-in-ci](windows-jit-corpus-not-in-ci.md).
 >
 > **SPIKE RUN 2026-08-05.** Verdict: **a Windows JIT is real but the road is
 > not the one this report assumed.** Building everything was nearly trivial;
@@ -763,4 +763,4 @@ fallbacks (c2mir cannot parse the MinGW `<sys/types.h>` family). They predate
 this work and were never visible, because nothing had run `run-jit.sh` on
 Windows since the ratchet landed (2026-09-09, after the last Windows corpus
 run of 2026-09-05). They are tracked with section 4 in
-[windows-jit-corpus-not-in-ci](../reported/windows-jit-corpus-not-in-ci.md).
+[windows-jit-corpus-not-in-ci](windows-jit-corpus-not-in-ci.md).

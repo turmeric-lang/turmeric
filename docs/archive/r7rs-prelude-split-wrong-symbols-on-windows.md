@@ -1,7 +1,13 @@
 # `#lang r7rs`: the prelude split prints wrong symbols on Windows
 
-**Fix landed 2026-09-28; the split stays off on Windows until a Windows run
-confirms it.** A split build has no weak data now, and the link-level
+**RESOLVED 2026-11-06: the split is on by default on Windows.** The
+`!defined(__linux__) && !defined(__APPLE__)` gate in `prelude_split_applies`
+(src/driver/pipeline.c) excludes `_WIN32` too now, so the `windows` CI job's
+three suite shards run every `r7rs-*` fixture through the split build on
+MSYS2/UCRT64 -- the one Windows run this report was waiting for.
+
+**Fix landed 2026-09-28; the split stayed off on Windows until a Windows run
+confirmed it.** A split build has no weak data now, and the link-level
 diagnosis is confirmed with MinGW-w64's GNU ld (below). What is left is one
 run on a Windows host: `TUR_PRELUDE_SPLIT=1 bash tests/run.sh` over the
 `r7rs-*` fixtures (MSYS2/UCRT64). Then drop the `!defined(__linux__)`

@@ -2,6 +2,15 @@
 
 **Severity: low (a leak, one value per evaluation; binding it with `let` avoids it).**
 
+**Narrowed again 2026-11-06: a plain-data struct before the effect is
+hoisted too.** `(peekp q (do (set! q ...) (ctr 2)) (mk))` releases its
+temporary and reads `q` before the effect, as the interpreter does (compiled
+code read it after: C leaves argument order unspecified). A by-value product
+whose every field is a plain scalar, with no Drop instance and nothing affine,
+owns nothing a copy could double-own (`hoist_arg_is_plain_copy`,
+`src/compiler/elab_call.c`). Left: an OWNING non-scalar earlier argument (a
+closure, a `Vec`, a Drop value) beside an effect.
+
 **Narrowed 2026-11-06: a `cstr`, `Vec` or other non-scalar result is
 released too, when the callee's body cannot hand back a view of the
 argument.** `(f64vec-show (f64vec-new 4 7.1))` and `(f64vec->vec ...)` free

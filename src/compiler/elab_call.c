@@ -3116,8 +3116,30 @@ static Binding *hoist_borrowed_drop_temp(Elab *e, Expr **slot, Span span,
     return tb;
 }
 
-/* Bind a plain-scalar argument to a `__borrowa` temp ahead of a hoisted
- * borrowed temporary, so the two keep their written evaluation order. */
+/* borrowed-drop-temporary-leaks-outside-the-hoist, the last shape: may a
+ * NON-scalar argument before the temporary be hoisted into a `__borrowa`
+ * temp to keep the evaluation order?  Only when the temp then owns nothing: a
+ * by-value product whose every field is a plain scalar, with no Drop
+ * instance and nothing affine or linear about it -- a plain-data struct such
+ * as `(Pt 1 2)`, which a copy duplicates whole.  An owning value (a closure's
+ * env, a Vec, a Drop opaque) would make the hoist's let its owner beside the
+ * callee that consumes it, so it keeps the old behaviour, a leak. */
+static bool hoist_arg_is_plain_copy(Elab *e, const Expr *a) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    if (!a || a->type.kind != TY_ADT || type_is_heap_struct(a->type)) return false;
+    if (ty_is_affine(a->type) || ty_is_sublinear(a->type) || ty_is_relevant(a->type))
+        return false;
+    const AdtDef *def = a->type.as.adt_.def;
+    if (!def || def->n_ctors != 1 || !def->ctors[0]) return false;
+    const CtorDef *c = def->ctors[0];
+    for (uint32_t fi = 0; fi < c->n_fields; fi++)
+        if (!type_kind_is_plain_scalar(c->fields[fi].kind)) return false;
+    return elab_fresh_sole_owner_drop_inst(e, &a->type, a) == NULL;
+}
+
+/* Bind a plain-scalar argument (or a plain-copy one, above) to a `__borrowa`
+ * temp ahead of a hoisted borrowed temporary, so the two keep their written
+ * evaluation order. */
 static void hoist_ordered_arg_temp(Elab *e, Expr **slot, Span span,
                                    HoistList *hl) {
     Expr *a = *slot;
@@ -3152,7 +3174,7 @@ static void hoist_ordered_arg_temp(Elab *e, Expr **slot, Span span,
  * `(f64vec->vec ...)` qualify: their String / Vec is built from the floats
  * they read out. */
 bool expr_subtree_has_inline_c(const Expr *e);   /* emit_core.c */
-static void mark_invoked_passthrough_boxes_stack(Expr *head);   /* below */
+void mark_invoked_passthrough_boxes_stack(Expr *head);   /* below; elab_internal.h */
 static bool borrow_param_result_may_view(const Binding *fb, uint32_t pi, int depth);
 
 static bool borrow_param_use_may_view(const Expr *x, const Binding *p, int depth);
@@ -3287,7 +3309,8 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
                         strncmp(aj->as.var.binding->name->name, "__borrow", 8) == 0)
                         continue;                 /* already a hoist temp */
                     if (!arg_is_literal(args[j]) &&
-                        !type_kind_is_plain_scalar(args[j]->type.kind))
+                        !type_kind_is_plain_scalar(args[j]->type.kind) &&
+                        !hoist_arg_is_plain_copy(e, args[j]))
                         order_ok = false;
                 }
             }
@@ -3872,7 +3895,7 @@ static bool param_used_only_as_result(const Expr *x, const Binding *p, bool tail
     return !cps_visit_children(x, param_used_only_as_result_visit, &u);
 }
 
-static void mark_invoked_passthrough_boxes_stack(Expr *head) {
+void mark_invoked_passthrough_boxes_stack(Expr *head) {
     while (head && head->kind == EX_ASCRIBE) head = head->as.ascribe_.inner;
     if (!head || head->kind != EX_CALL || head->as.call_.dict_arg) return;
     const Binding *cb = head->as.call_.fn_binding;
@@ -10464,8 +10487,29 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             && (fn_binding->nonretain_ptr_param_mask & (1u << i))
             && fn_binding->type.kind == TY_FN
             && effect_row_is_empty(fn_binding->type.as.fn.effect_row)) {
-            if (any_expr_is_owned_temp(args[i], 8))
+            if (any_expr_is_owned_temp(args[i], 8)) {
                 args[i]->any_drop_after = true;
+            } else {
+                /* any-widen-deep-drop-frees-borrowed-children, the leak
+                 * residue: an EXPLICIT widen argument, `(llen (:: one any))`.
+                 * It is already an `any`, so the frame-box rule above (which
+                 * runs for an implicit widen) never saw it, and the owned-temp
+                 * rule declines because the payload's children are `one`'s.
+                 * The box then had no owner.  The frame-box conditions hold
+                 * here too -- the callee keeps nothing of it and cannot
+                 * suspend -- so the header copy lives in the caller's frame:
+                 * no allocation, and `one`'s children stay `one`'s. */
+                Expr *w = args[i];
+                while (w && w->kind == EX_ASCRIBE) w = w->as.ascribe_.inner;
+                if (w && w->kind == EX_UNION_INJECT && !w->as.union_inject_.frame_box &&
+                    w->as.union_inject_.value &&
+                    w->as.union_inject_.value->type.kind != TY_UNION &&
+                    w->as.union_inject_.value->type.kind != TY_ANY) {
+                    w->as.union_inject_.frame_box = true;
+                    if (w->as.union_inject_.value->kind == EX_FN_TO_FAT)
+                        w->as.union_inject_.value->as.fn_to_fat_.stack_ok = true;
+                }
+            }
         }
 
         /* RM1 (reclamation-plan): the sum-box temporary case, the any rule one

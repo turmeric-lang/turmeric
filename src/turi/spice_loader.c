@@ -340,6 +340,12 @@ static int ensure_cache_dir(const char *root, char *out, size_t cap) {
 
 static int run_build(const char *tur_bin, const char *root,
                      const char *lib_path, const char *manifest_path) {
+#if TUR_NO_SUBPROCESS
+    /* Unreachable: tur_spice_image_load finds no project on such a platform.
+     * system() is not even declared available there, so the body goes. */
+    (void)tur_bin; (void)root; (void)lib_path; (void)manifest_path;
+    return -1;
+#else
     char q_bin[1024], q_root[4400], q_lib[4400], q_mf[4400];
     if (tur_shell_quote(tur_bin,       q_bin,  sizeof(q_bin))  != 0
      || tur_shell_quote(root,          q_root, sizeof(q_root)) != 0
@@ -379,6 +385,7 @@ static int run_build(const char *tur_bin, const char *root,
             "tur repl: fix the error above, then type (reload) at the "
             "prompt to retry.\n");
     return -1;
+#endif /* TUR_NO_SUBPROCESS */
 }
 
 /* ------------------------------------------------------------------ */
@@ -710,6 +717,14 @@ int tur_spice_image_load(const char *start_dir, const char *tur_bin,
     if (!start_dir) start_dir = ".";
     if (!tur_bin || !*tur_bin) tur_bin = "tur";
 
+#if TUR_NO_SUBPROCESS
+    /* iOS and its siblings: a spice image is built by a `tur build --shared`
+     * subprocess and dlopened, and neither is allowed there.  Spices on such
+     * a platform have to be linked into the app statically, so auto-discovery
+     * is compiled out: every directory reads as "no project". */
+    (void)tur_bin;
+    return 1;
+#endif
     char *root = find_build_tur_root(start_dir);
     if (!root) return 1;  /* no project here */
 

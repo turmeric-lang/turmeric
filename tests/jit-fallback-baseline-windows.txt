@@ -1,0 +1,92 @@
+# tests/jit-fallback-baseline-windows.txt -- fixtures run-jit.sh ALLOWS to fall back to cc
+# on Windows (MSYS2) ONLY, on top of tests/jit-fallback-baseline.txt.  One name per
+# line.  Same rules as the shared file.  Regenerate on an MSYS2 shell:
+#   TUR_JIT_FALLBACK_UPDATE=1 TUR=./build-win-jit/tur.exe bash tests/run-jit.sh
+# or tighten it from the windows-jit-corpus CI job: each shard prints the
+# fallbacks it saw, and this file is their union less the shared file
+# (docs/archive/windows-jit-corpus-not-in-ci.md).
+#
+# Measured 2026-11-06 on that job's first run (windows-latest, UCRT64): 70
+# names from the shards' lists, plus 7 that fell back and then failed only
+# because run-jit.sh gave fixtures no Windows scratch directory (async-file,
+# fs-read-string, httpd-mw-static, image-globals-roundtrip, image-hooks-
+# tracked, image-roundtrip, io-stdlib-roundtrip).  Most are MinGW headers
+# c2mir cannot parse (<sys/types.h>, <sys/stat.h>, <dirent.h>, vadefs.h,
+# pthread rwlocks); the reasons are grouped in the report.
+async-echo-server
+async-file
+capability-module-roundtrip
+docs-sicp-guide-examples
+extern-c-caret-shorthand
+fs-interp-basics
+fs-read-string
+fs-stream-walk
+httpd-async-echo
+httpd-async-mw-attr
+httpd-async-mw-compose
+httpd-bind-addr
+httpd-conn-upgrade
+httpd-conn-upgrade-async
+httpd-conn-upgrade-tls
+httpd-h1-basic
+httpd-h2-reactor
+httpd-h3-pool
+httpd-h4-keepalive
+httpd-h5-tls
+httpd-h6-routing
+httpd-h7-middleware
+httpd-mw-basic-auth
+httpd-mw-basic-auth-attr
+httpd-mw-basic-auth-noncapture
+httpd-mw-body-size
+httpd-mw-compose
+httpd-mw-compose-of
+httpd-mw-cookie
+httpd-mw-cors
+httpd-mw-cors-opts
+httpd-mw-cors-origins
+httpd-mw-etag
+httpd-mw-fold-many
+httpd-mw-form
+httpd-mw-json
+httpd-mw-multipart
+httpd-mw-rate-limit
+httpd-mw-recover
+httpd-mw-req-header
+httpd-mw-request-id
+httpd-mw-resp-header
+httpd-mw-secure-headers
+httpd-mw-static
+httpd-mw-timeout
+httpd-mw-trust-proxy
+httpd-new-pool-fail-drops-handler
+httpd-pool-pending-limit
+httpd-read-deadline
+httpd-req-string-opt
+httpd-static-index-listing
+image-globals-roundtrip
+image-hooks-tracked
+image-reload-hook
+image-roundtrip
+io-deprecated-names
+io-file-write-seek
+io-read-line-stdin
+io-stdlib-roundtrip
+load-then-import-same-module
+net-blocking-tcp
+r7rs-eval
+r7rs-file-ports
+r7rs-srfi-18
+r7rs-srfi-216
+r7rs-system-libraries
+recursive-linear-borrow-branch
+rwlock-basic
+simd-ops
+term-string
+time-clock-resolution
+time-dates-iso8601
+time-import-module
+tmpfile-linear
+tmpfile-linear-borrow
+warn-image-global-unregistered
+with-lock-scoped

@@ -13,6 +13,7 @@
  * overrides moved here.
  */
 #include "turi/interpreter_natives.h"
+#include "platform_proc.h"  /* TUR_NO_SUBPROCESS */
 
 #include "turi/eval.h"
 #include "turi/fiber.h"   /* SRFI 18 twins: turi_sched_yield, turi_spawn_fiber */
@@ -6074,9 +6075,10 @@ static void wk_register_chan_natives(TuriEnv *env) {
  *                                  signal ended it, or -errno */
 static TuriValue native_process_spawn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-#if defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__) || TUR_NO_SUBPROCESS
     /* No fork/exec in the browser (and no <sys/wait.h>; see the include
-     * guard at the top of this file). */
+     * guard at the top of this file), nor on iOS, whose SDK marks fork()
+     * unavailable and whose sandbox forbids a child process. */
     (void)a; (void)n;
     return turi_int(-ENOSYS);
 #else
@@ -6138,8 +6140,9 @@ static TuriValue native_process_child_of(TuriEnv *env, TuriValue *a, uint32_t n,
 static TuriValue native_process_wait(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_int(-EINVAL);
-#if defined(__EMSCRIPTEN__)
-    /* No process reaping in the browser; process/spawn-raw already fails. */
+#if defined(__EMSCRIPTEN__) || TUR_NO_SUBPROCESS
+    /* No process reaping in the browser or on iOS; process/spawn-raw
+     * already fails there. */
     return turi_int(-ECHILD);
 #elif defined(_WIN32)
     /* _cwait yields the child's exit code directly -- there is no POSIX

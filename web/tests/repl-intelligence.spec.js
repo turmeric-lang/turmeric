@@ -57,8 +57,13 @@ test.describe('Try Turmeric prompt intelligence', () => {
 
         const labels = await page.evaluate(() => window._turiRepl.metaCompletions(':doc co'));
         expect(labels.length).toBeGreaterThan(0);
-        // Symbols, not commands.
-        expect(labels.some(l => l.startsWith(':'))).toBe(false);
+        // Symbols, not commands. Not "nothing starting with a colon": `::`
+        // (the ascription form) is a documented symbol, and rightly offered
+        // after `:doc :`.
+        expect(labels.some(l => /^:[a-z]/.test(l))).toBe(false);
+        // And narrowed by what is typed, before the list is capped.
+        expect(labels.every(l => l.toLowerCase().startsWith('co'))).toBe(true);
+        expect(labels).toContain('cons');
     });
 
     test(':help is generated from the command table, aligned', async ({ page }) => {
@@ -89,7 +94,12 @@ test.describe('Try Turmeric prompt intelligence', () => {
         await submitAtPrompt(page, ':docs');
         await expect(page.locator('#docs-overlay')).toBeVisible({ timeout: 20_000 });
 
-        await typeAtPrompt(page, '(co');
+        // Not typeAtPrompt: it clicks #repl-input, and the docs overlay is a
+        // full-window backdrop over it, so the click is intercepted and
+        // Playwright waits out the test's 60 s for it to become clickable.
+        // Submitting `:docs` left the keyboard focus in the prompt, which is
+        // the state this test is about.
+        await page.evaluate(() => { window._turiRepl.focus(); window._turiRepl.setValue('(co'); });
         await page.keyboard.press('Escape');
         await page.waitForTimeout(300);
 
@@ -156,7 +166,10 @@ test.describe('Try Turmeric prompt intelligence', () => {
         await waitForReady(page);
         await waitForLsp(page);
 
-        await submitAtPrompt(page, '(defn zzz-broken-fn [x : int] : int (nope x))');
+        // A type error, which the evaluator refuses. An unknown callee
+        // (`(nope x)`) is not one: it warns TUR-W0040 and defines the fn,
+        // to be dispatched at run time.
+        await submitAtPrompt(page, '(defn zzz-broken-fn [x : int] : int (+ x "a"))');
         await page.waitForTimeout(1500);
 
         const session = await page.evaluate(() => window._turiRepl.sessionSource());
