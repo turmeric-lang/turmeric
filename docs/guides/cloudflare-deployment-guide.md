@@ -65,6 +65,7 @@ requests to it.
 
 ;; A fiber body is a captureless `(c-fn [] nil)`, so what a fiber works on
 ;; rides in a fiber-local slot, set on the new fiber before it is spawned.
+;; A detached fiber is freed by the scheduler once it finishes.
 (def fd-slot 1)
 
 (defn cstr-length [s : cstr] : int
@@ -88,7 +89,7 @@ requests to it.
 (defn spawn-on-fd [body : (c-fn [] nil) fd : Fd] : nil
   (let [f (fiber-new body 0)]
     (fiber-local-set! f fd-slot (fd->int fd))
-    (scheduler-spawn (scheduler-current) f)))
+    (scheduler-spawn-detached (scheduler-current) f)))
 
 (defn my-fd [] : Fd
   (int->fd (fiber-local-current-get fd-slot)))
@@ -126,6 +127,7 @@ load("stdlib/env.tur")
 load("stdlib/str.tur")
 ;; A fiber body is a captureless `(c-fn [] nil)`, so what a fiber works on
 ;; rides in a fiber-local slot, set on the new fiber before it is spawned.
+;; A detached fiber is freed by the scheduler once it finishes.
 def fd-slot 1
 defn cstr-length [s : cstr] : int
   ```c
@@ -143,7 +145,7 @@ defn handle-client [fd : Fd] : nil
 defn spawn-on-fd [body : (c-fn [] nil) fd : Fd] : nil
   let [f (fiber-new body 0)]
     fiber-local-set!(f fd-slot fd->int(fd))
-    scheduler-spawn(scheduler-current() f)
+    scheduler-spawn-detached(scheduler-current() f)
 defn my-fd [] : Fd
   int->fd(fiber-local-current-get(fd-slot))
 defn client-fiber [] : nil
@@ -170,12 +172,10 @@ defn main [] : int
 > over `client-fd` is refused (TUR-E0295). The fd travels in a fiber-local
 > slot instead -- `spawn-on-fd` sets it on the new fiber before handing the
 > fiber to the scheduler, and the body reads it back with
-> `fiber-local-current-get`. The scheduler does not free a fiber that has
-> finished, so each connection keeps its fiber (a 1 MiB stack by default) for
-> the life of the process
-> ([scheduler-finished-fibers-never-freed](../reported/scheduler-finished-fibers-never-freed.md));
-> a long-lived service wants a pool of fibers, or a sweep that `fiber-free`s
-> the done ones.
+> `fiber-local-current-get`. `scheduler-spawn-detached` hands each fiber to
+> the scheduler, which frees it once it finishes; with plain
+> `scheduler-spawn` every connection would keep its fiber (a 1 MiB stack by
+> default) for the life of the process.
 
 > **Owned-return note.** `http-ok` assembles a fresh response with nested
 > `str-concat` and returns it as `cstr`; `handle-client` sends it and drops it

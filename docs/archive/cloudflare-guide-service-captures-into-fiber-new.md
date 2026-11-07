@@ -75,6 +75,7 @@ Fix direction 1, with a fiber-local rather than `fiber-arg`.
 - **Also found: `str-eq?`'s inline C** compared two pointers to distinct
   anonymous struct types, a cc warning in every program that loads
   `stdlib/str.tur`. It compares them as `const void *`.
-- **Filed, not fixed:** the scheduler never frees a fiber that finished, so
-  the service keeps a 1 MiB stack per connection --
-  [scheduler-finished-fibers-never-freed](../reported/scheduler-finished-fibers-never-freed.md).
+- **Filed and fixed the same day:** the scheduler never freed a fiber that
+  finished, so the service kept a 1 MiB stack per connection --
+  [scheduler-finished-fibers-never-freed](scheduler-finished-fibers-never-freed.md).
+  The service spawns with `scheduler-spawn-detached` now.

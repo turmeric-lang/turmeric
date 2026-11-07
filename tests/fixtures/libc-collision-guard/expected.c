@@ -3682,6 +3682,7 @@ struct FiberBlock {
     int64_t r7dyn[8];
     TurDynSave *dynsave;
     void *tsan_fiber; void *tsan_caller;
+    int sched_detached;
 };
 
 #if defined(__SANITIZE_THREAD__)
@@ -4122,6 +4123,11 @@ static FiberBlock *tur_scheduler_dequeue(TurScheduler *s) {
     return f;
 }
 
+static void tur_scheduler_requeue(TurScheduler *s, FiberBlock *f) {
+    if (f->done) { if (f->sched_detached) tur_fiber_block_free(f); }
+    else if (!f->parked) tur_scheduler_enqueue(s, f);
+}
+
 static void tur_scheduler_spawn(TurScheduler *s, FiberBlock *f) {
     tur_scheduler_enqueue(s, f);
 }
@@ -4144,7 +4150,7 @@ static void tur_scheduler_run(TurScheduler *s) {
         s->current_fiber = f;
         tur_fiber_block_resume(f, 0);
         s->current_fiber = NULL;
-        if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
+        tur_scheduler_requeue(s, f);
     }
     s->running = false;
 }
@@ -4159,7 +4165,7 @@ static void tur_scheduler_run_to_completion(TurScheduler *s) {
             s->current_fiber = f;
             tur_fiber_block_resume(f, 0);
             s->current_fiber = NULL;
-            if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
+            tur_scheduler_requeue(s, f);
         } else {
             if (!tur_has_pending_timers() && !tur_has_pending_io()) break;
             int64_t sleep_us = tur_next_timer_wait_us();
@@ -4383,7 +4389,7 @@ static void tur_scheduler_run_one(TurScheduler *s) {
     s->current_fiber = f;
     tur_fiber_block_resume(f, 0);
     s->current_fiber = NULL;
-    if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
+    tur_scheduler_requeue(s, f);
 }
 
 /* Phase T23: Multi-threaded scheduler */

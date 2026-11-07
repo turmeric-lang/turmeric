@@ -12,6 +12,7 @@
 ;;   scheduler-new          []                           -> ptr<void>
 ;;   scheduler-current      []                           -> ptr<void>
 ;;   scheduler-spawn        [sched :ptr<void> f :FiberHandle] -> nil
+;;   scheduler-spawn-detached [sched :ptr<void> f :FiberHandle] -> nil (freed when done)
 ;;   scheduler-run          [sched :ptr<void>]            -> nil
 ;;   scheduler-run-to-completion [sched :ptr<void>]    -> nil
 ;; scheduler-spawn takes fiber.tur's FiberHandle, so a stray pointer is refused.
@@ -62,6 +63,29 @@
 
 (defn scheduler-spawn [sched : ptr<void> f : FiberHandle] : nil
   ```c
+  tur_scheduler_spawn((TurScheduler *)sched, (FiberBlock *)f);
+  ```)
+;;; scheduler-spawn-detached -- add a fiber to the ready queue and hand it to the scheduler, which frees it once it finishes.
+;;;
+;;; Parameters:
+;;;   sched -- scheduler pointer returned by scheduler-new
+;;;   f     -- fiber handle returned by fiber-new; do not use it again
+;;;
+;;; The scheduler `fiber-free`s a detached fiber right after the resume in
+;;; which it finished, so `fiber-done?`, `fiber-arg` and `fiber-free` on the
+;;; handle afterwards read freed memory. Use plain `scheduler-spawn` for a
+;;; fiber you still want to ask about; a server that starts a fiber per
+;;; connection wants this one, or it keeps every finished fiber's stack.
+;;; Set its fiber-locals before spawning it.
+;;;
+;;; Example:
+;;;   (scheduler-spawn-detached sched (fiber-new handle-one 0))
+;;;
+;;; Since: 2026-11-07
+
+(defn scheduler-spawn-detached [sched : ptr<void> f : FiberHandle] : nil
+  ```c
+  ((FiberBlock *)f)->sched_detached = 1;
   tur_scheduler_spawn((TurScheduler *)sched, (FiberBlock *)f);
   ```)
 ;; Run the scheduler event loop until queue is empty.

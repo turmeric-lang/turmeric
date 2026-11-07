@@ -17668,6 +17668,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * every switch announces itself (TUR_TSAN_FIBER_*); everywhere else the
      * macros are empty and these two words stay zero. */
     buf_puts(out, "    void *tsan_fiber; void *tsan_caller;\n");
+    /* scheduler-finished-fibers-never-freed: set by scheduler-spawn-detached.
+     * The scheduler owns a detached fiber and frees it once it is done (after
+     * the resume that finished it, when nothing runs on its stack). */
+    buf_puts(out, "    int sched_detached;\n");
     buf_puts(out, "};\n\n");
     buf_puts(out,
         "#if defined(__SANITIZE_THREAD__)\n"
@@ -18170,6 +18174,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    s->run_queue_len--;\n");
     buf_puts(out, "    return f;\n");
     buf_puts(out, "}\n\n");
+    /* After a resume: a fiber still runnable goes back on the queue, a parked
+     * one waits for its unpark, and a done one is dropped -- and freed when it
+     * was spawned detached (scheduler-finished-fibers-never-freed). */
+    buf_puts(out, "static void tur_scheduler_requeue(TurScheduler *s, FiberBlock *f) {\n");
+    buf_puts(out, "    if (f->done) { if (f->sched_detached) tur_fiber_block_free(f); }\n");
+    buf_puts(out, "    else if (!f->parked) tur_scheduler_enqueue(s, f);\n");
+    buf_puts(out, "}\n\n");
     buf_puts(out, "static void tur_scheduler_spawn(TurScheduler *s, FiberBlock *f) {\n");
     buf_puts(out, "    tur_scheduler_enqueue(s, f);\n");
     buf_puts(out, "}\n\n");
@@ -18191,7 +18202,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        s->current_fiber = f;\n");
     buf_puts(out, "        tur_fiber_block_resume(f, 0);\n");
     buf_puts(out, "        s->current_fiber = NULL;\n");
-    buf_puts(out, "        if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);\n");
+    buf_puts(out, "        tur_scheduler_requeue(s, f);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    s->running = false;\n");
     buf_puts(out, "}\n\n");
@@ -18205,7 +18216,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            s->current_fiber = f;\n");
     buf_puts(out, "            tur_fiber_block_resume(f, 0);\n");
     buf_puts(out, "            s->current_fiber = NULL;\n");
-    buf_puts(out, "            if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);\n");
+    buf_puts(out, "            tur_scheduler_requeue(s, f);\n");
     buf_puts(out, "        } else {\n");
     buf_puts(out, "            if (!tur_has_pending_timers() && !tur_has_pending_io()) break;\n");
     buf_puts(out, "            int64_t sleep_us = tur_next_timer_wait_us();\n");
@@ -18439,7 +18450,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    s->current_fiber = f;\n");
     buf_puts(out, "    tur_fiber_block_resume(f, 0);\n");
     buf_puts(out, "    s->current_fiber = NULL;\n");
-    buf_puts(out, "    if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);\n");
+    buf_puts(out, "    tur_scheduler_requeue(s, f);\n");
     buf_puts(out, "}\n\n");
 
     /* Phase T23: Minimal multi-threaded scheduler runtime.
