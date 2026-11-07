@@ -101,15 +101,15 @@ A pending `await` parks by capturing the continuation up to the async body's
 root. Every function between the body and the await has to be on the CPS
 backend for that capture to reach the root. An awaiting function reached
 through a named call, a function value, a rank-2 (`forall`) parameter, a
-lambda inside a generic, or an `export-as` function parks correctly. What
-still puts a nearer root in the way: a function the backend cannot take for
-another reason (an inline-C body, a signature shape it does not thread), and
-a rank-2 call with a struct argument or result or more than eight arguments.
-A constrained generic passed to a constrained rank-2 parameter parks
-correctly unless its result is a float. The compiled program refuses such a
-park at
-run time (`await: a pending future would park below a direct-style call`)
-instead of running the rest of the body with a dummy value.
+lambda inside a generic, or an `export-as` function parks correctly, and so
+does a rank-2 call with a by-value struct argument or result, a nil result
+or any number of arguments, and a constrained generic passed to a
+constrained rank-2 parameter at every result type. What still puts a nearer
+root in the way: a function the backend cannot take for another reason (an
+inline-C body, a signature shape it does not thread -- an owning aggregate
+parameter, for one). The compiled program refuses such a park at run time
+(`await: a pending future would park below a direct-style call`) instead of
+running the rest of the body with a dummy value.
 
 The compiler says so up front: a function that may await -- its own body
 awaits, it calls a function that does, or it is handed one -- that may run

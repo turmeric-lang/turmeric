@@ -1,13 +1,14 @@
-;; await-parks-only-to-the-nearest-c-frame: the shape that still puts a
-;; direct-style frame between an async body and its await.  It draws
-;; TUR-W0044 at compile time, and the compiled program refuses the park at
-;; run time rather than losing the rest of the body.
+;; await-parks-only-to-the-nearest-c-frame: the floor.  An awaiting function
+;; the CPS backend cannot take draws TUR-W0044 at compile time, and the
+;; compiled program refuses the park at run time rather than losing the rest
+;; of the async body.
 ;;
-;; A rank-2 call with a STRUCT position: the `fn_cps` slot carries one-word
-;; values, and the value's `.fn` carries a struct through the carrier-spill
-;; protocol the threaded path does not mirror, so the call stays delegated to
-;; the value's direct entry.  (`body`, which reads a field of that struct
-;; result, evicts with it -- the second warning.)
+;; Here the awaiter takes an OWNING aggregate (a struct with a `(Vec int)`
+;; field, so drop glue): a signature shape the backend does not thread, so
+;; `level3o` is compiled direct-style and the await below it would park at its
+;; root.  (Every rank-2 call shape this fixture used to pin now threads --
+;; await-through-rank2-param, await-through-rank2-struct-position,
+;; await-through-constrained-rank2-value.)
 
 
 (defn cur-cell [fresh : bool] : ptr<void>
@@ -53,16 +54,12 @@
     (free-future f)
     v))
 
-(defstruct P [a : int b : int])
-(defn level3p [p : P] : P (P (+ (.a p) (sum-values 0 300 0)) (.b p)))
-(defn r2p-apply [f (forall [a] (-> a a)) p : P] : P (f p))
-
-;; The functions passed to the rank-2 parameters below are not generic, so
-;; each is ascribed to the parameter's forall type -- the trusted opt-out of
-;; rank2-argument-genericity, which asserts what the checker cannot see.
-(defn body [] : int (.a (r2p-apply (:: level3p (forall [a] (-> a a))) (P 13 0))))
+(defstruct O [v : (Vec int) n : int])
+(defn level3o [o : O] : O (O (.v o) (+ (.n o) (sum-values 0 300 0))))
+(defn r2o-apply [f (forall [a] (-> a a)) o : O] : O (f o))
+(defn owning [] : int (.n (r2o-apply (:: level3o (forall [a] (-> a a))) (O (vec-new) 13))))
 
 (defn main [] : nil
   (cur-cell true)
-  (println (drive (async body)))
+  (println (drive (async owning)))
   (free-future (cur-cell false)))

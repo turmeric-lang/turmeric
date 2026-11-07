@@ -905,7 +905,7 @@ A park has to reach the `async` body's own entry. If a direct-style C frame
 sits between the await and that entry, the runtime aborts ("await: a pending
 future would park below a direct-style call"). TUR-W0044 is the compile-time
 warning for the shapes that lead there. See
-[await-parks-only-to-the-nearest-c-frame](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/await-parks-only-to-the-nearest-c-frame.md).
+[await-parks-only-to-the-nearest-c-frame](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/await-parks-only-to-the-nearest-c-frame.md).
 
 **Fibers** survive as **stacks** for `fiber-new`, task groups, the scheduler,
 and async I/O and timers (`FiberBlock` in the emitted runtime;
