@@ -1,6 +1,7 @@
 /* elab_fns.c -- function definition forms: defn, fn, extern-c, def. */
 #include <stdarg.h>
 #include "elab_internal.h"
+#include "mangle.h"        /* tur_mangle_ident: dict_clone_pinned_method_fndef */
 #include "lang_dialects.h"   /* saffron-lang-plan S2: lang_span_is_dynamic */
 #include "cps.h"          /* cps_expr_uses_control -- the control-cast hoist */
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
@@ -408,6 +409,40 @@ bool call_returns_fresh_sum_box_as(const Expr *call, const Binding *fb) {
     return true;
 }
 
+FnDef *dict_clone_pinned_method_fndef(const FnDef *clone, const Expr *call) {
+    if (!clone || clone->n_dict_clone == 0 || !call || call->kind != EX_CALL)
+        return NULL;
+    const Expr *dict = call->as.call_.dict_arg;
+    if (!dict || dict->kind != EX_DICT || !dict->as.dict_.instance ||
+        dict->as.dict_.method_name[0] == '\0')
+        return NULL;
+    const TypeClass *tc = dict->as.dict_.instance->typeclass;
+    if (!tc) return NULL;
+    for (uint8_t c = 0; c < clone->n_dict_clone; c++) {
+        if (clone->dict_clone_classes[c] != tc) continue;
+        const TypeClassInstance *inst = clone->dict_clone_pinned[c];
+        if (!inst) return NULL;
+        /* The dict node carries the MANGLED field name (elab_typeclasses.c),
+         * as emit_concrete_inst_method_fndef compares it. */
+        for (uint8_t mi = 0; mi < tc->n_methods && mi < inst->n_method_impls; mi++) {
+            if (!tc->methods[mi].name) continue;
+            char field[64];
+            tur_mangle_ident(tc->methods[mi].name->name, field, sizeof field);
+            if (strcmp(field, dict->as.dict_.method_name) == 0)
+                return inst->method_impls[mi];
+        }
+        return NULL;
+    }
+    return NULL;
+}
+
+static const FnDef *g_fresh_pin_clone = NULL;
+const FnDef *elab_fresh_pin_clone_set(const FnDef *clone) {
+    const FnDef *prev = g_fresh_pin_clone;
+    g_fresh_pin_clone = clone;
+    return prev;
+}
+
 bool call_returns_fresh_sum_box(const Expr *call) {
     if (!call || call->kind != EX_CALL) return false;
     /* phantom-parametric-heap-let-binding-repr-ice (second defect): a
@@ -416,7 +451,15 @@ bool call_returns_fresh_sum_box(const Expr *call) {
      * drop freed the payload integer as a pointer (a segfault at scope end). */
     if (call->as.call_.ctor)
         return !type_is_transparent_int_newtype(call->type);
-    if (!call_dispatch_is_static(call)) return false;
+    if (!call_dispatch_is_static(call)) {
+        /* carrier-sum-option-boxes-have-no-owner (dictionary dispatch): inside
+         * a PINNED dict clone the instance that runs is known, so ask it --
+         * `bind` is fresh through its continuation, `pure` outright.  Any
+         * other dynamic dispatch stays "not fresh", the status-quo leak. */
+        FnDef *pf = g_fresh_pin_clone
+            ? dict_clone_pinned_method_fndef(g_fresh_pin_clone, call) : NULL;
+        return pf && pf->binding && call_returns_fresh_sum_box_as(call, pf->binding);
+    }
     return call_returns_fresh_sum_box_as(call, call->as.call_.fn_binding);
 }
 

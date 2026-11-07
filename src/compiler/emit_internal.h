@@ -464,6 +464,20 @@ typedef struct EmitCtx {
     bool     *sum_pending_owned;   /* entry's Type is a malloc'd spine to free at drain */
     uint32_t  n_sum_pending;
     uint32_t  cap_sum_pending;
+    /* carrier-sum-option-boxes-have-no-owner (dictionary dispatch): pending
+     * TUR_CLOSURE_DROPs for a capturing closure LITERAL handed to a
+     * dict-dispatched method inside a PINNED dict clone, when the pinned
+     * method's inferred nonretain_param_mask covers that slot -- the
+     * continuation of `(bind x (fn [v] ..))`.  Same mark/drain discipline as
+     * sum_pending: the env is minted for this one call and is dead once the
+     * call has returned. */
+    char    **clo_pending;
+    uint32_t  n_clo_pending;
+    uint32_t  cap_clo_pending;
+    /* The env temp (past-header pointer) of the most recent heap closure env
+     * the EX_CLOSURE emission allocated, or NULL; the call argument loop
+     * clears it before emitting an argument and reads it after. */
+    char     *last_closure_env_tmp;
     /* value-struct-payload-sum-monomorph-box-has-no-owner: pending frees for
      * fresh BY-VALUE sum monomorph temps whose arm holds a boxed value-struct
      * payload, consumed as a non-retaining argument.  Name + type pairs (the

@@ -3448,11 +3448,21 @@ static void emit_carrier_sum_free(EmitCtx *ctx, Buf *body, const char *name,
  * says nothing about the one selected for this spec. */
 static bool emit_call_returns_fresh_sum_box(EmitCtx *ctx, const Expr *e) {
     if (!e || e->kind != EX_CALL) return false;
-    if (call_returns_fresh_sum_box(e)) return true;
-    if (!e->as.call_.dict_arg || call_dispatch_is_static(e)) return false;
-    FnDef *fd = emit_reresolve_method_fndef(ctx, e);
-    if (!fd || !fd->binding) return false;
-    return call_returns_fresh_sum_box_as(e, fd->binding);
+    /* carrier-sum-option-boxes-have-no-owner (dictionary dispatch): while a
+     * PINNED dict clone's body is emitted, the walk into a continuation's body
+     * (`(fn [v] (pure ..))`) meets dict-dispatched calls of its own; the pin
+     * context answers them with the method that runs.  NULL elsewhere. */
+    const FnDef *cur = (ctx && ctx->current_abi_specialization)
+        ? ctx->current_abi_specialization->fn : NULL;
+    const FnDef *pin_prev = elab_fresh_pin_clone_set(
+        (cur && cur->n_dict_clone > 0) ? cur : NULL);
+    bool r = call_returns_fresh_sum_box(e);
+    if (!r && e->as.call_.dict_arg && !call_dispatch_is_static(e)) {
+        FnDef *fd = emit_reresolve_method_fndef(ctx, e);
+        r = fd && fd->binding && call_returns_fresh_sum_box_as(e, fd->binding);
+    }
+    elab_fresh_pin_clone_set(pin_prev);
+    return r;
 }
 
 /* value-struct-payload-sum-monomorph-box-has-no-owner (dictionary sites): is
@@ -7389,6 +7399,103 @@ static void sum_pending_drain(EmitCtx *ctx, Buf *body, uint32_t mark) {
     }
 }
 
+/* carrier-sum-option-boxes-have-no-owner (dictionary dispatch): the closure-env
+ * twin (EmitCtx.clo_pending).  Drains as TUR_CLOSURE_DROP, which runs the env's
+ * drop glue -- the same release a let-bound closure gets at scope exit. */
+static void clo_pending_push(EmitCtx *ctx, const char *name) {
+    if (ctx->n_clo_pending >= ctx->cap_clo_pending) {
+        uint32_t nc = ctx->cap_clo_pending ? ctx->cap_clo_pending * 2 : 8;
+        char **nn = (char **)realloc(ctx->clo_pending, nc * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->clo_pending = nn;
+        ctx->cap_clo_pending = nc;
+    }
+    ctx->clo_pending[ctx->n_clo_pending++] = strdup(name);
+}
+
+static void clo_pending_drain(EmitCtx *ctx, Buf *body, uint32_t mark) {
+    while (ctx->n_clo_pending > mark) {
+        --ctx->n_clo_pending;
+        char *nm = ctx->clo_pending[ctx->n_clo_pending];
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "TUR_CLOSURE_DROP(%s);\n", nm);
+        free(nm);
+    }
+}
+
+/* carrier-sum-option-boxes-have-no-owner (dictionary dispatch): is `e` a
+ * dict-dispatched call inside a PINNED dict clone whose pinned method is `rc`
+ * (the re-resolved callee the argument loop already holds), and does that
+ * method run to completion (an empty effect row -- a callee that suspends may
+ * resume after the caller has freed)?  The two post-call frees below -- the
+ * by-value spill cell and the continuation's env -- are keyed on this plus the
+ * pinned method's inferred masks, exactly the facts a static call site checks. */
+static bool emit_pinned_dispatch_callee(EmitCtx *ctx, const Expr *e, const FnDef *rc) {
+    if (!ctx || !ctx->current_abi_specialization ||
+        !ctx->current_abi_specialization->fn || !rc || !rc->binding ||
+        !e || e->kind != EX_CALL)
+        return false;
+    if (!e->as.call_.dict_arg || call_dispatch_is_static(e)) return false;
+    if (dict_clone_pinned_method_fndef(ctx->current_abi_specialization->fn, e) != rc)
+        return false;
+    return rc->binding->type.kind == TY_FN &&
+           effect_row_is_empty(rc->binding->type.as.fn.effect_row);
+}
+
+/* ... and the payload gate for the spill cell: the cell holds a COPY of the
+ * caller's by-value `(Option int)` / `(Result int cstr)`, so its payload words
+ * are shared with the original and only the cell may go -- which the shallow
+ * arm of emit_carrier_sum_free is, exactly when no payload is a boxed value
+ * struct or a closure.  Admit plain scalar payloads only. */
+static bool sum_app_payloads_plain_scalar(Type t) {
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n = 0;
+    if (!type_extract_adt_app(&t, &def, args, &n) || !def || !def->name) return false;
+    if (strcmp(def->name, "Option") != 0 && strcmp(def->name, "Result") != 0) return false;
+    for (uint8_t i = 0; i < n; i++) {
+        switch (args[i].kind) {
+            case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_CSTR:
+            case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+            case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            case TY_FLOAT32: case TY_FLOAT64:
+                break;
+            default:
+                return false;
+        }
+    }
+    return n > 0;
+}
+
+/* carrier-sum-option-boxes-have-no-owner (dictionary dispatch): the spill cell
+ * the escaping bridge just minted for argument `i` of `e` -- a heap COPY of
+ * the caller's by-value `x` for the dict-dispatched `bind`'s carrier slot --
+ * is a fresh sum argument nothing else refers to.  Inside a PINNED dict clone
+ * the method that runs is `rc`; when its inferred nonretain_sum_param_mask
+ * covers this slot (the body neither keeps the box nor hands it or its arm
+ * back -- the bit a static drop-after stamp keys on), free the cell after the
+ * call through the sum pending list.  Scalar payloads only: the cell's payload
+ * words are shared with `x`, so only the shallow arm of the drain may run.  The
+ * bridge spells the cell as `(int64_t)(intptr_t)(<tmp>)`; the drain wants the
+ * temp's name. */
+static void emit_pinned_spill_cell_free(EmitCtx *ctx, const Expr *e, uint32_t i,
+                                        const FnDef *rc, const char *raw,
+                                        Type spill_ty) {
+    if (i >= 32 || !raw) return;
+    if (!emit_pinned_dispatch_callee(ctx, e, rc)) return;
+    if (!(rc->binding->nonretain_sum_param_mask & (1u << i))) return;
+    Type rt = emit_resolve_type(ctx, spill_ty);
+    if (!sum_app_payloads_plain_scalar(rt) || adt_app_has_boxed_struct_payload(ctx, rt))
+        return;
+    static const char pfx[] = "(int64_t)(intptr_t)(";
+    size_t pl = sizeof pfx - 1, rl = strlen(raw);
+    if (!(rl > pl + 1 && strncmp(raw, pfx, pl) == 0 && raw[rl - 1] == ')')) return;
+    char *cell = strndup(raw + pl, rl - pl - 1);
+    if (cell && emit_str_is_bare_ident(cell))
+        sum_pending_push(ctx, cell, spill_ty, false);
+    free(cell);
+}
+
 /* value-struct-payload-sum-monomorph-box-has-no-owner (round 4): `t` with
  * every tyvar named `name` replaced by `with`, as an OWNED spine
  * (substitute_adt_app_type_owned's discipline: the replacement leaf is
@@ -8178,6 +8285,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     uint32_t any_mark = ctx->n_any_pending;
     uint32_t sum_mark = ctx->n_sum_pending;
     uint32_t vsp_mark = ctx->n_vsp_pending;
+    uint32_t clo_mark = ctx->n_clo_pending;
     char *v = emit_value_dispatch(ctx, body, e);
     g_emit_expr_depth--;
     /* S1/findings 16: capture-and-clear the builder's ret-type note
@@ -8485,6 +8593,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (!type_extract_adt_app(&_dt, &_rd, _ra, &_rn))
                     _rd = (_dt.kind == TY_ADT) ? _dt.as.adt_.def : NULL;
             }
+            /* carrier-sum-option-boxes-have-no-owner (dictionary dispatch): a
+             * PINNED dict clone is typed as the bare carrier at its call and
+             * its signature spells `(m int)`; the sum it stands for is the
+             * by-value aggregate the Route B site recorded on the clone. */
+            if (!_rd && e->as.call_.fn_binding &&
+                e->as.call_.fn_binding->source_fn_def &&
+                e->as.call_.fn_binding->source_fn_def->n_dict_clone > 0 &&
+                e->as.call_.fn_binding->source_fn_def->dict_clone_pinned_result.kind
+                    != TY_UNKNOWN) {
+                Type _pt = emit_resolve_type(
+                    ctx, e->as.call_.fn_binding->source_fn_def->dict_clone_pinned_result);
+                if (!type_extract_adt_app(&_pt, &_rd, _ra, &_rn))
+                    _rd = (_pt.kind == TY_ADT) ? _pt.as.adt_.def : NULL;
+            }
         }
         bool _ok = _rd && _rd->name &&
             (strcmp(_rd->name, "Option") == 0 ||
@@ -8631,6 +8753,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     any_pending_drain(ctx, body, any_mark);
     sum_pending_drain(ctx, body, sum_mark);
     vsp_pending_drain(ctx, body, vsp_mark);
+    clo_pending_drain(ctx, body, clo_mark);
     /* And if THIS call is itself an owned `any` argument, its temp is what the
      * enclosing call will drop.  Pushed after the drain so it belongs to the
      * PARENT's mark, not this node's. */
@@ -14253,13 +14376,44 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                     }
                 }
+                free(ctx->last_closure_env_tmp);
+                ctx->last_closure_env_tmp = NULL;
                 char *raw = emit_arg_keep_order(ctx, body, e->as.call_.args,
                                                 e->as.call_.n_args, i, emit_arg,
                                                 emit_value(ctx, body, emit_arg));
+                char *clo_env_tmp = ctx->last_closure_env_tmp;
+                ctx->last_closure_env_tmp = NULL;
                 ctx->fat_box_sink_type = fbs_prev_t;
                 ctx->fat_box_sink_erased_mask = fbs_prev_m;
                 ctx->fat_box_sink_erased_res = fbs_prev_r;
                 ctx->sum_drop_admit = admit_prev;
+                /* carrier-sum-option-boxes-have-no-owner (dictionary dispatch):
+                 * a capturing closure LITERAL minted for this argument -- the
+                 * continuation `(fn [v] (pure ..))` handed to a dict-dispatched
+                 * `bind` -- has a heap env nothing else refers to.  Inside a
+                 * PINNED dict clone the method that runs is known, and when its
+                 * inferred mask says it only CALLS this parameter (Option's and
+                 * Result's `bind` do; a State-like `bind` that returns a closure
+                 * capturing `k` clears the bit), the env is dead once the call
+                 * returns: drop it after the call, as the let hoist does for a
+                 * static callee.  An unpinned dispatch keeps the status quo. */
+                if (clo_env_tmp) {
+                    const Expr *ca = emit_arg;
+                    for (;;) {
+                        if (!ca) break;
+                        if (ca->kind == EX_ASCRIBE) ca = ca->as.ascribe_.inner;
+                        else if (ca->kind == EX_POLY_WRAP) ca = ca->as.poly_wrap_.inner;
+                        else if (ca->kind == EX_FN_TO_FAT) ca = ca->as.fn_to_fat_.inner;
+                        else if (ca->kind == EX_POLY_TO_FAT) ca = ca->as.poly_to_fat_.inner;
+                        else break;
+                    }
+                    if (ca && ca->kind == EX_CLOSURE && ca->as.closure_.closure &&
+                        ca->as.closure_.closure->n_captures > 0 && i < 32 &&
+                        emit_pinned_dispatch_callee(ctx, e, reresolved_callee) &&
+                        (reresolved_callee->binding->nonretain_param_mask & (1u << i)))
+                        clo_pending_push(ctx, clo_env_tmp);
+                    free(clo_env_tmp);
+                }
                 if (rgn_erased && raw) {
                     if (emit_str_is_bare_ident(raw)) {
                         emit_region_note_lvalue(body, ctx->indent,
@@ -14746,6 +14900,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                            CK_CONCRETE, CK_CARRIER,
                                                            bridge_ty);
                         arg_carrier_boxed = true;
+                        emit_pinned_spill_cell_free(ctx, e, i, reresolved_callee,
+                                                    raw, bridge_ty);
                     }
                 }
                 /* hkt-dict-generic-byvalue-result-to-typed-param (second shape):
@@ -15760,6 +15916,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         raw = emit_carrier_bridge_escaping(ctx, body, raw,
                                                            CK_CONCRETE, CK_CARRIER,
                                                            spill_ty);
+                        emit_pinned_spill_cell_free(ctx, e, i, reresolved_callee,
+                                                    raw, spill_ty);
                         /* The box outlives any region bracket, and no store
                          * hook sees it: note its words here. */
                         const char *scn = emit_type_c_name(ctx, spill_ty);
@@ -17039,6 +17197,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     "struct %s *%s = (struct %s *)((char *)%s + sizeof(void *));\n",
                     env_name->name, fat_tmp, env_name->name, base_tmp);
                 free(base_tmp);
+                /* carrier-sum-option-boxes-have-no-owner (dictionary dispatch):
+                 * let the enclosing call's argument loop find this env. */
+                free(ctx->last_closure_env_tmp);
+                ctx->last_closure_env_tmp = strdup(fat_tmp);
             }
             indent_buf(body, ctx->indent);
             /* Cast to whatever the struct's `__fn` field was DECLARED as, not

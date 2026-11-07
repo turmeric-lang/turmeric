@@ -1,0 +1,29 @@
+;; carrier-sum-option-boxes-have-no-owner (dictionary dispatch), the direction
+;; the pinned-clone frees must NOT take: an instance method that hands one of
+;; its ARGUMENTS back as its result.  `pick` is Option's `alt-or`, which hands
+;; `x` or `y` back unchanged, so
+;; the Route B clone of `choose` is not fresh (the caller's readback bridge
+;; must not free a cell the spill still owns) and `pick`'s sum masks are clear
+;; (the clone must not free a spill cell its result points at).  Both frees are
+;; keyed on the pinned method's inferred facts, so neither fires here: the
+;; program prints the picked values, and under AddressSanitizer there is no
+;; double free or use-after-free (checked by hand when the frees landed;
+;; tests/run.sh pins the output).  The cells leak, which is this shape's
+;; status quo and why this fixture is not leak-checked.
+
+(defclass Pick [^m]
+  (pick [x : (m int) y : (m int)] : (m int)))
+
+(definstance Pick [Option]
+  (pick [x y] (alt-or x y)))
+
+(defn choose [^m] [^Pick m a : (m int) b : (m int)] : (m int)
+  (pick a b))
+
+(defn nothing [] : (Option int) (none))
+
+(defn main [] : int
+  (println (unwrap-or (choose (some 1) (nothing)) -1))   ; 1
+  (println (unwrap-or (choose (nothing) (some 2)) -1))   ; 2
+  (println (unwrap-or (choose (nothing) (nothing)) -1))  ; -1
+  0)
