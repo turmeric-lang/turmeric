@@ -12298,6 +12298,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         raw = emit_carrier_bridge(ctx, body, raw,
                                   CK_CONCRETE, CK_CARRIER,
                                   emit_resolve_type(ctx, e->as.call_.args[i]->type));
+                    } else if (type_is_b4box_closure_slot(
+                                   emit_resolve_type(ctx, e->as.call_.args[i]->type))) {
+                        /* closure-option-param-forward-decl-disagrees: an applied
+                         * by-value sum wider than a word (`(Option int)`) is a
+                         * b4box slot too (type_is_b4box_closure_slot, as the
+                         * thunk's definition and forward declaration ask), but
+                         * it is no wide by-value ADT, so the bridge above passed
+                         * it by value into the `int64_t` slot.  Spill it to this
+                         * frame and pass the address, as fat_dispatch_box_arg
+                         * does: the thunk deref-copies it at entry. */
+                        raw = fat_dispatch_box_arg(ctx, body, e->as.call_.args[i],
+                                                   e->as.call_.args[i]->type, raw);
                     } else {
                         /* heap-adt-word-slot-missing-cast (shape 2): none of the
                          * kind-keyed bridges above covers a `:heap` ADT actual,

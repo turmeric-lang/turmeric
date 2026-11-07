@@ -204,6 +204,26 @@ static void cv_push(ChunkVec *cv, size_t start, size_t end, int is_pp) {
     c->is_pp = is_pp;
 }
 
+/* The kind of conditional directive a line holds, for split_chunks' depth
+ * bookkeeping: 1 = #if / #ifdef / #ifndef, 2 = #elif / #else (and the
+ * C23 #elifdef / #elifndef), 3 = #endif, 0 = anything else.  Leading blanks
+ * before and after the `#` are allowed. */
+static int pp_conditional_kind(const char *s, size_t n, size_t i) {
+    while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+    if (i >= n || s[i] != '#') return 0;
+    i++;
+    while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+    size_t k = i;
+    while (k < n && is_id_char((unsigned char)s[k])) k++;
+    size_t len = k - i;
+#define PP_IS(lit) (len == sizeof(lit) - 1 && memcmp(s + i, lit, len) == 0)
+    if (PP_IS("if") || PP_IS("ifdef") || PP_IS("ifndef")) return 1;
+    if (PP_IS("elif") || PP_IS("else") || PP_IS("elifdef") || PP_IS("elifndef")) return 2;
+    if (PP_IS("endif")) return 3;
+#undef PP_IS
+    return 0;
+}
+
 /* Split s[0..n) into top-level entities.  A new entity starts at a line that
  * begins in column 0 with brace and paren depth 0, provided the previous one
  * is complete (its last code character was `;`, `}` or `)`, or it was a
@@ -216,7 +236,16 @@ static void cv_push(ChunkVec *cv, size_t start, size_t end, int is_pp) {
  * definition an unreferenced static, so the pruned TU ended in a dangling
  * attribute.  Linux's c2mir let it through (and the constructor was silently
  * gone); macOS's rejected it -- "syntax error on 317 (expected
- * '<declarator>')" -- and every program paid the full-TU retry. */
+ * '<declarator>')" -- and every program paid the full-TU retry. *
+ *
+ * Only the FIRST arm of a preprocessor conditional moves the brace and paren
+ * depth: at `#elif` / `#else` the depth goes back to what it was at the `#if`,
+ * and at `#endif` it is what the first arm left.  Inline C such as
+ * `async-socket-accept` opens one `{` in each arm of an `#ifdef _WIN32 /
+ * #else`; counted twice, the rest of the unit -- `main` included -- read as
+ * one unfinished definition, nothing reached it, and the prune dropped it
+ * (TUR-W0071 on every program that loaded stdlib/async_socket.tur). */
+#define PP_COND_MAX 64
 static void split_chunks(const char *s, size_t n, size_t base, ChunkVec *cv) {
     size_t i = 0, cur = 0;
     int depth = 0, paren = 0;
@@ -225,9 +254,44 @@ static void split_chunks(const char *s, size_t n, size_t base, ChunkVec *cv) {
     int at_line_start = 1;
     int in_attr = 0;        /* inside a top-level __attribute__((...)) */
     int last_attr = 0;      /* ...and `last` is the `)` that closed it */
+    struct { int depth, paren, end_depth, end_paren, in_later_arm; } cond[PP_COND_MAX];
+    int n_cond = 0;         /* open conditionals; deeper ones are not tracked */
+    int cond_overflow = 0;  /* conditionals opened past PP_COND_MAX */
     while (i < n) {
         if (at_line_start) {
             at_line_start = 0;
+            switch (pp_conditional_kind(s, n, i)) {
+            case 1:
+                if (n_cond < PP_COND_MAX) {
+                    cond[n_cond].depth = depth;
+                    cond[n_cond].paren = paren;
+                    cond[n_cond].in_later_arm = 0;
+                    n_cond++;
+                } else cond_overflow++;
+                break;
+            case 2:
+                if (!cond_overflow && n_cond > 0) {
+                    if (!cond[n_cond - 1].in_later_arm) {
+                        cond[n_cond - 1].end_depth = depth;
+                        cond[n_cond - 1].end_paren = paren;
+                        cond[n_cond - 1].in_later_arm = 1;
+                    }
+                    depth = cond[n_cond - 1].depth;
+                    paren = cond[n_cond - 1].paren;
+                }
+                break;
+            case 3:
+                if (cond_overflow) cond_overflow--;
+                else if (n_cond > 0) {
+                    n_cond--;
+                    if (cond[n_cond].in_later_arm) {
+                        depth = cond[n_cond].end_depth;
+                        paren = cond[n_cond].end_paren;
+                    }
+                }
+                break;
+            default: break;
+            }
             char c = s[i];
             int complete = !have_code ||
                            (cur_pp ? !pp_continues

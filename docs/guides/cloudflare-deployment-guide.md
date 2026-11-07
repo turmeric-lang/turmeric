@@ -61,6 +61,12 @@ requests to it.
 (load "stdlib/scheduler.tur")
 (load "stdlib/fiber.tur")
 (load "stdlib/env.tur")
+(load "stdlib/str.tur")
+
+;; A fiber body is a captureless `(c-fn [] nil)`, so what a fiber works on
+;; rides in a fiber-local slot, set on the new fiber before it is spawned.
+;; A detached fiber is freed by the scheduler once it finishes.
+(def fd-slot 1)
 
 (defn cstr-length [s : cstr] : int
   ```c
@@ -73,26 +79,39 @@ requests to it.
                           (str-concat "\r\n\r\n" body))))
 
 (defn handle-client [fd : Fd] : nil
-  (async-socket-recv fd 4096)
-  (let [body "Hello from Turmeric!\n"
-        resp (http-ok body 21)]
-    (async-socket-send fd resp (cstr-length resp)))
-  (async-socket-close fd))
+  (unsafe
+    (async-socket-recv fd 4096)
+    (let [body "Hello from Turmeric!\n"
+          resp (http-ok body 21)]
+      (async-socket-send fd resp (cstr-length resp)))
+    (async-socket-close fd)))
 
-(defn accept-loop [listen-fd : Fd sched : ptr<void>] : nil
-  (let [client-fd (async-socket-accept listen-fd)
-        f         (fiber-new (fn [] : nil (handle-client client-fd)) 0)]
-    (scheduler-spawn sched f))
-  (accept-loop listen-fd sched))
+(defn spawn-on-fd [body : (c-fn [] nil) fd : Fd] : nil
+  (let [f (fiber-new body 0)]
+    (fiber-local-set! f fd-slot (fd->int fd))
+    (scheduler-spawn-detached (scheduler-current) f)))
+
+(defn my-fd [] : Fd
+  (int->fd (fiber-local-current-get fd-slot)))
+
+(defn client-fiber [] : nil
+  (handle-client (my-fd)))
+
+(defn accept-loop [listen-fd : Fd] : nil
+  (spawn-on-fd client-fiber (unsafe (async-socket-accept listen-fd)))
+  (accept-loop listen-fd))
+
+(defn accept-fiber [] : nil
+  (accept-loop (my-fd)))
 
 (defn main [] : int
-  (let [port-str (env/get-raw "PORT")
-        port     (if (= port-str 0) 8080 (cstr->parse-int (:: port-str :cstr)))
-        sched    (scheduler-new)
-        fd       (async-socket-listen port 128)
-        accepter (fiber-new (fn [] : nil (accept-loop fd sched)) 0)]
+  (let [port  (match (env/get "PORT")
+                 (Some s) (str->int s)
+                 (None)   8080)
+        sched (scheduler-new)
+        fd    (unsafe (async-socket-listen port 128))]
     (println (str-concat "Listening on :" (int->str port)))
-    (scheduler-spawn sched accepter)
+    (spawn-on-fd accept-fiber fd)
     (scheduler-run-to-completion sched))
   0)
 ```
@@ -105,6 +124,11 @@ load("stdlib/async_socket.tur")
 load("stdlib/scheduler.tur")
 load("stdlib/fiber.tur")
 load("stdlib/env.tur")
+load("stdlib/str.tur")
+;; A fiber body is a captureless `(c-fn [] nil)`, so what a fiber works on
+;; rides in a fiber-local slot, set on the new fiber before it is spawned.
+;; A detached fiber is freed by the scheduler once it finishes.
+def fd-slot 1
 defn cstr-length [s : cstr] : int
   ```c
   return (int64_t)strlen(s);
@@ -112,27 +136,46 @@ defn cstr-length [s : cstr] : int
 defn http-ok [body : cstr len : int] : cstr
   str-concat("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: " str-concat(int->str(len) str-concat("\r\n\r\n" body)))
 defn handle-client [fd : Fd] : nil
-  async-socket-recv(fd 4096)
-  let [body "Hello from Turmeric!\n"
-       resp (http-ok body 21)]
-    async-socket-send(fd resp cstr-length(resp))
-  async-socket-close(fd)
-defn accept-loop [listen-fd : Fd sched : ptr<void>] : nil
-  let [client-fd (async-socket-accept listen-fd)
-       f         (fiber-new (fn [] : nil (handle-client client-fd)) 0)]
-    scheduler-spawn(sched f)
-  accept-loop(listen-fd sched)
+  unsafe
+    async-socket-recv(fd 4096)
+    let [body "Hello from Turmeric!\n"
+         resp (http-ok body 21)]
+      async-socket-send(fd resp cstr-length(resp))
+    async-socket-close(fd)
+defn spawn-on-fd [body : (c-fn [] nil) fd : Fd] : nil
+  let [f (fiber-new body 0)]
+    fiber-local-set!(f fd-slot fd->int(fd))
+    scheduler-spawn-detached(scheduler-current() f)
+defn my-fd [] : Fd
+  int->fd(fiber-local-current-get(fd-slot))
+defn client-fiber [] : nil
+  handle-client(my-fd())
+defn accept-loop [listen-fd : Fd] : nil
+  spawn-on-fd(client-fiber unsafe(async-socket-accept(listen-fd)))
+  accept-loop(listen-fd)
+defn accept-fiber [] : nil
+  accept-loop(my-fd())
 defn main [] : int
-  let [port-str (env/get-raw "PORT")
-       port     (if (= port-str 0) 8080 (cstr->parse-int (:: port-str :cstr)))
-       sched    (scheduler-new)
-       fd       (async-socket-listen port 128)
-       accepter (fiber-new (fn [] : nil (accept-loop fd sched)) 0)]
+  let [port  (match (env/get "PORT")
+               (Some s) (str->int s)
+               (None)   8080)
+       sched (scheduler-new)
+       fd    (unsafe (async-socket-listen port 128))]
     println(str-concat("Listening on :" int->str(port)))
-    scheduler-spawn(sched accepter)
+    spawn-on-fd(accept-fiber fd)
     scheduler-run-to-completion(sched)
   0
 ````
+
+> **Fiber-body note.** `fiber-new` takes a `(c-fn [] nil)`: a captureless
+> function the FiberBlock runtime calls as plain C, so a lambda that closes
+> over `client-fd` is refused (TUR-E0295). The fd travels in a fiber-local
+> slot instead -- `spawn-on-fd` sets it on the new fiber before handing the
+> fiber to the scheduler, and the body reads it back with
+> `fiber-local-current-get`. `scheduler-spawn-detached` hands each fiber to
+> the scheduler, which frees it once it finishes; with plain
+> `scheduler-spawn` every connection would keep its fiber (a 1 MiB stack by
+> default) for the life of the process.
 
 > **Owned-return note.** `http-ok` assembles a fresh response with nested
 > `str-concat` and returns it as `cstr`; `handle-client` sends it and drops it

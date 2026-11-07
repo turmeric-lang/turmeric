@@ -3291,7 +3291,10 @@ char *ensure_fncps_env_dispatch(EmitCtx *ctx, const Type *lifted_ty) {
         buf_printf(&prm, ", int64_t %s", an);
         const char *pc = cps_ir_fncps_arg_ctype(ak);
         bool flt = ak == TY_FLOAT || ak == TY_FLOAT64 || ak == TY_FLOAT32;
-        if (strcmp(pc, "int64_t") == 0) {
+        /* A `ptr<void>` goes to slot 0 as the word too: an untyped one's
+         * slot 0 is the wrapper that takes it so (ensure_closure_slot0_widen;
+         * cps-effectful-callback-through-multi-arg-or-untyped-param). */
+        if (strcmp(pc, "int64_t") == 0 || ak == TY_PTR_VOID) {
             buf_puts(&hs, ", int64_t"); buf_printf(&ha, ", %s", an);
             buf_puts(&ss, ", int64_t"); buf_printf(&sa, ", %s", an);
             continue;
@@ -11700,13 +11703,18 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
              * name), so out->data[_sig_start..len) is exactly the type. */
             size_t _sig_start = out->len;
             /* B4 slice 2: a wide by-value ADT closure param crosses as an int64
-             * box pointer -- mirror emit_fns.c's needs_box_load signature. */
+             * box pointer -- mirror emit_fns.c's needs_box_load signature,
+             * which asks type_is_b4box_closure_slot: an applied by-value sum
+             * wider than a word (`(Option int)`) is boxed too, and asking only
+             * type_is_wide_byval_adt here declared it by value -- "conflicting
+             * types" for every capturing lambda taking one
+             * (closure-option-param-forward-decl-disagrees). */
             Type _b4_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
                 ? *e->type.as.fn.arg_full_types[j] : fd->param_types[j];
             if (fd->closure &&
                 !fd->params[j]->is_poly_fn &&
                 fd->param_types[j].kind != TY_FN &&
-                type_is_wide_byval_adt(emit_resolve_type(ctx, _b4_pty))) {
+                type_is_b4box_closure_slot(emit_resolve_type(ctx, _b4_pty))) {
                 buf_puts(out, "int64_t");
             } else if (fd->params[j]->arrives_as_carrier_box) {
                 /* typed-comparator-over-hamt-box: declared as a niche option,
@@ -17668,6 +17676,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * every switch announces itself (TUR_TSAN_FIBER_*); everywhere else the
      * macros are empty and these two words stay zero. */
     buf_puts(out, "    void *tsan_fiber; void *tsan_caller;\n");
+    /* scheduler-finished-fibers-never-freed: set by scheduler-spawn-detached.
+     * The scheduler owns a detached fiber and frees it once it is done (after
+     * the resume that finished it, when nothing runs on its stack). */
+    buf_puts(out, "    int sched_detached;\n");
     buf_puts(out, "};\n\n");
     buf_puts(out,
         "#if defined(__SANITIZE_THREAD__)\n"
@@ -18170,6 +18182,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    s->run_queue_len--;\n");
     buf_puts(out, "    return f;\n");
     buf_puts(out, "}\n\n");
+    /* After a resume: a fiber still runnable goes back on the queue, a parked
+     * one waits for its unpark, and a done one is dropped -- and freed when it
+     * was spawned detached (scheduler-finished-fibers-never-freed). */
+    buf_puts(out, "static void tur_scheduler_requeue(TurScheduler *s, FiberBlock *f) {\n");
+    buf_puts(out, "    if (f->done) { if (f->sched_detached) tur_fiber_block_free(f); }\n");
+    buf_puts(out, "    else if (!f->parked) tur_scheduler_enqueue(s, f);\n");
+    buf_puts(out, "}\n\n");
     buf_puts(out, "static void tur_scheduler_spawn(TurScheduler *s, FiberBlock *f) {\n");
     buf_puts(out, "    tur_scheduler_enqueue(s, f);\n");
     buf_puts(out, "}\n\n");
@@ -18191,7 +18210,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        s->current_fiber = f;\n");
     buf_puts(out, "        tur_fiber_block_resume(f, 0);\n");
     buf_puts(out, "        s->current_fiber = NULL;\n");
-    buf_puts(out, "        if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);\n");
+    buf_puts(out, "        tur_scheduler_requeue(s, f);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    s->running = false;\n");
     buf_puts(out, "}\n\n");
@@ -18205,7 +18224,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            s->current_fiber = f;\n");
     buf_puts(out, "            tur_fiber_block_resume(f, 0);\n");
     buf_puts(out, "            s->current_fiber = NULL;\n");
-    buf_puts(out, "            if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);\n");
+    buf_puts(out, "            tur_scheduler_requeue(s, f);\n");
     buf_puts(out, "        } else {\n");
     buf_puts(out, "            if (!tur_has_pending_timers() && !tur_has_pending_io()) break;\n");
     buf_puts(out, "            int64_t sleep_us = tur_next_timer_wait_us();\n");
@@ -18439,7 +18458,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    s->current_fiber = f;\n");
     buf_puts(out, "    tur_fiber_block_resume(f, 0);\n");
     buf_puts(out, "    s->current_fiber = NULL;\n");
-    buf_puts(out, "    if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);\n");
+    buf_puts(out, "    tur_scheduler_requeue(s, f);\n");
     buf_puts(out, "}\n\n");
 
     /* Phase T23: Minimal multi-threaded scheduler runtime.

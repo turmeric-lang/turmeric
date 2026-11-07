@@ -22,7 +22,7 @@ parameter has an unchecked shape any more (see "Done 2026-09-28"). S2 landed
   of the right shape. Found on the way: the Cloudflare guide's service hands
   `fiber-new` capturing lambdas, which were always called as code and are now
   refused -- filed as
-  [cloudflare-guide-service-captures-into-fiber-new](cloudflare-guide-service-captures-into-fiber-new.md).
+  [cloudflare-guide-service-captures-into-fiber-new](../archive/cloudflare-guide-service-captures-into-fiber-new.md) (resolved 2026-11-07).
   The history of the item, as it stood:
 - **S1, the `ptr<void>` callbacks** (`timer-set`, `scheduler-timeout`,
   `once-call`, `fiber-new`, `register-test`) -- raw C code pointers handed to

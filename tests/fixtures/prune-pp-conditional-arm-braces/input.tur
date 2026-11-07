@@ -1,0 +1,38 @@
+;; The C-unit prune (src/compiler/jit_prune.c) splits the emitted unit at
+;; brace depth 0.  Only the first arm of a preprocessor conditional may move
+;; that depth: each arm below opens one `{` that a single `}` closes.  Counted
+;; twice, everything after this function -- `main` included -- read as one
+;; unfinished definition and was pruned away, so the build only succeeded on
+;; the full-unit retry (TUR-W0071).  stdlib/async_socket.tur's
+;; `async-socket-accept` has the same shape, so it is loaded too.
+(load "stdlib/async_socket.tur")
+
+(defn pick [x : int] : int
+  ```c
+#ifdef TUR_PRUNE_FIXTURE_NEVER_DEFINED
+  if (x > 100) {
+#else
+  if (x > 1) {
+#endif
+    return x * 2;
+  }
+#if defined(TUR_PRUNE_FIXTURE_NEVER_DEFINED)
+  if (x < -100) {
+#elif defined(TUR_PRUNE_FIXTURE_ALSO_NEVER_DEFINED)
+  if (x < -10) {
+#else
+  if (x < 0) {
+#endif
+    return 0;
+  }
+  return x;
+  ```)
+
+(defn after [x : int] : int (+ (pick x) 1))
+
+(defn main [] : int
+  (println (pick 5))       ; 10
+  (println (pick 1))       ; 1
+  (println (after 7))      ; 15
+  (println (fd-valid? (int->fd 3)))
+  0)

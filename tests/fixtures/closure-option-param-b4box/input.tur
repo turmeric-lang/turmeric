@@ -1,0 +1,40 @@
+;; closure-option-param-forward-decl-disagrees: a CAPTURING lambda whose
+;; parameter is an applied by-value sum wider than a word -- `(Option int)`,
+;; `(Result int int)` -- did not build at all.  The lambda's definition takes
+;; such a parameter as the B4 box (`int64_t __tur_b4box_<p>`,
+;; type_is_b4box_closure_slot), but its forward declaration asked only
+;; type_is_wide_byval_adt and declared it by value ("conflicting types"), and a
+;; direct call through the let-bound closure passed it by value too
+;; ("incompatible type for argument").  Captureless lambdas and wide structs
+;; were never affected.  Every line equals `tur --interpret`.
+(defn run [k : int] : int                     ; let-bound, called directly
+  (let [f (fn [o : (Option int) n : int] : int
+            (match o (Some v) (+ v k n) (None) (- k n)))
+        g (fn [r : (Result int int)] : int
+            (match r (Ok v) (* v k) (Err e) (- e k)))]
+    (+ (f (some 2) 10) (f (none) 1) (g (ok 3)) (g (err 100)))))
+
+(defn cnt [k : int] : int                     ; a recursive letrec closure
+  (letrec [go (fn [o : (Option int)] : int
+                (match o
+                  (Some v) (if (> v 0) (+ k (go (some (- v 1)))) 0)
+                  (None)   0))]
+    (go (some 5))))
+
+(defn appo [h : (fn [(Option int)] int)] : int (+ (h (some 5)) (h (none))))
+(defn via-param [k : int] : int               ; through a typed fn parameter
+  (appo (fn [o : (Option int)] : int (match o (Some v) (+ v k) (None) k))))
+
+(defn label [k : int] : cstr                  ; wrapped in an Option itself
+  (let [cb (some (fn [o : (Option int)] : cstr
+                   (match o (Some v) (if (> v k) "above" "below") (None) "none")))]
+    (match cb
+      (Some f) (f (some 2))
+      (None)   "absent")))
+
+(defn main [] : int
+  (println (run 1))         ; 13 + 0 + 3 + 99 = 115
+  (println (cnt 2))         ; 10
+  (println (via-param 1))   ; 6 + 1 = 7
+  (println (label 1))       ; above
+  0)

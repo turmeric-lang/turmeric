@@ -426,17 +426,18 @@ bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty) {
     if (n < 1 || n - 1 > CPS_FNCPS_MAX_ARGS || !lifted_ty->as.fn.arg_kinds) return false;
     /* The dispatcher (ensure_fncps_env_dispatch) keys the registry on the env
      * box's slot 0 and, on a miss, calls slot 0 at its own type -- so slot 0
-     * must BE the lifted entry the registry knows.  It is for every scalar
-     * but two: an untyped `ptr<void>` parameter is the word in the slot and
-     * `void *` in the definition, and a narrow-integer result comes back
-     * widened (thunk_param_slot_c_name / thunk_result_slot_c_name); either
-     * puts a widening wrapper in slot 0 (ensure_closure_slot0_widen). */
+     * must BE the lifted entry the registry knows, or a wrapper the lifted
+     * entry's E2a registration registers too.  Two shapes put a wrapper there
+     * (ensure_closure_slot0_widen): an untyped `ptr<void>` parameter is the
+     * word in the slot and `void *` in the definition, and a narrow-integer
+     * result comes back widened (thunk_param_slot_c_name /
+     * thunk_result_slot_c_name).  Both are registered (emit_cps_ir.c). */
     for (uint32_t i = 1; i < n; i++) {
         TypeKind ak = (TypeKind)lifted_ty->as.fn.arg_kinds[i];
         /* ...and the registry hit calls the twin with every non-float kind as
          * the word, which a `uint64_t` parameter's twin does not declare (its
          * E2a registration has no word adapter for it). */
-        if (!fncps_arg_kind_ok(ak) || ak == TY_PTR_VOID || ak == TY_UINT64) return false;
+        if (!fncps_arg_kind_ok(ak) || ak == TY_UINT64) return false;
     }
     switch (lifted_ty->as.fn.result_kind) {
         case TY_NIL: case TY_INT: case TY_INT64: case TY_UINT64:

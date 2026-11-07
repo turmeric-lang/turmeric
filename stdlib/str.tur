@@ -63,7 +63,7 @@
   ```c
   struct { const char *p; size_t len; } *a = (void*)s1;
   struct { const char *p; size_t len; } *b = (void*)s2;
-  if (a == NULL || b == NULL) return a == b;
+  if (a == NULL || b == NULL) return (const void *)a == (const void *)b;
   if (a->len != b->len) return false;
   return memcmp(a->p, b->p, a->len) == 0;
   ```)

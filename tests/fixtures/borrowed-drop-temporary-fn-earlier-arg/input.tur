@@ -1,0 +1,44 @@
+;; borrowed-drop-temporary-leaks-outside-the-hoist: a fn-typed argument
+;; before a fresh Drop temporary passed to a `^borrow` parameter kept the
+;; temporary unowned -- even with no effect anywhere in the call.  The
+;; argument arrives wrapped in its fn-value conversion, and the hoist's
+;; "is everything before it effect-free?" test did not look through that, so
+;; a local closure, a named defn and a captureless lambda all read as
+;; effectful.  Each line below released nothing before (the live count rose
+;; by one per call); it is 0 now.  Still open, and not here: an OWNING
+;; earlier argument (these closures included) beside an EFFECTFUL one keeps
+;; the old behaviour, a leak rather than a reordered closure.
+;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
+(defn ctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (ctr 0) (:: 1 Widget))
+(defn rel [w : Widget] : void (ctr 1) (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn live [] : nil (println (- (ctr 2) (ctr 3))))
+(defn plus1 [x : int] : int (+ x 1))
+(defn peekf [f : (fn [int] int) k : int ^borrow w : Widget] : int (f k))
+(defn peekf1 [f : (fn [int] int) ^borrow w : Widget] : int (f 1))
+
+(defn run [m : int] : int
+  (let [f (fn [x : int] : int (+ x m))]
+    (+ (peekf f 7 (mk))                              ; let-bound closure
+       (peekf1 f (mk))                               ; ... with no middle argument
+       (peekf plus1 7 (mk))                          ; named defn
+       (peekf1 plus1 (mk))
+       (peekf (fn [x : int] : int (* x 2)) 7 (mk))   ; captureless lambda
+       (peekf (fn [x : int] : int (+ x m)) 7 (mk)))))  ; capturing lambda
+
+(defn loop [n : int acc : int] : int
+  (if (= n 0) acc (loop (- n 1) (+ acc (run n)))))
+
+(defn main [] : int
+  (println (run 100))    (live)   ;; 107+101+8+2+14+107 = 339, then 0
+  (println (loop 50 0))  (live)   ;; 50 more turns of each: 0
+  0)

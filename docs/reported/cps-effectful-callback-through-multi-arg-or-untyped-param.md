@@ -1,5 +1,20 @@
 # An effectful callback through a multi-argument or untyped fn parameter is refused
 
+**Narrowed 2026-11-07: a capturing closure with an untyped `ptr<void>`
+argument threads.** Its env's slot 0 is the converting wrapper
+(`__tur_slot0_<thunk>`, `ensure_closure_slot0_widen`: slot 0 takes the
+pointer as the word, the definition as `void *`), so the fat dispatcher's
+registry lookup on slot 0 missed -- the same reason the narrow result was
+refused until 2026-11-06, and fixed the same way. The lambda's E2a
+registration (`src/compiler/emit_cps_ir.c`) registers the wrapper too when a
+parameter is an untyped `ptr<void>`; `cps_ir_fncps_closure_sig_ok`
+(`src/passes/cps_ir.c`) admits the kind; and the dispatcher's miss path
+(`ensure_fncps_env_dispatch`, `src/compiler/emit_module.c`) calls slot 0 with
+the word. Pinned by `tests/fixtures/cps-effectful-capturing-callback-ptr-void-arg`
+(leak-checked: tail and non-tail, a second `int` argument, a unit result, a
+let-bound lambda called twice, 100 turns); it runs under `tur jit` and clean
+under clang's `-fsanitize=function`. Left: an untyped `^fat` parameter.
+
 **Narrowed 2026-11-06 (re-measured): an aggregate argument wider than 16
 bytes threads.** The item below that says it is refused at compile time no
 longer reproduces on `main`: a 40-byte struct argument and a three-field
@@ -8,7 +23,7 @@ reach the handler around the caller and print what `tur --interpret` prints,
 leak-clean and with no `tur jit` fallback. Which change lifted it was not
 bisected. Pinned by `tests/fixtures/cps-effectful-callback-wide-aggregate`
 (leak-checked). Left: an untyped `^fat` parameter, and a capturing closure
-with an untyped `ptr<void>` argument.
+with an untyped `ptr<void>` argument (threads since 2026-11-07, top).
 
 **Narrowed 2026-11-06: a capturing closure with a `bool` or narrow-integer
 result threads.** See "Fixed 2026-11-06" at the end. Left: an untyped `^fat`

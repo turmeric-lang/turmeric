@@ -2487,6 +2487,78 @@ bool closure_env_drop_frees_box_only(const struct Closure *c) {
  * scope exit does.  Inline C that names a capture could still have taken an
  * address in the box; a shift receiver and an effect payload are reaped
  * elsewhere. */
+/* sum-closure-payload-never-dropped item 4, the non-scalar result: does
+ * expression `x` -- a value the closure's body can return -- name any of its
+ * captures?  Any EX_VAR bound to one, at any depth (a nested lambda that
+ * captures it names it too, through the same binding). */
+typedef struct { const struct Closure *c; } CapMentionUd;
+static bool expr_mentions_capture(const Expr *x, const struct Closure *c);
+static bool cap_mention_visit(const Expr *x, void *ud) {
+    return expr_mentions_capture(x, ((const CapMentionUd *)ud)->c);
+}
+static bool expr_mentions_capture(const Expr *x, const struct Closure *c) {
+    if (!x) return false;
+    if (x->kind == EX_VAR) {
+        for (uint32_t i = 0; i < c->n_captures; i++)
+            if (x->as.var.binding == c->captures[i]) return true;
+        return false;
+    }
+    if (x->kind == EX_CLOSURE) {
+        const struct Closure *in = x->as.closure_.closure;
+        if (!in) return true;
+        for (uint32_t i = 0; i < in->n_captures; i++)
+            for (uint32_t j = 0; j < c->n_captures; j++)
+                if (in->captures[i] == c->captures[j]) return true;
+        return false;
+    }
+    if (x->kind == EX_INLINE_C || x->kind == EX_FN_DEF) return true;
+    CapMentionUd u = { c };
+    return cps_visit_children(x, cap_mention_visit, &u);
+}
+
+/* Can the value `x` evaluates to -- in tail position of the closure's body --
+ * hold anything of a capture?  No when it is a literal, one of the closure's
+ * own parameters (the caller's value), or a call whose whole subtree names no
+ * capture (what it returns was not reached from one); through `if` branches,
+ * `do` / `let` bodies and `match` arms.  Anything else -- a capture itself, a
+ * let-bound local or a match binder (either may alias one), a constructor --
+ * may. */
+static bool closure_result_may_view_capture(const Expr *x, const struct Closure *c,
+                                            int depth) {
+    if (!x || depth > 64) return true;
+    switch (x->kind) {
+    case EX_ASCRIBE:
+        return closure_result_may_view_capture(x->as.ascribe_.inner, c, depth + 1);
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT: case EX_FLOAT_LIT:
+    case EX_CSTR_LIT:
+        return false;
+    case EX_VAR:
+        for (uint32_t i = 0; i < c->fn->n_params; i++)
+            if (c->fn->params[i] && c->fn->params[i] == x->as.var.binding)
+                return false;
+        return true;
+    case EX_IF:   /* the condition's value is not returned */
+        return closure_result_may_view_capture(x->as.if_.then_, c, depth + 1) ||
+               (x->as.if_.else_or_null &&
+                closure_result_may_view_capture(x->as.if_.else_or_null, c, depth + 1));
+    case EX_DO:
+        if (x->as.do_.n == 0) return false;
+        return closure_result_may_view_capture(x->as.do_.items[x->as.do_.n - 1], c,
+                                               depth + 1);
+    case EX_LET:
+        return closure_result_may_view_capture(x->as.let_.body, c, depth + 1);
+    case EX_MATCH:
+        for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+            if (closure_result_may_view_capture(x->as.match_.arms[i].body, c, depth + 1))
+                return true;
+        return false;
+    case EX_CALL:
+        return expr_mentions_capture(x, c);
+    default:
+        return true;
+    }
+}
+
 bool closure_env_drop_ok_under_scalar_result(const struct Closure *c) {
     if (!c || !c->fn || c->n_captures == 0) return false;
     if (c->is_shift_receiver || c->is_effect_payload) return false;
@@ -2497,7 +2569,12 @@ bool closure_env_drop_ok_under_scalar_result(const struct Closure *c) {
     case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
         break;
     default:
-        return false;
+        /* sum-closure-payload-never-dropped item 4: a non-scalar result is
+         * as safe when nothing the body can return was reached from a
+         * capture (closure_result_may_view_capture). */
+        if (!c->fn->body || closure_result_may_view_capture(c->fn->body, c, 0))
+            return false;
+        break;
     }
     return !closure_body_inline_c_touches_env(c);
 }

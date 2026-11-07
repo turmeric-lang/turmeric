@@ -1,0 +1,43 @@
+;; cps-effectful-capturing-callback-ptr-void-arg: an effectful CAPTURING
+;; lambda with an untyped `ptr<void>` parameter, passed to a typed fn
+;; parameter.  Slot 0 of its env takes the pointer as the word while the
+;; lambda's definition takes `void *`, so slot 0 holds a converting wrapper
+;; (ensure_closure_slot0_widen), not the lambda's own entry -- and the fat
+;; dispatcher keys the direct -> CPS registry on slot 0, so the function was
+;; refused (cps-effectful-callback-through-multi-arg-or-untyped-param).  The
+;; lambda's registration names the wrapper too now, and the dispatcher's miss
+;; path calls slot 0 with the word.  Every line equals `tur --interpret`.
+(defeffect Ask [] :int)
+
+;; plen -- the length of the C string a pointer names (literals only, so
+;; nothing here allocates and the fixture is leak-checked).
+(defn plen [p : ptr<void>] : int
+  ```c
+  return (int64_t)strlen((const char *)p);
+  ```)
+(defn sp [s : cstr] : ptr<void> (:: s ptr<void>))
+
+(defn appp [h : (fn [ptr<void>] int) p : ptr<void>] : int (h p))
+(defn appp2 [h : (fn [int ptr<void>] int) p : ptr<void>] : int (+ 1 (h 4 p)))
+(defn appv [h : (fn [ptr<void>] nil) p : ptr<void>] : int (do (h p) 3))
+
+(defn f1 [m : int] : int                      ; tail call through the slot
+  (appp (fn [p : ptr<void>] : int (+ m (plen p) (perform (Ask)))) (sp "1234567")))
+(defn f2 [m : int] : int                      ; non-tail, a second argument
+  (appp2 (fn [n : int p : ptr<void>] : int (* n (+ m (plen p) (perform (Ask))))) (sp "x")))
+(defn f3 [m : int] : int                      ; unit result
+  (appv (fn [p : ptr<void>] : nil (println (+ m (plen p) (perform (Ask))))) (sp "ab")))
+(defn f4 [m : int] : int                      ; the same lambda twice, non-tail
+  (let [h (fn [p : ptr<void>] : int (+ m (plen p) (perform (Ask))))]
+    (+ (appp h (sp "four")) (appp h (sp "eight888")))))
+
+(defn loop [n : int acc : int] : int
+  (if (= n 0) acc (loop (- n 1) (+ acc (f1 n)))))
+
+(defn main [] : int
+  (println (handle (f1 5) (Ask [] k) (resume k 10)))          ; 22
+  (println (handle (f2 5) (Ask [] k) (resume k 10)))          ; 65
+  (println (handle (f3 5) (Ask [] k) (resume k 10)))          ; 17 then 3
+  (println (handle (f4 5) (Ask [] k) (resume k 10)))          ; 42
+  (println (handle (loop 100 0) (Ask [] k) (resume k 1)))     ; 5050+800 = 5850
+  0)

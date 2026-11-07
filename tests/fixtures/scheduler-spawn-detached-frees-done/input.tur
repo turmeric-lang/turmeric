@@ -1,0 +1,56 @@
+;; scheduler-finished-fibers-never-freed: the scheduler dropped a finished
+;; fiber from its queue and never freed it, so a fiber per connection kept a
+;; 1 MiB stack per connection.  `scheduler-spawn-detached` hands the fiber to
+;; the scheduler, which frees it once it is done.  A chain of 300 fibers --
+;; each spawns the next, reading its depth from a fiber-local -- must leave
+;; the process about as large as it found it (it grew ~300 MiB before).
+;; LeakSanitizer cannot see the old leak (a finished fiber's stack points at
+;; the next fiber), so this measures VmSize.  It reads -1, and the check
+;; passes vacuously, off Linux and when an ASan runtime is loaded (`tur jit`
+;; under a Debug tur, a sanitized build): its quarantine keeps freed stacks
+;; mapped.
+(load "stdlib/scheduler.tur")
+
+(def depth-slot 7)
+(def ^mut ran 0)
+
+(defn vm-mib [] : int
+  ```c
+#include <dlfcn.h>
+#if !defined(__linux__)
+  return -1;
+#else
+  if (dlsym(RTLD_DEFAULT, "__asan_init")) return -1;
+  FILE *f = fopen("/proc/self/status", "r"); char line[256]; int64_t kb = -1;
+  while (f && fgets(line, sizeof line, f)) if (!strncmp(line, "VmSize:", 7)) kb = atoll(line + 7);
+  if (f) fclose(f);
+  return kb < 0 ? -1 : kb / 1024;
+#endif
+  ```)
+
+(defn link [] : nil
+  (let [d (fiber-local-current-get depth-slot)]
+    (set! ran (+ ran 1))
+    (when (< d 300)
+      (let [next (fiber-new link 0)]
+        (fiber-local-set! next depth-slot (+ d 1))
+        (scheduler-yield!)
+        (scheduler-spawn-detached (scheduler-current) next)))))
+
+(defn kept [] : nil (set! ran (+ ran 1)))
+
+(defn main [] : int
+  (let [s      (scheduler-new)
+        before (vm-mib)
+        first  (fiber-new link 0)
+        held   (fiber-new kept 0)]
+    (fiber-local-set! first depth-slot 1)
+    (scheduler-spawn-detached s first)
+    (scheduler-spawn s held)              ; plain spawn: still the caller's
+    (scheduler-run-to-completion s)
+    (println ran)                         ; 301
+    (println (fiber-done? held))          ; 1 -- the handle is still valid
+    (fiber-free held)
+    (let [after (vm-mib)]
+      (println (if (or (< before 0) (< (- after before) 64)) "bounded" "grew"))))
+  0)

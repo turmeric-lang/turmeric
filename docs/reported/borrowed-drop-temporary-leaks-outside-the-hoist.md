@@ -2,6 +2,22 @@
 
 **Severity: low (a leak, one value per evaluation; binding it with `let` avoids it).**
 
+**Narrowed 2026-11-07: a fn-typed earlier argument with no effect beside it
+is hoisted.** Re-measured on `main`, the shape was wider than this report
+said: `(peekf f 7 (mk))` -- `f` a let-bound closure, a parameter, a named
+defn or a lambda -- leaked its temporary with NO effectful argument at all, as
+did `(peekf1 f (mk))`. A fn-typed argument arrives wrapped in its fn-value
+conversion (`EX_POLY_WRAP`, `EX_FN_TO_FAT`, `EX_POLY_TO_FAT`), and
+`arg_is_effect_free` (`src/compiler/elab_call.c`) peeled only ascriptions, so
+the call's prefix read as effectful and the order check then refused the
+owning value. It peels the wrappers `HOIST_PEEL_SLOT` already peels now, and
+takes a captureless `EX_FN` as effect-free. Pinned by
+`tests/fixtures/borrowed-drop-temporary-fn-earlier-arg` (leak-checked: a
+let-bound and a capturing lambda, a named defn, a captureless lambda, with and
+without a middle argument, 50 turns; the live count was 306 after the loop, it
+is 0). Still open, unchanged: an OWNING earlier argument -- a closure, a `Vec`,
+a Drop value -- beside an EFFECTFUL one.
+
 **Narrowed again 2026-11-06: a plain-data struct before the effect is
 hoisted too.** `(peekp q (do (set! q ...) (ctr 2)) (mk))` releases its
 temporary and reads `q` before the effect, as the interpreter does (compiled
