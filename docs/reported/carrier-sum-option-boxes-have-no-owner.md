@@ -1,5 +1,17 @@
 # Carrier-riding sum Option/Result boxes have no automatic owner
 
+**Narrowed 2026-11-07: dictionary dispatch inside a constrained generic is
+owned at the direct call site.** The one row that grew with a running program
+-- a Route B dict clone, `(bind-then-pure (some 41))` from a concrete caller,
+40-72 B a call -- is now pinned to the instances its call site passes
+(`FnDef.dict_clone_pinned`), and the three boxes each call leaked are freed:
+the result cell at the caller's readback bridge, the spill cell and the
+continuation's env after the dict-dispatched call, each keyed on the pinned
+method's own freshness / non-retain facts. Sweep 1950 -> 1726 B; this
+report's residue 448 -> 224 B. The design note below ("what a fix needs")
+stands as the record of why it took pinning; see "Narrowed 2026-11-07" at the
+end for the mechanism and what is left.
+
 **Narrowed 2026-11-06: a `match` written at the use site owns a fresh
 carrier cell.** `(match (ok i) (Ok x) x (Err e) 0)` over an erased
 `(Result int E)` -- the E nothing pins, the commonest way to write it -- leaked
@@ -16,15 +28,15 @@ carrier). Pinned by `tests/fixtures/match-fresh-carrier-cell-freed`
 (leak-checked: `ok`, `err`, a float payload, beside by-value producers; 100
 turns, 1600 B per shape before).
 
-**Severity: low-medium -- downgraded from medium 2026-10-08** (see the
-re-measurement at the end). What is left is 408 B across 9 fixtures, from three
-consumers the compiler cannot see through. Only one of them grows with a
-running program: a user-written HKT-constrained generic (`[^Monad m ...]`)
-called from a concrete caller, at ~40-72 B a call. Nothing in `stdlib/` is
-such a generic (no `^Monad` / `^Applicative` / `^Functor` constraint on any
-stdlib defn); 40 fixtures are. The other two are code that erased the box
-itself (`:int` inline-C readers, a `ptr<void>` closure), which owns it by
-CLAUDE.md's own rule.
+**Severity: low -- downgraded from low-medium 2026-11-07** (see the last
+section). What is left is 224 B across 7 fixtures, and nothing in it grows with
+a running program on a path the compiler sees through: 176 B is code that
+erased the box itself (`:int` inline-C readers, an erasing ascription), which
+owns it by CLAUDE.md's own rule; 16 B is a `ptr<void>`-erased closure; 32 B is
+an HKT-constrained generic reached through a rank-2 `forall` PARAMETER
+(`(at-opt poly-bind)`), the one dictionary path that is not pinned because the
+clone there runs under whatever dictionary arrives. Before 2026-11-07 the
+direct-call row read 256 B and grew ~40-72 B a call.
 
 **Original severity:** medium (memory growth in long-lived carrier-path programs).
 Filed 2026-08-27 during SR2b.
@@ -429,3 +441,95 @@ on 2026-10-08), 1919 B with LSan's default roots. The one row that moved is
 `hkt-stdlib-result-ok-biased`, 64 -> 48 B; every other row matches
 2026-10-08's strict column byte for byte. `tests/run-leak-check.sh`: 212
 passed, 0 failed, 4 known-open.
+
+## Narrowed 2026-11-07 -- the dictionary-dispatch row is owned
+
+**Executed as a report on 2026-11-07, and this time the row moved.** The
+2026-10-08 design note ("what a fix needs, measured against the C") said the
+fix was tractable because Route B clones are per CALL SITE, and listed three
+pieces of plumbing. All three landed, and they are smaller than the note
+feared because the clone body is still shared: nothing is copied per clone, and
+nothing is devirtualized. The pin is read only where an ownership question is
+asked.
+
+**Mechanism.**
+
+- **Pin.** `make_dict_clone` mints one clone per Route B call site
+  (`bind_then_pure__dict_19`, `__dict_30`, ...). The Route B block in
+  `elab_call.c` now records the instances that site passes on the clone's
+  FnDef (`dict_clone_pinned[k]`, one per constraint, in constraint order) and
+  the by-value aggregate the site reads the carrier back as
+  (`dict_clone_pinned_result`). The ambient clones -- the rank-2 pass site and
+  the nested-mapper lowering, which take whatever dictionary arrives -- are
+  never pinned; `dict_clone_pinned_method_fndef` (elab_fns.c) answers NULL for
+  them and for any dispatch whose class is not one of the clone's constraints.
+- **Result cell.** The clone binding is stamped with
+  `elab_stamp_sum_freshness` at the Route B site, under a pin context that
+  `call_returns_fresh_sum_box` consults for a non-static dispatch: Option's /
+  Result's `bind` is fresh through its continuation (`fresh_sum_via_param_mask`),
+  the continuation's `pure` (or by-value `some` / `ok-int`) is fresh, so the
+  clone is `returns_fresh_sum_box`. The caller's readback bridge
+  (`emit_owned_carrier_mark`) then frees the cell it copied out of, exactly as
+  it does for any fresh producer; it reads the sum type off
+  `dict_clone_pinned_result`, since the call is typed as the bare carrier and
+  the clone's signature spells `(m int)`.
+- **Spill cell and continuation env.** `emit_reresolve_method_fndef` returns
+  the pinned method for a dict-dispatched call emitted inside a pinned clone,
+  so the argument loop's `reresolved_callee` is the method that runs. The
+  by-value spill the `dict-clone-receiver-spill-escapes` arm mints (a heap
+  copy of `x` for `bind`'s carrier slot) is pushed on the sum pending list
+  when the pinned method's `nonretain_sum_param_mask` covers the slot and the
+  payloads are plain scalars (the cell's payload words are shared with `x`, so
+  only the drain's shallow arm may run); the capturing closure literal's env
+  is dropped (`TUR_CLOSURE_DROP`, a new `clo_pending` list with the same
+  mark/drain discipline) when the pinned method's `nonretain_param_mask`
+  covers its slot. Both require an empty effect row on the pinned method, as
+  the static stamps do.
+
+**What keeps it sound** is that every free is keyed on a fact of the method
+that actually runs, never on the clone or the representative. `alt-or` hands
+an argument back: its freshness walk fails on the bare `x`, its sum masks are
+clear, and a clone over it frees nothing
+(`tests/fixtures/dict-clone-pinned-method-returns-arg`, checked under ASan
+by hand: correct output, no double free, the spill cells leak as before). A
+State-like `bind` that returns a closure capturing `k` clears the fn-param
+bit, so the env stays. A `perform`ing method has a non-empty row, so nothing
+fires.
+
+**Measured** (same sweep, same procedure, stack and register roots off):
+
+| | bytes |
+|---|---:|
+| 2026-10-15 (last recorded) | 1968 |
+| before today's change | 1950 |
+| after | **1726** |
+
+Row by row: `hkt-constrained-byvalue-bind-pure` 112 -> **0**,
+`hkt-constrained-hole-headed-instance-head` 64 -> **0**,
+`hkt-constrained-spec-reresolves-instance` 48 -> **0**; every other row is
+unchanged (`re-string` had already drifted 548 -> 514 before today, and
+`hkt-stdlib-result-ok-biased` reads 64 again, as on 2026-10-08). So this
+report's own residue is **224 B**:
+
+| Category | Rows | Bytes |
+|---|---|---:|
+| a fixture's own `:int` inline-C reader / erasing ascription | `hkt-stdlib-result-ok-biased` 64, `conv-defstruct-option-hkt-instance-bodies` 40, `hkt-stdlib-option-result-instances` 40, `typed-slots/coerce-carrier-to-struct` 32 | 176 |
+| dictionary dispatch through a rank-2 `forall` parameter | `hkt-constrained-byvalue-carrier` 32 | 32 |
+| `ptr<void>`-erased closure | `option-map-capturing-closure` | 16 |
+
+plus `colored-generic-erased-carrier-param`'s known 16 B (unchanged, still
+`known-leak`). `tests/run-leak-check.sh`: 285 passed (284 before, plus the new
+`dict-clone-pinned-boxes-freed`: every arm of both sums, a `pure` continuation
+and a by-value `some` one, a `pure`-only body, 100 turns each; 1600 B per
+shape before), 0 failed, 8 known-open.
+
+**What is left, and why it is not this change.** The 32 B row is the rank-2
+path: `(at-opt poly-bind)` hands `poly-bind` as a `forall` VALUE, the wrapper
+is a clone that takes ambient dictionaries, and the call inside `at-opt` goes
+through the poly carrier. Pinning is exactly wrong there -- the same wrapper
+runs under every caller's dictionary. Its two cells (the spill in `at-opt` and
+the continuation's aggregate-spill shim box) would need the freshness and mask
+facts to travel with the dictionary at runtime, or the monomorphization this
+report has always named. `hkt-constrained-continuation-dict` (outside the
+sweep list) is the same path with two user instances, 48 B. The 176 B and 16 B
+rows are the fixtures' own erasure, as attributed on 2026-10-08.

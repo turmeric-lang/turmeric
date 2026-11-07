@@ -1,0 +1,107 @@
+;; await-parks-only-to-the-nearest-c-frame: a rank-2 call with a STRUCT
+;; position.  The `fn_cps` slot is a word ABI, so a by-value struct argument
+;; crosses it as a pointer to a reaped heap box -- the DK slot's own Tier-C
+;; protocol (slot_store_reap) -- and the value's twin reads the struct back for
+;; the registered `__cps` entry, or boxes the direct entry's result; a struct
+;; result comes back to the join the same way.  The `.fn` fallback is the
+;; direct emitter's own rendering, which carries the struct through the
+;; carrier-spill protocol as before.  A field read of such a call's result
+;; (`(.a (f p))`) and a construction with a computed field (`(P (next-value)
+;; 0)`) are bound to a binder first, where they used to evict the function
+;; (`unsupported form: EX_GET_FIELD`).  Shapes:
+;;
+;;   arg-and-result -- `(forall [a] (-> a a))` on a two-field struct
+;;   arg-only       -- `(forall [a] (-> a int))`
+;;   wide           -- a three-field struct, which the direct entry takes by
+;;                     pointer (type_struct_pass_by_ptr)
+;;   from-await     -- the struct argument built from awaited values
+;;   two-structs    -- `(forall [a b] (-> a b a))`, two struct positions
+;;
+;; Each body awaits a pending future each turn; the driver fulfills it with
+;; 2 and hands out a fresh one.  Leak-checked (requires.leak-check).
+
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+(defn level3 [m : int] : int (+ m (sum-values 0 300 0)))
+(defn apply3 [f : (fn [int] int) x : int] : int (f x))
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+(defstruct P [a : int b : int])
+(defstruct Q [a : int b : int c : int])        ; 24 bytes: passed by pointer
+
+;; struct argument and struct result
+(defn level3p [p : P] : P (P (+ (.a p) (sum-values 0 300 0)) (.b p)))
+(defn r2p-apply [f (forall [a] (-> a a)) p : P] : P (f p))
+(defn arg-and-result [] : int (.a (r2p-apply (:: level3p (forall [a] (-> a a))) (P 13 0))))
+
+;; struct argument, int result
+(defn sum-p [p : P] : int (+ (.a p) (+ (.b p) (sum-values 0 300 0))))
+(defn r2pi-apply [f (forall [a] (-> a int)) p : P] : int (f p))
+(defn arg-only [] : int (+ 7 (r2pi-apply (:: sum-p (forall [a] (-> a int))) (P 3 3))))
+
+;; a struct wider than 16 bytes (the direct entry takes it by pointer)
+(defn level3q [q : Q] : Q (Q (+ (.a q) (sum-values 0 300 0)) (.b q) (.c q)))
+(defn r2q-apply [f (forall [a] (-> a a)) q : Q] : Q (f q))
+(defn wide [] : int (let [q (r2q-apply (:: level3q (forall [a] (-> a a))) (Q 10 2 1))] (+ (.a q) (+ (.b q) (.c q)))))
+
+;; the struct argument is built from an awaited value
+(defn from-await [] : int (.a (r2p-apply (:: level3p (forall [a] (-> a a))) (P (next-value) (next-value)))))
+
+;; two struct positions, and the result used twice
+(defn add-pq [p : P q : Q] : P (P (+ (.a p) (.a q)) (+ (.b p) (sum-values 0 300 0))))
+(defn r2pq-apply [f (forall [a b] (-> a b a)) p : P q : Q] : P (f p q))
+(defn two-structs [] : int
+  (let [r (r2pq-apply (:: add-pq (forall [a b] (-> a b a))) (P 1 2) (Q 10 0 0))]
+    (+ (.a r) (.b r))))
+
+(defn main [] : nil
+  (cur-cell true)
+  ;; 13 + 600
+  (println (drive (async arg-and-result)))
+  ;; 7 + 3 + 3 + 600
+  (println (drive (async arg-only)))
+  ;; 10 + 600 + 2 + 1
+  (println (drive (async wide)))
+  ;; 2 + 600
+  (println (drive (async from-await)))
+  ;; (1 + 10) + (2 + 600)
+  (println (drive (async two-structs)))
+  (free-future (cur-cell false)))

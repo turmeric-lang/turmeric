@@ -1,0 +1,52 @@
+;; carrier-sum-option-boxes-have-no-owner (dictionary dispatch): a DIRECT call
+;; to an HKT-constrained generic at the stdlib Option / Result routes through
+;; the callee's DICT CLONE (Route B, elab_call.c), and each such call used to
+;; leak three things the compiler could not see through the dictionary:
+;;
+;;   - the heap spill of the by-value argument handed to `bind` as a carrier;
+;;   - the env of the `(fn [v] (pure ..))` continuation, when `bind` ran it;
+;;   - the box `pure` (or the continuation's own `some`/`ok`) minted, which the
+;;     caller reads back by value and never freed.
+;;
+;; The clone is minted per call site, so it is now PINNED to the instances that
+;; site passes (FnDef.dict_clone_pinned).  The ownership questions are then
+;; asked of the method that RUNS: Option's / Result's `bind` is fresh through
+;; its continuation and non-retaining in both parameters, `pure` is fresh, so
+;; the caller's readback bridge owns the result cell and the clone body frees
+;; the spill cell and the env after the call.  Every arm of both sums, a
+;; continuation that returns `pure` and one that returns a by-value `some`
+;; (the aggregate-spill shim shape), and a `pure`-only body, 100 turns each:
+;; 1600 B per shape before, and this fixture is leak-checked.
+
+(defn bind-then-pure [^m] [^Monad m ^Applicative m x : (m int)] : (m int)
+  (bind x (fn [v] (pure (+ v 1)))))
+
+(defn poly-bind [^m] [^Monad m x : (m int)] : (m int)
+  (bind x (fn [v] (some (* v 2)))))
+
+(defn just-pure [^m] [^Applicative m x : (m int)] : (m int)
+  (pure 7))
+
+(defn ok-int  [n : int] : (Result int cstr) (ok n))
+(defn bad     []        : (Result int cstr) (err "boom"))
+(defn nothing []        : (Option int) (none))
+
+(defn res-or [r : (Result int cstr) d : int] : int
+  (if (ok? r) (ok-val r) d))
+
+;; One turn: (i+1) + (-1) + 2i + (i+1) + (-1) + 7 = 4i + 7.
+(defn turn [i : int] : int
+  (+ (unwrap-or (bind-then-pure (some i)) -1)
+     (+ (unwrap-or (bind-then-pure (nothing)) -1)
+        (+ (unwrap-or (poly-bind (some i)) 0)
+           (+ (res-or (bind-then-pure (ok-int i)) -1)
+              (+ (res-or (bind-then-pure (bad)) -1)
+                 (unwrap-or (just-pure (some 0)) -1)))))))
+
+(defn turns [i : int acc : int] : int
+  (if (= i 0) acc (turns (- i 1) (+ acc (turn i)))))
+
+(defn main [] : int
+  (println (turn 1))        ; 11
+  (println (turns 100 0))   ; 4 * 5050 + 700 = 20900
+  0)

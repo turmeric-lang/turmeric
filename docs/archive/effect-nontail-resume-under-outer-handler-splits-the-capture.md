@@ -54,7 +54,7 @@ and captures up to it: `(+ 1 _)` and nothing more. Its case's resume returns
 of `dk_invoke` as the inner resume's result, to run through `(+ 100 _)` and
 `(* 10 _)` after the fact.
 
-[await-parks-only-to-the-nearest-c-frame](../reported/await-parks-only-to-the-nearest-c-frame.md)
+[await-parks-only-to-the-nearest-c-frame](await-parks-only-to-the-nearest-c-frame.md)
 shape 2 is the same mechanism with `await` in place of the outer effect.
 
 ## Fix directions
@@ -108,7 +108,7 @@ keeps is
 [effect-nontail-resume-copies-held-until-outer-entry](../reported/effect-nontail-resume-copies-held-until-outer-entry.md).
 
 Also fixed by it: shape 2 of
-[await-parks-only-to-the-nearest-c-frame](../reported/await-parks-only-to-the-nearest-c-frame.md),
+[await-parks-only-to-the-nearest-c-frame](await-parks-only-to-the-nearest-c-frame.md),
 an `await` inside a multi-shot case's non-tail resume (102 for 105).
 
 Still on `dk_invoke`, and so still able to split a capture: a `k` that

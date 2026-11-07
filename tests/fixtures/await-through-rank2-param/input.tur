@@ -135,6 +135,13 @@
 (defn r2-eq [] : int (if (r2e-apply (:: level3e (forall [a] [(Eq a)] (-> a a bool))) 5) 1213 0))
 (defn r2-eq-computed [] : int (if (r2e-computed (:: level3e (forall [a] [(Eq a)] (-> a a bool))) 5) 1213 0))
 
+;; r2-nine: more than eight arguments (the slot used to stop at eight)
+(defn level9 [a : int b : int c : int d : int e : int f : int g : int h : int i : int] : int
+  (+ a (+ b (+ c (+ d (+ e (+ f (+ g (+ h (+ i (sum-values 0 300 0)))))))))))
+(defn r29-apply [f (forall [a] (-> a a a a a a a a a a)) x : int] : int (f x x x x x x x x x))
+(defn r2-nine [] : int
+  (+ 7 (* 2 (+ 3 (r29-apply (:: level9 (forall [a] (-> a a a a a a a a a a))) 1)))))
+
 (defn main [] : nil
   (cur-cell true)
   ;; 7 + 2 * (3 + 600), four times
@@ -151,4 +158,6 @@
   (println (drive (async r2-nil)))
   (println (drive (async r2-eq)))
   (println (drive (async r2-eq-computed)))
+  ;; 7 + 2 * (3 + 9 + 600)
+  (println (drive (async r2-nine)))
   (free-future (cur-cell false)))

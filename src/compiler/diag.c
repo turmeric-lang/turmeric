@@ -1279,11 +1279,13 @@ static const DiagExplanation diag_explanations_[] = {
       "is inline C, or a form in its body has no lowering there.\n"
       "\n"
       "The second form names a call instead: a call through a rank-2 (forall)\n"
-      "parameter that may be handed a function that awaits, with a struct\n"
-      "argument or result, or more than eight arguments.  That call has no\n"
-      "threaded lowering and enters the value's direct entry, with the same\n"
-      "effect.  Every scalar position threads, dictionaries included; so does a\n"
-      "constrained generic passed as the value, unless its result is a float.\n"
+      "parameter that may be handed a function that awaits, with an argument\n"
+      "or result the continuation slot does not carry (an owning aggregate, an\n"
+      "`any`).  That call has no threaded lowering and enters the value's\n"
+      "direct entry, with the same effect.  Every scalar position threads,\n"
+      "dictionaries included, and so does an owning-free by-value struct, a\n"
+      "nil result and any number of arguments; a constrained generic passed as\n"
+      "the value threads at every result type.\n"
       "\n"
       "A pending `await` parks by shifting to the NEAREST root prompt.  With this\n"
       "function on the C stack between the async body and the await, that root\n"
@@ -1304,7 +1306,7 @@ static const DiagExplanation diag_explanations_[] = {
       "Only functions that may run below an async body warn: an (async ...)\n"
       "thunk, and whatever it calls or references.  An await anywhere else has\n"
       "no body to lose.\n"
-      "See docs/reported/await-parks-only-to-the-nearest-c-frame.md.\n",
+      "See docs/archive/await-parks-only-to-the-nearest-c-frame.md.\n",
     },
     { TUR_W0045_UNKNOWN_TYPE_NAME_IS_TYVAR,
       "TUR-W0045: A parameter's type name is unknown and is read as a type variable\n"

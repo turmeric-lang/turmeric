@@ -1,5 +1,15 @@
 # An await below a direct-style call or a non-tail resume parks only part of the async body
 
+**RESOLVED 2026-11-06 (tenth pass): the last two rank-2 shapes park, and so
+does a float-result dict-clone.** A rank-2 call with a struct argument or
+result (two-field, three-field by-pointer, two struct positions, the struct
+built from awaited values), one with nine arguments, and a constrained
+generic with a float result passed as a constrained rank-2 value all print
+the right answer. Every shape this report ever listed now parks the whole
+async body or -- for a function the backend genuinely cannot take, such as
+one whose parameter is an owning aggregate -- warns at compile time and
+refuses at run time. See "Tenth pass" at the end.
+
 **Narrowed 2026-10-14 (ninth pass): a constrained generic passed as a
 constrained rank-2 value parks, and so does a nil-result rank-2 call.** The
 one shape left is a rank-2 call with a struct position (or more than eight
@@ -68,13 +78,13 @@ on the way; what is left is a may-await function the CPS backend evicts for
 some other reason.** See "Fixed 2026-10-09" at the end for what changed and
 the shape that still gives a wrong answer.
 
-**Severity: low (was medium-high), re-rated 2026-10-18.** There is no silent
-wrong answer left (2026-10-09). The two shapes still open after the ninth
-pass, a rank-2 call with a struct position or more than eight arguments and a
-float-result dict-clone, draw `TUR-W0044` at compile time and are refused at
-run time. The index row already said low. This line still carried the
-original rating, which is what a severity sort of the reports reads. The
-original description follows.
+**Severity: low (was medium-high), re-rated 2026-10-18; resolved 2026-11-06.**
+There is no silent wrong answer left (2026-10-09). The two shapes still open
+after the ninth pass, a rank-2 call with a struct position or more than eight
+arguments and a float-result dict-clone, drew `TUR-W0044` at compile time and
+were refused at run time until the tenth pass admitted them. The index row
+already said low. This line still carried the original rating, which is what
+a severity sort of the reports reads. The original description follows.
 
 **Original severity: medium-high (silent wrong answer), in two narrow
 shapes.** A pending `await` parks by shifting to the nearest root prompt. That is the
@@ -155,7 +165,7 @@ pending future -- overwriting the first park, which leaks (536 B under ASan)
   awaiting function -- by name, or a lambda whose body awaits -- as one that
   may await, since its callee may call it.
 - **Shape 2** is fixed by
-  [effect-nontail-resume-under-outer-handler-splits-the-capture](../archive/effect-nontail-resume-under-outer-handler-splits-the-capture.md):
+  [effect-nontail-resume-under-outer-handler-splits-the-capture](effect-nontail-resume-under-outer-handler-splits-the-capture.md):
   a non-tail resume in the case's own body runs into the chain, so the await
   parks the whole body: 105, and no overwritten park.
 
@@ -179,7 +189,7 @@ dispatcher, so admission was all that was missing:
   the await predicate -- the frame's `__kont` is the reinstalled-handler
   tail, and the await's shift to the root prompt captures past the frame
   into it, so a parked continuation carries the handler (the spine
-  unification of [cps-await-cont-baked-env](../archive/cps-await-cont-baked-env.md));
+  unification of [cps-await-cont-baked-env](cps-await-cont-baked-env.md));
 - an await continuation admits a `perform` whose arguments are slot atoms
   and whose own continuation passes the await predicate -- the frame's
   `next` is the actual enclosing chain (`dk_frame_resume_borrow`), so
@@ -242,7 +252,7 @@ became passing ones once the lambdas were admitted (below):
 `await-below-struct-capturing-lambda` (2428, leak-checked) and
 `await-in-struct-capturing-async-body` (605; its async env box leaks,
 pre-existing,
-[async-capturing-body-env-never-freed](async-capturing-body-env-never-freed.md)).
+[async-capturing-body-env-never-freed](../reported/async-capturing-body-env-never-freed.md)).
 The 83 async/await fixtures and the JIT set show no false refusal. The
 preamble change regenerated the split runtime and moved 159 `expected.c`
 snapshots.
@@ -452,7 +462,7 @@ refusal).
   run (`generic_base_never_runs`).
 
 Found on the way, not about `await`:
-[erased-capture-aggregate-box-never-freed](../archive/erased-capture-aggregate-box-never-freed.md)
+[erased-capture-aggregate-box-never-freed](erased-capture-aggregate-box-never-freed.md)
 -- the struct instantiation boxes `v` into the erased env field and the shared
 drop glue never frees it (16 B per closure, on the direct path too).
 
@@ -601,3 +611,64 @@ async / generic / lens / dict / constrained / hkt fixtures.
   result evicts with it (`unsupported form: EX_GET_FIELD`).
 - *A float-result dict-clone* keeps the direct path (its carrier return
   would convert the value) and the warning.
+
+### Tenth pass (2026-11-06): struct positions, nine arguments, a float-result dict-clone
+
+| Shape | Ninth pass | Now |
+|---|---|---|
+| rank-2 call with a struct argument and result, `(forall [a] (-> a a))` on `P [a b]` | refused, warned | 613 (13 + 600) |
+| struct argument, int result | refused, warned | 613 |
+| a three-field struct, which the direct entry takes by pointer | refused, warned | 613 |
+| the struct argument built from awaited values, `(P (next-value) (next-value))` | refused, warned | 602 |
+| two struct positions, `(forall [a b] (-> a b a))` | refused, warned | 613 |
+| rank-2 call with nine arguments | refused, warned | 1231 |
+| constrained generic `[(Eq T)] [x : T y : T] : float` passed as a constrained rank-2 value | refused, warned | 7.1, then 1213 |
+| awaiter whose parameter is an owning aggregate (a struct with a `(Vec int)` field) | refused, warned | refused, warned |
+
+- **A struct position threads.** The `fn_cps` slot is a word ABI, and the
+  DK slot already has a word protocol for an owning-free by-value aggregate:
+  a pointer to a reaped heap box (`slot_store_reap` / `slot_box_ty`, Tier C),
+  which a `__cps` entry with such a parameter takes by value and such a
+  result delivers as. The slot call now boxes a struct atom the same way
+  (`fncps_arg_word`, `src/compiler/emit_cps_ir.c`), the value's twin reads
+  the box back for the registered `__cps` entry -- or passes the pointer /
+  the value to the direct entry as the direct emitter declares it
+  (`type_struct_pass_by_ptr`), and boxes its result
+  (`ensure_poly_wrap_cps_thunk`, `src/compiler/emit_module.c`) -- and a
+  struct result of the `.fn` fallback is boxed for the join. The predicates
+  admit the position in the hoisted form only (`cps_ir_fncps_agg_ty`,
+  `fncps_forall_call_ok_as`, `cps_ir_fncps_sig_ok_agg` for a forall sink;
+  `src/passes/cps_ir.c`); the pack site builds the twin beside the
+  aggregate-result spill it used to skip it for; `tailcall_args_ok` reads a
+  slot call as a `__cps`-shaped crossing rather than cps->direct. A typed
+  `fn` parameter keeps its scalar-only rule: its fallback is a word-ABI
+  cast, not the direct emitter's rendering.
+- **A field read or a construction over a value that carries control.**
+  `(.a (f p))` evicted the function (`unsupported form: EX_GET_FIELD`):
+  `is_delegatable_struct` wants an atomic struct expression and nothing
+  bound it first. `get_field_hoisted` / `make_struct_hoisted` bind the
+  operand(s) to fresh binders through the CPS path, left to right (a `^mut`
+  read in order, as `rank2_hoist_args` does), and delegate the op on the
+  atoms, in both `cps_bind` and `cps_tail`.
+- **Nine arguments.** `CPS_FNCPS_MAX_ARGS` was 8; nothing below it is sized
+  by the number (the slot call and the twin build their text in growable
+  buffers), so it is `MAX_FN_ARITY` now.
+- **A float-result dict-clone.** Its direct definition already returns the
+  value's bits in the carrier (`forall-dict-float-result-truncated`), which
+  is what a `__cps` body delivers for a float too; the one conversion was the
+  entry wrapper's `__ret`, which loaded the word as a double and assigned it
+  to `int64_t`. It hands the word back as it is, and `fn_erased_base` /
+  `cps_ir_fncps_sig_ok_erased` no longer refuse the result kind.
+- **The refusal fixture.** `await-below-unthreaded-frame-refused` pins the
+  floor on the shape that is left: an awaiter the backend cannot take at all
+  (an owning aggregate parameter), warned and refused. `TUR-W0044`'s second
+  form, `tur explain TUR-W0044` and the async guide describe that remainder;
+  the run-time message points at this report's archive location.
+
+Pinned by `await-through-rank2-struct-position` (the five struct shapes,
+leak-checked, `unexpected.stderr` TUR-W0044), the nine-argument shape added
+to `await-through-rank2-param`, and the float-result shape added to
+`await-through-constrained-rank2-value`. The run-time message's path moved
+every `expected.c` snapshot by one line (162); no other snapshot moved, so
+the twin and the hoists reach only a forall sink handed a struct-signature
+awaiter.

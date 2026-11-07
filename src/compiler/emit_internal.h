@@ -464,6 +464,20 @@ typedef struct EmitCtx {
     bool     *sum_pending_owned;   /* entry's Type is a malloc'd spine to free at drain */
     uint32_t  n_sum_pending;
     uint32_t  cap_sum_pending;
+    /* carrier-sum-option-boxes-have-no-owner (dictionary dispatch): pending
+     * TUR_CLOSURE_DROPs for a capturing closure LITERAL handed to a
+     * dict-dispatched method inside a PINNED dict clone, when the pinned
+     * method's inferred nonretain_param_mask covers that slot -- the
+     * continuation of `(bind x (fn [v] ..))`.  Same mark/drain discipline as
+     * sum_pending: the env is minted for this one call and is dead once the
+     * call has returned. */
+    char    **clo_pending;
+    uint32_t  n_clo_pending;
+    uint32_t  cap_clo_pending;
+    /* The env temp (past-header pointer) of the most recent heap closure env
+     * the EX_CLOSURE emission allocated, or NULL; the call argument loop
+     * clears it before emitting an argument and reads it after. */
+    char     *last_closure_env_tmp;
     /* value-struct-payload-sum-monomorph-box-has-no-owner: pending frees for
      * fresh BY-VALUE sum monomorph temps whose arm holds a boxed value-struct
      * payload, consumed as a non-retaining argument.  Name + type pairs (the
@@ -956,6 +970,12 @@ static inline bool emit_match_in_tail(const EmitCtx *ctx, const Expr *e) {
 enum { EMIT_OWN_NONE = 0, EMIT_OWN_SHALLOW, EMIT_OWN_DEEP };
 const struct AdtDef *emit_own_adt_of(Type t);
 bool emit_own_binding_owned(EmitCtx *ctx, const Binding *b);
+
+/* The letrec closure knot, for the CPS emitter (emit_expr.c, letrec_knot_begin). */
+void emit_letrec_knot_begin(EmitCtx *ctx, const Expr *e, LetrecKnot *save);
+void emit_letrec_knot_owner(EmitCtx *ctx, const Expr *e, uint32_t i);
+void emit_letrec_knot_bound(EmitCtx *ctx, Buf *body, const Binding *b);
+void emit_letrec_knot_end(EmitCtx *ctx, const LetrecKnot *save);
 bool emit_own_param_owned(EmitCtx *ctx, const struct FnDef *fd, uint32_t i);
 bool emit_own_expr_owned(EmitCtx *ctx, const Expr *e);
 bool emit_call_arg_temp_is_lent_fresh_spine(EmitCtx *ctx, const Expr *call,

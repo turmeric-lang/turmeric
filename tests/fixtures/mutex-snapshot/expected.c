@@ -4919,7 +4919,7 @@ static tur_dkw __tur_await_body(tur_dkw env, DK *subk) {
         }
     }
     if (tur_async_body_depth >= 0 && __dk_entry_depth != tur_async_body_depth) {
-        fprintf(stderr, "await: a pending future would park below a direct-style call (a function on the path to this await that the CPS backend could not compile), losing the rest of the async body; refusing to continue. See docs/reported/await-parks-only-to-the-nearest-c-frame.md\n");
+        fprintf(stderr, "await: a pending future would park below a direct-style call (a function on the path to this await that the CPS backend could not compile), losing the rest of the async body; refusing to continue. See docs/archive/await-parks-only-to-the-nearest-c-frame.md\n");
         fflush(stderr);
         abort();
     }

@@ -538,6 +538,7 @@ campaign's live scoreboard is the missing-cells table in
 Closed reports that arrived after the sweep, still in [../archive/](.) rather
 than `history/` because they have not been swept yet:
 
+- **[await-parks-only-to-the-nearest-c-frame.md](await-parks-only-to-the-nearest-c-frame.md)** -- ten passes: an await below a frame the CPS backend does not take parked only part of the async body; every listed shape now parks the whole body (rank-2 struct positions, nine arguments and a float-result dict-clone closed it), and the remainder -- an awaiter the backend cannot take at all -- warns (`TUR-W0044`) and refuses at run time
 - **[sweet-dollar-double-applies-single-call.md](sweet-dollar-double-applies-single-call.md)** -- sweet-exp `$` no longer wraps a rest-of-line that is already one complete expression, so it composes with neoteric / curly-infix / data literals; see [syntax-guide.md](../guides/syntax-guide.md)
 - **[ci-cps-tramp-turi-timeouts-under-load.md](ci-cps-tramp-turi-timeouts-under-load.md)** -- the turi flake was ~3.5 GiB RSS per fixture, not CPU contention; full depth moved to compiled-only siblings, and both harnesses now report a timeout as a timeout instead of a "stdout mismatch"
 

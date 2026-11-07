@@ -1,0 +1,18 @@
+;; cps-local-fn-alias-or-lambda-called-in-place-refused (the mutual `letrec`):
+;; a capturing `letrec` of two members that call each other, performing on
+;; every one of 1,000,000 turns.  Each call is the sibling lambda's own CPS
+;; call with its env box passed on, so the C stack does not grow with the turn
+;; count.  Compiled only: the interpreter's resume nests per perform at this
+;; depth.
+(defeffect Ask [] :int)
+
+(defn ping [m : int n : int] : int
+  (letrec [ev (fn [i : int acc : int] : int
+                (if (= i 0) acc (od (- i 1) (+ acc m (perform (Ask))))))
+           od (fn [i : int acc : int] : int
+                (if (= i 0) acc (ev (- i 1) (+ acc (perform (Ask))))))]
+    (ev n 0)))
+
+(defn main [] : int
+  (println (handle (ping 2 1000000) (Ask [] k) (resume k 1)))   ; 500000*3 + 500000*1 = 2000000
+  0)

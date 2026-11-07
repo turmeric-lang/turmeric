@@ -378,8 +378,47 @@ bool cps_ir_fncps_sig_ok_erased(const Type *fn_ty) {
         if (k != TY_TYVAR && !fncps_arg_kind_ok(k)) return false;
     }
     TypeKind rk = fn_ty->as.fn.result_kind;
-    if (rk == TY_FLOAT || rk == TY_FLOAT64 || rk == TY_FLOAT32) return false;
+    /* A float result is the carrier word holding the value's BITS (emit_fns.c,
+     * forall-dict-float-result-truncated), which is also what the DK slot
+     * carries for a float, so it needs no conversion on either side. */
     return rk == TY_TYVAR || fncps_result_kind_ok(rk);
+}
+/* await-parks-only-to-the-nearest-c-frame: an owning-free by-value aggregate
+ * -- a `defstruct` / by-value ADT product with no drop glue, or its parametric
+ * monomorph -- crosses the `fn_cps` slot as a pointer to a reaped heap box: the
+ * DK slot's own Tier-C protocol (emit_cps_ir.c, slot_store_reap / slot_box_ty),
+ * which the registered `__cps` entry of a function with such a parameter or
+ * result already speaks (it takes the struct by value and delivers its result
+ * as a reaped box).  The value's twin unboxes each argument for the entry and
+ * boxes a direct result (emit_module.c, ensure_poly_wrap_cps_thunk).  A heap
+ * handle is a pointer already, and an owning aggregate would need per-copy
+ * glue; neither is admitted here.  Only a rank-2 (forall) call takes this
+ * route: its `.fn` fallback is the direct emitter's own rendering, which
+ * carries a struct through the carrier-spill protocol, whereas a typed `fn`
+ * parameter's fallback is a word-ABI cast (fncps_direct_call). */
+bool cps_ir_fncps_agg_ty(const Type *t) {
+    if (!t) return false;
+    if (t->kind != TY_ADT && t->kind != TY_APP) return false;
+    if (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)) return false;
+    if (!type_is_byvalue_adt_product(*(Type *)t)) return false;
+    const AdtDef *def = t->kind == TY_ADT ? t->as.adt_.def : type_adt_app_def(t);
+    return def && !def->needs_drop_glue && !def->is_heap;
+}
+/* cps_ir_fncps_sig_ok, admitting an aggregate position too (the full types
+ * say which).  Asked for a value handed to a forall sink (boxes_aggregate),
+ * by the fill and by arg_fat_has_fn_cps alike. */
+bool cps_ir_fncps_sig_ok_agg(const Type *fn_ty) {
+    if (cps_ir_fncps_sig_ok(fn_ty)) return true;
+    if (!fn_ty || fn_ty->kind != TY_FN) return false;
+    uint32_t n = fn_ty->as.fn.arity;
+    if (n > CPS_FNCPS_MAX_ARGS || (n && !fn_ty->as.fn.arg_kinds)) return false;
+    for (uint32_t i = 0; i < n; i++) {
+        if (fncps_arg_kind_ok((TypeKind)fn_ty->as.fn.arg_kinds[i])) continue;
+        const Type *ft = fn_ty->as.fn.arg_full_types ? fn_ty->as.fn.arg_full_types[i] : NULL;
+        if (!cps_ir_fncps_agg_ty(ft)) return false;
+    }
+    if (fncps_result_kind_ok(fn_ty->as.fn.result_kind)) return true;
+    return cps_ir_fncps_agg_ty(fn_ty->as.fn.result_full_type);
 }
 bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty) {
     if (!lifted_ty || lifted_ty->kind != TY_FN) return false;
@@ -467,11 +506,18 @@ static bool fncps_forall_call_ok_as(const Binding *fn, const Expr *e, bool atomi
     for (uint32_t i = 0; i < nc; i++)
         if (e->as.call_.args[i]->kind != EX_DICT) return false;
     if (e->as.call_.poly_arg_mask) return false;
-    if (!fncps_result_kind_ok(e->type.kind)) return false;
+    /* An aggregate position (cps_ir_fncps_agg_ty) threads only in the hoisted
+     * form: the slot call boxes an ATOM, and the `.fn` fallback re-renders
+     * the call over atoms. */
+    if (!fncps_result_kind_ok(e->type.kind)
+        && !(atomic && cps_ir_fncps_agg_ty(&e->type))) return false;
     if (!atomic && e->type.kind != TY_NIL && !fncps_forall_word_kind(e->type.kind)) return false;
     for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
         TypeKind k = e->as.call_.args[i]->type.kind;
-        if (!fncps_arg_kind_ok(k)) return false;
+        if (!fncps_arg_kind_ok(k)) {
+            if (atomic && cps_ir_fncps_agg_ty(&e->as.call_.args[i]->type)) continue;
+            return false;
+        }
         if (!atomic && !fncps_forall_word_kind(k)) return false;
     }
     return true;
@@ -1412,6 +1458,12 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
         CTerm *t = build_letraw(b, init, bx, rest);
         t->as.letraw.reap_env = true;
         t->as.letraw.reap_at_backedge = cps_closure_only_invoked(let, idx);
+        /* A member of a mutual `letrec` group: the emitter builds its box under
+         * the letrec knot, so a sibling bound later is patched in. */
+        if (let->kind == EX_LETREC && let->as.let_.n > 1) {
+            t->as.letraw.knot_let = let;
+            t->as.letraw.knot_idx = idx;
+        }
         return t;
     }
     if (init && (init->kind == EX_CATCH_UNWIND || init->kind == EX_CATCH_PANIC_OF)) {
@@ -3792,8 +3844,13 @@ static bool cps_self_env_call(const CpsB *b, const Binding *callee) {
 /* The `letrec` cps_tail / cps_bind lower like a `let` of a local closure. */
 static bool letrec_local_closure(CpsB *b, const Expr *e) {
     if (!e || e->kind != EX_LETREC) return false;
-    const Binding *lc = cps_ir_let_local_closure(e, 0);
-    return lc && callee_colored(b, lc);
+    /* Every member colored: a member's call of a sibling is the sibling's own
+     * CPS call, which only a colored lambda has. */
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        const Binding *lc = cps_ir_let_local_closure(e, i);
+        if (!lc || !callee_colored(b, lc)) return false;
+    }
+    return true;
 }
 
 /* cps-local-fn-alias-or-lambda-called-in-place-refused (a lambda called from
@@ -4254,13 +4311,17 @@ static bool local_closure_type_ok(const Type *t) {
     return fn_alias_kind_concrete(t->kind);
 }
 
-static const Binding *local_closure_shape(const Expr *let, uint32_t i) {
+static const Binding *local_closure_member(const Expr *let, uint32_t i) {
     if (!let || i >= let->as.let_.n) return NULL;
     /* A `letrec` of one capturing member is the same shape: its lambda reaches
      * itself by a self-call, which threads its own env (cps_self_env_call),
-     * never by a capture of the member. */
+     * never by a capture of the member.  A `letrec` of SEVERAL capturing
+     * members is the shape once more per member -- a sibling's lambda captures
+     * the member and only calls it, saturated (pap_calls_saturated admits such
+     * a closure literal) -- provided every member qualifies
+     * (local_closure_shape). */
     bool rec = let->kind == EX_LETREC;
-    if (!(let->kind == EX_LET || (rec && let->as.let_.n == 1))) return NULL;
+    if (!(let->kind == EX_LET || rec)) return NULL;
     const Binding *vb = let->as.let_.bindings[i].binding;
     if (!vb || vb->is_global || vb->is_param || vb->is_mut || vb->is_poly_fn
         || vb->type.kind != TY_FN)
@@ -4294,8 +4355,9 @@ static const Binding *local_closure_shape(const Expr *let, uint32_t i) {
     /* Every use a saturated call: pap_calls_saturated reads any other use --
      * an argument, a capture by a nested fn, a stored value -- as a refusal,
      * so the box never leaves the let. */
-    for (uint32_t j = i + 1; j < let->as.let_.n; j++)
-        if (!pap_calls_saturated(let->as.let_.bindings[j].init, vb, ar)) return NULL;
+    for (uint32_t j = 0; j < let->as.let_.n; j++)
+        if (j != i && !pap_calls_saturated(let->as.let_.bindings[j].init, vb, ar))
+            return NULL;
     if (!pap_calls_saturated(let->as.let_.body, vb, ar)) return NULL;
     if (rec && !pap_calls_saturated(fd->body, vb, ar)) return NULL;
     /* The box is reaped at the DK entry boundary (cps_bind_let_init), so its
@@ -4321,6 +4383,23 @@ static const Binding *local_closure_shape(const Expr *let, uint32_t i) {
     return lam;
 }
 
+/* cps-local-fn-alias-or-lambda-called-in-place-refused (the mutual `letrec`):
+ * a `letrec` of several capturing members -- `ev` and `od` capturing one
+ * another -- qualifies only as a GROUP, since the members' boxes are built
+ * with the direct emitter's letrec knot (a slot for a member not bound yet is
+ * zeroed and patched once it is) and reaped together.  So each member is the
+ * shape above, and so is every sibling. */
+static bool letrec_group(const Expr *let) {
+    return let && let->kind == EX_LETREC && let->as.let_.n > 1;
+}
+static const Binding *local_closure_shape(const Expr *let, uint32_t i) {
+    const Binding *lam = local_closure_member(let, i);
+    if (!lam || !letrec_group(let)) return lam;
+    for (uint32_t j = 0; j < let->as.let_.n; j++)
+        if (j != i && !local_closure_member(let, j)) return NULL;
+    return lam;
+}
+
 /* The rewrite is for a lambda whose effects may leave it: a pure one gains
  * nothing from a CPS entry, and it keeps the direct path it always had (its
  * calls stay closure calls; a `letrec` of it keeps the direct lowering). */
@@ -4335,8 +4414,16 @@ static bool local_lambda_effectful(const FnDef *fd) {
 const Binding *cps_ir_let_local_closure(const Expr *let, uint32_t i) {
     const Binding *lam = local_closure_shape(let, i);
     if (!lam) return NULL;
-    const Expr *init = ascribe_peel(let->as.let_.bindings[i].init);
-    return local_lambda_effectful(init->as.closure_.closure->fn) ? lam : NULL;
+    /* A mutual group shares one protocol: it is effectful when any member is,
+     * since a pure member's call of an effectful sibling must thread the
+     * continuation too (left direct, it would run the sibling's direct entry
+     * from a fresh root). */
+    uint32_t lo = letrec_group(let) ? 0 : i, hi = letrec_group(let) ? let->as.let_.n : i + 1;
+    for (uint32_t j = lo; j < hi; j++) {
+        const Expr *init = ascribe_peel(let->as.let_.bindings[j].init);
+        if (local_lambda_effectful(init->as.closure_.closure->fn)) return lam;
+    }
+    return NULL;
 }
 
 const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i) {
@@ -5275,6 +5362,49 @@ static Expr *rank2_hoist_args(CpsB *b, Expr *e, Pending *pp) {
     c->as.call_.args = na;
     return c;
 }
+/* await-parks-only-to-the-nearest-c-frame: a field read whose struct
+ * expression carries control -- `(.a (f p))` with `f` a rank-2 parameter that
+ * threads -- is `(let [s (f p)] (.a s))`: the struct expression is bound to a
+ * fresh binder of its own type through the CPS path, and the read of that
+ * atom is delegated (is_delegatable_struct).  Before this the form evicted the
+ * whole function (`unsupported form: EX_GET_FIELD`).  NULL when the struct
+ * expression is already an atom (the delegatable case, handled before). */
+static Expr *get_field_hoisted(CpsB *b, Expr *e, CVar *s) {
+    Expr *se = e->as.get_field_.struct_expr;
+    if (!se || is_atomic(se)) return NULL;
+    *s = fresh_cvar(b, &se->type);
+    Expr *ng = arena_alloc(b->a, sizeof(Expr));
+    *ng = *e;
+    ng->as.get_field_.struct_expr = cvar_expr(b, s, &se->type, se->span);
+    return ng;
+}
+/* The same for a struct construction with a computed field -- `(P (f p) 0)`,
+ * the struct ARGUMENT of a rank-2 call built from an awaiting one, which the
+ * call arms hoist whole (rank2_hoist_args) and then meet here.  Each computed
+ * field is bound to a fresh binder, left to right, queued on `pp`; the
+ * construction then reads only atoms and is delegated.  NULL when no field is
+ * computed. */
+static Expr *make_struct_hoisted(CpsB *b, Expr *e, Pending *pp) {
+    uint32_t n = e->as.make_struct_.n_fields, need = 0, last_bound = 0;
+    for (uint32_t i = 0; i < n; i++)
+        if (!is_atomic(e->as.make_struct_.field_values[i])) { need++; last_bound = i; }
+    if (!need) return NULL;
+    Expr *ns = arena_alloc(b->a, sizeof(Expr));
+    *ns = *e;
+    Expr **nf = arena_alloc(b->a, n * sizeof(Expr *));
+    for (uint32_t i = 0; i < n; i++) {
+        Expr *a = e->as.make_struct_.field_values[i];
+        if (is_atomic(a) && !atom_must_bind_in_order(a, i < last_bound)) {
+            nf[i] = a;
+            continue;
+        }
+        CVar y = fresh_cvar(b, &a->type);
+        nf[i] = cvar_expr(b, &y, &a->type, a->span);
+        pend_push(b, pp, a, y, false);
+    }
+    ns->as.make_struct_.field_values = nf;
+    return ns;
+}
 /* `x := reinterpret(e')` where e' carries control: bind e' to a fresh binder y
  * of e''s own type (any translation the operand needs), then x from a
  * synthesized reinterpret of y -- atomic, so delegated to the direct emitter,
@@ -5484,7 +5614,8 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return unsupported_form(b, e);
         }
         CTerm *rest = cps_tail(b, e->as.let_.body, kont);
-        rest = cps_bind_let_init(b, e, 0, cvar_of_binding(e->as.let_.bindings[0].binding), rest);
+        for (uint32_t i = e->as.let_.n; i-- > 0; )
+            rest = cps_bind_let_init(b, e, i, cvar_of_binding(e->as.let_.bindings[i].binding), rest);
         b->n_pap = saved_pap;
         return rest;
     }
@@ -5527,6 +5658,29 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         CTerm *ac = new_term(b, CT_APPCONT);
         ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
         return build_letraw(b, e, x, ac);
+    }
+    /* A field read or a construction over a value that carries control
+     * (get_field_hoisted / make_struct_hoisted): bind the operand(s) first,
+     * then the delegated op's result, then deliver. */
+    if (e->kind == EX_GET_FIELD) {
+        CVar s;
+        Expr *ng = get_field_hoisted(b, e, &s);
+        if (ng) {
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            return cps_bind(b, e->as.get_field_.struct_expr, s, build_letraw(b, ng, x, ac));
+        }
+    }
+    if (e->kind == EX_MAKE_STRUCT) {
+        Pending p = {0};
+        Expr *ns = make_struct_hoisted(b, e, &p);
+        if (ns) {
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            return fold_pending(b, &p, build_letraw(b, ns, x, ac));
+        }
     }
     /* (cont? k) in tail position: deliver the unconsumed-check to kont. */
     if (e->kind == EX_CONT_PRED) {
@@ -6087,7 +6241,8 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             return unsupported_form(b, e);
         }
         CTerm *r = cps_bind(b, e->as.let_.body, x, rest);
-        r = cps_bind_let_init(b, e, 0, cvar_of_binding(e->as.let_.bindings[0].binding), r);
+        for (uint32_t i = e->as.let_.n; i-- > 0; )
+            r = cps_bind_let_init(b, e, i, cvar_of_binding(e->as.let_.bindings[i].binding), r);
         b->n_pap = saved_pap;
         return r;
     }
@@ -6098,6 +6253,19 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     }
     if (is_delegatable_owning(e) || is_delegatable_struct(e) || is_delegatable_value(e))
         return build_letraw(b, e, x, rest);
+    /* A field read or a construction over a value that carries control: bind
+     * the operand(s) through the CPS path, then delegate the op on the atoms
+     * (get_field_hoisted / make_struct_hoisted). */
+    if (e->kind == EX_GET_FIELD) {
+        CVar s;
+        Expr *ng = get_field_hoisted(b, e, &s);
+        if (ng) return cps_bind(b, e->as.get_field_.struct_expr, s, build_letraw(b, ng, x, rest));
+    }
+    if (e->kind == EX_MAKE_STRUCT) {
+        Pending p = {0};
+        Expr *ns = make_struct_hoisted(b, e, &p);
+        if (ns) return fold_pending(b, &p, build_letraw(b, ns, x, rest));
+    }
     /* (cont? k) in bind position: bind the unconsumed-check to x. */
     if (e->kind == EX_CONT_PRED)
         return build_cont_pred(b, e, x, rest);

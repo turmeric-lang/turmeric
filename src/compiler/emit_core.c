@@ -4710,6 +4710,18 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
  * instance live.  Without this the re-dispatched callee is referenced by an
  * emitted spec body but its instance is pruned as dead (undefined reference). */
 FnDef *emit_reresolve_method_fndef(EmitCtx *ctx, const Expr *call) {
+    /* carrier-sum-option-boxes-have-no-owner (dictionary dispatch): inside a
+     * PINNED dict clone (FnDef.dict_clone_pinned, the Route B site) the dict
+     * slot this call loads holds exactly the pinned instance's singleton, so
+     * the method that runs is known without any type re-resolution.  Only the
+     * ownership questions read this (freshness, the drop-after admission, the
+     * masks); the call itself still goes through the dictionary. */
+    if (ctx && ctx->current_abi_specialization &&
+        ctx->current_abi_specialization->fn) {
+        FnDef *pf = dict_clone_pinned_method_fndef(
+            ctx->current_abi_specialization->fn, call);
+        if (pf) return pf;
+    }
     Type resolved;
     const Expr *dict = NULL;
     if (!emit_reresolve_disp_type(ctx, call, &resolved, &dict)) return NULL;
