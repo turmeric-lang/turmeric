@@ -2852,6 +2852,12 @@ static void __dk_reap_push(void *p, unsigned char kind) {
 }
 __attribute__((unused)) static DK *__dk_reap_keep(DK *k) { __dk_reap_push(k, 1); return k; }
 __attribute__((unused)) static tur_dkw __dk_reap_ptr(tur_dkw p) { __dk_reap_push((void *)p, 0); return p; }
+__attribute__((unused)) static void *__dk_cell_new(size_t sz) {
+    size_t *h = (size_t *)malloc(16 + sz);
+    h[0] = sz; h[1] = 0;
+    __dk_reap_push((void *)h, 0);
+    return (char *)h + 16;
+}
 /* Register a single spliced node (->next points into an enclosing k) for a
  * single-node free at reap -- dk_free would walk into the enclosing chain.
  * Kind 3, freed like kind 0, but known to be a node: a park's hand-off reads
@@ -3266,8 +3272,8 @@ __attribute__((unused)) static void __dk_cells_fresh(DK *c, const DK *stop) {
             for (int j = 0; j < nm; j++) if (from[j] == old) { nw = to[j]; break; }
             if (!nw) {
                 if (nm >= 32) continue;   /* table full: this cell stays shared */
-                nw = malloc(sizeof(int64_t)); memcpy(nw, old, sizeof(int64_t));
-                __dk_reap_ptr((tur_dkw)nw);
+                size_t sz = ((const size_t *)old)[-2];
+                nw = __dk_cell_new(sz); memcpy(nw, old, sz);
                 from[nm] = old; to[nm] = nw; nm++;
             }
             w[i] = nw;
