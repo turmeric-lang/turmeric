@@ -1,5 +1,27 @@
 # A capturing `async` body's closure env is never freed
 
+**Narrowed a seventh time 2026-11-07: a let-bound lambda spawned more than
+once, each spawn awaited where it is written.** `(let [body (fn [] ...)]
+(+ (await (async body)) (await (async body))))` -- and the same from a
+`while`, or a loop of calls -- kept its box (24 B a let): no one spawn may
+drop a box the next spawn runs, and the let could not drop it either, since
+a spawned body may still be running, parked, when the let exits. But
+`(await (async body))` returns only once the body has settled (its future is
+fulfilled when the body returns; a thread-backed body is joined first), so
+that use is an INVOCATION of the local, as a direct call is, and nothing runs
+the env afterwards. The escape walk reads it so now (`EX_AWAIT` over an
+`EX_ASYNC` of the binding, `binding_escapes_impl`, `src/compiler/emit_core.c`),
+and the let drops the box at its scope exit (`TUR_CLOSURE_DROP`) -- the reap
+list, for a let the CPS backend lowers (`cps_closure_env_freeable`, which
+`cps_let_mark_spawn_owned` now consults first, so a box that backend reaps is
+never also handed to the spawn). A spawn NOT under an await is still an
+escape: the body may be parked when the scope exits
+(`async-let-bound-body-env-kept`'s `drive`). Pinned by
+`tests/fixtures/async-let-bound-body-env-dropped-awaited` (leak-checked:
+twice in sequence, from a `while`, a struct capture, a performing function
+with a perform between the two spawns, a body that parks every turn, 200
+spawns from a recursive loop, and main's own direct-style let).
+
 **Narrowed a sixth time 2026-10-12: a let the CPS backend lowers.**
 `(let [body (fn [] ...)] (await (async body)))` in a function that performs
 leaked its box (32 B a spawn): the direct emitter's let marks such a binding
@@ -120,8 +142,11 @@ in 202 allocations before, 0 now).
 `^fat` closure, a Drop instance -- under a NON-scalar result, since that
 result may still reference it (a scalar result admits them since 2026-11-06,
 below; an `rc` cannot be captured by an async body at all, TUR-E0010); a
-lambda bound to a local that is spawned more than once, or in a let the CPS
-backend lowers; an inline-C block in the body that names a capture.
+lambda bound to a local and spawned more than once where some spawn is NOT
+awaited where it is written -- its future held or driven by the program --
+or spawned once, unawaited, in a let the CPS backend lowers whose scope can
+capture a continuation; a local captured by another lambda that spawns it;
+an inline-C block in the body that names a capture.
 
 **Narrowed 2026-11-06: a scalar result admits a capture whose drop releases
 something.** `async_spawn_owns_env` (`src/compiler/emit_expr.c`) takes a

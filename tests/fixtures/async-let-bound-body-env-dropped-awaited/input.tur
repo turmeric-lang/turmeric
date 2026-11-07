@@ -1,0 +1,123 @@
+;; async-capturing-body-env-never-freed: a capturing lambda BOUND TO A LOCAL
+;; and spawned MORE THAN ONCE -- `(let [body (fn [] ...)] ... (async body)
+;; ... (async body))` -- kept its env box: no one spawn may drop a box the
+;; next spawn runs, and the let could not drop it either, since a spawned
+;; body may still be running, parked, when the let exits.  When every spawn
+;; is awaited where it is written, `(await (async body))`, the await returns
+;; only once the body has settled, so the use is an INVOCATION of the local,
+;; as a direct call is (closure_binding_escapes), and the let drops the box
+;; at its scope exit -- the CPS reap list for a let the CPS backend lowers.
+;; Leak-checked (requires.leak-check): twice in sequence and from a `while`,
+;; in main (the direct emitter's let) and in colored functions (the CPS
+;; let), a performing function, a body that parks every turn, a struct
+;; capture, and 200 spawns from a recursive loop.  A spawn NOT under an await
+;; -- async-let-bound-body-env-kept's `drive` -- still keeps the box.
+(defeffect Ask [] :int)
+
+(defstruct P [a : int b : int])
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+;; CPS: the same local spawned twice in sequence, both awaited
+(defn twice [k : int] : int
+  (let [body (fn [] : int (* k 2))]
+    (+ (await (async body)) (await (async body)))))
+
+;; CPS: spawned and awaited from a `while`
+(defn in-while [k : int] : int
+  (let [body (fn [] : int (+ k 1))
+        ^mut i 0
+        ^mut acc 0]
+    (while (< i 3)
+      (set! acc (+ acc (await (async body))))
+      (set! i (+ i 1)))
+    acc))
+
+;; CPS: a struct capture, spawned twice
+(defn struct-cap [k : int] : int
+  (let [p    (P k 1)
+        body (fn [] : int (+ (.a p) (.b p)))]
+    (+ (await (async body)) (await (async body)))))
+
+;; CPS: a performing function -- a perform before the box is built and one
+;; between the two awaited spawns (the reap runs after every resume the
+;; entry sees)
+(defn performing [k : int] : int
+  (let [x    (perform (Ask))
+        body (fn [] : int (* k x))]
+    (let [a (await (async body))
+          y (perform (Ask))
+          b (await (async body))]
+      (+ a b y))))
+
+;; CPS: a body that parks every turn, spawned and awaited twice; main drives
+;; the outer fiber's future, fulfilling the cell each park
+(defn parking [k : int] : int
+  (let [body (fn [] : int (+ k (sum-values 0 3 0)))]
+    (+ (await (async body)) (await (async body)))))
+
+;; handled here rather than in main: main's own let below leaves the CPS
+;; subset, and an evicted handler would taint every function performing Ask
+(defn run-performing [k : int] : int
+  (handle (performing k) (Ask [] k) (resume k 2)))
+
+(defn lp [i : int acc : int] : int
+  (if (= i 0) acc (lp (- i 1) (+ acc (twice i)))))
+
+(defn main [] : nil
+  (cur-cell true)
+  (println (twice 5))
+  (println (in-while 10))
+  (println (struct-cap 40))
+  (println (run-performing 3))
+  (println (drive (async (fn [] : int (parking 100)))))
+  (println (lp 100 0))
+  ;; main's own let is the direct emitter's: dropped at scope exit
+  (let [k    7
+        body (fn [] : int (* k 3))
+        ^mut i 0
+        ^mut acc 0]
+    (while (< i 4)
+      (set! acc (+ acc (await (async body))))
+      (set! i (+ i 1)))
+    (println (+ acc (await (async body)) (await (async body)))))
+  (free-future (cur-cell false)))
