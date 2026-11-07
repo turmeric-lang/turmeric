@@ -4030,6 +4030,9 @@ static void cps_let_mark_spawn_owned(CpsB *b, const Expr *let) {
     for (uint32_t i = 0; i < let->as.let_.n; i++) {
         const Expr *init = ascribe_peel(let->as.let_.bindings[i].init);
         if (!init || init->kind != EX_CLOSURE) continue;
+        /* A box this backend reaps itself (cps_closure_env_freeable: every
+         * use is a call or an awaited spawn) has one owner already. */
+        if (cps_closure_env_freeable(let, i)) continue;
         /* The scope after the box is built: the later inits and the body.
          * Control BEFORE it (an earlier init) re-runs the construction on a
          * resume, so each spawn still gets a box of its own. */

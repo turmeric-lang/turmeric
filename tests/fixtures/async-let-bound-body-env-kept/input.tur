@@ -7,6 +7,11 @@
 ;;   twice     -- the same local spawned twice in sequence
 ;;   in-while  -- spawned from a `while` body
 ;;   captured  -- spawned inside a lambda that captured it, called twice
+;;
+;; Each hands its future to `drive`, so the body may still be parked when the
+;; let exits.  A spawn awaited where it is written, `(await (async body))`,
+;; is an invocation instead, and such a local IS dropped at scope exit however
+;; often it is spawned: async-let-bound-body-env-dropped-awaited.
 
 (defn future-value [f : ptr<void>] : int
   ```c

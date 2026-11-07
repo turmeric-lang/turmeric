@@ -1696,6 +1696,34 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
             case EX_REINTERPRET:
                 ESC_PUSH(cur->as.reinterpret_.expr);
                 break;
+            /* async-capturing-body-env-never-freed: `(await (async b))` -- a
+             * spawn of `b` awaited right there -- is an INVOCATION of `b`, not
+             * a retention: the await returns only once the spawned body has
+             * settled (its future is fulfilled when the body returns, and a
+             * thread-backed body is joined first), so nothing runs `b`'s env
+             * afterwards.  It is therefore not an escape, exactly as a direct
+             * call is not, and a let-bound lambda spawned any number of times
+             * this way is dropped at its scope exit (the CPS reap list for a
+             * let the CPS backend lowers).  A spawn NOT under an await is
+             * still an escape: the body may be running, parked, after the
+             * scope exits (async-let-bound-body-env-kept's `drive`). */
+            case EX_AWAIT: {
+                const Expr *fut = cur->as.await_.fut_expr;
+                while (fut && fut->kind == EX_ASCRIBE) fut = fut->as.ascribe_.inner;
+                if (fut && fut->kind == EX_ASYNC) {
+                    const Expr *fe = fut->as.async_.fn_expr;
+                    while (fe && (fe->kind == EX_ASCRIBE || fe->kind == EX_FN_TO_FAT))
+                        fe = fe->kind == EX_ASCRIBE ? fe->as.ascribe_.inner
+                                                    : fe->as.fn_to_fat_.inner;
+                    if (fe && fe->kind == EX_VAR && fe->as.var.binding == b)
+                        break;   /* the awaited spawn of `b` itself */
+                }
+                ESC_PUSH(cur->as.await_.fut_expr);
+                break;
+            }
+            case EX_ASYNC:
+                ESC_PUSH(cur->as.async_.fn_expr);   /* a bare `b` here escapes */
+                break;
 
             /* ---- leaves: cannot reference `b` ---- */
             case EX_NIL_LIT:
