@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found executing await-parks-only-to-the-nearest-c-frame (filed 2026-11-06)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [rank2-result-only-tyvar-pinned-to-first-argument](rank2-result-only-tyvar-pinned-to-first-argument.md) | low (compile-time rejection) | A call through `f (forall [a] (-> int a))` types `a` from its first argument, so `(f m)` is `int` whatever the enclosing return or a `let` annotation says: right by accident at `int`, refused with `TUR-E0708`/`TUR-E0709` at `cstr` or a struct; the bare-tyvar result arm in `elab_call.c` lacks the `poly_expected` instantiation its `TY_APP` sibling has |
+
 ## Found executing five reports (filed 2026-11-05)
 
 | Report | Severity | One line |
