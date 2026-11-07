@@ -3788,6 +3788,24 @@ static void letrec_knot_end(EmitCtx *ctx, const LetrecKnotSave *save) {
     ctx->letrec_knot = *save;
 }
 
+/* The CPS emitter's view of the knot (emit_cps_ir.c, emit_letraw): a mutual
+ * `letrec` of capturing closures lowered to one raw let per member
+ * (cps_ir.c, letraw.knot_let) builds each member's box through emit_value, in
+ * this ctx, so the same deferral applies -- opened at the first member, each
+ * member owned while its init is emitted, closed once the last is bound. */
+void emit_letrec_knot_begin(EmitCtx *ctx, const Expr *e, LetrecKnot *save) {
+    letrec_knot_begin(ctx, e, save);
+}
+void emit_letrec_knot_owner(EmitCtx *ctx, const Expr *e, uint32_t i) {
+    letrec_knot_owner(ctx, e, i);
+}
+void emit_letrec_knot_bound(EmitCtx *ctx, Buf *body, const Binding *b) {
+    letrec_knot_bound(ctx, body, b);
+}
+void emit_letrec_knot_end(EmitCtx *ctx, const LetrecKnot *save) {
+    letrec_knot_end(ctx, save);
+}
+
 /* Should EX_CLOSURE `ce` defer its fill of `captured`?  Only the owner's own
  * init, in the frame that opened the knot, capturing a member not bound yet. */
 static bool letrec_knot_defers(const EmitCtx *ctx, const Expr *ce, const Binding *captured) {

@@ -1412,6 +1412,12 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
         CTerm *t = build_letraw(b, init, bx, rest);
         t->as.letraw.reap_env = true;
         t->as.letraw.reap_at_backedge = cps_closure_only_invoked(let, idx);
+        /* A member of a mutual `letrec` group: the emitter builds its box under
+         * the letrec knot, so a sibling bound later is patched in. */
+        if (let->kind == EX_LETREC && let->as.let_.n > 1) {
+            t->as.letraw.knot_let = let;
+            t->as.letraw.knot_idx = idx;
+        }
         return t;
     }
     if (init && (init->kind == EX_CATCH_UNWIND || init->kind == EX_CATCH_PANIC_OF)) {
@@ -3792,8 +3798,13 @@ static bool cps_self_env_call(const CpsB *b, const Binding *callee) {
 /* The `letrec` cps_tail / cps_bind lower like a `let` of a local closure. */
 static bool letrec_local_closure(CpsB *b, const Expr *e) {
     if (!e || e->kind != EX_LETREC) return false;
-    const Binding *lc = cps_ir_let_local_closure(e, 0);
-    return lc && callee_colored(b, lc);
+    /* Every member colored: a member's call of a sibling is the sibling's own
+     * CPS call, which only a colored lambda has. */
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        const Binding *lc = cps_ir_let_local_closure(e, i);
+        if (!lc || !callee_colored(b, lc)) return false;
+    }
+    return true;
 }
 
 /* cps-local-fn-alias-or-lambda-called-in-place-refused (a lambda called from
@@ -4251,13 +4262,17 @@ static bool local_closure_type_ok(const Type *t) {
     return fn_alias_kind_concrete(t->kind);
 }
 
-static const Binding *local_closure_shape(const Expr *let, uint32_t i) {
+static const Binding *local_closure_member(const Expr *let, uint32_t i) {
     if (!let || i >= let->as.let_.n) return NULL;
     /* A `letrec` of one capturing member is the same shape: its lambda reaches
      * itself by a self-call, which threads its own env (cps_self_env_call),
-     * never by a capture of the member. */
+     * never by a capture of the member.  A `letrec` of SEVERAL capturing
+     * members is the shape once more per member -- a sibling's lambda captures
+     * the member and only calls it, saturated (pap_calls_saturated admits such
+     * a closure literal) -- provided every member qualifies
+     * (local_closure_shape). */
     bool rec = let->kind == EX_LETREC;
-    if (!(let->kind == EX_LET || (rec && let->as.let_.n == 1))) return NULL;
+    if (!(let->kind == EX_LET || rec)) return NULL;
     const Binding *vb = let->as.let_.bindings[i].binding;
     if (!vb || vb->is_global || vb->is_param || vb->is_mut || vb->is_poly_fn
         || vb->type.kind != TY_FN)
@@ -4291,8 +4306,9 @@ static const Binding *local_closure_shape(const Expr *let, uint32_t i) {
     /* Every use a saturated call: pap_calls_saturated reads any other use --
      * an argument, a capture by a nested fn, a stored value -- as a refusal,
      * so the box never leaves the let. */
-    for (uint32_t j = i + 1; j < let->as.let_.n; j++)
-        if (!pap_calls_saturated(let->as.let_.bindings[j].init, vb, ar)) return NULL;
+    for (uint32_t j = 0; j < let->as.let_.n; j++)
+        if (j != i && !pap_calls_saturated(let->as.let_.bindings[j].init, vb, ar))
+            return NULL;
     if (!pap_calls_saturated(let->as.let_.body, vb, ar)) return NULL;
     if (rec && !pap_calls_saturated(fd->body, vb, ar)) return NULL;
     /* The box is reaped at the DK entry boundary (cps_bind_let_init), so its
@@ -4318,6 +4334,23 @@ static const Binding *local_closure_shape(const Expr *let, uint32_t i) {
     return lam;
 }
 
+/* cps-local-fn-alias-or-lambda-called-in-place-refused (the mutual `letrec`):
+ * a `letrec` of several capturing members -- `ev` and `od` capturing one
+ * another -- qualifies only as a GROUP, since the members' boxes are built
+ * with the direct emitter's letrec knot (a slot for a member not bound yet is
+ * zeroed and patched once it is) and reaped together.  So each member is the
+ * shape above, and so is every sibling. */
+static bool letrec_group(const Expr *let) {
+    return let && let->kind == EX_LETREC && let->as.let_.n > 1;
+}
+static const Binding *local_closure_shape(const Expr *let, uint32_t i) {
+    const Binding *lam = local_closure_member(let, i);
+    if (!lam || !letrec_group(let)) return lam;
+    for (uint32_t j = 0; j < let->as.let_.n; j++)
+        if (j != i && !local_closure_member(let, j)) return NULL;
+    return lam;
+}
+
 /* The rewrite is for a lambda whose effects may leave it: a pure one gains
  * nothing from a CPS entry, and it keeps the direct path it always had (its
  * calls stay closure calls; a `letrec` of it keeps the direct lowering). */
@@ -4332,8 +4365,16 @@ static bool local_lambda_effectful(const FnDef *fd) {
 const Binding *cps_ir_let_local_closure(const Expr *let, uint32_t i) {
     const Binding *lam = local_closure_shape(let, i);
     if (!lam) return NULL;
-    const Expr *init = ascribe_peel(let->as.let_.bindings[i].init);
-    return local_lambda_effectful(init->as.closure_.closure->fn) ? lam : NULL;
+    /* A mutual group shares one protocol: it is effectful when any member is,
+     * since a pure member's call of an effectful sibling must thread the
+     * continuation too (left direct, it would run the sibling's direct entry
+     * from a fresh root). */
+    uint32_t lo = letrec_group(let) ? 0 : i, hi = letrec_group(let) ? let->as.let_.n : i + 1;
+    for (uint32_t j = lo; j < hi; j++) {
+        const Expr *init = ascribe_peel(let->as.let_.bindings[j].init);
+        if (local_lambda_effectful(init->as.closure_.closure->fn)) return lam;
+    }
+    return NULL;
 }
 
 const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i) {
@@ -5481,7 +5522,8 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return unsupported_form(b, e);
         }
         CTerm *rest = cps_tail(b, e->as.let_.body, kont);
-        rest = cps_bind_let_init(b, e, 0, cvar_of_binding(e->as.let_.bindings[0].binding), rest);
+        for (uint32_t i = e->as.let_.n; i-- > 0; )
+            rest = cps_bind_let_init(b, e, i, cvar_of_binding(e->as.let_.bindings[i].binding), rest);
         b->n_pap = saved_pap;
         return rest;
     }
@@ -6084,7 +6126,8 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             return unsupported_form(b, e);
         }
         CTerm *r = cps_bind(b, e->as.let_.body, x, rest);
-        r = cps_bind_let_init(b, e, 0, cvar_of_binding(e->as.let_.bindings[0].binding), r);
+        for (uint32_t i = e->as.let_.n; i-- > 0; )
+            r = cps_bind_let_init(b, e, i, cvar_of_binding(e->as.let_.bindings[i].binding), r);
         b->n_pap = saved_pap;
         return r;
     }

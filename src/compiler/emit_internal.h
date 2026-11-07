@@ -970,6 +970,12 @@ static inline bool emit_match_in_tail(const EmitCtx *ctx, const Expr *e) {
 enum { EMIT_OWN_NONE = 0, EMIT_OWN_SHALLOW, EMIT_OWN_DEEP };
 const struct AdtDef *emit_own_adt_of(Type t);
 bool emit_own_binding_owned(EmitCtx *ctx, const Binding *b);
+
+/* The letrec closure knot, for the CPS emitter (emit_expr.c, letrec_knot_begin). */
+void emit_letrec_knot_begin(EmitCtx *ctx, const Expr *e, LetrecKnot *save);
+void emit_letrec_knot_owner(EmitCtx *ctx, const Expr *e, uint32_t i);
+void emit_letrec_knot_bound(EmitCtx *ctx, Buf *body, const Binding *b);
+void emit_letrec_knot_end(EmitCtx *ctx, const LetrecKnot *save);
 bool emit_own_param_owned(EmitCtx *ctx, const struct FnDef *fd, uint32_t i);
 bool emit_own_expr_owned(EmitCtx *ctx, const Expr *e);
 bool emit_call_arg_temp_is_lent_fresh_spine(EmitCtx *ctx, const Expr *call,

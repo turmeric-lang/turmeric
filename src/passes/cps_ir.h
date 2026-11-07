@@ -331,7 +331,12 @@ struct CTerm {
          * arm's closure (emit_sum_let_closure_reap). */
         struct { CVar x; const Expr *e; CTerm *body; bool reap_env;
                  bool reap_any_env; bool reap_at_backedge;
-                 const Expr *sum_let; uint32_t sum_let_idx; }               letraw;
+                 const Expr *sum_let; uint32_t sum_let_idx;
+                 /* A member init of a mutual `letrec` of capturing closures:
+                  * the emitter builds the box under the letrec knot
+                  * (emit_letrec_knot_*), so a capture of a sibling bound
+                  * later is zeroed and patched once that sibling is. */
+                 const Expr *knot_let; uint32_t knot_idx; }                 letraw;
         /* U3 cloneable (multi-shot).  `receiver` is a named, uncolored top-level
          * fn called with the fresh cloneable_cont handle; its result is the reset
          * value bound to x; then run body.

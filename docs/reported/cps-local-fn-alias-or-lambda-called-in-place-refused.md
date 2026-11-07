@@ -1,5 +1,38 @@
 # An effectful function called through a local name is refused
 
+**Narrowed a sixth time 2026-11-07: a capturing `letrec` of SEVERAL members
+runs** -- `(letrec [ev (fn [i] ... (perform (Ask)) ... (od ...)) od (fn [i]
+... (ev ...))] (ev 4))`, the members capturing one another and a local of the
+enclosing function. The one-member lowering applies per member now: a
+`letrec` whose every member is a capturing lambda only ever called, saturated
+-- from the body or from a sibling's lambda, which `pap_calls_saturated`
+already admits -- is lowered like a `let` of a local closure, member by
+member (`local_closure_shape` over `local_closure_member`, `letrec_group`,
+`src/passes/cps_ir.c`). A call through a member from a sibling's body is the
+nested rewrite of 2026-10-12 (`nested_alias_rewrite`), so it is the member
+lambda's own CPS call with its env box first. The group shares one protocol:
+it is effectful when any member is, and every member must be colored. The
+boxes are built with the direct emitter's letrec knot -- a slot for a member
+bound later is zeroed and patched once that member is -- which the CPS raw-let
+emitter now drives (`letraw.knot_let`, `emit_letrec_knot_*` exported from
+`src/compiler/emit_expr.c`, used in `emit_letraw`), and each box is reaped at
+the entry boundary like a one-member group's. Pinned by
+`tests/fixtures/cps-capturing-letrec-mutual-called-in-place` (leak-checked;
+tail and non-tail calls between the members, a three-member chain, both
+members performing different effects, a member that also calls itself, float
+and struct captures, the body performing around calls of both members,
+two-parameter members, the group nested in a capturing lambda, a 2,000-turn
+mutual loop, 100 calls under one counting handler; every line equals
+`tur --interpret`) and `cps-capturing-letrec-mutual-deep` (compiled only;
+1,000,000 performing turns in flat C stack).
+
+**What is left: a lambda that RETURNS a function** -- `(let [mk (fn [k] (fn
+[n] (+ m k n (perform (Ask))))) g (mk 2)] (g 1))`. The inner lambda's one
+value use is the `return`, which the E2 tally reads as unthreadable; admitting
+it needs the call sites of `mk` to be let locals only ever called, and the
+local's call to thread through the E2a registry the way a thread local's does
+(`call_threads_via_registry`), with the returned box reaped at the boundary.
+
 **Narrowed a fifth time 2026-10-12: a lambda called from inside ANOTHER
 closure runs** -- `(let [f (fn ...perform...) g (fn [n] (* 2 (f n)))] (g 1))`,
 capturing or captureless `f`. The rewrite that makes a call through `f` the
@@ -23,7 +56,8 @@ local and as a value runs too** (see "Fixed 2026-10-10" below), and so does
 one only ever passed on. **What is left:**
 
 - a lambda that RETURNS a function;
-- a capturing `letrec` of more than one member (mutual recursion).
+- a capturing `letrec` of more than one member (mutual recursion) -- fixed
+  2026-11-07, see above.
 
 (A lambda called from inside another closure was on this list until
 2026-10-12; see above.)
@@ -48,42 +82,42 @@ Found 2026-10-09 while fixing
 
 ```turmeric
 (defeffect Ask [] : int)
-(defn app [h : (fn [int] #fx{Ask} int) x : int] #fx{Ask} : int (h x))
-(defn v2 [m : int] : int
-  (let [f (fn [n : int] : int (+ m n (perform (Ask))))
-        g (fn [n : int] : int (* 2 (f n)))]               ; g captures f
+(defn v4 [m : int] : int
+  (let [mk (fn [k : int] : (fn [int] int)
+             (fn [n : int] : int (+ m k n (perform (Ask)))))
+        g  (mk 2)]
     (g 1)))
-(defn v3 [m : int] : int
-  (letrec [ev (fn [i : int] : int (if (= i 0) (+ m (perform (Ask))) (od (- i 1))))
-           od (fn [i : int] : int (if (= i 0) m (ev (- i 1))))]
-    (ev 4)))
 (defn main [] : int
-  (println (handle (v2 5) (Ask [] k) (resume k 10)))   ; 32
-  (println (handle (v3 1) (Ask [] k) (resume k 10)))   ; 11
+  (println (handle (v4 5) (Ask [] k) (resume k 10)))   ; 18
   0)
 ```
+
+The shapes the earlier repros carried -- `v2`, a lambda called from inside
+another closure, and `v3`, the capturing mutual `letrec` -- compile and run
+now (`cps-local-lambda-called-from-another-closure`,
+`cps-capturing-letrec-mutual-called-in-place`).
 
 ## Root cause (what is left)
 
 The rewrite below needs every use of the local to be a saturated call
-(`pap_calls_saturated`). A use as a value -- an argument, or a capture by
-another closure -- means the lambda can be called from where nothing
-threads the caller's continuation, so it stays an fn value; the E2
-threadability tally then decides it. For a CAPTURING lambda the thread-local
-registration below now covers the call through the local; a captureless one
-is the thin direct-entry value, which the E2 tally reads differently (its
-let alias is an alias target), and its call is still evicted. A `letrec` of
-several capturing members shares one env-building protocol the CPS
-translation does not reproduce.
+(`pap_calls_saturated`). A use as a value -- an argument, a `return`, or a
+capture by a closure that does more than call it -- means the lambda can be
+called from where nothing threads the caller's continuation, so it stays an
+fn value; the E2 threadability tally then decides it. A lambda RETURNED from
+another lambda has exactly one value use, the return, which the tally reads
+as unthreadable (`uses=1 ok=0`), so its effect taints every performer in the
+program.
 
 ## Fix directions
 
-- A closure capturing another local closure: when the captured closure is
-  only CALLED in the capturing lambda, the call inside is the same env call
-  through the env field.
 - A fn-returning lambda: the direct call to its lifted `__fn_N` returns the
   int64 carrier, not the closure (pr-386, `Binding.is_lifted_lambda`), so it
-  needs the closure protocol too.
+  needs the closure protocol too. The local that receives the result (`g`)
+  holds a closure box like a thread local does, so its call could thread
+  through the E2a registry (`call_threads_via_registry`) once the tally reads
+  the return as threadable -- which needs every call site of `mk` to be such
+  a local -- and the box is reaped at the boundary like a fresh-call env
+  (`cps_fresh_call_env_freeable`).
 
 ## Fixed (2026-10-10): a value use as well as calls (captureless)
 
