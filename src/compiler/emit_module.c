@@ -11703,13 +11703,18 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
              * name), so out->data[_sig_start..len) is exactly the type. */
             size_t _sig_start = out->len;
             /* B4 slice 2: a wide by-value ADT closure param crosses as an int64
-             * box pointer -- mirror emit_fns.c's needs_box_load signature. */
+             * box pointer -- mirror emit_fns.c's needs_box_load signature,
+             * which asks type_is_b4box_closure_slot: an applied by-value sum
+             * wider than a word (`(Option int)`) is boxed too, and asking only
+             * type_is_wide_byval_adt here declared it by value -- "conflicting
+             * types" for every capturing lambda taking one
+             * (closure-option-param-forward-decl-disagrees). */
             Type _b4_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
                 ? *e->type.as.fn.arg_full_types[j] : fd->param_types[j];
             if (fd->closure &&
                 !fd->params[j]->is_poly_fn &&
                 fd->param_types[j].kind != TY_FN &&
-                type_is_wide_byval_adt(emit_resolve_type(ctx, _b4_pty))) {
+                type_is_b4box_closure_slot(emit_resolve_type(ctx, _b4_pty))) {
                 buf_puts(out, "int64_t");
             } else if (fd->params[j]->arrives_as_carrier_box) {
                 /* typed-comparator-over-hamt-box: declared as a niche option,

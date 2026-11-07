@@ -1,0 +1,72 @@
+;; sum-closure-payload-never-dropped item 4, the non-scalar result: a
+;; capturing closure whose env holds a Drop value, wrapped in an Option local
+;; and only invoked, was released only when its result was a plain scalar --
+;; a `cstr` result might have been a view of a capture.  It is released too
+;; when nothing the body can return was reached from a capture: a literal,
+;; one of the closure's own parameters, or a call that names no capture,
+;; through `if` / `do` / `let` / `match`.  Each `run*` leaked its 24 B env and
+;; never released its `Res` (the live count rose by one per call); both are 0
+;; now.  A closure that returns something a capture reaches keeps the old
+;; behaviour (sum-closure-payload-kept pins the keeping shapes).
+;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
+(defn ctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+(defopaque ^affine Res :int)
+(defn mk [v : int] : Res (ctr 0) (:: v Res))
+(defn rel [r : Res] : void (ctr 1) (:: r int) nil)
+(definstance Drop [Res] (drop [x] : void (rel x)))
+(defn peek [^borrow r : Res] : int (:: r int))
+(defn live [] : int (- (ctr 2) (ctr 3)))
+(defn size-word [n : int] : cstr (if (> n 3) "big" "small"))
+
+(defn run-lit [k : int] : int                 ; literals in both branches
+  (let [w  (mk k)
+        cb (some (fn [x : int] : cstr (if (> (+ x (peek w)) 3) "big" "small")))]
+    (match cb
+      (Some f) (do (println (f 1)) 1)
+      (None)   0)))
+
+(defn run-param [k : int] : int               ; the closure's own parameter
+  (let [w  (mk k)
+        cb (some (fn [s : cstr] : cstr (do (peek w) s)))]
+    (match cb
+      (Some f) (do (println (f "param")) 2)
+      (None)   0)))
+
+(defn run-call [k : int] : int                ; a call that names no capture
+  (let [w  (mk k)
+        cb (some (fn [x : int] : cstr
+                   (let [n (+ x (peek w))]
+                     (size-word n))))]
+    (match cb
+      (Some f) (do (println (f 0)) 3)
+      (None)   0)))
+
+(defn run-match [k : int] : int               ; through a match on a parameter
+  (let [w  (mk k)
+        cb (some (fn [o : (Option int)] : cstr
+                   (match o
+                     (Some v) (if (> v (peek w)) "above" "below")
+                     (None)   "none")))]
+    (match cb
+      (Some f) (do (println (f (some 2))) (println (f (none))) 4)
+      (None)   0)))
+
+(defn run-all [k : int] : int
+  (+ (run-lit k) (run-param k) (run-call k) (run-match k)))
+
+(defn lp [i : int acc : int] : int
+  (if (= i 0) acc (lp (- i 1) (+ acc (run-all i)))))
+
+(defn main [] : int
+  (println (run-all 5))   ; big param big below none, then 10
+  (println (live))        ; 0
+  (println (lp 50 0))     ; 500
+  (println (live))        ; 0
+  0)

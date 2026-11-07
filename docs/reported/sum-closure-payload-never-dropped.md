@@ -1,5 +1,22 @@
 # A capturing closure held in a by-value Option/Result local is released only in its simplest shapes
 
+**Narrowed 2026-11-07: item 4's non-scalar-result half.** A closure whose
+glue releases a Drop-instance capture is dropped with a `cstr` (or any
+non-scalar) result too, when nothing its body can return was reached from a
+capture: every tail value -- through `if` branches, `do` / `let` bodies and
+`match` arms -- is a literal, one of the closure's own parameters, or a call
+whose whole subtree names no capture (`closure_result_may_view_capture`,
+`src/compiler/emit_core.c`, asked by `closure_env_drop_ok_under_scalar_result`
+for a non-scalar result). A capture itself, a let-bound local or a match
+binder in tail position (either may alias a capture), or a constructor keeps
+the old answer. Pinned by
+`tests/fixtures/sum-closure-payload-nonscalar-result-dropped` (leak-checked:
+literal branches, a returned parameter, a capture-free call, a match on a
+parameter, 50 turns of each; 24 B and one `Res` per call before, 0 now). Left
+of item 4: inline C naming a capture. Found on the way and fixed:
+[closure-option-param-forward-decl-disagrees](../archive/closure-option-param-forward-decl-disagrees.md)
+-- a capturing lambda with an `(Option int)` parameter did not build at all.
+
 **Narrowed 2026-11-06: item 4's scalar-result half.** A closure whose glue
 releases a Drop-instance or owned `^fat` capture is dropped too when its
 result is a plain scalar; see item 4.
@@ -150,7 +167,8 @@ Each of these still leaks the env, as before. None is freed early.
    `sum-closure-payload-drop-capture-dropped` (leak-checked: matched out and
    called, `unwrap`ped and called on the spot, 100 calls of each; 4848 B in
    202 allocations before, 0 now). Left: such a closure with a non-scalar
-   result, and inline C naming a capture.) (**Narrowed
+   result -- since 2026-11-07, one whose returned value no capture reaches
+   (top) -- and inline C naming a capture.) (**Narrowed
    2026-10-09:** a closure whose env drop frees the box alone is dropped now,
    `closure_env_drop_frees_box_only` -- a struct capture is a copy in the box,
    and the glue releases only rc, owned fat and Drop-instance captures.
