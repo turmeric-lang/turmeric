@@ -3291,7 +3291,10 @@ char *ensure_fncps_env_dispatch(EmitCtx *ctx, const Type *lifted_ty) {
         buf_printf(&prm, ", int64_t %s", an);
         const char *pc = cps_ir_fncps_arg_ctype(ak);
         bool flt = ak == TY_FLOAT || ak == TY_FLOAT64 || ak == TY_FLOAT32;
-        if (strcmp(pc, "int64_t") == 0) {
+        /* A `ptr<void>` goes to slot 0 as the word too: an untyped one's
+         * slot 0 is the wrapper that takes it so (ensure_closure_slot0_widen;
+         * cps-effectful-callback-through-multi-arg-or-untyped-param). */
+        if (strcmp(pc, "int64_t") == 0 || ak == TY_PTR_VOID) {
             buf_puts(&hs, ", int64_t"); buf_printf(&ha, ", %s", an);
             buf_puts(&ss, ", int64_t"); buf_printf(&sa, ", %s", an);
             continue;

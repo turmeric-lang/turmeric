@@ -3061,11 +3061,23 @@ static bool type_kind_is_plain_scalar(TypeKind k) {
 
 /* Evaluating it has no effect, so a later argument may be hoisted past it. */
 static bool arg_is_effect_free(const Expr *a) {
-    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
-    if (!a) return true;
+    /* borrowed-drop-temporary-leaks-outside-the-hoist: a fn-typed argument
+     * arrives wrapped in its fn-value conversion (a poly carrier, a fat shim),
+     * which only repackages what it wraps -- so `(peekf f (mk))` with `f` a
+     * local, a parameter or a named defn, or a captureless lambda, is as
+     * effect-free as `(peek2 k (mk))` and its temporary is hoisted the same
+     * way.  The same wrappers HOIST_PEEL_SLOT looks through. */
+    for (;;) {
+        if (!a) return true;
+        if (a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        else if (a->kind == EX_POLY_WRAP) a = a->as.poly_wrap_.inner;
+        else if (a->kind == EX_FN_TO_FAT) a = a->as.fn_to_fat_.inner;
+        else if (a->kind == EX_POLY_TO_FAT) a = a->as.poly_to_fat_.inner;
+        else break;
+    }
     switch (a->kind) {
     case EX_VAR: case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
-    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_FN:
         return true;
     default:
         return false;

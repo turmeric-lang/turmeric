@@ -16452,7 +16452,13 @@ entry_wrapper_done:
         if (fd->closure && fd->n_params >= 1 && fd->n_params - 1 <= 255 &&
             ctx->pending_handler_fns) {
             const char *rcn = type_c_name(fd->return_type);
-            if (rcn && strcmp(thunk_result_slot_c_spelling(rcn), rcn) != 0) {
+            /* ...and so does one with an untyped `ptr<void>` parameter: slot 0
+             * takes it as the word, the definition as `void *`. */
+            bool word_ptr = false;
+            for (uint32_t i = 1; i < fd->n_params && !word_ptr; i++)
+                word_ptr = fd->params[i]->type.kind == TY_PTR_VOID &&
+                           type_is_word_closure_slot(fd->params[i]->type);
+            if (rcn && (word_ptr || strcmp(thunk_result_slot_c_spelling(rcn), rcn) != 0)) {
                 uint8_t wn = (uint8_t)(fd->n_params - 1);
                 Type *wpt = (Type *)calloc(wn ? wn : 1, sizeof(Type));
                 if (!wpt) { fprintf(stderr, "tur: oom\n"); abort(); }
