@@ -99,7 +99,8 @@
 ;;;
 ;;; Parameters:
 ;;;   ms  -- delay in milliseconds before invoking the callback
-;;;   cb  -- function pointer to invoke; receives arg as its sole argument
+;;;   cb  -- a captureless function `(c-fn [ptr<void>] nil)`; receives arg
+;;;          as its sole argument
 ;;;   arg -- opaque pointer passed through to the callback
 ;;;
 ;;; Example:
@@ -107,7 +108,7 @@
 ;;;
 ;;; Since: Phase T21
 
-(defn scheduler-timeout [ms : int cb : ptr<void> arg : ptr<void>] : nil
+(defn scheduler-timeout [ms : int cb : (c-fn [ptr<void>] nil) arg : ptr<void>] : nil
   ```c
   tur_scheduler_timeout((int64_t)ms, (void (*)(void *))cb, arg);
   ```)

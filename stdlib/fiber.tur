@@ -26,7 +26,8 @@
 ;;; fiber-new -- create a new fiber from a function pointer and an optional stack size.
 ;;;
 ;;; Parameters:
-;;;   fn         -- zero-argument function pointer to run as the fiber body
+;;;   fn         -- a captureless zero-argument function `(c-fn [] nil)` to
+;;;                 run as the fiber body
 ;;;   stack-size -- requested stack size in bytes; 0 uses the default size
 ;;;
 ;;; Returns:
@@ -37,7 +38,7 @@
 ;;;
 ;;; Since: Phase T21-C
 
-(defn fiber-new [fn : ptr<void> stack-size : int] : FiberHandle
+(defn fiber-new [fn : (c-fn [] nil) stack-size : int] : FiberHandle
   ```c
   return (void *)(intptr_t)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   ```)

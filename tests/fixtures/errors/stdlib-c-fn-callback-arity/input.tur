@@ -1,0 +1,16 @@
+;; stdlib-int-stand-in-audit S1: timer-set's callback is called as
+;; `void (*)(void *)` with the timer's arg, so it is `(c-fn [ptr<void>] nil)`.
+;; A nullary function is refused at the call: as `ptr<void>` it was accepted,
+;; and called with an argument it never declared.
+(load "stdlib/timer.tur")
+
+(defn tick [] : nil (println "tick"))
+
+(defn no-arg [] : ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+(defn main [] : int
+  (timer-cancel (timer-set 10 tick (no-arg)))
+  0)

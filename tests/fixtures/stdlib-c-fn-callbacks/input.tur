@@ -1,0 +1,48 @@
+;; stdlib-int-stand-in-audit S1: the stdlib callbacks a C API stores or calls
+;; as a bare function pointer are typed `(c-fn [...] R)`, so a captureless
+;; function of the right shape is accepted and a capturing closure or a wrong
+;; arity is refused at the call (errors/stdlib-c-fn-callback-*).  Before, each
+;; was `ptr<void>`: anything went, and a closure was called as code.
+
+(load "stdlib/test.tur")
+(load "stdlib/sync.tur")
+(load "stdlib/fiber.tur")
+(load "stdlib/timer.tur")
+
+(def ^mut init-count 0)
+
+(defn init-once [] : nil
+  (set! init-count (+ init-count 1)))
+
+(defn fiber-body [] : nil
+  (fiber-yield 7)
+  (fiber-yield 8))
+
+(defn t-pass [] : int 1)
+
+(defn on-timer [arg : ptr<void>] : nil (println "timer fired"))
+
+(defn no-arg [] : ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+(defn main [] : int
+  ;; once-call: (c-fn [] nil)
+  (let [flag (once-flag-new)]
+    (once-call flag init-once)
+    (once-call flag init-once)
+    (once-call flag init-once)
+    (once-flag-free flag))
+  (println init-count)                       ; 1
+  ;; fiber-new: (c-fn [] nil)
+  (let [f (fiber-new fiber-body 0)]
+    (println (fiber-resume f 0))             ; 7
+    (println (fiber-resume f 0))             ; 8
+    (fiber-free f))
+  ;; timer-set: (c-fn [ptr<void>] nil) -- armed and cancelled, never fired
+  (timer-cancel (timer-set 1000 on-timer (no-arg)))
+  ;; register-test: (c-fn [] int), a defn and a captureless lambda (deftest)
+  (register-test "t-pass" t-pass)
+  (deftest "lambda" (= 1 1))
+  (run-tests!))

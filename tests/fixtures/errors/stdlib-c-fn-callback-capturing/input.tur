@@ -1,0 +1,14 @@
+;; stdlib-int-stand-in-audit S1: fiber-new runs its body as a bare C function
+;; pointer, so it takes a captureless `(c-fn [] nil)`.  A closure over a local
+;; is refused at the call: it used to be accepted as `ptr<void>` and its
+;; closure record jumped to as code when the fiber ran.
+(load "stdlib/fiber.tur")
+
+(defn work [k : int] : nil (println k))
+
+(defn main [] : int
+  (let [k 5
+        f (fiber-new (fn [] : nil (work k)) 0)]
+    (fiber-resume f 0)
+    (fiber-free f))
+  0)
