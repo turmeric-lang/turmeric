@@ -2561,12 +2561,17 @@ static bool emit_arm_is_recorded_byval_agg(EmitCtx *ctx, const char *v,
  * A pass-by-pointer parameter is excluded: it really is held as `const T *`, and
  * the caller's own `then_is_byptr_param` branch derefs it. */
 static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
+static bool expr_is_erased_carrier_param(EmitCtx *ctx, const Expr *e);
 static bool emit_arm_is_byval_agg_var(EmitCtx *ctx, const Expr *arm, Type bv) {
     if (!arm || bv.kind == TY_UNKNOWN) return false;
     while (arm->kind == EX_ASCRIBE && arm->as.ascribe_.inner)
         arm = arm->as.ascribe_.inner;
     if (arm->kind != EX_VAR || !arm->as.var.binding) return false;
     if (expr_is_pbp_param(ctx, arm)) return false;
+    /* hkt-instance-carrier-base-if-arms-return-params-unbridged: a generic
+     * carrier base's parameter is the int64 word, not the aggregate its
+     * resolved type names -- the arm needs the readback bridge. */
+    if (expr_is_erased_carrier_param(ctx, arm)) return false;
     Type at = emit_resolve_type(ctx, arm->as.var.binding->type);
     bool is_sum = g_sr1_sum_byvalue && emit_type_is_byvalue_sum(ctx, at);
     /* byvalue-struct-param-as-if-arm-derefs: the SR1 comment above only
@@ -5760,10 +5765,47 @@ static void emit_merge_assign_bridged(EmitCtx *ctx, Buf *body, const char *tmp,
  * producer whose by-value type is exactly what the temp was declared as, since
  * the match temp is declared from the match's own type rather than from its
  * arms.  Returns a replacement for `val` (caller frees). */
+/* hkt-instance-carrier-base-if-arms-return-params-unbridged: a parameter of a
+ * generic carrier base (an instance method reached through its dictionary)
+ * is the int64 carrier word whatever its resolved type says, while the
+ * base's merge temps and its C return are spelled at the resolved by-value
+ * aggregate (`tur_adt_Option__int`).  `(pick [x y] (if (some? x) x y))` -- or
+ * just `(pick [x y] x)` -- then assigned the word to the aggregate, a hard cc
+ * error; an argument position (`(some? x)`) already gets the carrier->concrete
+ * readback.  This is that readback for an arm or a tail: NULL when `arm` is
+ * not such a parameter or the sink is not that aggregate, else the bridged
+ * expression (`val` is borrowed, never consumed). */
+static bool expr_is_erased_carrier_param(EmitCtx *ctx, const Expr *e);
+char *emit_erased_param_into_byval_sink(EmitCtx *ctx, Buf *body,
+                                        const Expr *arm, const char *sink_c,
+                                        Type sink, const char *val) {
+    if (!arm || !sink_c || !val || !expr_is_erased_carrier_param(ctx, arm))
+        return NULL;
+    size_t sl = strlen(sink_c);
+    if (sl == 0 || sink_c[sl - 1] == '*' || strcmp(sink_c, "int64_t") == 0)
+        return NULL;
+    Type rs = emit_resolve_type(ctx, sink);
+    if (!emit_type_is_byvalue_adt(ctx, rs) &&
+        !(g_sr1_sum_byvalue && emit_type_is_byvalue_sum(ctx, rs)))
+        return NULL;
+    const char *want = emit_type_c_name(ctx, rs);
+    if (!want || strcmp(want, sink_c) != 0) return NULL;
+    return emit_carrier_bridge(ctx, body, strdup(val),
+                               CK_CARRIER, CK_CONCRETE, rs);
+}
+
 static char *match_arm_carrier_bridge(EmitCtx *ctx, Buf *body,
                                       const Expr *arm_body, const char *tmp,
                                       char *val) {
     const char *tc = tmp ? emit_localvar_lookup_ctype(tmp) : NULL;
+    {
+        const Expr *ab = arm_body;
+        while (ab && ab->kind == EX_ASCRIBE) ab = ab->as.ascribe_.inner;
+        Type at = (ab && ab->kind == EX_VAR && ab->as.var.binding)
+                  ? ab->as.var.binding->type : type_simple(TY_UNKNOWN, CK_COPY);
+        char *eb = emit_erased_param_into_byval_sink(ctx, body, ab, tc, at, val);
+        if (eb) { free(val); return eb; }
+    }
     if (!tc || !fn_body_tail_is_carrier_producer(arm_body) ||
         fn_body_tail_emits_byvalue_carrier_abi(ctx, arm_body))
         return val;
@@ -5916,7 +5958,15 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
          * out.  (A `make-struct` arm already produces a by-value aggregate, so
          * only the bare-param arm needs the deref.) */
         bool then_is_byptr_param = expr_is_pbp_param(ctx, th) && !temp_is_ptr;
-        if (if_bv.kind != TY_UNKNOWN &&
+        char *then_erased = if_bv.kind == TY_UNKNOWN
+            ? emit_erased_param_into_byval_sink(ctx, body, th,
+                  if_merge_temp_ctype(tmp, temp_c), e->type, t)
+            : NULL;
+        if (then_erased) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s = %s;\n", tmp, then_erased);
+            free(then_erased);
+        } else if (if_bv.kind != TY_UNKNOWN &&
             !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.then_) &&
             !emit_arm_is_recorded_byval_agg(ctx, t, if_bv) &&
             !emit_arm_is_byval_agg_var(ctx, e->as.if_.then_, if_bv)) {
@@ -5965,7 +6015,15 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* RSP1: see the then-branch comment -- deref a pass-by-ptr struct
              * parameter returned as the else-branch result. */
             bool else_is_byptr_param = expr_is_pbp_param(ctx, eb) && !temp_is_ptr2;
-            if (if_bv.kind != TY_UNKNOWN &&
+            char *else_erased = if_bv.kind == TY_UNKNOWN
+                ? emit_erased_param_into_byval_sink(ctx, body, eb,
+                      if_merge_temp_ctype(tmp, temp_c2), e->type, el)
+                : NULL;
+            if (else_erased) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s = %s;\n", tmp, else_erased);
+                free(else_erased);
+            } else if (if_bv.kind != TY_UNKNOWN &&
                 !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.else_or_null) &&
                 !emit_arm_is_recorded_byval_agg(ctx, el, if_bv) &&
                 !emit_arm_is_byval_agg_var(ctx, e->as.if_.else_or_null, if_bv)) {

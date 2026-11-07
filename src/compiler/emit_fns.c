@@ -4719,8 +4719,23 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
      * every box path below then assigned the int64 into a struct. */
     const char *ret_val_ct = (ret_val && emit_str_is_bare_ident(ret_val))
         ? emit_localvar_lookup_ctype(ret_val) : NULL;
+    /* hkt-instance-carrier-base-if-arms-return-params-unbridged: a generic
+     * carrier base returning one of its own parameters (`(pick [x y] x)`):
+     * the parameter is the int64 word, the C return the resolved aggregate. */
+    char *erased_ret = NULL;
+    if (!is_main && !ret_is_int64_carrier && ret_ctype && tail_e) {
+        const Expr *re = tail_e;
+        while (re && re->kind == EX_ASCRIBE) re = re->as.ascribe_.inner;
+        if (re && re->kind == EX_VAR && re->as.var.binding)
+            erased_ret = emit_erased_param_into_byval_sink(ctx, out, re,
+                             ret_ctype, re->as.var.binding->type, ret_val);
+    }
     /* Special case: if this is main and it returns int64_t, cast to int */
-    if (is_main && result_kind == TY_INT) {
+    if (erased_ret) {
+        indent_buf(out, ctx->indent);
+        buf_printf(out, "return %s;\n", erased_ret);
+        free(erased_ret);
+    } else if (is_main && result_kind == TY_INT) {
         buf_printf(out, "return (int)%s;\n", ret_val);
     } else if (ret_is_int64_carrier && ret_val_ct &&
                strcmp(ret_val_ct, "int64_t") == 0) {
