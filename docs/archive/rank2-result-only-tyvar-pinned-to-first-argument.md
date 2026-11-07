@@ -1,5 +1,33 @@
 # A rank-2 call whose type variable appears only in the result is typed from its first argument
 
+**Resolved 2026-11-07.** A call through a rank-2 parameter whose result
+variable no argument names takes the variable from what the call site
+expects, as the `TY_APP` result arm beside it already did:
+
+- the expected-type channel (`poly_expected`), which an annotated `let`, an
+  ascription and a struct / ADT / applied declared return all reach the call
+  through (`src/compiler/elab_call.c`, the bare-tyvar arm of the rank-2
+  call's result instantiation);
+- for a SCALAR declared return (`: cstr`, `: float`, `: bool`, `: int`,
+  `: ptr<void>`), which `elab_defn` does not push on that channel, the call's
+  form being one of the body's tail calls -- through `if` arms and the last
+  form of `do` / `let` / `let*` (`elab_collect_tail_calls`,
+  `Elab.ret_tail_calls`, `src/compiler/elab_fns.c`).  Pushing the scalar
+  return on the shared channel was tried first and refused: an unannotated
+  `let` init and every `do` statement read it, so `(let [ap (app)] ...)` in an
+  `: int` main dispatched `app` at `int` (`arrow-instance-apply`,
+  `category-instance-basic`, `io-stdlib-roundtrip`,
+  `errors/rt-return-dispatch-unascribed`).
+
+Only with neither does it fall back to argument 0, which keeps `(+ 1 (f m))`
+at `int` working as before.  Fix direction 2 (refuse a result-only variable
+with nothing to instantiate it) was not taken: that fallback is what an
+`int`-typed use relies on.  Pinned by
+`tests/fixtures/rank2-result-only-tyvar-from-expected` (a struct return, a
+`cstr` and a `float` return, tail position through `if` / `let` / `do`, an
+annotated `let`, an ascription, a `(-> cstr a)` parameter at `int`, and the
+argument-position fallback; compiled, `tur --interpret` and `tur jit` agree).
+
 **Severity: low (compile-time rejection, no wrong answer).** Found on
 2026-11-06 while widening `await-through-rank2-struct-position`
 (await-parks-only-to-the-nearest-c-frame, tenth pass); the shape was dropped

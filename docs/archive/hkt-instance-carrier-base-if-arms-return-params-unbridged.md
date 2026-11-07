@@ -1,5 +1,27 @@
 # HKT instance method whose `if` arms return a parameter: carrier base assigns the int64 word to the by-value merge temp
 
+**Resolved 2026-11-07.** A generic carrier base's parameter (the int64 word)
+delivered into a sink spelled at its resolved by-value aggregate gets the
+carrier->concrete readback an argument position already got
+(`emit_erased_param_into_byval_sink`, `src/compiler/emit_expr.c`, keyed on
+`expr_is_erased_carrier_param`): an `if` arm into its merge temp, a `match`
+arm (`match_arm_carrier_bridge`), and the base's own tail
+(`src/compiler/emit_fns.c`).  `emit_arm_is_byval_agg_var` no longer answers
+"already the aggregate" for such a parameter, so an `if` whose temp is typed
+by an arm's by-value producer bridges it too.
+
+The shape was wider than filed: `(pick [x y] x)` -- the parameter as the
+whole body -- failed the same way (`return x;` from a function returning
+`tur_adt_Option__int`).  Root-cause item 2 did not reproduce: on this build
+the base returns the aggregate, its dictionary slot is spelled the same, and
+the dict clone casts the slot to the aggregate-returning type, so the three
+agree; only the parameter readback was missing.
+
+Pinned by `tests/fixtures/hkt-carrier-base-returns-param` (`if`, `match` and
+whole-body methods, each through a constrained generic and statically, the
+answer from each parameter in turn; compiled, `tur --interpret` and `tur jit`
+agree).
+
 **Severity: medium** -- a hard C compile error ("incompatible types when
 assigning to type 'tur_adt_Option__int' from type 'int64_t'") on a plain
 shape, but only when the instance is reached through a dictionary. Found

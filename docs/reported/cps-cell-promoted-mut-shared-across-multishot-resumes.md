@@ -1,5 +1,22 @@
 # A `^mut` the CPS backend keeps in a shared cell is shared by every `^multishot` run
 
+**Narrowed again 2026-11-07: a `bool`, narrow-integer, `float32` or
+plain-data struct cell is re-celled too.** A cell in a function whose cells
+are re-celled (`g_cells_fresh_ok`) is made by `__dk_cell_new`, which puts the
+value's size in a 16-byte header in front of it, and `__dk_cells_fresh` copies
+each masked cell at that size instead of as one word
+(`src/compiler/emit_dk_runtime.c`). The mask admits what a byte copy may
+duplicate (`byref_cell_is_recellable`, `src/compiler/emit_cps_ir.c`): a
+one-word value as before, a `bool`, `int8`..`uint32`, `float32`, and a
+one-constructor struct with no drop glue whose every field is a scalar slot.
+An owning struct stays shared (two runs would each own one value). Pinned by
+`tests/fixtures/cps-multishot-cell-per-run-narrow-and-struct` (leak-checked; a
+loop cell of each kind, a struct join cell, two performs and four runs, a
+one-shot handler; every line equals `tur --interpret` and `tur jit`).
+**Still open:** a cell in a function that also builds a closure literal (the
+closure's env is not a DK env and cannot be re-celled), and an owning struct
+cell.
+
 **Narrowed 2026-11-06: both repro shapes agree now (`12022`, `16026` on all
 three engines).** Fix direction 2, at the DK runtime. A frame whose env holds
 a one-word by-reference cell (an `int64_t`, a `double`, a pointer) records

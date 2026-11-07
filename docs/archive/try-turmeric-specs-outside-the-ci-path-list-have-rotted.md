@@ -6,7 +6,7 @@ established). CI is green because it does not run these specs.
 **RESOLVED 2026-11-06** (#1462): all ten `repl-intelligence` tests pass in
 CI's blocking desktop step on the first attempt, the four rotted ones
 included. The eleven other specs CI never ran are their own report now:
-[web-specs-never-run-in-ci](../reported/web-specs-never-run-in-ci.md).
+[web-specs-never-run-in-ci](web-specs-never-run-in-ci.md).
 
 **Worked 2026-11-06: all four fixed or diagnosed, and the spec is on CI's list.**
 No bundle could be built in that session (Emscripten was not installable), so
