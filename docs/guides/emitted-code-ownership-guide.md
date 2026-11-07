@@ -640,8 +640,10 @@ Check [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/doc
 **Option/Result boxes**
 
 - [carrier-sum-option-boxes-have-no-owner](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/carrier-sum-option-boxes-have-no-owner.md) --
-  carrier cells behind consumers the compiler cannot see through (dictionary
-  dispatch, HKT-constrained generics).
+  carrier cells behind consumers the compiler cannot see through: an
+  HKT-constrained generic reached through a rank-2 `forall` parameter, and
+  code that erased the box itself. (A DIRECT call to such a generic is owned
+  since 2026-11-07: its dict clone is pinned to the call site's instances.)
 - [sum-closure-payload-never-dropped](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sum-closure-payload-never-dropped.md) --
   a closure in an Option/Result local beyond the simplest shapes.
 

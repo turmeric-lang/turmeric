@@ -1300,6 +1300,22 @@ struct FnDef {
     Binding             *dict_clone_params[MAX_FN_CONSTRAINTS];
     struct TypeClass    *dict_clone_classes[MAX_FN_CONSTRAINTS];
     uint8_t              n_dict_clone;
+    /* carrier-sum-option-boxes-have-no-owner (dictionary dispatch): a Route B
+     * clone -- the DIRECT call to a constrained HKT generic at concrete
+     * instances (elab_call.c) -- is PINNED to those instances:
+     * dict_clone_pinned[k] is the instance whose dictionary singleton the one
+     * call site that uses this clone passes for constraint k.  A Route B clone
+     * is minted per call site, so the pin is exact, and it is what lets the
+     * ownership questions (is this method's result fresh, does it retain this
+     * argument) be asked of the method that RUNS, where a dict load answered
+     * nothing.  NULL for the ambient clones the rank-2 / nested-mapper paths
+     * mint: those run under whatever dictionary arrives and are never pinned. */
+    struct TypeClassInstance *dict_clone_pinned[MAX_FN_CONSTRAINTS];
+    /* ... and the by-value aggregate the pinned call site reads the clone's
+     * int64 carrier back as (`(Option int)`): the readback bridge keys its
+     * free on the sum type, and the clone's own signature spells `(m int)`.
+     * TY_UNKNOWN (zero) when the clone is not pinned. */
+    Type                 dict_clone_pinned_result;
     /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 1): memoized on the
      * ORIGINAL constrained FnDef the first time it is dict-cloned.  Every clone
      * of the same original reuses these per-constraint dict param Bindings so
@@ -2354,6 +2370,17 @@ bool tur_name_is_reserved_special_form(const char *name);
  * argument a fresh producer -- a closure literal whose body is fresh, or a
  * defn so flagged.  Defined in elab_fns.c; shared with the emitter. */
 bool call_returns_fresh_sum_box(const Expr *call);
+/* carrier-sum-option-boxes-have-no-owner (dictionary dispatch): the instance
+ * method FnDef a dict-dispatched `call` runs inside PINNED dict clone `clone`
+ * (FnDef.dict_clone_pinned), or NULL -- not a pinned clone, not one of its
+ * constraints' classes, or no such method. */
+struct FnDef *dict_clone_pinned_method_fndef(const struct FnDef *clone,
+                                             const Expr *call);
+/* The pinned clone whose body the freshness walk is currently asked about, so
+ * a dict-dispatched call inside it (and inside its continuation lambdas) is
+ * answered by the pinned method rather than "not static, not fresh".  Returns
+ * the previous value; callers restore it.  NULL clears. */
+const struct FnDef *elab_fresh_pin_clone_set(const struct FnDef *clone);
 /* The same question with the callee supplied by the caller -- the emitter's
  * per-spec re-resolution of a dictionary dispatch hands in the instance
  * method that actually runs. */

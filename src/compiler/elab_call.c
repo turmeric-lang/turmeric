@@ -13052,6 +13052,29 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                  * so the existing carrier->concrete ascription bridge derefs. */
                 if (call_result_type.kind == TY_APP)
                     dict_clone_byvalue_result = true;
+                /* carrier-sum-option-boxes-have-no-owner (dictionary dispatch):
+                 * PIN the clone to the instances this one call site passes
+                 * (the clone is minted per site, so the pin is exact), and
+                 * decide its result's freshness with the pinned methods
+                 * standing in for the dict loads.  `(bind x (fn [v] (pure
+                 * ..)))` at Option is fresh: Option's `bind` is fresh through
+                 * its continuation and `pure` mints a `Some`.  The caller's
+                 * readback bridge then owns the carrier cell it copies out of,
+                 * as it does any fresh producer's.  A method that hands an
+                 * argument back (`alt-or`) keeps the clone "not fresh", and
+                 * every ambient clone (rank-2 / nested-mapper paths) stays
+                 * unpinned: those run under whatever dictionary arrives. */
+                if (clone->source_fn_def &&
+                    clone->source_fn_def->n_dict_clone == nc) {
+                    FnDef *pcf = clone->source_fn_def;
+                    for (uint8_t ci = 0; ci < nc; ci++)
+                        pcf->dict_clone_pinned[ci] = insts[ci];
+                    pcf->dict_clone_pinned_result = call_result_type;
+                    const FnDef *pin_prev = elab_fresh_pin_clone_set(pcf);
+                    elab_stamp_sum_freshness(clone, pcf->params, pcf->n_params,
+                                             pcf->body);
+                    elab_fresh_pin_clone_set(pin_prev);
+                }
             }
         }
     }
