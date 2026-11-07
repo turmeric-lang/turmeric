@@ -1,0 +1,1 @@
+cps-local-fn-alias-or-lambda-called-in-place-refused: the mutual letrec group's boxes are reaped at the entry boundary.

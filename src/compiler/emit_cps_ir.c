@@ -8500,6 +8500,11 @@ typedef struct {
      * struct but writes elsewhere, so it never reaches the backedge. */
     char        *loop_reaps[16];
     uint32_t     n_loop_reaps;
+    /* The letrec knots open in this body (letraw.knot_let): the member raw
+     * lets nest, so the first member's letraw opens the knot and the last
+     * member's closes it, restoring what it saved here. */
+    LetrecKnot   knot_saves[8];
+    uint32_t     n_knot_saves;
     /* cps-self-call-through-join-grows-the-stack: `__kont` here is the live
      * downstream chain and nothing on the C stack between this code and the
      * trampoline driver's landing consumes a returned value -- a main body,
@@ -11080,6 +11085,22 @@ static void emit_letraw(CE *ce, const CTerm *t) {
             ce->ctx->dyn_tail_guard = NULL;
         }
     }
+    /* A member of a mutual `letrec` of capturing closures: its box is built
+     * under the letrec knot, so its fill of a sibling bound later is zeroed now
+     * and patched when that sibling is (emit_letrec_knot_bound, below). */
+    const Expr *knot_let = t->as.letraw.knot_let;
+    bool knot_open = false;
+    if (knot_let) {
+        if (t->as.letraw.knot_idx == 0) {
+            if (ce->n_knot_saves < sizeof ce->knot_saves / sizeof ce->knot_saves[0]) {
+                emit_letrec_knot_begin(ce->ctx, knot_let, &ce->knot_saves[ce->n_knot_saves++]);
+                knot_open = true;
+            }
+        } else {
+            knot_open = ce->ctx->letrec_knot.active;
+        }
+        if (knot_open) emit_letrec_knot_owner(ce->ctx, knot_let, t->as.letraw.knot_idx);
+    }
     char *rhs = emit_value(ce->ctx, ce->out, t->as.letraw.e);
     ce->ctx->dyn_tail_mode = DYN_TAIL_NONE;
     ce->ctx->dyn_tail_guard = NULL;
@@ -11233,6 +11254,14 @@ static void emit_letraw(CE *ce, const CTerm *t) {
      * reap never double-frees, and never walks -- __dk_reap_ptr is a bare free).
      * A scalar-captured closure frees cleanly; the freeable gate already excluded
      * a non-scalar-returning closure (result could alias the env). */
+    if (knot_let && knot_open) {
+        /* The member is bound: flush every sibling fill that waited on it. */
+        int si = ce->ctx->indent; ce->ctx->indent = ce->indent;
+        emit_letrec_knot_bound(ce->ctx, ce->out, t->as.letraw.x.bind);
+        ce->ctx->indent = si;
+        if (t->as.letraw.knot_idx + 1 == knot_let->as.let_.n && ce->n_knot_saves > 0)
+            emit_letrec_knot_end(ce->ctx, &ce->knot_saves[--ce->n_knot_saves]);
+    }
     bool loop_reap_pushed = false;
     if (t->as.letraw.reap_env) {
         /* closure-drop-glue: flag-on this env is headered (env[-1] drop-glue),
