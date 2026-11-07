@@ -38,7 +38,8 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [cloudflare-guide-service-captures-into-fiber-new](cloudflare-guide-service-captures-into-fiber-new.md) | low (a guide program that never worked) | The Cloudflare guide's `service.tur` starts its fibers with capturing lambdas, `(fiber-new (fn [] : nil (handle-client client-fd)) 0)`; `fiber-new` runs its body as a bare C function pointer, so the closure record was jumped to as code, and since `fiber-new` takes `(c-fn [] nil)` the program is TUR-E0295. No test compiles the guide |
+| [scheduler-finished-fibers-never-freed](scheduler-finished-fibers-never-freed.md) | low-medium (leak per spawned fiber) | `tur_scheduler_run*` drop a done fiber from the queue and never free it; a fiber-per-connection server keeps a 1 MiB stack per connection (1,001 fibers: +1007 MiB VmSize). LeakSanitizer misses it: a finished fiber's stack still points at the next |
+| ~~[cloudflare-guide-service-captures-into-fiber-new](../archive/cloudflare-guide-service-captures-into-fiber-new.md)~~ | low (a guide program that never worked) | **RESOLVED 2026-11-07** (archived): the service starts captureless fiber bodies that read their fd from a fiber-local slot, `scheduler-spawn` takes a `FiberHandle`, and `tur_cloudflare_guide_service` builds both copies and serves three concurrent connections. Found on the way and fixed: the C-unit prune counted both arms of an `#ifdef` and dropped `main` from every program loading `async_socket.tur` (`prune-pp-conditional-arm-braces`) |
 
 ## Found executing await-parks-only-to-the-nearest-c-frame (filed 2026-11-06)
 

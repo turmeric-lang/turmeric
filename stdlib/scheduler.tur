@@ -11,9 +11,11 @@
 ;; API:
 ;;   scheduler-new          []                           -> ptr<void>
 ;;   scheduler-current      []                           -> ptr<void>
-;;   scheduler-spawn        [sched :ptr<void> f :ptr<void>] -> nil
+;;   scheduler-spawn        [sched :ptr<void> f :FiberHandle] -> nil
 ;;   scheduler-run          [sched :ptr<void>]            -> nil
 ;;   scheduler-run-to-completion [sched :ptr<void>]    -> nil
+;; scheduler-spawn takes fiber.tur's FiberHandle, so a stray pointer is refused.
+(load "stdlib/fiber.tur")
 ;; Create a new scheduler. Only one scheduler is supported in v1.
 ;;; scheduler-new -- create a new cooperative fiber scheduler.
 ;;;
@@ -51,14 +53,14 @@
 ;;;
 ;;; Parameters:
 ;;;   sched -- scheduler pointer returned by scheduler-new
-;;;   f     -- fiber pointer to enqueue
+;;;   f     -- fiber handle returned by fiber-new
 ;;;
 ;;; Example:
-;;;   (scheduler-spawn sched my-fiber)
+;;;   (scheduler-spawn sched (fiber-new my-fn 0))
 ;;;
 ;;; Since: Phase T21
 
-(defn scheduler-spawn [sched : ptr<void> f : ptr<void>] : nil
+(defn scheduler-spawn [sched : ptr<void> f : FiberHandle] : nil
   ```c
   tur_scheduler_spawn((TurScheduler *)sched, (FiberBlock *)f);
   ```)

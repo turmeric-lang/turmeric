@@ -1670,6 +1670,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_sanitize_programs PROPERTIES TIMEOUT 720)
+# cloudflare-guide-service-captures-into-fiber-new: the Cloudflare guide's
+# service.tur (both copies) builds without the prune's full-unit retry, and
+# answers three concurrent connections on a loopback port.
+add_test(
+  NAME tur_cloudflare_guide_service
+  COMMAND bash tests/check-cloudflare-guide-service.sh $<TARGET_FILE:tur>
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_cloudflare_guide_service PROPERTIES TIMEOUT 720)
 # turi-call-frames-never-reclaimed: `tur --interpret` hands an activation's
 # call frame (and its let / match-arm frames) back when it returns uncaptured.
 # Runs one program with and without reclamation and asserts peak RSS halves.
