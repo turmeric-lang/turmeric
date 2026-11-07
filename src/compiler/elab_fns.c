@@ -10056,6 +10056,38 @@ static void collect_return_values(Expr *e, Expr **out, uint32_t *n, uint32_t cap
     }
 }
 
+/* rank2-result-only-tyvar-pinned-to-first-argument: record the call forms in
+ * tail position of a function body -- through `if` arms and the last form of
+ * `do` / `let` / `let*` -- in Elab.ret_tail_calls.  Syntactic, like
+ * rt_check_fn_tail_walk; a form it cannot see through is simply not named. */
+void elab_collect_tail_calls(Elab *e, const Form *f, uint32_t depth) {
+    if (!f || depth > 32 || f->tag != F_LIST || f->as.list.len == 0) return;
+    const Form *h0 = f->as.list.items[0];
+    const char *h = (h0->tag == F_SYM && h0->as.sym) ? h0->as.sym->name : NULL;
+    uint32_t len = f->as.list.len;
+    if (h && strcmp(h, "if") == 0) {
+        for (uint32_t i = 2; i < len && i < 4; i++)
+            elab_collect_tail_calls(e, f->as.list.items[i], depth + 1);
+        return;
+    }
+    if (h && strcmp(h, "do") == 0) {
+        if (len > 1) elab_collect_tail_calls(e, f->as.list.items[len - 1], depth + 1);
+        return;
+    }
+    if (h && (strcmp(h, "let") == 0 || strcmp(h, "let*") == 0)) {
+        if (len > 2) elab_collect_tail_calls(e, f->as.list.items[len - 1], depth + 1);
+        return;
+    }
+    if (e->n_ret_tail_calls < ELAB_RET_TAIL_CALLS_MAX)
+        e->ret_tail_calls[e->n_ret_tail_calls++] = f;
+}
+
+bool elab_form_is_ret_tail_call(const Elab *e, const Form *f) {
+    for (uint32_t i = 0; i < e->n_ret_tail_calls; i++)
+        if (e->ret_tail_calls[i] == f) return true;
+    return false;
+}
+
 Expr *elab_defn(Elab *e, const Form *call) {
     /* forward-call-to-aggregate-result-types-as-carrier: a module type
      * elaborated since the last defn may be what a pending forward decl's
@@ -12832,6 +12864,24 @@ Expr *elab_defn(Elab *e, const Form *call) {
         e->ret_contract = rc;
     }
     if (body_expected) e->expected_type = body_expected;
+    /* rank2-result-only-tyvar-pinned-to-first-argument: a scalar declared
+     * return is not pushed on the expected-type channel (an unannotated `let`
+     * init and every `do` statement would read it -- `(let [ap (app)] ...)` in
+     * an `: int` main dispatched `app` at int), so the calls in TAIL position
+     * are named instead, for the one reader that needs them. */
+    const Form *saved_tail_calls[ELAB_RET_TAIL_CALLS_MAX];
+    uint32_t saved_n_tail_calls = e->n_ret_tail_calls;
+    Type saved_tail_scalar = e->ret_tail_scalar;
+    memcpy(saved_tail_calls, e->ret_tail_calls, sizeof saved_tail_calls);
+    e->n_ret_tail_calls = 0;
+    e->ret_tail_scalar = type_simple(TY_UNKNOWN, CK_COPY);
+    if (!body_expected && return_annotated && n_body > 0 &&
+        (return_kind == TY_CSTR || return_kind == TY_FLOAT ||
+         return_kind == TY_FLOAT32 || return_kind == TY_BOOL ||
+         return_kind == TY_INT || return_kind == TY_PTR_VOID)) {
+        e->ret_tail_scalar = type_from_kind(return_kind);
+        elab_collect_tail_calls(e, call->as.list.items[body_start + n_body - 1], 0);
+    }
     {
         /* Internal defines: splice (define name init) into nested let forms. */
         Form *spliced = splice_internal_defines(e,
@@ -12932,6 +12982,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
     }
+    e->n_ret_tail_calls = saved_n_tail_calls;
+    e->ret_tail_scalar = saved_tail_scalar;
+    memcpy(e->ret_tail_calls, saved_tail_calls, sizeof saved_tail_calls);
     e->ret_contract = saved_ret_contract;
     e->ret_expected_type = saved_ret_expected;
     /* nested-defn-accepted-outer-returns-zero: a body whose LAST form is a

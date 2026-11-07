@@ -15029,6 +15029,29 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                         }
                     }
                 }
+                /* rank2-result-only-tyvar-pinned-to-first-argument: no
+                 * argument's parameter names the result variable --
+                 * `f (forall [a] (-> int a))` -- so no argument says what `a`
+                 * is here.  Instantiate it from the expected type the call
+                 * site carries (the enclosing function's declared return, an
+                 * annotated `let`, an ascription), as the TY_APP result arm
+                 * below does; only with no expectation fall back to argument
+                 * 0, which is right at `int` and nowhere else. */
+                if (!pin && poly_expected &&
+                    poly_expected->kind != TY_TYVAR &&
+                    poly_expected->kind != TY_UNKNOWN &&
+                    poly_expected->kind != TY_ANY &&
+                    poly_expected->kind != TY_FORALL &&
+                    poly_expected->kind != TY_NIL) {
+                    pin = poly_expected;
+                    result_kind = pin->kind;
+                }
+                if (!pin && !poly_expected &&
+                    e->ret_tail_scalar.kind != TY_UNKNOWN &&
+                    elab_form_is_ret_tail_call(e, call)) {
+                    pin = &e->ret_tail_scalar;
+                    result_kind = pin->kind;
+                }
                 if (!pin && n_args > 0 && args[0]) pin = &args[0]->type;
                 if (pin && (pin->kind == TY_APP || pin->kind == TY_ADT)) {
                     Type *rf = (Type *)arena_alloc(e->arena, sizeof(Type));
