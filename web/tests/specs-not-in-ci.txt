@@ -5,11 +5,9 @@
 # line here for a spec CI does run.  A spec off every list passes by not
 # running -- docs/archive/try-turmeric-specs-outside-the-ci-path-list-have-rotted.md.
 #
-# Tracked as docs/reported/web-specs-never-run-in-ci.md.
+# The gap this list tracked is closed:
+# docs/archive/web-specs-never-run-in-ci.md.
 # Promoting one: add it to the desktop path list in .github/workflows/ci.yml
 # ("Run broader smoke suite (desktop)"), delete its line here, and fix what CI
 # then reports.
 prod-smoke.spec.js -- drives the live turmeric-lang.com, not this checkout; its own config (`npm run test:prod`)
-run-session.spec.js -- never run in CI; waits for the evaluator (Ready), so it needs the wasm bundle a local run had no Emscripten for
-share-link.spec.js -- never run in CI; 2 of 3 tests fail locally without the wasm bundle (the /try/ app may not come up without it), unconfirmed against a built one
-toolbar-overflow.spec.js -- never run in CI; waits for the evaluator (Ready), so it needs the wasm bundle a local run had no Emscripten for

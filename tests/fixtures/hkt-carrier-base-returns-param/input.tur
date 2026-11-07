@@ -1,0 +1,47 @@
+;; hkt-instance-carrier-base-if-arms-return-params-unbridged: an HKT instance
+;; method whose body hands back one of its own parameters -- from an `if` arm,
+;; a `match` arm, or as the whole body -- reached through a dictionary (a
+;; constrained generic).  The carrier base's parameters are the int64 word and
+;; its merge temps and return the resolved `(Option int)`, so the parameter
+;; needs the carrier->concrete readback an argument gets; it was assigned as
+;; is, a hard cc error.  Each method is called statically and through the
+;; dictionary, with the answer coming from each parameter in turn.
+
+(defclass Pick [^m]
+  (pick-if [x : (m int) y : (m int)] : (m int))
+  (pick-match [x : (m int) y : (m int)] : (m int))
+  (pick-first [x : (m int) y : (m int)] : (m int))
+  (pick-second [x : (m int) y : (m int)] : (m int)))
+
+(definstance Pick [Option]
+  (pick-if [x y] (if (some? x) x y))
+  (pick-match [x y] (match x (Some v) (if (> v 10) x y) (None) y))
+  (pick-first [x y] x)
+  (pick-second [x y] y))
+
+(defn via-if [^m] [^Pick m a : (m int) b : (m int)] : (m int) (pick-if a b))
+(defn via-match [^m] [^Pick m a : (m int) b : (m int)] : (m int) (pick-match a b))
+(defn via-first [^m] [^Pick m a : (m int) b : (m int)] : (m int) (pick-first a b))
+(defn via-second [^m] [^Pick m a : (m int) b : (m int)] : (m int) (pick-second a b))
+
+(defn nothing [] : (Option int) (none))
+
+(defn show [o : (Option int)] : nil (println (unwrap-or o -1)))
+
+(defn main [] : int
+  ;; through the dictionary
+  (show (via-if (some 1) (nothing)))        ; 1
+  (show (via-if (nothing) (some 2)))        ; 2
+  (show (via-match (some 30) (some 3)))     ; 30
+  (show (via-match (some 4) (some 40)))     ; 40
+  (show (via-match (nothing) (some 5)))     ; 5
+  (show (via-first (some 6) (some 60)))     ; 6
+  (show (via-second (some 7) (some 70)))    ; 70
+  (show (via-first (nothing) (some 8)))     ; -1
+  ;; statically
+  (show (pick-if (some 9) (nothing)))       ; 9
+  (show (pick-if (nothing) (some 10)))      ; 10
+  (show (pick-match (some 11) (some 0)))    ; 11
+  (show (pick-first (some 12) (some 0)))    ; 12
+  (show (pick-second (some 0) (some 13)))   ; 13
+  0)

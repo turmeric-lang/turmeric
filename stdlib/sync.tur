@@ -43,11 +43,12 @@
 ;;;
 ;;; Parameters:
 ;;;   flag    -- once-flag pointer from once-flag-new
-;;;   init-fn -- zero-argument C function pointer to invoke at most once
+;;;   init-fn -- a captureless zero-argument function `(c-fn [] nil)`,
+;;;              invoked at most once
 ;;;
 ;;; Since: Phase T19-C
 
-(defn once-call [flag : ptr<void> init-fn : ptr<void>] : nil
+(defn once-call [flag : ptr<void> init-fn : (c-fn [] nil)] : nil
   ```c
   pthread_once((pthread_once_t *)flag, (void (*)(void))init_fn);
   ```)

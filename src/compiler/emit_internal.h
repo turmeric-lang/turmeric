@@ -1075,6 +1075,15 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                           char *src_str,
                           CarrierKind src_ck, CarrierKind sink_ck,
                           Type concrete_ty);
+/* hkt-instance-carrier-base-if-arms-return-params-unbridged: a generic
+ * carrier base's parameter (the int64 word) delivered into a sink spelled at
+ * its resolved by-value aggregate (`sink_c`) -- an `if`/`match` merge temp or
+ * the base's own C return.  NULL when `arm` is not such a parameter or the
+ * sink is not that aggregate; else the carrier->concrete readback (malloc'd).
+ * `val` is borrowed.  emit_expr.c. */
+char *emit_erased_param_into_byval_sink(EmitCtx *ctx, Buf *body,
+                                        const Expr *arm, const char *sink_c,
+                                        Type sink, const char *val);
 /* Like emit_carrier_bridge, but for a CK_CONCRETE -> CK_CARRIER crossing whose
  * carrier value is STORED in a heap container that outlives the current
  * expression (e.g. vec-push! / map-set! / set-add! of a by-value aggregate

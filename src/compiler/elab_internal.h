@@ -1253,6 +1253,16 @@ typedef struct Elab {
      * type, say) are not its type.  NULL when undeclared; saved and restored
      * exactly where ret_contract is. */
     Type *ret_expected_type;
+    /* rank2-result-only-tyvar-pinned-to-first-argument: the call forms in
+     * tail position of the defn body being elaborated, and its scalar
+     * declared return (TY_UNKNOWN when it is not one).  A rank-2 call whose
+     * result variable no argument names instantiates it from this when the
+     * call is one of these forms and nothing is on the expected-type channel.
+     * Saved and restored around each defn body (elab_collect_tail_calls). */
+#define ELAB_RET_TAIL_CALLS_MAX 16
+    const struct Form *ret_tail_calls[ELAB_RET_TAIL_CALLS_MAX];
+    uint32_t n_ret_tail_calls;
+    Type ret_tail_scalar;
 } Elab;
 
 /* See Elab.ret_contract.  Each predicate is NULL when absent; they are applied
@@ -1829,6 +1839,8 @@ struct CtFn {
 
 /* elab_core.c */
 Type type_from_kind(TypeKind k);
+void elab_collect_tail_calls(Elab *e, const struct Form *f, uint32_t depth);
+bool elab_form_is_ret_tail_call(const Elab *e, const struct Form *f);
 TypeKind typekind_from_symbol(const char *name);
 uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out_arg_kinds);
 bool fwd_decl_scan_variadic(const Form *params_f, TypeKind *rest_kind);

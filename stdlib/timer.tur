@@ -22,7 +22,8 @@
 ;;;
 ;;; Parameters:
 ;;;   ms       -- delay in milliseconds before the callback fires (:int).
-;;;   callback -- a :ptr<void> to the function to invoke; signature void(*)(void*).
+;;;   callback -- a captureless function `(c-fn [ptr<void>] nil)`, called
+;;;               with arg when the timer fires.
 ;;;   arg      -- opaque :ptr<void> passed to callback when it fires.
 ;;;
 ;;; Returns:
@@ -36,7 +37,7 @@
 ;; Schedule a callback to fire after ms milliseconds.
 ;; Returns a TimerId that can be passed to timer-cancel.
 
-(defn timer-set [ms : int callback : ptr<void> arg : ptr<void>] : TimerId
+(defn timer-set [ms : int callback : (c-fn [ptr<void>] nil) arg : ptr<void>] : TimerId
   ```c
   if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
   int64_t deadline = tur_monotonic_ns() + (int64_t)ms * 1000000LL;

@@ -1,0 +1,64 @@
+;; rank2-result-only-tyvar-pinned-to-first-argument: a call through a rank-2
+;; parameter whose result variable no argument names --
+;; `f (forall [a] (-> int a))` -- takes `a` from what the call site expects:
+;; the enclosing function's declared return (a struct, or a scalar in tail
+;; position, through `if` / `let` / `do`), an annotated `let`, an ascription.
+;; It used to be typed from its first argument (int) and refused at cstr or a
+;; struct.
+
+(defstruct P [a : int b : int])
+
+(defn slen [s : cstr] : int
+  ```c
+  return (int64_t)strlen(s);
+  ```)
+
+(defn mk-p [m : int] : P (P m 1))
+(defn name-of [m : int] : cstr (if (= m 13) "thirteen" "other"))
+(defn half [m : int] : float (/ (as float m) 2.0))
+(defn shout [s : cstr] : int (+ 100 (slen s)))
+(defn twice [m : int] : int (* 2 m))
+
+;; the declared return is a struct
+(defn r2-struct [f (forall [a] (-> int a)) m : int] : P (f m))
+
+;; a scalar declared return, the call in tail position
+(defn r2-cstr [f (forall [a] (-> int a)) m : int] : cstr (f m))
+(defn r2-float [f (forall [a] (-> int a)) m : int] : float (f m))
+
+;; tail position through `if`, `let` and `do`
+(defn r2-if [f (forall [a] (-> int a)) m : int] : cstr
+  (if (> m 0) (f m) "non-positive"))
+(defn r2-let [f (forall [a] (-> int a)) m : int] : cstr
+  (let [k (+ m 1)]
+    (f k)))
+(defn r2-do [f (forall [a] (-> int a)) m : int] : cstr
+  (do (println "in r2-do")
+      (f m)))
+
+;; an annotated let, and an ascription
+(defn r2-let-ann [f (forall [a] (-> int a)) m : int] : int
+  (let [s : cstr (f m)]
+    (slen s)))
+(defn r2-ascribe [f (forall [a] (-> int a)) m : int] : float
+  (+ (:: (f m) float) 0.25))
+
+;; the result variable is int at an argument whose type is not int
+(defn r2-from-cstr [f (forall [a] (-> cstr a)) s : cstr] : int (f s))
+
+;; no expectation anywhere: an int result still works, as before
+(defn r2-arg [f (forall [a] (-> int a)) m : int] : int (+ 1 (f m)))
+
+(defn main [] : int
+  (println (.a (r2-struct (:: mk-p (forall [a] (-> int a))) 13)))
+  (println (r2-cstr (:: name-of (forall [a] (-> int a))) 13))
+  (println (r2-float (:: half (forall [a] (-> int a))) 7))
+  (println (r2-if (:: name-of (forall [a] (-> int a))) 13))
+  (println (r2-if (:: name-of (forall [a] (-> int a))) -2))
+  (println (r2-let (:: name-of (forall [a] (-> int a))) 12))
+  (println (r2-do (:: name-of (forall [a] (-> int a))) 13))
+  (println (r2-let-ann (:: name-of (forall [a] (-> int a))) 13))
+  (println (r2-ascribe (:: half (forall [a] (-> int a))) 7))
+  (println (r2-from-cstr (:: shout (forall [a] (-> cstr a))) "abcd"))
+  (println (r2-arg (:: twice (forall [a] (-> int a))) 20))
+  0)

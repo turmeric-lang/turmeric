@@ -1,0 +1,89 @@
+;; cps-cell-promoted-mut-shared-across-multishot-resumes: every resume of a
+;; `^multishot` k runs its own copy of the rest of the handled body, and a
+;; local bound inside it starts from its value at the `perform` in every run.
+;; A `^mut` the CPS backend keeps in a heap cell is re-celled per run; that
+;; covered one-word cells only, so a `bool`, a narrow integer, a `float32` and
+;; a plain-data struct cell were still shared, and the second run started
+;; from the first run's value.  Each line equals `tur --interpret`.
+
+(defeffect Choose [] : int)
+
+(defstruct Acc [n : int m : int])
+
+;; a loop's cell-carried variable, one shape per cell kind
+(defn lp-bool [] : int
+  (let [^mut i    0
+        ^mut seen false]
+    (while (< i 1)
+      (when (= i 0) (set! seen (not seen)))
+      (let [v (perform (Choose))]
+        (when (= v 10) (set! seen (not seen))))
+      (set! i (+ i 1)))
+    (if seen 1 0)))
+
+(defn lp-f32 [] : int
+  (let [^mut i 0
+        ^mut x (as float32 1.5)]
+    (while (< i 1)
+      (when (= i 0) (set! x (+ x (as float32 1.0))))
+      (let [v (perform (Choose))] (set! x (+ x (as float32 v))))
+      (set! i (+ i 1)))
+    (as int x)))
+
+(defn lp-i32 [] : int
+  (let [^mut i 0
+        ^mut x (as int32 1)]
+    (while (< i 1)
+      (when (= i 0) (set! x (+ x (as int32 1))))
+      (let [v (perform (Choose))] (set! x (+ x (as int32 v))))
+      (set! i (+ i 1)))
+    (as int x)))
+
+(defn lp-u8 [] : int
+  (let [^mut i 0
+        ^mut x (as uint8 3)]
+    (while (< i 1)
+      (when (= i 0) (set! x (+ x (as uint8 1))))
+      (let [v (perform (Choose))] (set! x (+ x (as uint8 v))))
+      (set! i (+ i 1)))
+    (as int x)))
+
+(defn lp-struct [] : int
+  (let [^mut i 0
+        ^mut a (Acc 1 100)]
+    (while (< i 1)
+      (when (= i 0) (set! a (Acc (+ (.n a) 1) (.m a))))
+      (let [v (perform (Choose))] (set! a (Acc (+ (.n a) v) (.m a))))
+      (set! i (+ i 1)))
+    (+ (.n a) (.m a))))
+
+;; a join cell: a suspending branch assigns the struct
+(defn br-struct [c : bool] : int
+  (let [^mut s (Acc 5 0)]
+    (if c
+      (do (set! s (Acc (+ (.n s) 1) 0))
+          (let [v (perform (Choose))] (set! s (Acc (+ (.n s) v) v))))
+      nil)
+    (+ (.n s) (.m s))))
+
+;; two performs, four runs: the struct cell at each run's own value
+(defn two-performs [] : int
+  (let [^mut i 0
+        ^mut a (Acc 0 0)]
+    (while (< i 2)
+      (when (>= i 0) (set! a (Acc (+ (.n a) 1) (.m a))))
+      (let [v (perform (Choose))] (set! a (Acc (.n a) (+ (.m a) v))))
+      (set! i (+ i 1)))
+    (+ (* 100 (.n a)) (.m a))))
+
+(defn main [] : int
+  (println (handle (lp-bool) (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (lp-f32) (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (lp-i32) (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (lp-u8) (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (lp-struct) (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (br-struct true) (Choose [] ^multishot k) (+ (* 1000 (resume k 10)) (resume k 20))))
+  (println (handle (two-performs) (Choose [] ^multishot k) (+ (resume k 1) (resume k 2))))
+  ;; a one-shot handler is unaffected
+  (println (handle (lp-struct) (Choose [] k) (resume k 10)))
+  0)

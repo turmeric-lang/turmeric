@@ -1,0 +1,1 @@
+argument 2 of 'timer-set' has the wrong arity for C function pointer parameter: expected 1 parameter(s), got 0

@@ -1,5 +1,14 @@
 # Eleven Try Turmeric specs have never run in CI
 
+**Resolved 2026-11-07: the last three promoted.** `run-session`, `share-link`
+and `toolbar-overflow` are on the desktop path list in
+`.github/workflows/ci.yml` ("Run broader smoke suite (desktop) -- BLOCKING"),
+the step whose job builds the wasm bundle they wait for, and their lines are
+gone from `web/tests/specs-not-in-ci.txt`. That file now names only
+`prod-smoke`, which is not part of this gap (it drives the live site through
+its own config). `python3 tests/check-web-specs-in-ci.py` reports 39 specs run
+by CI and 1 excluded.
+
 **Narrowed 2026-11-06: seven promoted.** `ci-api`, `docs-highlight`,
 `docs-restore`, `editor-highlight`, `pwa-update`, `sw-kill` and
 `theme-toggle` are on the desktop path list now; all 42 of their tests passed

@@ -2410,6 +2410,8 @@ jobs:
           tests/docs-restore.spec.js tests/editor-highlight.spec.js
           tests/pwa-update.spec.js tests/sw-kill.spec.js
           tests/theme-toggle.spec.js
+          tests/run-session.spec.js tests/share-link.spec.js
+          tests/toolbar-overflow.spec.js
 
       # Not the default `success()`, because the desktop step above now
       # BLOCKS: a desktop failure would skip this step, mobile would produce no

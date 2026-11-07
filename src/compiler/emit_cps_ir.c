@@ -7984,6 +7984,32 @@ static bool byref_cell_is_one_word(EmitCtx *ctx, const Binding *b) {
     size_t n = strlen(t);
     return n > 0 && t[n - 1] == '*';
 }
+/* The cells a resume copy may re-cell by copying their bytes: a one-word
+ * value, a `bool`, a narrow integer, a `float32`, or a plain-data by-value
+ * struct (one constructor, no drop glue, every field a scalar slot).  Each is
+ * allocated by __dk_cell_new in a function whose cells are re-celled
+ * (g_cells_fresh_ok), so the copy reads the size from the cell's header.  An
+ * owning struct is left out: two runs would each own one value. */
+static bool byref_cell_is_recellable(EmitCtx *ctx, const Binding *b) {
+    if (!b || !byref_cell_ctype(ctx, b)) return false;
+    if (byref_cell_is_one_word(ctx, b)) return true;
+    switch (b->type.kind) {
+        case TY_BOOL: case TY_INT8: case TY_INT16: case TY_INT32:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_FLOAT32:
+            return true;
+        default: break;
+    }
+    Type _r; const Type *t = cps_resolve_ty(&b->type, &_r);
+    if (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)) return false;
+    if (!type_is_byvalue_adt_product(*(Type *)t)) return false;
+    const AdtDef *d = slot_agg_def(t);
+    if (!d || d->needs_drop_glue || d->n_ctors != 1 || !d->ctors[0]) return false;
+    if (d->n_type_params > 0 || type_has_unresolved_tyvar(t)) return false;
+    const CtorDef *c = d->ctors[0];
+    for (uint32_t i = 0; i < c->n_fields; i++)
+        if (!slot_ty(c->fields[i].kind)) return false;
+    return true;
+}
 /* `dk_env_sized(<node>, sizeof(<name>_env))` -- or, for an env that holds a
  * maskable cell, `dk_env_cells(<node>, sizeof(<name>_env), <name>_env_CELLS)`.
  * Returns the opening and the closing text around the node expression. */
@@ -10069,10 +10095,18 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                  * entry boundary) -- a stored continuation may still be resumed
                  * after this fn's dynamic extent, so it cannot be freed here. */
                 const Binding *cb = t->as.letval.x.bind;
-                ce_line(ce, "%s = (%s)malloc(sizeof(%s)); *%s = %s;",
-                        bn, byref_cell_ptr_ctype(ce->ctx, cb),
-                        byref_cell_ctype(ce->ctx, cb), bn, v);
-                ce_line(ce, "__dk_reap_ptr((tur_dkw)%s);", bn);
+                if (g_cells_fresh_ok && byref_cell_is_recellable(ce->ctx, cb)) {
+                    /* A cell a resume copy may re-cell: sized header, and on
+                     * the reap list from __dk_cell_new. */
+                    ce_line(ce, "%s = (%s)__dk_cell_new(sizeof(%s)); *%s = %s;",
+                            bn, byref_cell_ptr_ctype(ce->ctx, cb),
+                            byref_cell_ctype(ce->ctx, cb), bn, v);
+                } else {
+                    ce_line(ce, "%s = (%s)malloc(sizeof(%s)); *%s = %s;",
+                            bn, byref_cell_ptr_ctype(ce->ctx, cb),
+                            byref_cell_ctype(ce->ctx, cb), bn, v);
+                    ce_line(ce, "__dk_reap_ptr((tur_dkw)%s);", bn);
+                }
             } else if (t->as.letval.x.ty == TY_FN && t->as.letval.v.kind == CA_VAR
                        && t->as.letval.v.var && t->as.letval.v.var->is_global) {
                 /* A thin fn local (letval_thin_fn_local_ok) is an int64 slot
@@ -12227,7 +12261,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             for (int i = 0; i < caps->n; i++) {
                 const Binding *cb = caps->e[i].b;
                 if (!cb || caps->e[i].polyfn || !is_byref_mut(cb) ||
-                    !byref_cell_is_one_word(ce->ctx, cb)) continue;
+                    !byref_cell_is_recellable(ce->ctx, cb)) continue;
                 if (!any) buf_printf(ce->helpers, "#define %s_env_CELLS (0u", name);
                 buf_printf(ce->helpers, " | (1u << (offsetof(%s_env, f%d) / 8))", name, i);
                 any = true;

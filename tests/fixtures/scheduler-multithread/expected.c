@@ -2852,6 +2852,12 @@ static void __dk_reap_push(void *p, unsigned char kind) {
 }
 __attribute__((unused)) static DK *__dk_reap_keep(DK *k) { __dk_reap_push(k, 1); return k; }
 __attribute__((unused)) static tur_dkw __dk_reap_ptr(tur_dkw p) { __dk_reap_push((void *)p, 0); return p; }
+__attribute__((unused)) static void *__dk_cell_new(size_t sz) {
+    size_t *h = (size_t *)malloc(16 + sz);
+    h[0] = sz; h[1] = 0;
+    __dk_reap_push((void *)h, 0);
+    return (char *)h + 16;
+}
 /* Register a single spliced node (->next points into an enclosing k) for a
  * single-node free at reap -- dk_free would walk into the enclosing chain.
  * Kind 3, freed like kind 0, but known to be a node: a park's hand-off reads
@@ -3266,8 +3272,8 @@ __attribute__((unused)) static void __dk_cells_fresh(DK *c, const DK *stop) {
             for (int j = 0; j < nm; j++) if (from[j] == old) { nw = to[j]; break; }
             if (!nw) {
                 if (nm >= 32) continue;   /* table full: this cell stays shared */
-                nw = malloc(sizeof(int64_t)); memcpy(nw, old, sizeof(int64_t));
-                __dk_reap_ptr((tur_dkw)nw);
+                size_t sz = ((const size_t *)old)[-2];
+                nw = __dk_cell_new(sz); memcpy(nw, old, sz);
                 from[nm] = old; to[nm] = nw; nm++;
             }
             w[i] = nw;
@@ -6536,6 +6542,7 @@ typedef int64_t (*tur_fnptr_int64_t_int64_t_void___t)(int64_t, void *);
 typedef bool (*tur_fnptr_bool_int64_t_int64_t_void___t)(int64_t, int64_t, void *);
 typedef int64_t (*tur_fnptr_int64_t_int64_t_int64_t_int64_t_void___t)(int64_t, int64_t, int64_t, void *);
 typedef int64_t (*tur_fnptr_int64_t_int64_t_int64_t_void___t)(int64_t, int64_t, void *);
+typedef void (*tur_fnptr_void_t)(void);
 
 #if !defined(TUR_FWD_tur_adt_Cons__int) && !defined(TUR_TY_tur_adt_Cons__int)
 #define TUR_FWD_tur_adt_Cons__int
@@ -7180,7 +7187,7 @@ static int64_t with_hyuntrailed(int64_t);
 static void trail_hyreset_ex(void);
 static int64_t trail_slautolink_hyhint(void);
 static int64_t with_hyregion(int64_t);
-static void * fiber_hynew(void *, int64_t);
+static void * fiber_hynew(tur_fnptr_void_t, int64_t);
 static int64_t fiber_hyresume(void *, int64_t);
 static void fiber_hyyield(int64_t);
 static int64_t fiber_hydone_qu(void *);
@@ -11106,7 +11113,7 @@ static int64_t with_hyregion(int64_t body) {
         return ((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body));
 }
 
-static void * fiber_hynew(void * fn, int64_t stack_size) {
+static void * fiber_hynew(tur_fnptr_void_t fn, int64_t stack_size) {
         return (void *)(intptr_t)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   
 }
@@ -11297,12 +11304,12 @@ int main(int argc, char **argv) {
             void * sched_6 = __ps_205;
             (void)sched_6;
             {
-                void * __ps_206 = (fiber_hynew((void *)(intptr_t)(fiber_hya), INT64_C(0)));
+                void * __ps_206 = (fiber_hynew((tur_fnptr_void_t)(fiber_hya), INT64_C(0)));
                 if (tur_panicking) { tur_panic_root_exit(); }
                 void * fa_7 = __ps_206;
                 (void)fa_7;
                 {
-                    void * __ps_207 = (fiber_hynew((void *)(intptr_t)(fiber_hyb), INT64_C(0)));
+                    void * __ps_207 = (fiber_hynew((tur_fnptr_void_t)(fiber_hyb), INT64_C(0)));
                     if (tur_panicking) { tur_panic_root_exit(); }
                     void * fb_8 = __ps_207;
                     (void)fb_8;

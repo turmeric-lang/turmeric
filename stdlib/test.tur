@@ -124,17 +124,17 @@
 ;;;
 ;;; Parameters:
 ;;;   name    -- test name string
-;;;   test-fn -- no-argument callback returning 1 on pass, 0 on fail.
-;;;              Must carry no environment -- captures are forbidden. The
-;;;              runtime stores test-fn as a bare C function pointer and
-;;;              calls it directly; a captured value would be silently
-;;;              dropped at the storage boundary. Pass a top-level defn,
-;;;              or a (fn ...) literal with no free variables.
+;;;   test-fn -- a captureless no-argument function `(c-fn [] int)`
+;;;              returning 1 on pass, 0 on fail.  The runtime stores it as
+;;;              a bare C function pointer and calls it directly, so a
+;;;              capturing closure is refused at the call (TUR-E0295).
+;;;              Pass a top-level defn, or a (fn ...) literal with no free
+;;;              variables.
 ;;;
 ;;; Returns:
 ;;;   Non-zero on successful registration.
 
-(defn register-test [name : cstr test-fn : ptr<void>] : int
+(defn register-test [name : cstr test-fn : (c-fn [] int)] : int
   ```c
   extern int64_t tur_test_register(const char *name, void *test_fn);
   return (int)tur_test_register((const char *)name, (void *)test_fn);

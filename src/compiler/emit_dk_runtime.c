@@ -835,7 +835,8 @@ void emit_cps_runtime_prelude(Buf *out) {
  * (and an Err's payload) goes on the reap list for the boundary free. */
 "    bool catch_reap;      /* catch prompt: reap the Ok / Err box it makes */\n"
 /* cps-cell-promoted-mut-shared-across-multishot-resumes: the env words that
- * are one-word by-reference cells (bit i = word i), set by dk_env_cells.  A
+ * are by-reference cells made by __dk_cell_new (bit i = word i), set by
+ * dk_env_cells.  A
  * resume copy re-cells them (__dk_cells_fresh), so each run of a `^multishot`
  * k has its own.  Copied by dk_copy_node. */
 "    uint32_t cell_mask;   /* env words that are by-reference cells */\n");
@@ -1351,6 +1352,17 @@ void emit_cps_runtime_prelude(Buf *out) {
 "}\n"
 "__attribute__((unused)) static DK *__dk_reap_keep(DK *k) { __dk_reap_push(k, 1); return k; }\n"
 "__attribute__((unused)) static tur_dkw __dk_reap_ptr(tur_dkw p) { __dk_reap_push((void *)p, 0); return p; }\n"
+/* cps-cell-promoted-mut-shared-across-multishot-resumes: a by-reference cell a
+ * resume copy may re-cell (__dk_cells_fresh) carries its own size in a 16-byte
+ * header before the value, so a `bool`, a narrow integer or a plain-data
+ * struct cell is copied at its own size, not as one word.  The header keeps
+ * the value 16-byte aligned; the reap list holds the block. */
+"__attribute__((unused)) static void *__dk_cell_new(size_t sz) {\n"
+"    size_t *h = (size_t *)malloc(16 + sz);\n"
+"    h[0] = sz; h[1] = 0;\n"
+"    __dk_reap_push((void *)h, 0);\n"
+"    return (char *)h + 16;\n"
+"}\n"
 "/* Register a single spliced node (->next points into an enclosing k) for a\n"
 " * single-node free at reap -- dk_free would walk into the enclosing chain.\n"
 " * Kind 3, freed like kind 0, but known to be a node: a park's hand-off reads\n"
@@ -1893,8 +1905,9 @@ void emit_cps_runtime_prelude(Buf *out) {
 " * know whether running the invoked chain might tail-resume out. */\n"
 "static tur_dkw __dk_drive_bounded(DK *first, tur_dkw firstv);\n"
 /* cps-cell-promoted-mut-shared-across-multishot-resumes: give the copy `c`
- * (up to `stop`) cells of its own.  Each masked env word names a one-word
- * cell; the first frame of the copy to name a cell allocates its replacement,
+ * (up to `stop`) cells of its own.  Each masked env word names a cell made by
+ * __dk_cell_new, whose header says how many bytes it holds; the first frame of
+ * the copy to name a cell allocates its replacement,
  * holding the value the cell has now (what the `perform` left: the originals
  * never run once copied), and every later frame of the same copy naming that
  * cell gets the same replacement.  A frame's env is shared with the frame it
@@ -1913,8 +1926,8 @@ void emit_cps_runtime_prelude(Buf *out) {
 "            for (int j = 0; j < nm; j++) if (from[j] == old) { nw = to[j]; break; }\n"
 "            if (!nw) {\n"
 "                if (nm >= 32) continue;   /* table full: this cell stays shared */\n"
-"                nw = malloc(sizeof(int64_t)); memcpy(nw, old, sizeof(int64_t));\n"
-"                __dk_reap_ptr((tur_dkw)nw);\n"
+"                size_t sz = ((const size_t *)old)[-2];\n"
+"                nw = __dk_cell_new(sz); memcpy(nw, old, sz);\n"
 "                from[nm] = old; to[nm] = nw; nm++;\n"
 "            }\n"
 "            w[i] = nw;\n"

@@ -1,6 +1,7 @@
 # stdlib: `:int` stand-ins for callbacks and container payloads
 
-**Status:** Reported -- most of it landed; the residue is below.
+**Status:** Reported -- most of it landed; the residue is S2 below (S1 closed
+2026-11-07).
 **Severity: low-medium (design debt) -- downgraded from "S1 subset high"
 2026-10-08.** What made it high is gone: since 2026-09-28 no
 `^fat <name> : int` callback is left in `stdlib/`, so no Turmeric closure
@@ -8,6 +9,21 @@ parameter has an unchecked shape any more (see "Done 2026-09-28"). S2 landed
 13 of 19 sites (ref, chan, atomic) and S3 landed both items (`json/bool`,
 `either.tur`). What is left, none of it a silent wrong answer:
 
+- **S1 is done (2026-11-07).** The five `ptr<void>` callbacks below take
+  `(c-fn [...] R)` at their C signatures: `once-call` and `fiber-new`
+  `(c-fn [] nil)` (`pthread_once`'s and the FiberBlock entry's `void
+  (*)(void)`), `register-test` `(c-fn [] int)` (the registry's
+  `int64_t (*)(void)`), `timer-set` and `scheduler-timeout`
+  `(c-fn [ptr<void>] nil)` (`void (*)(void *)`, handed the arg). A
+  capturing closure is TUR-E0295 at the call and a wrong arity is refused
+  (`errors/stdlib-c-fn-callback-capturing`, `errors/stdlib-c-fn-callback-arity`;
+  `stdlib-c-fn-callbacks` runs each with a captureless function, `deftest`'s
+  lambda included). Every in-tree caller already passed a captureless defn
+  of the right shape. Found on the way: the Cloudflare guide's service hands
+  `fiber-new` capturing lambdas, which were always called as code and are now
+  refused -- filed as
+  [cloudflare-guide-service-captures-into-fiber-new](cloudflare-guide-service-captures-into-fiber-new.md).
+  The history of the item, as it stood:
 - **S1, the `ptr<void>` callbacks** (`timer-set`, `scheduler-timeout`,
   `once-call`, `fiber-new`, `register-test`) -- raw C code pointers handed to
   C APIs, not Turmeric closures. They want a C function-pointer type or a
