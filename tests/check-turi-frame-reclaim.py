@@ -130,6 +130,20 @@ CALLCC_PROGRAM = """#lang r7rs
 CALLCC_EXPECTED = EXPECTED + EXPECTED + "(hits 2 v 1)\n"
 
 
+# The stderr of the last run of each program, so a FAIL line can show what the
+# program said.  A sanitizer report (or a turi error) that ends the process
+# leaves stdout unflushed, so without this a CI failure reads only as
+# "printed '' (status 256)" -- turi-callcc-frame-reclaim-check-fails-in-ci.
+STDERR = {}
+
+
+def stderr_tail(src, n=40):
+    lines = STDERR.get(src, "").rstrip("\n").splitlines()
+    if not lines:
+        return "  (no stderr)"
+    return "\n".join("  | " + l for l in lines[-n:])
+
+
 def run(src, reclaim, asan="detect_leaks=0"):
     env = dict(os.environ)
     env["ASAN_OPTIONS"] = asan
@@ -137,7 +151,7 @@ def run(src, reclaim, asan="detect_leaks=0"):
     p = subprocess.Popen([TUR, "--interpret", src], stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, env=env)
     out = p.stdout.read().decode()
-    p.stderr.read()
+    STDERR[src] = p.stderr.read().decode(errors="replace")
     _, status, ru = os.wait4(p.pid, 0)
     # ru_maxrss is KB on Linux but BYTES on macOS: the absolute growth bounds
     # below read 272 KiB of growth there as 272 MB.
@@ -207,6 +221,7 @@ def main():
     if st_args != 0 or out_args != ARGS_EXPECTED:
         print("FAIL check-turi-frame-reclaim: argument program printed %r (status %d), want %r"
               % (out_args, st_args, ARGS_EXPECTED))
+        print(stderr_tail(args))
         ok = False
     elif grow_args > ARGS_GROWTH_MB:
         print("FAIL check-turi-frame-reclaim: %s -- unwritable by-value arguments are being copied" % amsg)
@@ -219,6 +234,7 @@ def main():
     if st_pins != 0 or out_pins != PINS_EXPECTED:
         print("FAIL check-turi-frame-reclaim: generic-call program printed %r (status %d), want %r"
               % (out_pins, st_pins, PINS_EXPECTED))
+        print(stderr_tail(pins))
         ok = False
     elif grow_pins > ARGS_GROWTH_MB:
         print("FAIL check-turi-frame-reclaim: %s -- tyvar/dict pins are not handed back" % pmsg)
@@ -231,6 +247,7 @@ def main():
     if st_perf != 0 or out_perf != PERFORM_EXPECTED:
         print("FAIL check-turi-frame-reclaim: perform program printed %r (status %d), want %r"
               % (out_perf, st_perf, PERFORM_EXPECTED))
+        print(stderr_tail(perf))
         ok = False
     elif grow_perf > ARGS_GROWTH_MB:
         print("FAIL check-turi-frame-reclaim: %s -- a one-shot resume keeps its continuation" % fmsg)
@@ -243,6 +260,7 @@ def main():
     if st_dfr != 0 or out_dfr != DEFER_EXPECTED:
         print("FAIL check-turi-frame-reclaim: defer program printed %r (status %d), want %r"
               % (out_dfr, st_dfr, DEFER_EXPECTED))
+        print(stderr_tail(dfr))
         ok = False
     elif grow_dfr > ARGS_GROWTH_MB:
         print("FAIL check-turi-frame-reclaim: %s -- a fired defer keeps its snapshot" % dmsg)
@@ -257,6 +275,7 @@ def main():
     if st_cc != 0 or out_cc != CALLCC_EXPECTED:
         print("FAIL check-turi-frame-reclaim: call/cc program printed %r (status %d), want %r"
               % (out_cc, st_cc, CALLCC_EXPECTED))
+        print(stderr_tail(cc))
         ok = False
     elif grow_cc > cc_bound:
         print("FAIL check-turi-frame-reclaim: %s -- a capture pins every later frame" % cmsg)
