@@ -5,7 +5,7 @@
 ;;; make-vec3 -- allocate a 3-element vec for testing
 (defn make-vec3 [a : int b : int c : int] : int
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec =
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec =
     malloc(sizeof(*vec));
   vec->data = (int64_t *)malloc(3 * sizeof(int64_t));
   vec->data[0] = a; vec->data[1] = b; vec->data[2] = c;

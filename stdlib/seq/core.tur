@@ -180,13 +180,13 @@
 
 (defn seq-vec-len [v : int] : int
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void *)(intptr_t)v;
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void *)(intptr_t)v;
   return (int64_t)vec->len;
   ```)
 
 (defn seq-vec-get [v : int i : int] : int
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void *)(intptr_t)v;
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void *)(intptr_t)v;
   return vec->data[i];
   ```)
 ;; --- List helpers (no #fx{Unsafe} so usable inside gen bodies) ---

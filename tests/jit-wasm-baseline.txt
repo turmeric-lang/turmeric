@@ -20,6 +20,8 @@ async-timer-basic fail  # stdout mismatch on the interpreted path: the program s
 await-below-evicted-caller-or-nontail-resume fail  # stdout mismatch on the error path: the module threw: unreachable
 await-below-struct-capturing-lambda fail  # stdout mismatch on the error path: the module threw: unreachable
 await-in-generic-capturing-lambda fail  # stdout mismatch on the error path: the module threw: unreachable
+await-in-generic-capturing-lambda-struct fail  # stdout mismatch on the error path: the module threw: unreachable
+await-through-fn-value fail  # stdout mismatch on the error path: the module threw: unreachable
 barrier-rendezvous fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 byval-spine-drop-refused-nonscalar-param interpreted  # the program starts threads (pthread_create), which this engine cannot run
 callcc-in-fiber fail  # stdout mismatch on the error path: the module threw: unreachable
@@ -29,10 +31,16 @@ cancel-select fail  # stdout mismatch on the interpreted path: the program start
 childhandle-linear fail  # stdout mismatch on the interpreted path: import of undefined item fork
 classic-list-surface interpreted  # the program starts threads (pthread_create), which this engine cannot run
 cps-effectful-callback-aggregate-args fail  # stdout mismatch on the error path: the module threw: unreachable
+cps-effectful-callback-wide-aggregate fail  # stdout mismatch on the error path: the module threw: unreachable
+cps-effectful-capturing-callback-narrow-result fail  # stdout mismatch on the error path: the module threw: unreachable
+cps-effectful-capturing-callback-ptr-void-arg fail  # stdout mismatch on the error path: the module threw: unreachable
 cps-effectful-capturing-callback-scalar-kinds fail  # stdout mismatch on the error path: the module threw: unreachable
 cps-effectful-capturing-closure-callback fail  # stdout mismatch on the error path: the module threw: unreachable
 cps-effectful-closure-through-unannotated-param fail  # stdout mismatch on the error path: the module threw: unreachable
 cps-local-closure-value-and-call fail  # stdout mismatch on the error path: the module threw: unreachable
+cps-multishot-cell-per-run fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
+cps-multishot-cell-per-run-narrow-and-struct fail  # stdout mismatch on the compiled path
+cps-set-value-performs fail  # stdout mismatch on the compiled path
 data-literal-typed-empty fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 defalias-composite interpreted  # the program starts threads (pthread_create), which this engine cannot run
 defdynamic-option-convey fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
@@ -66,7 +74,7 @@ fs-symlink-perms fail  # stdout mismatch on the interpreted path: import of unde
 g4b-thread-local-global fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 gc-registry-growth fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 gde-generic-dict-eq-map fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-generic-hof-effectful-callback fail  # stdout mismatch on the error path: the module threw: unreachable
+generic-hof-unannotated-fat-param-mixed fail  # stdout mismatch on the error path: the module threw: unreachable
 ghe3-generic-map-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 gmk-map-literal-cstr-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 httpd-async-echo fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
@@ -129,6 +137,7 @@ map-literal-frees-intermediates fail  # stdout mismatch on the error path: the m
 neoteric-ascription-sweet fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 net-blocking-tcp fail  # stdout mismatch on the interpreted path: import of undefined item socket
 niche-elem-comparator-conventions fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
+numvec-store-loops fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
 os-misc-surface fail  # stdout mismatch on the interpreted path: import of undefined item getgid
 p19-8-fiber-effect-chain fail  # stdout mismatch on the error path: the module threw: unreachable
 panic-catch-unwind-signal fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
@@ -354,7 +363,7 @@ saffron-while-any-condition interpreted  # the program starts threads (pthread_c
 schan-worker-pool fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 scheduler-basic fail  # stdout mismatch on the error path: the module threw: unreachable
 scheduler-io-park fail  # stdout mismatch on the error path: the module threw: unreachable
-schema-decode-union fail  # stdout mismatch on the compiled path
+scheduler-spawn-detached-frees-done fail  # stdout mismatch on the error path: the module threw: unreachable
 schema-reader-json-file fail  # stdout mismatch on the error path: the module threw: unreachable
 session-async-peer-on-thread fail  # stdout mismatch on the error path: the module threw: unwind
 session-async-warn fail  # stdout mismatch on the error path: the module threw: unreachable
@@ -398,7 +407,9 @@ set-cstr-content fail  # stdout mismatch on the error path: the module threw: nu
 set-of-any-elements fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 shift0-receiver-runs-outside-its-reset fail  # stdout mismatch on the compiled path
 signal-handle-poll fail  # stdout mismatch on the interpreted path: import of undefined item socket
+simd-masks-shuffle-convert fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
 stackless-catch-unwind-byref-aggregate-group-bail fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
+stdlib-c-fn-callbacks fail  # stdout mismatch on the interpreted path: the program starts threads (tur_timer_wheel_new), which this engine cannot run
 stm-retry-wakeup fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 stm-stress fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 tailcall-dyn-leak interpreted  # the program starts threads (pthread_create), which this engine cannot run

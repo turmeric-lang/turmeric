@@ -69,7 +69,7 @@ emcc 6.0.10 / node 22:
 - `CHECK_NULL_WRITES` is off because the check turns it on by default, and its
   canary at address 0 changed the answer of programs that read through a null
   pointer and used to see 0 there. That found a real defect, recorded as shape
-  4 of [ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md);
+  4 of [ilp32-word-slots-truncate-64-bit-carriers](ilp32-word-slots-truncate-64-bit-carriers.md);
   it is not this flag's to change.
 
 Still open: the stock `tur_wasm` (reader, elaborator, formatter, LSP and the

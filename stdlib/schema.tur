@@ -659,7 +659,7 @@
 
 (defn schema-error-count [errs : int] : int
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+  struct { int64_t *data; int64_t len; int64_t cap; } *v = (void*)(intptr_t)errs;
   return v ? (int)v->len : 0;
   ```)
 ;;; schema-error-at -- the i-th SchemaError in an error Vec.
@@ -675,8 +675,8 @@
 
 (defn schema-error-at [errs : int i : int] : int
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
-  if (!v || i < 0 || (size_t)i >= v->len) return 0;
+  struct { int64_t *data; int64_t len; int64_t cap; } *v = (void*)(intptr_t)errs;
+  if (!v || i < 0 || i >= v->len) return 0;
   return v->data[i];
   ```)
 ;;; schema-error-message -- format an error Vec into one human-readable cstr.
@@ -695,12 +695,12 @@
 
 (defn schema-error-message [errs : int] : cstr
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+  struct { int64_t *data; int64_t len; int64_t cap; } *v = (void*)(intptr_t)errs;
   if (!v || v->len == 0) {
     char *empty = malloc(1); empty[0] = 0; return empty;
   }
   size_t total = 1;
-  for (size_t i = 0; i < v->len; i++) {
+  for (int64_t i = 0; i < v->len; i++) {
     int64_t *e = (int64_t*)(intptr_t)v->data[i];
     const char *path = (const char*)(intptr_t)e[0];
     const char *msg  = (const char*)(intptr_t)e[1];
@@ -709,7 +709,7 @@
   }
   char *out = malloc(total);
   out[0] = 0;
-  for (size_t i = 0; i < v->len; i++) {
+  for (int64_t i = 0; i < v->len; i++) {
     int64_t *e = (int64_t*)(intptr_t)v->data[i];
     const char *path = (const char*)(intptr_t)e[0];
     const char *msg  = (const char*)(intptr_t)e[1];
@@ -747,7 +747,7 @@
 
 (defn sch-vpush- [v : ptr x : int] : void
   ```c
-  typedef struct { int64_t *data; size_t len; size_t cap; } tur_sch_vec_t;
+  typedef struct { int64_t *data; int64_t len; int64_t cap; } tur_sch_vec_t;
   tur_sch_vec_t *vp = (tur_sch_vec_t *)v;
   if (vp->len == vp->cap) {
     vp->cap = vp->cap ? vp->cap * 2 : 4;
@@ -815,7 +815,7 @@
 (defn sch-decode-rec- [schema : int node : int path : cstr errs : ptr] : int
   ```c
   typedef struct { int64_t kind; int64_t a; int64_t b; int64_t c; } tur_sch_t;
-  typedef struct { int64_t *data; size_t len; size_t cap; } tur_sch_vec_t;
+  typedef struct { int64_t *data; int64_t len; int64_t cap; } tur_sch_vec_t;
   tur_sch_t *s = (tur_sch_t*)(intptr_t)schema;
   tur_sch_vec_t *ep = (tur_sch_vec_t *)errs;
   if (!s) return 0;
@@ -896,7 +896,7 @@
       tur_sch_vec_t *out = malloc(sizeof(*out));
       out->data = NULL; out->len = 0; out->cap = 0;
       if (jarr) {
-        for (size_t i = 0; i < jarr->len; i++) {
+        for (int64_t i = 0; i < jarr->len; i++) {
           char *ipath = (char *)sch_hymkidx_hy(path, (int64_t)i);
           int64_t dv = sch_hydecode_hyrec_hy((int64_t)(intptr_t)elem, jarr->data[i], ipath, errs);
           free(ipath);
@@ -912,8 +912,8 @@
     case 9: { /* union: first arm that matches wins */
       tur_sch_vec_t *arms = (tur_sch_vec_t*)(intptr_t)s->a;
       if (!arms || arms->len == 0) return 0;
-      for (size_t i = 0; i < arms->len; i++) {
-        size_t before = ep->len;
+      for (int64_t i = 0; i < arms->len; i++) {
+        int64_t before = ep->len;
         int64_t dv = sch_hydecode_hyrec_hy(arms->data[i], node, path, errs);
         if (ep->len == before) return dv;
         ep->len = before;
@@ -923,7 +923,7 @@
       return 0;
     }
     case 10: { /* transform */
-      size_t before = ep->len;
+      int64_t before = ep->len;
       int64_t dv = sch_hydecode_hyrec_hy(s->a, node, path, errs);
       if (ep->len != before) return 0;
       return TUR_APPLY1(s->b, dv);
@@ -941,7 +941,7 @@
       return 0;
     }
     case 14: { /* ap */
-      size_t before = ep->len;
+      int64_t before = ep->len;
       int64_t fv = sch_hydecode_hyrec_hy(s->a, node, path, errs);
       int64_t av = sch_hydecode_hyrec_hy(s->b, node, path, errs);
       if (ep->len != before) return 0;
@@ -949,7 +949,7 @@
       return f(av);
     }
     case 16: { /* ap-fat */
-      size_t before = ep->len;
+      int64_t before = ep->len;
       int64_t fv = sch_hydecode_hyrec_hy(s->a, node, path, errs);
       int64_t av = sch_hydecode_hyrec_hy(s->b, node, path, errs);
       if (ep->len != before) return 0;
@@ -989,7 +989,7 @@
 
 (defn schema-decode [schema : int node : int] : int
   ```c
-  typedef struct { int64_t *data; size_t len; size_t cap; } tur_sch_vec_t;
+  typedef struct { int64_t *data; int64_t len; int64_t cap; } tur_sch_vec_t;
   tur_sch_vec_t *errs = malloc(sizeof(*errs));
   errs->data = NULL; errs->len = 0; errs->cap = 0;
 
@@ -1047,9 +1047,9 @@
 
 (defn schema-decode-report [errs : int] : int
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+  struct { int64_t *data; int64_t len; int64_t cap; } *v = (void*)(intptr_t)errs;
   fprintf(stderr, "schema-decode!: validation failed\n");
-  if (v) for (size_t i = 0; i < v->len; i++) {
+  if (v) for (int64_t i = 0; i < v->len; i++) {
     int64_t *e = (int64_t*)(intptr_t)v->data[i];
     const char *path = (const char*)(intptr_t)e[0];
     const char *msg  = (const char*)(intptr_t)e[1];
