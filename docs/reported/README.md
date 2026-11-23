@@ -3555,3 +3555,9 @@ any struct with an `Option` field triggered it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+
+## Found checking mir#21 against the browser JIT corpus (filed 2026-11-23)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [jit-wasm-baseline-stale-and-not-in-ci](jit-wasm-baseline-stale-and-not-in-ci.md) | low (test infrastructure) | `tests/run-jit-wasm.sh` reports 11 fixtures worse than `tests/jit-wasm-baseline.txt` on `main` (traps, two wrong outputs on the compiled path), and no CI job runs the harness, so the baseline drifts unseen |
