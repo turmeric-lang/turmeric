@@ -385,4 +385,19 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     (docs/archive/c2mir-paste-of-u8-prefixed-token.md).  Covered by
     c-tests/new/narrow-u8-string-encoding.c and
     c-tests/new/u8-prefixed-identifier.c.
+
+  52e52a7 (merged as 9d86c04b, turmeric-lang/mir#21) -- wasm32: c2mir
+    builds a variadic call's tail in a buffer and passes its address
+    (VA_BUF_TARGET_P), and the buffer was an alloca at the call site.  It ran
+    on every execution of the call and nothing releases an alloca before
+    the function returns, so a loop around printf -- `(println i)` on an
+    int -- grew the linear stack 16 bytes an iteration and about a million
+    prints in one function overflowed the browser module's 16 MiB stack
+    (docs/archive/c2mir-wasm-vararg-buffer-allocas-per-call.md).  A function
+    now has one buffer, an alloca in its prologue next to the frame's,
+    sized to its largest variadic tail; a call's buffer is filled after all
+    its arguments are evaluated and is dead once it returns, so sharing is
+    safe.  Native targets compile none of it.  Covered by
+    wasm-tests/ffi-test.c there, tests/fixtures/jit-wasm-vararg-loop-stack
+    here.
 ```

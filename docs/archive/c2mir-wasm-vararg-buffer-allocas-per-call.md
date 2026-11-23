@@ -1,5 +1,17 @@
 # On wasm32, every variadic call c2mir compiles allocates stack that lasts until the function returns
 
+**Status 2026-11-23: RESOLVED** (turmeric-lang/mir#21, vendored at `9d86c04b`).
+c2mir now gives a function one variadic buffer: an alloca in its prologue, next
+to the frame's, sized to the function's largest variadic tail. Every call fills
+it from offset 0. Sharing is safe because a call's buffer is filled only after
+all its arguments, nested calls included, are evaluated, and is dead once the
+call returns. Measured with emcc 6.0.10 and node 22, in the fork's
+`wasm-tests/ffi-test.c`: stack growth is 0 for 1000 and for 2,000,000 variadic
+calls in one function (before: 16000 bytes, and a segmentation fault under
+`-sSAFE_HEAP` on an 8 MiB stack). Pinned there, and here by
+`tests/fixtures/jit-wasm-vararg-loop-stack`, which `tests/run-jit-wasm.sh` runs
+through the browser JIT module. The text below is the report as filed.
+
 **Severity:** high for the planned wasm JIT (wasm-jit-plan), none today --
 nothing ships it yet. `(println i)` on an int is `printf("%lld\n", ...)`
 (`src/compiler/builtins.c:410`), and the emitter turns self tail calls into
@@ -11,8 +23,8 @@ overflows. The overflow failed as
 stack-overflow trap, which suggests memory was corrupted.
 
 Filed 2026-10-24, found while checking the wasm residue of
-[mir-interp-tail-calls-grow-the-stack](../archive/mir-interp-tail-calls-grow-the-stack.md)
-(see [wasm-mir-interp-tail-call-keeps-allocas](wasm-mir-interp-tail-call-keeps-allocas.md)).
+[mir-interp-tail-calls-grow-the-stack](mir-interp-tail-calls-grow-the-stack.md)
+(see [wasm-mir-interp-tail-call-keeps-allocas](../reported/wasm-mir-interp-tail-call-keeps-allocas.md)).
 Native targets are not affected: there c2mir passes the variadic tail as call
 arguments.
 

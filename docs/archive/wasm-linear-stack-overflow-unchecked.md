@@ -30,7 +30,7 @@ measured below.
 | Plain non-tail recursion, small frames | JS `RangeError` near depth 1,800, using 2.7 of 16 MiB. The JS limit binds first, as claimed | same |
 | Non-tail recursion with a 16 KiB local array | `memory access out of bounds` near depth 1,000, *before* the JS limit; the module is dead afterwards | `Aborted(stack overflow (Attempt to set SP to ...))` |
 | Tail-call chain through a function with a local aggregate ([wasm-mir-interp-tail-call-keeps-allocas](../reported/wasm-mir-interp-tail-call-keeps-allocas.md)) | `memory access out of bounds` after about 24k calls | `Aborted(stack overflow ...)` |
-| `printf` in a loop, 2e6 iterations ([c2mir-wasm-vararg-buffer-allocas-per-call](../reported/c2mir-wasm-vararg-buffer-allocas-per-call.md)) | `null function or function signature mismatch`: memory was corrupted before anything trapped | `Aborted(stack overflow ...)` |
+| `printf` in a loop, 2e6 iterations ([c2mir-wasm-vararg-buffer-allocas-per-call](c2mir-wasm-vararg-buffer-allocas-per-call.md)) | `null function or function signature mismatch`: memory was corrupted before anything trapped | `Aborted(stack overflow ...)` |
 
 So the linear stack is reachable today, by anything that grows it without
 nesting a JS frame per step: large frames, allocas kept by tail calls, and

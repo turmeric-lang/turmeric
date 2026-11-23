@@ -1,0 +1,28 @@
+;; jit-wasm-vararg-loop-stack: two million variadic calls in ONE function run
+;; in constant stack under the browser JIT.
+;;
+;; On wasm32 c2mir builds a variadic call's tail in a buffer and passes its
+;; address.  That buffer was an alloca at the call site, so it ran on every
+;; execution of the call and stayed until the function returned: 16 bytes an
+;; iteration, and a loop of about a million `printf`s -- `(println i)` on an
+;; int is one -- overflowed the module's 16 MiB stack
+;; (docs/archive/c2mir-wasm-vararg-buffer-allocas-per-call.md).  The buffer is
+;; now one per function.  tests/run-jit-wasm.sh runs this on the MIR
+;; interpreter in the module; natively the tail is passed as call arguments
+;; and the fixture only checks the answer.
+;;
+;; The loop is inline C so that it formats into a buffer instead of printing
+;; two million lines.
+
+(defn format-many [n : int] : int
+  ```c
+  char buf[32];
+  int64_t total = 0;
+  for (int64_t i = 0; i < n; i++)
+    total += snprintf(buf, sizeof buf, "%lld|%d", (long long)i, 7);
+  return total;
+  ```)
+
+(defn main [] : int
+  (println (format-many 2000000))
+  0)
