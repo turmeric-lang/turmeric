@@ -3,7 +3,8 @@
 **Status 2026-11-23: RESOLVED.** Three reads in the emitted CPS code and its
 runtime treated a pointer-sized slot as a 64-bit word. On LP64 the two are the
 same bits; on wasm32 (the browser JIT, ILP32) each read the wrong bytes. Nine
-fixtures that failed through `tests/run-jit-wasm.sh` now come out `compiled`.
+fixtures that failed through `tests/run-jit-wasm.sh` with no baseline row now
+come out `compiled`, and so do ten whose row said `fail`.
 
 **Severity:** high for the browser JIT, none natively. An effectful capturing
 callback aborted (`unhandled effect`, `no CPS entry registered`, or `await: a
@@ -65,6 +66,22 @@ regenerated in the same change.
 | `cps-set-value-performs` | `5050` for `50100` | 3 |
 | `cps-multishot-cell-per-run-narrow-and-struct` | wrong output | 3 |
 | `cps-multishot-cell-per-run` | wrong output, then `memory access out of bounds` | 3 |
+
+## Baseline rows that could go
+
+A full run after the fix (3309 fixtures: 2621 compiled, 191 interpreted, 208
+failed, 249 skipped, exit 0) also reported ten fixtures whose baseline row
+said `fail` and which now come out `compiled`. Their rows are removed from
+`tests/jit-wasm-baseline.txt`:
+
+`await-below-evicted-caller-or-nontail-resume`,
+`await-below-struct-capturing-lambda`, `await-in-generic-capturing-lambda`,
+`cps-effectful-callback-aggregate-args`,
+`cps-effectful-capturing-callback-scalar-kinds`,
+`cps-effectful-capturing-closure-callback`,
+`cps-effectful-closure-through-unannotated-param`,
+`cps-local-closure-value-and-call`, `effect-capturing-closure-thin-param`,
+`generic-hof-effectful-callback`.
 
 ## Verification
 

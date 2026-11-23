@@ -17,9 +17,6 @@ async-echo-server fail  # stdout mismatch on the interpreted path: import of und
 async-file fail  # stdout mismatch on the interpreted path: the program starts threads (tur_timer_wheel_new), which this engine cannot run
 async-on-thread-body-env-dropped fail  # stdout mismatch on the error path: the module threw: unwind
 async-timer-basic fail  # stdout mismatch on the interpreted path: the program starts threads (tur_timer_wheel_new), which this engine cannot run
-await-below-evicted-caller-or-nontail-resume fail  # stdout mismatch on the error path: the module threw: unreachable
-await-below-struct-capturing-lambda fail  # stdout mismatch on the error path: the module threw: unreachable
-await-in-generic-capturing-lambda fail  # stdout mismatch on the error path: the module threw: unreachable
 barrier-rendezvous fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 byval-spine-drop-refused-nonscalar-param interpreted  # the program starts threads (pthread_create), which this engine cannot run
 callcc-in-fiber fail  # stdout mismatch on the error path: the module threw: unreachable
@@ -28,11 +25,6 @@ cancel-cooperative fail  # stdout mismatch on the interpreted path: the program 
 cancel-select fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 childhandle-linear fail  # stdout mismatch on the interpreted path: import of undefined item fork
 classic-list-surface interpreted  # the program starts threads (pthread_create), which this engine cannot run
-cps-effectful-callback-aggregate-args fail  # stdout mismatch on the error path: the module threw: unreachable
-cps-effectful-capturing-callback-scalar-kinds fail  # stdout mismatch on the error path: the module threw: unreachable
-cps-effectful-capturing-closure-callback fail  # stdout mismatch on the error path: the module threw: unreachable
-cps-effectful-closure-through-unannotated-param fail  # stdout mismatch on the error path: the module threw: unreachable
-cps-local-closure-value-and-call fail  # stdout mismatch on the error path: the module threw: unreachable
 data-literal-typed-empty fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 defalias-composite interpreted  # the program starts threads (pthread_create), which this engine cannot run
 defdynamic-option-convey fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
@@ -48,7 +40,6 @@ docs-sicp-guide-no-import interpreted  # the program starts threads (pthread_cre
 dynvar-binding-moves-with-fiber fail  # stdout mismatch on the error path: the module threw: unreachable
 dynvar-convey fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 dynvar-convey-isolation fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-effect-capturing-closure-thin-param fail  # stdout mismatch on the error path: the module threw: unreachable
 effect-nontail-resume-once-in-place fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 effect-nontail-resume-under-outer fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 eqmap-cstr-content fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
@@ -66,7 +57,6 @@ fs-symlink-perms fail  # stdout mismatch on the interpreted path: import of unde
 g4b-thread-local-global fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 gc-registry-growth fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 gde-generic-dict-eq-map fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-generic-hof-effectful-callback fail  # stdout mismatch on the error path: the module threw: unreachable
 ghe3-generic-map-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 gmk-map-literal-cstr-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 httpd-async-echo fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
