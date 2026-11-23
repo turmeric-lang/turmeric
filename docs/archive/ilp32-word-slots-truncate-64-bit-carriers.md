@@ -6,11 +6,11 @@
 > `seq/consume.tur` (and, in turmeric-spices, `frame/group.tur`, `c-dsl`,
 > `glsl/codegen.tur`, `plot/area.tur` and `contour.tur`) say `int64_t` now, and
 > `tests/check-extern-c-widths.py` fails on a new one in the stdlib.
-> `schema-decode-union` left the baseline. Of the 21 rows the baseline still
+> `schema-decode-union` left the baseline. Of the 23 rows the baseline still
 > records as `stdout mismatch on the compiled path`, one is this family and
 > has its own report,
 > [ilp32-tvar-float-payload-truncated](../reported/ilp32-tvar-float-payload-truncated.md);
-> the other 20 are not (see "What is left in the baseline" at the end).
+> the other 22 are not (see "What is left in the baseline" at the end).
 
 **Severity:** high for the wasm JIT (wasm-jit-plan P3) and for
 `tur build --target wasm`: 44 corpus fixtures run to completion on the
@@ -241,4 +241,16 @@ module (emsdk 6.0.10) and read:
 | 4 `image-*` | the image hooks: `init` runs where the fixture expects a reloaded image (untraced; ints and strings only) | no |
 | 3 `panic-*` | the location names the module's `main.tur`, the fixture expects `input.tur` | no |
 | `shift0-receiver-runs-outside-its-reset`, `direct-shift-outside-lexical-reset` | 5100 for 5000: a `shift0` receiver's shift lands on the inner reset, the pre-shift0-pop answer (untraced; an int, nothing to truncate) | no |
+| `cps-set-value-performs`, `cps-multishot-cell-per-run-narrow-and-struct` | joined the baseline in this run, and fail on `main` without this change: 50100 for 5050, a `set!` cell shared across runs (untraced; not a truncation) | no |
 | `time-dates-iso8601` | `local-parts` after `(env/set "TZ" "XYZ-3")` prints UTC: the module's `localtime_r` does not follow `TZ` | no |
+
+The full corpus run behind that table (2601 compiled, 191 interpreted, 227
+failed) also refreshed the baseline, which no CI job checks and which had
+drifted on `main`: 13 rows that it recorded as `compiled` fail now (the
+`cps-effectful-*` and `await-*` rows trap with `unreachable`,
+`numvec-store-loops` and `simd-masks-shuffle-convert` with an out-of-bounds
+access), and `generic-hof-effectful-callback` compiles. None of the 13
+touches the code this report changed; three were re-run against an unmodified
+tree and fail there too. `seq-core-from-vec` hand-built its vector with the
+`size_t` header and read it through `seq/core.tur`'s fixed view; the fixture
+says `int64_t` now.

@@ -255,7 +255,7 @@ enclosing `let`-bound locals the same way it names parameters:
         ^mut i 1
         key    (rvec-get raw i)]
     ```c
-    { struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)raw;
+    { struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)raw;
       vec->data[i] = key; }
     ```))
 ```
