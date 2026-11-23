@@ -5,7 +5,7 @@
 > padding, and `stdlib/list.tur`'s `list-tail` read both into one `int64_t`;
 > whatever a reused region or malloc block left in the padding decided whether
 > a nil tail read as nil. That is shape 4 of
-> [ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md).
+> [ilp32-word-slots-truncate-64-bit-carriers](ilp32-word-slots-truncate-64-bit-carriers.md).
 > `list-tail` now reads the tail as a pointer and widens it, and
 > `typed/list-concat` prints `true true true 5` on 8 of 8 runs in one module
 > (`run.js --repeat 8`), where it alternated before.

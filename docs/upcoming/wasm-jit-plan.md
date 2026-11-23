@@ -942,7 +942,7 @@ What the fallbacks and failures are now, by reason (a fixture counts once):
 | `setjmp` not importable (the effect and panic landings) | 642 fell back right; 98 fell back and the interpreter got it wrong too | P5 (5.6) |
 | Asyncify: `emscripten_fiber_swap` in a module built without it | 106 | P5 (5.5) |
 | The program starts threads (refused by design) | 60 | stays a fallback (risk 7) |
-| Wrong answer on the compiled path | 52 | 44 are 64-bit carriers in pointer-width slots ([report](../reported/ilp32-word-slots-truncate-64-bit-carriers.md); `tur build --target wasm` has it too); the 8 that mir#16 let run to the end are the same family plus panic locations that name the module's `main.tur` where the fixture expects `input.tur` |
+| Wrong answer on the compiled path | 52 | 44 are 64-bit carriers in pointer-width slots ([report](../archive/ilp32-word-slots-truncate-64-bit-carriers.md); `tur build --target wasm` has it too); the 8 that mir#16 let run to the end are the same family plus panic locations that name the module's `main.tur` where the fixture expects `input.tur` |
 | Other traps: `exit` reaching the JS caller (13), null function (12), `Aborted()` (10), BigInt conversion (5), JS stack (4), out-of-bounds memory (3) | 47 | unsorted; the `exit` ones mean some path to `exit` misses 5.7's landing |
 | Imports the module has no host for (`fork`, `socket`, `popen`, `symlink`, `getgid`, `fnmatch`) | 12 | stay fallbacks |
 
@@ -1086,7 +1086,7 @@ What it took, and how it differs from 5.6 as written:
 - **A 64-bit DK word.** With `setjmp` working, the CPS backend's programs
   reached the engine and printed wrong floats: the DK machine carried values
   as `intptr_t`, 32 bits here (shape 1 of
-  [ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md)).
+  [ilp32-word-slots-truncate-64-bit-carriers](../archive/ilp32-word-slots-truncate-64-bit-carriers.md)).
   `tur_dkw` is `int64_t` where `intptr_t` is narrower and `intptr_t`
   elsewhere, so native output is unchanged.
 - **Two fork bugs on the way.** An address stored into an 8-byte interpreter

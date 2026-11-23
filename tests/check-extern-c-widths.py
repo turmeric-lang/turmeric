@@ -9,7 +9,7 @@ nothing notices.  On wasm32 the caller and callee disagree on the wasm
 signature (i64 against i32): through the browser JIT's exact-signature call
 stubs that is a `function signature mismatch` trap, and under `tur build
 --target wasm` it is whatever the engine makes of it.  Shape 3 of
-docs/reported/ilp32-word-slots-truncate-64-bit-carriers.md.
+docs/archive/ilp32-word-slots-truncate-64-bit-carriers.md.
 
 The check reads every `(extern-c NAME [...] :RET)` in stdlib/*.tur, finds
 NAME's prototype in src/runtime/*.h and src/async/*.h, and fails when RET is
@@ -19,6 +19,13 @@ is not flagged: both are i32 on wasm and the bool read is sound.  A
 runtime function the headers do not declare (an inline-C-only helper) is
 skipped.  Fix the runtime's return type to `int64_t` (or declare the
 Turmeric side at the real width); do not allowlist.
+
+A second check, same report, same shape: a view of a stdlib vector's header
+in the stdlib's inline C.  `vec.tur` lays a vector out as
+`{ int64_t *data; int64_t len; int64_t cap; }`; a view that says `size_t len;
+size_t cap` agrees with it on LP64 and reads the wrong bytes on wasm32, where
+`size_t` is 4 bytes.  Any struct body in stdlib/**/*.tur that opens with
+`int64_t *data;` and follows it with a `size_t` field fails.
 
 Usage: python3 tests/check-extern-c-widths.py   (exit 1 on a finding)
 """
@@ -33,6 +40,7 @@ NARROW = {'int', 'unsigned', 'unsigned int', 'uint32_t', 'int32_t', 'size_t',
           'unsigned short', 'char', 'unsigned char', 'float', 'long',
           'unsigned long'}
 PROTO = re.compile(r'^\s*((?:const\s+)?(?:unsigned\s+|signed\s+)?[A-Za-z_]\w*(?:\s+\w+)?)\s*(\**)\s*\b(tur_[a-z0-9_]+)\s*\(', re.M)
+VECVIEW = re.compile(r'\{\s*int64_t\s*\*\s*data\s*;\s*size_t\b')
 EXTERN = re.compile(r'\(extern-c\s+([a-z0-9_]+)\s*\[[^\]]*\]\s*(?:#fx\{[^}]*\}\s*)?:([a-z]+)')
 
 
@@ -58,12 +66,22 @@ def main():
             if ret in ('int', 'ptr') and cret in NARROW:
                 findings.append('%s: (extern-c %s ... :%s) but %s returns %s (%s)'
                                 % (os.path.relpath(t, ROOT), name, ret, name, cret, h))
+    views = 0
+    for t in sorted(glob.glob(os.path.join(ROOT, 'stdlib/**/*.tur'), recursive=True)):
+        if os.path.basename(t) == 'docstrings.tur':
+            continue
+        for n, line in enumerate(open(t, encoding='utf-8', errors='replace'), 1):
+            views += line.count('int64_t *data; int64_t len; int64_t cap;')
+            if VECVIEW.search(line):
+                findings.append('%s:%d: a vector header viewed with a `size_t` field; '
+                                'vec.tur has `int64_t len; int64_t cap`'
+                                % (os.path.relpath(t, ROOT), n))
     for f in findings:
         print('FAIL check-extern-c-widths: ' + f)
     if findings:
         return 1
-    print('PASS check-extern-c-widths (%d extern-c declarations against %d runtime prototypes)'
-          % (checked, len(protos)))
+    print('PASS check-extern-c-widths (%d extern-c declarations against %d runtime prototypes; '
+          '%d vector-header views)' % (checked, len(protos), views))
     return 0
 
 

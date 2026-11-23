@@ -235,7 +235,7 @@ METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8,ccall,cwrap,FS,ENV,wasmTable,a
 # address 0, so a program that READS through a null pointer sees that word
 # instead of the 0 it saw before and its answer changes.  The reads it found
 # are a defect of their own, shape 4 of
-# docs/reported/ilp32-word-slots-truncate-64-bit-carriers.md, so the canary
+# docs/archive/ilp32-word-slots-truncate-64-bit-carriers.md, so the canary
 # stays off here rather than turning a stack check into a behaviour change.
 # shellcheck disable=SC2086
 emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" "$OUT/stubs.o" \

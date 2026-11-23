@@ -354,7 +354,6 @@ saffron-while-any-condition interpreted  # the program starts threads (pthread_c
 schan-worker-pool fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 scheduler-basic fail  # stdout mismatch on the error path: the module threw: unreachable
 scheduler-io-park fail  # stdout mismatch on the error path: the module threw: unreachable
-schema-decode-union fail  # stdout mismatch on the compiled path
 schema-reader-json-file fail  # stdout mismatch on the error path: the module threw: unreachable
 session-async-peer-on-thread fail  # stdout mismatch on the error path: the module threw: unwind
 session-async-warn fail  # stdout mismatch on the error path: the module threw: unreachable

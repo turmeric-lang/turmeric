@@ -9881,7 +9881,7 @@ static int64_t json_slstring(const char * s) {
 }
 
 static int64_t json_slarray_hynew(void) {
-        struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+        struct { int64_t *data; int64_t len; int64_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0;
   int64_t *n = malloc(2 * sizeof(int64_t));
   n[0] = 5; n[1] = (int64_t)(intptr_t)v;
@@ -9891,7 +9891,7 @@ static int64_t json_slarray_hynew(void) {
 
 static int64_t json_slarray_hypush(int64_t arr, int64_t elem) {
         int64_t *n = (int64_t*)(intptr_t)arr;
-  struct { int64_t *data; size_t len; size_t cap; } *v =
+  struct { int64_t *data; int64_t len; int64_t cap; } *v =
       (void*)(intptr_t)n[1];
   if (v->len >= v->cap) {
     v->cap = v->cap > 0 ? v->cap * 2 : 4;
@@ -9950,15 +9950,15 @@ static const char * json_slget_hystring(int64_t node) {
 
 static int64_t json_slarray_hylen(int64_t node) {
         int64_t *n = (int64_t*)(intptr_t)node;
-  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)n[1];
+  struct { int64_t *data; int64_t len; int64_t cap; } *v = (void*)(intptr_t)n[1];
   return (int64_t)v->len;
   
 }
 
 static int64_t json_slarray_hyget(int64_t node, int64_t i) {
         int64_t *n = (int64_t*)(intptr_t)node;
-  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)n[1];
-  if (i < 0 || (size_t)i >= v->len) return 0;
+  struct { int64_t *data; int64_t len; int64_t cap; } *v = (void*)(intptr_t)n[1];
+  if (i < 0 || i >= v->len) return 0;
   return v->data[i];
   
 }
@@ -10060,9 +10060,9 @@ static void json_hyenc_hynode_hy(int64_t node, void * b) {
     }
     case 4: json_hyenc_hystr_hy(b, (const char*)(intptr_t)np[1]); break;
     case 5: {
-      struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)np[1];
+      struct { int64_t *data; int64_t len; int64_t cap; } *v = (void*)(intptr_t)np[1];
       json_hyenc_hyappend_hyc_hy(b, (int64_t)'[');
-      for (size_t i = 0; i < v->len; i++) {
+      for (int64_t i = 0; i < v->len; i++) {
         if (i > 0) json_hyenc_hyappend_hyc_hy(b, (int64_t)',');
         json_hyenc_hynode_hy(v->data[i], b);
       }
@@ -10257,7 +10257,7 @@ static int64_t json_hydec_hyparse_hyvalue_hy(void * c) {
   if (ch == '[') {
     cp->pos++;
     int64_t *n = malloc(2 * sizeof(int64_t));
-    struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+    struct { int64_t *data; int64_t len; int64_t cap; } *v = malloc(sizeof(*v));
     if (!n || !v) { free(n); free(v); cp->err = 1; return 0; }
     v->data = NULL; v->len = 0; v->cap = 0;
     /* Built as a node up front so an error part-way through frees the
@@ -10269,7 +10269,7 @@ static int64_t json_hydec_hyparse_hyvalue_hy(void * c) {
         int64_t elem = json_hydec_hyparse_hyvalue_hy(c);
         if (cp->err) { json_hyfree_hynode_hy((int64_t)(intptr_t)n); return 0; }
         if (v->len >= v->cap) {
-          size_t ncap = v->cap > 0 ? v->cap * 2 : 4;
+          int64_t ncap = v->cap > 0 ? v->cap * 2 : 4;
           int64_t *nd = realloc(v->data, ncap * sizeof(int64_t));
           if (!nd) {
             json_hyfree_hynode_hy(elem); json_hyfree_hynode_hy((int64_t)(intptr_t)n);
@@ -10379,8 +10379,8 @@ static void json_hyfree_hynode_hy(int64_t node) {
   if (type == 4) {
     free((void*)(intptr_t)np[1]);
   } else if (type == 5) {
-    struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)np[1];
-    for (size_t i = 0; i < v->len; i++) json_hyfree_hynode_hy(v->data[i]);
+    struct { int64_t *data; int64_t len; int64_t cap; } *v = (void*)(intptr_t)np[1];
+    for (int64_t i = 0; i < v->len; i++) json_hyfree_hynode_hy(v->data[i]);
     free(v->data);
     free(v);
   } else if (type == 6) {
@@ -10635,25 +10635,25 @@ static const char * schema_hyerror_hytext(int64_t e) {
 }
 
 static int64_t schema_hyerror_hycount(int64_t errs) {
-        struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+        struct { int64_t *data; int64_t len; int64_t cap; } *v = (void*)(intptr_t)errs;
   return v ? (int)v->len : 0;
   
 }
 
 static int64_t schema_hyerror_hyat(int64_t errs, int64_t i) {
-        struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
-  if (!v || i < 0 || (size_t)i >= v->len) return 0;
+        struct { int64_t *data; int64_t len; int64_t cap; } *v = (void*)(intptr_t)errs;
+  if (!v || i < 0 || i >= v->len) return 0;
   return v->data[i];
   
 }
 
 static const char * schema_hyerror_hymessage(int64_t errs) {
-        struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+        struct { int64_t *data; int64_t len; int64_t cap; } *v = (void*)(intptr_t)errs;
   if (!v || v->len == 0) {
     char *empty = malloc(1); empty[0] = 0; return empty;
   }
   size_t total = 1;
-  for (size_t i = 0; i < v->len; i++) {
+  for (int64_t i = 0; i < v->len; i++) {
     int64_t *e = (int64_t*)(intptr_t)v->data[i];
     const char *path = (const char*)(intptr_t)e[0];
     const char *msg  = (const char*)(intptr_t)e[1];
@@ -10662,7 +10662,7 @@ static const char * schema_hyerror_hymessage(int64_t errs) {
   }
   char *out = malloc(total);
   out[0] = 0;
-  for (size_t i = 0; i < v->len; i++) {
+  for (int64_t i = 0; i < v->len; i++) {
     int64_t *e = (int64_t*)(intptr_t)v->data[i];
     const char *path = (const char*)(intptr_t)e[0];
     const char *msg  = (const char*)(intptr_t)e[1];
@@ -10675,7 +10675,7 @@ static const char * schema_hyerror_hymessage(int64_t errs) {
 }
 
 static void sch_hyvpush_hy(void * v, int64_t x) {
-        typedef struct { int64_t *data; size_t len; size_t cap; } tur_sch_vec_t;
+        typedef struct { int64_t *data; int64_t len; int64_t cap; } tur_sch_vec_t;
   tur_sch_vec_t *vp = (tur_sch_vec_t *)v;
   if (vp->len == vp->cap) {
     vp->cap = vp->cap ? vp->cap * 2 : 4;
@@ -10743,7 +10743,7 @@ static int64_t sch_hyjpayload_hy(int64_t n) {
 
 static int64_t sch_hydecode_hyrec_hy(int64_t schema, int64_t node, const char * path, void * errs) {
         typedef struct { int64_t kind; int64_t a; int64_t b; int64_t c; } tur_sch_t;
-  typedef struct { int64_t *data; size_t len; size_t cap; } tur_sch_vec_t;
+  typedef struct { int64_t *data; int64_t len; int64_t cap; } tur_sch_vec_t;
   tur_sch_t *s = (tur_sch_t*)(intptr_t)schema;
   tur_sch_vec_t *ep = (tur_sch_vec_t *)errs;
   if (!s) return 0;
@@ -10824,7 +10824,7 @@ static int64_t sch_hydecode_hyrec_hy(int64_t schema, int64_t node, const char * 
       tur_sch_vec_t *out = malloc(sizeof(*out));
       out->data = NULL; out->len = 0; out->cap = 0;
       if (jarr) {
-        for (size_t i = 0; i < jarr->len; i++) {
+        for (int64_t i = 0; i < jarr->len; i++) {
           char *ipath = (char *)sch_hymkidx_hy(path, (int64_t)i);
           int64_t dv = sch_hydecode_hyrec_hy((int64_t)(intptr_t)elem, jarr->data[i], ipath, errs);
           free(ipath);
@@ -10840,8 +10840,8 @@ static int64_t sch_hydecode_hyrec_hy(int64_t schema, int64_t node, const char * 
     case 9: { /* union: first arm that matches wins */
       tur_sch_vec_t *arms = (tur_sch_vec_t*)(intptr_t)s->a;
       if (!arms || arms->len == 0) return 0;
-      for (size_t i = 0; i < arms->len; i++) {
-        size_t before = ep->len;
+      for (int64_t i = 0; i < arms->len; i++) {
+        int64_t before = ep->len;
         int64_t dv = sch_hydecode_hyrec_hy(arms->data[i], node, path, errs);
         if (ep->len == before) return dv;
         ep->len = before;
@@ -10851,7 +10851,7 @@ static int64_t sch_hydecode_hyrec_hy(int64_t schema, int64_t node, const char * 
       return 0;
     }
     case 10: { /* transform */
-      size_t before = ep->len;
+      int64_t before = ep->len;
       int64_t dv = sch_hydecode_hyrec_hy(s->a, node, path, errs);
       if (ep->len != before) return 0;
       return TUR_APPLY1(s->b, dv);
@@ -10869,7 +10869,7 @@ static int64_t sch_hydecode_hyrec_hy(int64_t schema, int64_t node, const char * 
       return 0;
     }
     case 14: { /* ap */
-      size_t before = ep->len;
+      int64_t before = ep->len;
       int64_t fv = sch_hydecode_hyrec_hy(s->a, node, path, errs);
       int64_t av = sch_hydecode_hyrec_hy(s->b, node, path, errs);
       if (ep->len != before) return 0;
@@ -10877,7 +10877,7 @@ static int64_t sch_hydecode_hyrec_hy(int64_t schema, int64_t node, const char * 
       return f(av);
     }
     case 16: { /* ap-fat */
-      size_t before = ep->len;
+      int64_t before = ep->len;
       int64_t fv = sch_hydecode_hyrec_hy(s->a, node, path, errs);
       int64_t av = sch_hydecode_hyrec_hy(s->b, node, path, errs);
       if (ep->len != before) return 0;
@@ -10917,7 +10917,7 @@ static int64_t sch_hydecode_hyrec_hy(int64_t schema, int64_t node, const char * 
 }
 
 static int64_t schema_hydecode(int64_t schema, int64_t node) {
-        typedef struct { int64_t *data; size_t len; size_t cap; } tur_sch_vec_t;
+        typedef struct { int64_t *data; int64_t len; int64_t cap; } tur_sch_vec_t;
   tur_sch_vec_t *errs = malloc(sizeof(*errs));
   errs->data = NULL; errs->len = 0; errs->cap = 0;
 
@@ -10947,9 +10947,9 @@ static int64_t schema_hydecode_hyerrors(int64_t r) {
 }
 
 static int64_t schema_hydecode_hyreport(int64_t errs) {
-        struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+        struct { int64_t *data; int64_t len; int64_t cap; } *v = (void*)(intptr_t)errs;
   fprintf(stderr, "schema-decode!: validation failed\n");
-  if (v) for (size_t i = 0; i < v->len; i++) {
+  if (v) for (int64_t i = 0; i < v->len; i++) {
     int64_t *e = (int64_t*)(intptr_t)v->data[i];
     const char *path = (const char*)(intptr_t)e[0];
     const char *msg  = (const char*)(intptr_t)e[1];

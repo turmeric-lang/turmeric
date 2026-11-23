@@ -1,5 +1,17 @@
 # On wasm32, word slots typed `intptr_t` or `void *` truncate 64-bit carriers
 
+> **RESOLVED 2026-11-23** (archived). All four shapes below are fixed, and
+> the last stragglers of shape 3 went the same day: the `size_t` vector-header
+> views left in `stdlib/json.tur`, `schema.tur`, `seq/core.tur` and
+> `seq/consume.tur` (and, in turmeric-spices, `frame/group.tur`, `c-dsl`,
+> `glsl/codegen.tur`, `plot/area.tur` and `contour.tur`) say `int64_t` now, and
+> `tests/check-extern-c-widths.py` fails on a new one in the stdlib.
+> `schema-decode-union` left the baseline. Of the 21 rows the baseline still
+> records as `stdout mismatch on the compiled path`, one is this family and
+> has its own report,
+> [ilp32-tvar-float-payload-truncated](../reported/ilp32-tvar-float-payload-truncated.md);
+> the other 20 are not (see "What is left in the baseline" at the end).
+
 **Severity:** high for the wasm JIT (wasm-jit-plan P3) and for
 `tur build --target wasm`: 44 corpus fixtures run to completion on the
 browser JIT module and print a **wrong answer**, with no diagnostic. Natively
@@ -79,7 +91,13 @@ Four shapes, all measured on the module:
    view is still in `frame/group.tur`, `c-dsl/codegen.tur` and `types.tur`,
    `glsl/codegen.tur`, and `plot/area.tur` and `contour.tur` (`CstrVec`,
    `StrVec`, `FillVec`) -- wrong on any wasm32 target, harmless natively; none
-   is in the arcade's engine yet.
+   is in the arcade's engine yet. *Fixed 2026-11-23:* all six say `int64_t`
+   now (turmeric-spices), and so do the views the stdlib itself still had --
+   `json.tur` (its arrays, which `schema.tur` reads as vectors), `schema.tur`
+   (the `vec-of` arms and field lists: `schema-decode-union` printed an empty
+   error on the module) and `seq/core.tur` / `seq/consume.tur`.
+   `check-extern-c-widths.py` fails on a `size_t` field after `int64_t *data;`
+   anywhere under `stdlib/`.
 
 4. **A struct's pointer field read through a 64-bit cell view.** *Found
    2026-10-29* (raylib-web-playground-plan prerequisite 2), by Emscripten's
@@ -110,7 +128,7 @@ Four shapes, all measured on the module:
 
    The padding is whatever the allocator left there, so the answer also varied
    from run to run in one module: this was
-   [wasm-jit-comparator-result-varies-between-runs](../archive/wasm-jit-comparator-result-varies-between-runs.md),
+   [wasm-jit-comparator-result-varies-between-runs](wasm-jit-comparator-result-varies-between-runs.md),
    and, against the module built from `main` on 2026-10-29, seven corpus rows
    (`generic-forward-nullary-arg-tyvar-name`, `list-basic`, `typed/list-basic`,
    `list-byvalue-adt-elements`, `list-count-phantom-opaque-aggregate-element`,
@@ -209,3 +227,18 @@ corpus.
   report mismatches.
 - `tests/run-jit-wasm.sh` is the measurement: each fixed shape turns its rows
   from `fail` to `compiled`, and the baseline ratchets.
+
+## What is left in the baseline (2026-11-23)
+
+Each remaining `stdout mismatch on the compiled path` row was run through the
+module (emsdk 6.0.10) and read:
+
+| Rows | Cause | This family? |
+|---|---|---|
+| `schema-decode-union` | `schema.tur` viewed the `vec-of` arms with `size_t len; size_t cap` | yes -- fixed, row gone |
+| `tvar-float-payload-value-converted` | a TVar read is typed `ptr<void>`, a 32-bit C pointer on wasm32, so a float payload's top half is gone before any slot is involved | yes -- [ilp32-tvar-float-payload-truncated](../reported/ilp32-tvar-float-payload-truncated.md) |
+| 10 `reactor-*` | the reactor's poll answers -1: no epoll/kqueue on the page | no |
+| 4 `image-*` | the image hooks: `init` runs where the fixture expects a reloaded image (untraced; ints and strings only) | no |
+| 3 `panic-*` | the location names the module's `main.tur`, the fixture expects `input.tur` | no |
+| `shift0-receiver-runs-outside-its-reset`, `direct-shift-outside-lexical-reset` | 5100 for 5000: a `shift0` receiver's shift lands on the inner reset, the pre-shift0-pop answer (untraced; an int, nothing to truncate) | no |
+| `time-dates-iso8601` | `local-parts` after `(env/set "TZ" "XYZ-3")` prints UTC: the module's `localtime_r` does not follow `TZ` | no |
