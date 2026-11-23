@@ -3560,4 +3560,5 @@ any struct with an `Option` field triggered it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [jit-wasm-baseline-stale-and-not-in-ci](jit-wasm-baseline-stale-and-not-in-ci.md) | low (test infrastructure) | `tests/run-jit-wasm.sh` reports 11 fixtures worse than `tests/jit-wasm-baseline.txt` on `main` (traps, two wrong outputs on the compiled path), and no CI job runs the harness, so the baseline drifts unseen |
+| [jit-wasm-baseline-stale-and-not-in-ci](jit-wasm-baseline-stale-and-not-in-ci.md) | low (test infrastructure) | No CI job runs `tests/run-jit-wasm.sh`. On 2026-11-23 its baseline was 11 fixtures behind, nine of them real wasm32 defects (fixed, see the next row); it holds again only until the next fixture lands |
+| ~~[wasm32-cps-pointer-slots-read-as-64-bit-words](../archive/wasm32-cps-pointer-slots-read-as-64-bit-words.md)~~ | high (browser JIT) | **RESOLVED 2026-11-23** (archived): three CPS reads treated a pointer-sized slot as a 64-bit word, so on wasm32 an effectful capturing callback aborted and a multishot resume shared its `^mut` cells. Nine fixtures now compile through the browser JIT |

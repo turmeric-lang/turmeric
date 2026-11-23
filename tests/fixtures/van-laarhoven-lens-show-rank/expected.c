@@ -3272,7 +3272,8 @@ __attribute__((unused)) static void __dk_cells_fresh(DK *c, const DK *stop) {
             for (int j = 0; j < nm; j++) if (from[j] == old) { nw = to[j]; break; }
             if (!nw) {
                 if (nm >= 32) continue;   /* table full: this cell stays shared */
-                size_t sz = ((const size_t *)old)[-2];
+                /* The header is 16 BYTES (__dk_cell_new), not two size_t. */
+                size_t sz = *(const size_t *)((const char *)old - 16);
                 nw = __dk_cell_new(sz); memcpy(nw, old, sz);
                 from[nm] = old; to[nm] = nw; nm++;
             }
@@ -9444,7 +9445,7 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
             __ce_list_hyeq_qu_j0->f2 = cmp_fn;
             __dk_reap_ptr((tur_dkw)__ce_list_hyeq_qu_j0);
             { int64_t *__e2ab = (int64_t *)(intptr_t)(cmp_fn); /* E2a threaded fn-value heap join (fat callee) */
-              __tur_cps_fn __e2af = __tur_cps_lookup(__e2ab[0]);
+              __tur_cps_fn __e2af = __tur_cps_lookup((tur_dkw)(intptr_t)*(void **)__e2ab);
               if (__e2af) return ((int64_t (*)(void *, int64_t, int64_t, DK *))__e2af)((void *)__e2ab, __t6, __t7, __dk_reap_node(dk_env_sized(dk_frame_resume_join(list_hyeq_qu_j0, (tur_dkw)__ce_list_hyeq_qu_j0, __kont), sizeof(list_hyeq_qu_j0_env))));
               void *__e2ah = ((void **)__e2ab)[-1];
               if (__e2ah == (void *)__tur_fatbox_keep || __e2ah == NULL) {

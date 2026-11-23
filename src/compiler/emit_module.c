@@ -3309,7 +3309,10 @@ char *ensure_fncps_env_dispatch(EmitCtx *ctx, const Type *lifted_ty) {
     buf_putc(&ss, '\0'); buf_putc(&sa, '\0');
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     buf_printf(target, "static int64_t %s(void *__pwe%s, struct DK *__kont) {\n", name, prm.data);
-    buf_puts(target, "    int64_t __pwf = ((int64_t *)__pwe)[0];\n");
+    /* Slot 0 is a function POINTER: read as an int64 word, a 32-bit target
+     * (the browser JIT) picks up the uninitialised padding after it and the
+     * registry lookup misses (emit_e2a_fat_dispatch has the same read). */
+    buf_puts(target, "    int64_t __pwf = (int64_t)(intptr_t)*(void **)__pwe;\n");
     buf_puts(target, "    __tur_cps_fn __c = __tur_cps_lookup((tur_dkw)__pwf);\n");
     buf_printf(target, "    if (__c) return ((int64_t(*)(void *%s, struct DK *))__c)(__pwe%s, __kont);\n",
                hs.data, ha.data);

@@ -354,6 +354,7 @@ saffron-while-any-condition interpreted  # the program starts threads (pthread_c
 schan-worker-pool fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 scheduler-basic fail  # stdout mismatch on the error path: the module threw: unreachable
 scheduler-io-park fail  # stdout mismatch on the error path: the module threw: unreachable
+scheduler-spawn-detached-frees-done fail  # stdout mismatch on the error path: the module threw: unreachable
 schema-decode-union fail  # stdout mismatch on the compiled path
 schema-reader-json-file fail  # stdout mismatch on the error path: the module threw: unreachable
 session-async-peer-on-thread fail  # stdout mismatch on the error path: the module threw: unwind
@@ -399,6 +400,7 @@ set-of-any-elements fail  # stdout mismatch on the error path: the module threw:
 shift0-receiver-runs-outside-its-reset fail  # stdout mismatch on the compiled path
 signal-handle-poll fail  # stdout mismatch on the interpreted path: import of undefined item socket
 stackless-catch-unwind-byref-aggregate-group-bail fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
+stdlib-c-fn-callbacks fail  # stdout mismatch on the interpreted path: the program starts threads (tur_timer_wheel_new), which this engine cannot run
 stm-retry-wakeup fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 stm-stress fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 tailcall-dyn-leak interpreted  # the program starts threads (pthread_create), which this engine cannot run

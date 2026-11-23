@@ -9173,7 +9173,15 @@ static void emit_e2a_fat_dispatch(CE *ce, const char *callee, const char *who,
     char thin_cast[512];
     e2a_cast(ce->ctx, thin_cast, sizeof thin_cast, "", sig, n);
     ce_line(ce, "{ int64_t *__e2ab = (int64_t *)(intptr_t)(%s); /* %s (fat callee) */", callee, tag);
-    ce_line(ce, "  __tur_cps_fn __e2af = __tur_cps_lookup(__e2ab[0]);");
+    /* Slot 0 is read as a POINTER, not as an int64 word: a closure env box
+     * starts with its lifted entry, a function pointer, and on a 32-bit
+     * target (the browser JIT) the four bytes after it are padding that
+     * malloc left uninitialised, so the 64-bit read missed the registry and
+     * the dispatch fell through to slot 1 -- a capture
+     * (docs/archive/wasm32-cps-pointer-slots-read-as-64-bit-words.md).  A fatshim
+     * box's slot 0 is a 64-bit word holding the shim's address, whose low
+     * half is the same pointer.  On LP64 the two reads are the same bits. */
+    ce_line(ce, "  __tur_cps_fn __e2af = __tur_cps_lookup((tur_dkw)(intptr_t)*(void **)__e2ab);");
     const char *sep = n ? ", " : "";
     const char *av = n ? argv : "";
     ce_line(ce, "  if (__e2af) return ((%s)__e2af)((void *)__e2ab, %s%s%s);",
@@ -12263,7 +12271,15 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                 if (!cb || caps->e[i].polyfn || !is_byref_mut(cb) ||
                     !byref_cell_is_recellable(ce->ctx, cb)) continue;
                 if (!any) buf_printf(ce->helpers, "#define %s_env_CELLS (0u", name);
-                buf_printf(ce->helpers, " | (1u << (offsetof(%s_env, f%d) / 8))", name, i);
+                /* The bit is the field's index in POINTER-sized words, which is
+                 * how __dk_cells_fresh walks the env.  Dividing by 8 named the
+                 * wrong word on a 32-bit target (the browser JIT), so a
+                 * multishot resume's copy kept sharing the cell.  A word past
+                 * the mask's 32 bits stays shared rather than shifting out of
+                 * range. */
+                buf_printf(ce->helpers, " | (offsetof(%s_env, f%d) / sizeof(void *) < 32"
+                                        " ? 1u << (offsetof(%s_env, f%d) / sizeof(void *)) : 0u)",
+                           name, i, name, i);
                 any = true;
             }
             if (any) {

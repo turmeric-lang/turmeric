@@ -1,53 +1,36 @@
-# `tests/jit-wasm-baseline.txt` has drifted: 11 fixtures are worse than their baseline, and no CI job runs the harness
+# No CI job runs `tests/run-jit-wasm.sh`, so its baseline drifts unseen
 
-**Severity:** low (test infrastructure). `tests/run-jit-wasm.sh` exits 1 on a
-clean checkout of `main`, so it cannot tell a new browser-JIT regression from
-the eleven it already reports. Nothing in `.github/`, `CMakeLists.txt` or the
-Justfile runs it, and the baseline was last rewritten on 2026-10-30.
+**Severity:** low (test infrastructure). Nothing in `.github/`,
+`CMakeLists.txt` or the Justfile runs the browser-JIT corpus. On 2026-11-23
+`tests/jit-wasm-baseline.txt`, last rewritten on 2026-10-30, was 11 fixtures
+behind, and nine of those were real defects that only this harness shows.
 
 Filed 2026-11-23, found while checking turmeric-lang/mir#21
 ([c2mir-wasm-vararg-buffer-allocas-per-call](../archive/c2mir-wasm-vararg-buffer-allocas-per-call.md))
 against the corpus.
 
-## Repro (measured, emcc 6.0.10, node 22, `main` at e9372656)
+## What the stale baseline was hiding (measured, emcc 6.0.10, node 22)
 
-```sh
-cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-cmake --build build-wasm -j --target tur_wasm_jit
-bash tests/run-jit-wasm.sh     # 3309 fixtures; needs sharding to fit 12 minutes
-```
+`bash tests/run-jit-wasm.sh` on `main` at e9372656 exited 1 with 11 fixtures
+"worse than the baseline". All 11 were added between 2026-10-28 and 2026-11-07
+and had no baseline row.
 
-`2602 compiled, 191 interpreted, 227 failed, 249 skipped`, and "worse than the
-baseline" for these, each with baseline `compiled`:
+- **Nine were wasm32 defects in the CPS code**, fixed the same day:
+  [wasm32-cps-pointer-slots-read-as-64-bit-words](../archive/wasm32-cps-pointer-slots-read-as-64-bit-words.md).
+  Two of them printed wrong numbers with no diagnostic.
+- **Two cannot run on the page** and got baseline rows:
+  `scheduler-spawn-detached-frees-done` (fibers: `getcontext`) and
+  `stdlib-c-fn-callbacks` (threads: `tur_timer_wheel_new`).
 
-| Fixture | Outcome now |
-| --- | --- |
-| `await-in-generic-capturing-lambda-struct` | the module threw: unreachable |
-| `await-through-fn-value` | the module threw: unreachable |
-| `cps-effectful-callback-wide-aggregate` | the module threw: unreachable |
-| `cps-effectful-capturing-callback-narrow-result` | the module threw: unreachable |
-| `cps-effectful-capturing-callback-ptr-void-arg` | the module threw: unreachable |
-| `generic-hof-unannotated-fat-param-mixed` | the module threw: unreachable |
-| `scheduler-spawn-detached-frees-done` | the module threw: unreachable |
-| `cps-multishot-cell-per-run` | the module threw: memory access out of bounds |
-| `cps-multishot-cell-per-run-narrow-and-struct` | stdout mismatch on the compiled path |
-| `cps-set-value-performs` | stdout mismatch on the compiled path |
-| `stdlib-c-fn-callbacks` | interpreted path: the program starts threads (`tur_timer_wheel_new`) |
-
-All eleven give the same outcome with the vendored MIR before and after mir#21,
-so that change did not cause them.
+So the baseline holds again, but only until the next fixture lands.
 
 ## Root cause
 
-Not diagnosed per fixture. Some of these fixtures may be newer than the
-baseline, in which case they were never `compiled` and only lack a row; the
-two `stdout mismatch on the compiled path` rows are wrong output from the
-engine and deserve a look first. The structural cause is that no job runs the
-harness, so nothing notices when a row goes stale.
+The harness is run by hand. A full run is 3309 fixtures and took about 40
+minutes on 4 cores here, in four shards of under 12 minutes each.
 
 ## Fix directions
 
-- Triage the eleven: add baseline rows for the ones the page cannot run
-  (threads), file the wrong-output and trap cases.
-- Run `tests/run-jit-wasm.sh` in CI, sharded (a full run took about 30 minutes
-  on 4 cores here), in the job that already builds `tur_wasm_jit`.
+- Run `tests/run-jit-wasm.sh` in CI, sharded with `TUR_TEST_SHARD` and
+  `TUR_JIT_WASM_RESULTS`, in the job that already builds `tur_wasm_jit`
+  (`.github/workflows/ci.yml`), or nightly if the per-PR cost is too high.
