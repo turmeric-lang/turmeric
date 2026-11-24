@@ -436,6 +436,15 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent);
 void cps_ir_dump_program(Arena *a, Expr *program, FILE *out);
 
 /* E2a: fn-value PARAM bindings whose effectful tail calls thread the DK. */
+/* sepcomp-cross-module-effect-unhandled: the other-module functions whose
+ * exported `__cps` entry a call threads into (`_has` asks it of a call's
+ * callee binding).  emit_cps_ir.c fills the set
+ * before it translates a separately compiled unit; the translator then treats
+ * a call to one as a call to a colored function. */
+void cps_ir_foreign_cps_reset(void);
+void cps_ir_foreign_cps_add(const FnDef *fd);
+bool cps_ir_foreign_cps_has(const Binding *fn);
+
 void cps_ir_thread_param_reset(void);
 /* Forget the callee_fndef binding -> FnDef table (a new classification). */
 void cps_ir_callee_cache_reset(void);

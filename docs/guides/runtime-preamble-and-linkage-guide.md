@@ -210,6 +210,16 @@ This is used by project builds and `--shared` libraries:
 - Ordinary runtime functions are replicated `static` into every module
   (`rt_fn` is `static ` in this mode). They all operate on the one set of
   globals.
+- The DK machine follows the same rule since 2026-11-24. Its functions are
+  per-module `static` copies; its state (driver landing, resume chain, reap
+  list, entry depth, pending-perform list, handler-group counter, pin flag,
+  re-opening slot) is defined once, hidden, under `TUR_RT_OWNER`.
+  `emit_cps_runtime_prelude` spells that state `static` for the single-file
+  posture, so `emit_dk_shared_state` rewrites those lines in this one, from a
+  table of the exact lines. A line that no longer matches its row becomes an
+  `#error` in `tur_runtime.h`. Before, every module had its own machine
+  state, which broke any chain that crossed modules
+  ([sepcomp-cross-module-effect-unhandled](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sepcomp-cross-module-effect-unhandled.md)).
 - The rc/GC family is defined once, inside the owner guard, at `TUR_RT_LOCAL`
   (hidden) visibility, so a `.so` does not export its collector.
   `emit_rcgc_prototypes` gives the other modules the declarations (DEDUP-3).

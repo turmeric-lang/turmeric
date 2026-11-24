@@ -1882,17 +1882,23 @@ static Expr **effect_check_items(Expr *program, uint32_t *out_n) {
  * side ("unhandled effect" abort).  Effect tags are also numbered per unit.
  *
  * So, under separate compilation only: index the other modules' callees this
- * unit reaches (transitively, through their bodies), infer their rows in the
- * same fixpoint as this unit's own functions, and refuse at the call site a
- * call whose callee can perform a user effect.  A capability tag and Unsafe
- * are authority marks, not performed effects, and cross freely.  Building the
- * program as one unit (`tur run` / `tur build <main.tur>`) threads them.
+ * unit reaches (transitively, through their bodies) and infer their rows in
+ * the same fixpoint as this unit's own functions.  The ones that can perform a
+ * user effect are published to the emitter (effect_check_foreign_effects),
+ * which threads a call into one through the callee's exported `__cps` entry
+ * and refuses the call it cannot thread.  Until 2026-11-24 this pass refused
+ * every such call itself.  A capability tag and Unsafe are authority marks,
+ * not performed effects, and are never published.
  * --------------------------------------------------------------------------- */
 
 static bool s_separate_compilation = false;
+static void foreign_effectful_reset(void);
 
 void effect_check_set_separate_compilation(bool on) {
     s_separate_compilation = on;
+    /* Off also drops what the last unit published: its FnDefs die with that
+     * compile's arena, and nothing may ask about them afterwards. */
+    if (!on) foreign_effectful_reset();
 }
 
 typedef struct {
@@ -1908,12 +1914,6 @@ typedef struct {
 static void foreign_scan(const Expr *e, ForeignFns *acc);
 static bool foreign_scan_visit(const Expr *c, void *ud) {
     foreign_scan(c, (ForeignFns *)ud);
-    return false;
-}
-
-static bool foreign_has(const ForeignFns *acc, const FnDef *fd) {
-    for (uint32_t i = 0; i < acc->n; i++)
-        if (acc->v[i] == fd) return true;
     return false;
 }
 
@@ -1959,60 +1959,78 @@ static void foreign_scan(const Expr *e, ForeignFns *acc) {
     (void)cps_visit_children(e, foreign_scan_visit, acc);
 }
 
-/* The first user effect in `row` (not a capability, not Unsafe), or NULL. */
-static Effect *row_first_user_effect(EffectRow *row, EffectEnv *env) {
-    if (!row || row->kind != ERK_CONCRETE) return NULL;
+/* What the fixpoint found, for the emitter: each other-module callee this unit
+ * reaches that can perform a user effect, with those effects.  The CPS backend
+ * threads a call into one through the callee's exported `__cps` entry (and
+ * refuses the call it cannot thread); see emit_cps_ir.c, "cross-module
+ * threading".  Rebuilt by every effect_check_pass; the FnDefs and Symbols
+ * belong to that compile. */
+typedef struct {
+    const FnDef   *fd;
+    const Symbol **effs;
+    uint32_t       n_effs;
+} ForeignEffectful;
+
+static ForeignEffectful *s_foreign_eff;
+static uint32_t          s_foreign_eff_n, s_foreign_eff_cap;
+
+static void foreign_effectful_reset(void) {
+    for (uint32_t i = 0; i < s_foreign_eff_n; i++) free((void *)s_foreign_eff[i].effs);
+    free(s_foreign_eff);
+    s_foreign_eff = NULL;
+    s_foreign_eff_n = s_foreign_eff_cap = 0;
+}
+
+static void foreign_effectful_publish(const ForeignFns *acc, EffectEnv *env) {
     Effect *unsafe_eff = find_unsafe_effect(env);
-    for (uint32_t i = 0; i < row->as.concrete.n_effects; i++) {
-        Effect *ef = row->as.concrete.effects[i];
-        if (!ef || ef->is_capability || ef == unsafe_eff) continue;
-        return ef;
-    }
-    return NULL;
-}
-
-typedef struct { const ForeignFns *acc; EffectEnv *env; int rc; } ForeignCheck;
-
-static void foreign_check(const Expr *e, ForeignCheck *fc);
-static bool foreign_check_visit(const Expr *c, void *ud) {
-    foreign_check(c, (ForeignCheck *)ud);
-    return false;
-}
-
-static void foreign_check(const Expr *e, ForeignCheck *fc) {
-    if (!e) return;
-    if (e->kind == EX_CALL && e->as.call_.fn_binding) {
-        FnDef *fd = e->as.call_.fn_binding->source_fn_def;
-        Effect *ef = (fd && foreign_has(fc->acc, fd))
-                         ? row_first_user_effect(fd->inferred_effect_row, fc->env)
-                         : NULL;
-        if (ef) {
-            const char *callee = fd->binding && fd->binding->name
-                                     ? fd->binding->name->name : "this function";
-            const char *mod = fd->binding && fd->binding->defining_module_name
-                                  ? fd->binding->defining_module_name->name : NULL;
-            diag_emit(DIAG_ERROR, e->span,
-                      "`%s`%s%s%s can perform the effect `%s`, and this call crosses "
-                      "into it from another module of a separately compiled build. "
-                      "An effect cannot reach a handler across a module boundary "
-                      "there: each module is its own C unit, and the call enters "
-                      "the callee through its plain entry, so the `perform` would "
-                      "find no handler and abort at run time. Handle `%s` inside "
-                      "%s, or build the program as one unit (`tur run` or "
-                      "`tur build <main.tur>`), which threads it.",
-                      callee, mod ? " (module " : "", mod ? mod : "", mod ? ")" : "",
-                      ef->name ? ef->name->name : "?",
-                      ef->name ? ef->name->name : "it",
-                      mod ? mod : "that module");
-            fc->rc = 1;
+    for (uint32_t i = 0; i < acc->n; i++) {
+        const FnDef *fd = acc->v[i];
+        EffectRow *row = fd->inferred_effect_row;
+        if (!row || row->kind != ERK_CONCRETE) continue;
+        const Symbol **effs = NULL;
+        uint32_t n = 0;
+        for (uint32_t k = 0; k < row->as.concrete.n_effects; k++) {
+            Effect *ef = row->as.concrete.effects[k];
+            if (!ef || ef->is_capability || ef == unsafe_eff || !ef->name) continue;
+            const Symbol **grown = realloc((void *)effs, (n + 1) * sizeof *effs);
+            if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+            effs = grown;
+            effs[n++] = ef->name;
         }
+        if (!n) continue;
+        if (s_foreign_eff_n == s_foreign_eff_cap) {
+            s_foreign_eff_cap = s_foreign_eff_cap ? s_foreign_eff_cap * 2 : 16;
+            ForeignEffectful *grown =
+                realloc(s_foreign_eff, s_foreign_eff_cap * sizeof *s_foreign_eff);
+            if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+            s_foreign_eff = grown;
+        }
+        s_foreign_eff[s_foreign_eff_n].fd = fd;
+        s_foreign_eff[s_foreign_eff_n].effs = effs;
+        s_foreign_eff[s_foreign_eff_n].n_effs = n;
+        s_foreign_eff_n++;
     }
-    if (e->kind == EX_FN && e->as.fn_.fn)
-        foreign_check(e->as.fn_.fn->body, fc);
-    else if (e->kind == EX_CLOSURE && e->as.closure_.closure &&
-             e->as.closure_.closure->fn)
-        foreign_check(e->as.closure_.closure->fn->body, fc);
-    (void)cps_visit_children(e, foreign_check_visit, fc);
+}
+
+bool effect_check_is_separate_compilation(void) {
+    return s_separate_compilation;
+}
+
+uint32_t effect_check_foreign_effects(const FnDef *fd, const Symbol *const **out) {
+    if (out) *out = NULL;
+    if (!fd) return 0;
+    for (uint32_t i = 0; i < s_foreign_eff_n; i++)
+        if (s_foreign_eff[i].fd == fd) {
+            if (out) *out = s_foreign_eff[i].effs;
+            return s_foreign_eff[i].n_effs;
+        }
+    return 0;
+}
+
+uint32_t effect_check_foreign_count(void) { return s_foreign_eff_n; }
+
+const FnDef *effect_check_foreign_at(uint32_t i) {
+    return i < s_foreign_eff_n ? s_foreign_eff[i].fd : NULL;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2020,6 +2038,7 @@ static void foreign_check(const Expr *e, ForeignCheck *fc) {
  * --------------------------------------------------------------------------- */
 
 int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
+    foreign_effectful_reset();
     if (!program || program->kind != EX_PROGRAM) return 0;
     if (!env) return 0;
 
@@ -2323,17 +2342,9 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         check_unreachable_handlers_in_expr(a, item->as.fn_def_.fn->body, &idx, env);
     }
 
-    /* sepcomp-cross-module-effect-unhandled: refuse a call that would carry a
-     * user effect across a unit boundary. */
-    if (foreign.n > 0) {
-        ForeignCheck fc = { &foreign, env, 0 };
-        for (uint32_t i = 0; i < n_items; i++) {
-            Expr *item = items[i];
-            if (item && item->kind == EX_FN_DEF && item->as.fn_def_.fn)
-                foreign_check(item->as.fn_def_.fn->body, &fc);
-        }
-        if (fc.rc) rc = 1;
-    }
+    /* sepcomp-cross-module-effect-unhandled: hand the emitter the other
+     * modules' callees that can perform a user effect. */
+    foreign_effectful_publish(&foreign, env);
     free(foreign.v);
 
     if (s_e0254_n > 0) rc = 1;

@@ -893,9 +893,40 @@ static const FnDef *callee_fndef(CpsB *b, const Binding *fn) {
     return NULL;
 }
 
+/* sepcomp-cross-module-effect-unhandled: the other-module functions a call
+ * threads into (populated by emit_cps_ir.c's ensure_S, under separate
+ * compilation only).  Such a function is no item of this unit's program, so
+ * callee_fndef does not know it, but its module exports its `__cps` entry and
+ * a call must hand it the caller's chain like any colored callee.  Keyed on
+ * the FnDef: an import's `:refer` binding and the module's own are two
+ * Bindings of one function. */
+static const FnDef **g_foreign_cps;
+static uint32_t      g_foreign_cps_n, g_foreign_cps_cap;
+void cps_ir_foreign_cps_reset(void) { g_foreign_cps_n = 0; }
+bool cps_ir_foreign_cps_has(const Binding *fn) {
+    if (!fn || !fn->is_global || !fn->source_fn_def) return false;
+    for (uint32_t i = 0; i < g_foreign_cps_n; i++)
+        if (g_foreign_cps[i] == fn->source_fn_def) return true;
+    return false;
+}
+void cps_ir_foreign_cps_add(const FnDef *fd) {
+    if (!fd) return;
+    for (uint32_t i = 0; i < g_foreign_cps_n; i++)
+        if (g_foreign_cps[i] == fd) return;
+    if (g_foreign_cps_n == g_foreign_cps_cap) {
+        g_foreign_cps_cap = g_foreign_cps_cap ? g_foreign_cps_cap * 2 : 16;
+        const FnDef **grown = (const FnDef **)realloc(
+            (void *)g_foreign_cps, g_foreign_cps_cap * sizeof *g_foreign_cps);
+        if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_foreign_cps = grown;
+    }
+    g_foreign_cps[g_foreign_cps_n++] = fd;
+}
+
 static bool callee_colored(CpsB *b, const Binding *fn) {
     const FnDef *fd = callee_fndef(b, fn);
-    return fd && fd->cps_colored;
+    if (!fd) return cps_ir_foreign_cps_has(fn);
+    return fd->cps_colored;
 }
 
 /* serial-shift-colored-receiver-rejected: may a perform inside this function

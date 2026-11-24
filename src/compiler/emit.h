@@ -175,6 +175,29 @@ const char *emit_inst_method_linkage_attr(const struct FnDef *fd);
  * turn's new defns for the JIT pruner by it. */
 char *emit_c_function_name(const Binding *b);
 
+/* Cross-module threading under separate compilation
+ * (sepcomp-cross-module-effect-unhandled;
+ * defined in emit_cps_ir.c).  The driver brackets a build with
+ * these so that an effect performed in one module's unit reaches a handler in
+ * another's:
+ *
+ *  - emit_cps_xmod_build_begin: once, before the first unit; then
+ *    emit_cps_xmod_set_unlinked_modules when some modules are not linked.
+ *  - emit_cps_xmod_unit_begin(module): before each unit's implementation is
+ *    emitted (again when the unit is recompiled -- its ledger lines are
+ *    replaced).
+ *  - emit_cps_xmod_deny_unsatisfied(module): after every unit has been
+ *    emitted.  True when `module` threads a call into a `__cps` entry no unit
+ *    exports (the callee left the CPS backend's subset in its own module);
+ *    those entries are then denied, and recompiling `module` reports each
+ *    such call as a located error instead of leaving it to the linker. */
+void emit_cps_xmod_build_begin(void);
+/* After emit_cps_xmod_build_begin: the modules compiled for their headers only
+ * (not linked into this output).  A call is never threaded into one. */
+void emit_cps_xmod_set_unlinked_modules(const char *const *names, int n);
+void emit_cps_xmod_unit_begin(const char *module_name);
+bool emit_cps_xmod_deny_unsatisfied(const char *module_name);
+
 int emit_header(Buf *out, const char *module_name, const Expr *program,
                 bool separate_compilation,
                 const ForcedAbiSpec *forced, uint32_t n_forced);

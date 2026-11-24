@@ -31,8 +31,21 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env);
 
 /* sepcomp-cross-module-effect-unhandled: tell the pass the unit is one module
  * of a separately compiled build, so it infers rows for the other modules'
- * callees and refuses a call that would carry a user effect across. */
+ * callees and publishes the ones that can perform a user effect. */
 void effect_check_set_separate_compilation(bool on);
+bool effect_check_is_separate_compilation(void);
+/* The driver turns it off again once the unit is emitted (which also drops
+ * the published callees, below): they point into that compile's arena. */
+
+/* The user effects (never a capability tag or Unsafe) that `fd`, a function
+ * of ANOTHER module reached from the unit the last effect_check_pass ran
+ * over, can perform.  Returns their count and points *out at their names; 0
+ * when `fd` is this unit's own, was not reached, or performs none.  Valid
+ * until the next effect_check_pass. */
+uint32_t effect_check_foreign_effects(const FnDef *fd, const Symbol *const **out);
+/* Enumerate those functions. */
+uint32_t effect_check_foreign_count(void);
+const FnDef *effect_check_foreign_at(uint32_t i);
 
 /* Validate a single function definition against its declared effect row.
  * Emits TUR-E0009 for each effect that is inferred but not declared.

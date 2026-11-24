@@ -13,6 +13,7 @@
 #include "arena.h"
 #include "expr.h"
 #include "effect.h"   /* E2 taint: credit indirect fn-value effect rows */
+#include "effect_check.h"   /* cross-module threading: the other modules' effectful callees */
 #include "mangle.h"   /* fn_unreached: the C spelling of a name */
 
 /* The elaborator's complete free-variable walker (backs the closure-capture
@@ -4504,17 +4505,384 @@ static int eff_bits_live(void) {
     return g_eff_n < CPS_MAX_EFFECTS ? g_eff_n : CPS_MAX_EFFECTS;
 }
 
+/* ---- cross-module threading (sepcomp-cross-module-effect-unhandled) -----
+ *
+ * Under separate compilation each module is its own C unit, and the
+ * classification above sees one module.  Four things let an effect performed
+ * in one unit reach a handler installed in another:
+ *
+ *  1. The OWNER exports the `__cps` twin of every exported function it
+ *     CPS-emits (xmod_exports_cps): external linkage, and one line in the
+ *     build's ledger (xmod_line_add).
+ *  2. An IMPORTER treats a call to another module's function that can perform
+ *     a user effect (effect_check_foreign_effects) as a call to a colored
+ *     function in S: the translator makes it a CT_TAILCALL, the emitter
+ *     declares the twin `extern` and threads the caller's chain into it, and
+ *     the classification credits the caller with the callee's effects, so the
+ *     taint rules keep the handler and the call on the DK machine together.
+ *  3. Effect tags are derived from the effect's NAME (effect_emit_tag), so
+ *     every unit of a build -- and a library built on its own -- agrees on
+ *     them.  Whole-program builds keep the per-program counter.
+ *  4. The units share one DK machine: its state is defined once, in the
+ *     runtime's owner unit (emit_module.c, emit_dk_shared_state).
+ *
+ * What cannot thread is refused at the call site
+ * (emit_cps_ir_xmod_refuse_direct_call): a call the direct path would make
+ * through the callee's plain entry, which seeds a fresh root.  That covers a
+ * caller evicted from S, a callee whose signature has no CPS ABI, a callee in
+ * a module outside the link, and -- through the ledger -- a callee its own
+ * module did not CPS-emit: the driver recompiles the importer with that twin
+ * denied (emit_cps_xmod_deny_unsatisfied), and the same refusal fires. */
+
+static bool xmod_on(void) { return effect_check_is_separate_compilation(); }
+
+/* The ledger: which `__cps` twins each unit of this build exports, and which
+ * it calls.  Keyed by the unit's module name, so recompiling a unit (the
+ * forced-spec pass) replaces its lines.  Process-wide, reset per build. */
+typedef struct { char *unit; char *sym; bool is_import; } XmodLine;
+static XmodLine *g_xmod_lines;
+static uint32_t  g_xmod_lines_n, g_xmod_lines_cap;
+static char     *g_xmod_unit;
+static char    **g_xmod_denied;
+static uint32_t  g_xmod_denied_n, g_xmod_denied_cap;
+
+static void xmod_line_add(const char *sym, bool is_import) {
+    const char *unit = g_xmod_unit ? g_xmod_unit : "";
+    for (uint32_t i = 0; i < g_xmod_lines_n; i++)
+        if (g_xmod_lines[i].is_import == is_import
+            && strcmp(g_xmod_lines[i].sym, sym) == 0
+            && strcmp(g_xmod_lines[i].unit, unit) == 0) return;
+    if (g_xmod_lines_n == g_xmod_lines_cap) {
+        g_xmod_lines_cap = g_xmod_lines_cap ? g_xmod_lines_cap * 2 : 32;
+        XmodLine *grown = (XmodLine *)realloc(g_xmod_lines,
+                                              g_xmod_lines_cap * sizeof *g_xmod_lines);
+        if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_xmod_lines = grown;
+    }
+    g_xmod_lines[g_xmod_lines_n].unit = strdup(unit);
+    g_xmod_lines[g_xmod_lines_n].sym = strdup(sym);
+    g_xmod_lines[g_xmod_lines_n].is_import = is_import;
+    g_xmod_lines_n++;
+}
+
+/* Modules compiled for their headers only: the output being linked does not
+ * contain them (a `--shared` library's :spices deps), so they run on another
+ * library's DK machine and a chain cannot be handed to them. */
+static char   **g_xmod_unlinked;
+static uint32_t g_xmod_unlinked_n;
+
+void emit_cps_xmod_set_unlinked_modules(const char *const *names, int n) {
+    for (uint32_t i = 0; i < g_xmod_unlinked_n; i++) free(g_xmod_unlinked[i]);
+    free(g_xmod_unlinked);
+    g_xmod_unlinked = NULL;
+    g_xmod_unlinked_n = 0;
+    if (!names || n <= 0) return;
+    g_xmod_unlinked = (char **)calloc((size_t)n, sizeof *g_xmod_unlinked);
+    if (!g_xmod_unlinked) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (int i = 0; i < n; i++)
+        if (names[i]) g_xmod_unlinked[g_xmod_unlinked_n++] = strdup(names[i]);
+}
+
+static bool xmod_module_unlinked(const Symbol *module) {
+    if (!module || !module->name) return false;
+    for (uint32_t i = 0; i < g_xmod_unlinked_n; i++)
+        if (strcmp(g_xmod_unlinked[i], module->name) == 0) return true;
+    return false;
+}
+
+static bool xmod_denied(const char *sym) {
+    for (uint32_t i = 0; i < g_xmod_denied_n; i++)
+        if (strcmp(g_xmod_denied[i], sym) == 0) return true;
+    return false;
+}
+
+void emit_cps_xmod_build_begin(void) {
+    for (uint32_t i = 0; i < g_xmod_lines_n; i++) {
+        free(g_xmod_lines[i].unit);
+        free(g_xmod_lines[i].sym);
+    }
+    free(g_xmod_lines);
+    g_xmod_lines = NULL;
+    g_xmod_lines_n = g_xmod_lines_cap = 0;
+    for (uint32_t i = 0; i < g_xmod_denied_n; i++) free(g_xmod_denied[i]);
+    free(g_xmod_denied);
+    g_xmod_denied = NULL;
+    g_xmod_denied_n = g_xmod_denied_cap = 0;
+    free(g_xmod_unit);
+    g_xmod_unit = NULL;
+    emit_cps_xmod_set_unlinked_modules(NULL, 0);
+}
+
+void emit_cps_xmod_unit_begin(const char *module_name) {
+    free(g_xmod_unit);
+    g_xmod_unit = strdup(module_name ? module_name : "");
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < g_xmod_lines_n; i++) {
+        if (strcmp(g_xmod_lines[i].unit, g_xmod_unit) == 0) {
+            free(g_xmod_lines[i].unit);
+            free(g_xmod_lines[i].sym);
+            continue;
+        }
+        g_xmod_lines[k++] = g_xmod_lines[i];
+    }
+    g_xmod_lines_n = k;
+}
+
+bool emit_cps_xmod_deny_unsatisfied(const char *module_name) {
+    if (!module_name) return false;
+    bool any = false;
+    for (uint32_t i = 0; i < g_xmod_lines_n; i++) {
+        if (!g_xmod_lines[i].is_import || strcmp(g_xmod_lines[i].unit, module_name) != 0)
+            continue;
+        bool exported = false;
+        for (uint32_t j = 0; j < g_xmod_lines_n && !exported; j++)
+            exported = !g_xmod_lines[j].is_import
+                && strcmp(g_xmod_lines[j].sym, g_xmod_lines[i].sym) == 0;
+        if (exported) continue;
+        /* Unsatisfied whether or not another importer already had it denied:
+         * this unit's emitted C names the twin too. */
+        any = true;
+        if (xmod_denied(g_xmod_lines[i].sym)) continue;
+        if (g_xmod_denied_n == g_xmod_denied_cap) {
+            g_xmod_denied_cap = g_xmod_denied_cap ? g_xmod_denied_cap * 2 : 8;
+            char **grown = (char **)realloc(g_xmod_denied,
+                                            g_xmod_denied_cap * sizeof *g_xmod_denied);
+            if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+            g_xmod_denied = grown;
+        }
+        g_xmod_denied[g_xmod_denied_n++] = strdup(g_xmod_lines[i].sym);
+    }
+    return any;
+}
+
+/* `<owner's C name>__cps`, malloc'd. */
+static char *xmod_cps_symbol(const FnDef *fd) {
+    char *cn = raw_name_for_binding(fd->binding);
+    size_t cl = strlen(cn);
+    char *xn = (char *)malloc(cl + 6);
+    if (!xn) { fprintf(stderr, "tur: oom\n"); abort(); }
+    memcpy(xn, cn, cl);
+    memcpy(xn + cl, "__cps", 6);
+    free(cn);
+    return xn;
+}
+
+/* The twin's linkage: external, and hidden -- it is reachable from the other
+ * modules of the same linked output, which share one DK machine, and from
+ * nothing outside it (a `--shared` library exports no `__cps` symbol). */
+#define XMOD_CPS_LINKAGE "TUR_RT_LOCAL "
+
+/* OWNER side: does this unit give `fd`'s `__cps` twin external linkage?  An
+ * exported function of a named module; never a stdlib copy (static in every
+ * unit) or a spec clone (the caller passes mono_emit). */
+static bool xmod_exports_cps(const FnDef *fd) {
+    const Binding *b = fd ? fd->binding : NULL;
+    return xmod_on() && b && b->is_exported && !b->is_from_stdlib
+        && b->defining_module_name && !b->is_lifted_lambda && !fd->closure;
+}
+
+/* IMPORTER side.  The other-module function a call through `b` names, when
+ * it can perform a user effect; NULL otherwise. */
+static const FnDef *xmod_callee_fd(const Binding *b) {
+    if (!b || !b->is_global || !xmod_on()) return NULL;
+    const FnDef *fd = b->source_fn_def;
+    if (!fd || !fd->binding || !effect_check_foreign_effects(fd, NULL)) return NULL;
+    return fd;
+}
+
+/* ...and the ones a call threads into: the owner exports the twin (the same
+ * test as xmod_exports_cps), the signature has a CPS ABI, and the owner is not
+ * known to have left the function out of its S.  Cached per classification
+ * (fn_sig_ok spells C types, which registers monomorphs). */
+typedef struct { const FnDef *fd; bool ok; } XmodCallee;
+static XmodCallee *g_xmod_callees;
+static uint32_t    g_xmod_callees_n, g_xmod_callees_cap;
+
+static void xmod_callees_reset(void) {
+    g_xmod_callees_n = 0;
+    cps_ir_foreign_cps_reset();
+}
+
+static bool xmod_fd_threads(const FnDef *fd) {
+    for (uint32_t i = 0; i < g_xmod_callees_n; i++)
+        if (g_xmod_callees[i].fd == fd) return g_xmod_callees[i].ok;
+    return false;
+}
+
+static bool xmod_threads(const Binding *b) {
+    const FnDef *fd = xmod_callee_fd(b);
+    return fd && xmod_fd_threads(fd);
+}
+
+static void xmod_callees_build(void) {
+    xmod_callees_reset();
+    if (!xmod_on()) return;
+    for (uint32_t i = 0, n = effect_check_foreign_count(); i < n; i++) {
+        const FnDef *fd = effect_check_foreign_at(i);
+        const Binding *b = fd ? fd->binding : NULL;
+        if (!b) continue;
+        bool ok = b->is_exported && !b->is_from_stdlib && b->defining_module_name
+            && !b->is_lifted_lambda && !fd->closure && !b->c_export_name
+            && !fn_is_main(fd) && fd->body && fd->body->kind != EX_INLINE_C
+            && !xmod_module_unlinked(b->defining_module_name);
+        for (uint32_t k = 0; ok && k < fd->n_params; k++)
+            ok = fd->params[k] && !type_has_unresolved_tyvar(&fd->param_types[k]);
+        if (ok) ok = !type_has_unresolved_tyvar(fn_ret_type(fd)) && fn_sig_ok(fd);
+        if (ok) {
+            char *sym = xmod_cps_symbol(fd);
+            ok = !xmod_denied(sym);
+            free(sym);
+        }
+        if (g_xmod_callees_n == g_xmod_callees_cap) {
+            g_xmod_callees_cap = g_xmod_callees_cap ? g_xmod_callees_cap * 2 : 16;
+            XmodCallee *grown = (XmodCallee *)realloc(
+                g_xmod_callees, g_xmod_callees_cap * sizeof *g_xmod_callees);
+            if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+            g_xmod_callees = grown;
+        }
+        g_xmod_callees[g_xmod_callees_n].fd = fd;
+        g_xmod_callees[g_xmod_callees_n].ok = ok;
+        g_xmod_callees_n++;
+        if (ok) cps_ir_foreign_cps_add(fd);
+    }
+}
+
+/* Credit a call into another module with the user effects its callee can
+ * perform, as if the caller performed them: the taint rules then treat the
+ * call like a `perform` of each. */
+static void xmod_mark_call_effects(const Binding *b, EffSet *perf) {
+    const FnDef *fd = xmod_callee_fd(b);
+    if (!fd || !perf) return;
+    const Symbol *const *effs = NULL;
+    uint32_t n = effect_check_foreign_effects(fd, &effs);
+    for (uint32_t i = 0; i < n; i++)
+        if (effs[i]) effset_add(perf, eff_bit(effs[i]));
+}
+
+/* The refusal.  `b` is the callee of a call the DIRECT path is about to make
+ * (the direct emitter, or a cps->direct arm of this backend).  Reported once
+ * per call site. */
+static struct { uint16_t file_id; uint32_t start; } *g_xmod_refused;
+static uint32_t g_xmod_refused_n, g_xmod_refused_cap;
+
+bool emit_cps_ir_xmod_refuse_direct_call(const Binding *b, Span span) {
+    const FnDef *fd = xmod_callee_fd(b);
+    if (!fd) return false;
+    for (uint32_t i = 0; i < g_xmod_refused_n; i++)
+        if (g_xmod_refused[i].file_id == span.file_id
+            && g_xmod_refused[i].start == span.off_start) return true;
+    if (g_xmod_refused_n == g_xmod_refused_cap) {
+        g_xmod_refused_cap = g_xmod_refused_cap ? g_xmod_refused_cap * 2 : 8;
+        void *grown = realloc(g_xmod_refused, g_xmod_refused_cap * sizeof *g_xmod_refused);
+        if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_xmod_refused = grown;
+    }
+    g_xmod_refused[g_xmod_refused_n].file_id = span.file_id;
+    g_xmod_refused[g_xmod_refused_n].start = span.off_start;
+    g_xmod_refused_n++;
+
+    const Symbol *const *effs = NULL;
+    (void)effect_check_foreign_effects(fd, &effs);
+    const char *eff = effs && effs[0] ? effs[0]->name : "?";
+    const char *callee = fd->binding->name ? fd->binding->name->name : "this function";
+    const char *mod = fd->binding->defining_module_name
+                          ? fd->binding->defining_module_name->name : NULL;
+    /* Which side could not thread it. */
+    const char *why = xmod_fd_threads(fd)
+        ? "The call is not threaded here: the enclosing function left the CPS "
+          "backend's supported subset (TUR_TRACE_EVICT=1 names the form), so "
+          "the callee would be entered through its plain entry and its "
+          "`perform` would find no handler and abort at run time."
+        : xmod_module_unlinked(fd->binding->defining_module_name)
+        ? "Its module is not linked into this library (a dependency built on "
+          "its own, with its own continuation machine), so the call would "
+          "enter it through its plain entry, and its `perform` would find no "
+          "handler and abort at run time. `--bundle-deps` links it in."
+        : "Its module exports no threaded entry for it -- its signature has no "
+          "CPS ABI, or the function left the CPS backend's supported subset "
+          "there (TUR_TRACE_EVICT=1 names the form) -- so the call would enter "
+          "it through its plain entry, and its `perform` would find no handler "
+          "and abort at run time.";
+    diag_emit(DIAG_ERROR, span,
+              "`%s`%s%s%s can perform the effect `%s`, and this call crosses "
+              "into it from another module of a separately compiled build. %s "
+              "Handle `%s` inside %s%s",
+              callee, mod ? " (module " : "", mod ? mod : "", mod ? ")" : "",
+              eff, why, eff, mod ? mod : "that module",
+              xmod_module_unlinked(fd->binding->defining_module_name)
+                  ? "."
+                  : ", or reshape the function the trace names so the backend "
+                    "can thread the call. This is a compiler limitation, not a "
+                    "mistake in this expression.");
+    return true;
+}
+
+/* The tag `dk_perform` / `dk_handler*` are emitted with.  A whole-program
+ * build numbers effects per program (effect_tag).  A separately compiled unit
+ * derives the tag from the effect's name, the identity a whole-program build
+ * uses too (effect_tag is keyed on the interned name), so that every unit
+ * linked into one program agrees without sharing a table: FNV-1a of the name,
+ * folded into [2, INT32_MAX] (0 is the root prompt, 1 reset/shift).  Two names
+ * that fold to one tag would run the wrong handler, silently, so each tag is
+ * checked against the names this build has seen under it. */
+typedef struct { int tag; char *name; } XmodTag;
+static XmodTag *g_xmod_tags;
+static uint32_t g_xmod_tags_n, g_xmod_tags_cap;
+
+int effect_emit_tag(const Symbol *eff) {
+    if (!xmod_on() || !eff || !eff->name) return effect_tag(eff);
+    uint32_t h = 2166136261u;
+    for (uint32_t i = 0; i < eff->len; i++) {
+        h ^= (uint8_t)eff->name[i];
+        h *= 16777619u;
+    }
+    int tag = (int)(h % 0x7ffffffdu) + 2;
+    for (uint32_t i = 0; i < g_xmod_tags_n; i++) {
+        if (g_xmod_tags[i].tag != tag) continue;
+        if (strlen(g_xmod_tags[i].name) == eff->len
+            && memcmp(g_xmod_tags[i].name, eff->name, eff->len) == 0) return tag;
+        static bool told;
+        if (!told) {
+            told = true;
+            diag_emit(DIAG_ERROR, (Span){0},
+                      "the effects `%s` and `%.*s` hash to the same handler tag "
+                      "(%d) in a separately compiled build, so a `perform` of "
+                      "one could run the other's handler. Rename one of them, "
+                      "or build the program as one unit (`tur build "
+                      "<main.tur>`), which numbers effects instead.",
+                      g_xmod_tags[i].name, (int)eff->len, eff->name, tag);
+        }
+        return tag;
+    }
+    if (g_xmod_tags_n == g_xmod_tags_cap) {
+        g_xmod_tags_cap = g_xmod_tags_cap ? g_xmod_tags_cap * 2 : 16;
+        XmodTag *grown = (XmodTag *)realloc(g_xmod_tags, g_xmod_tags_cap * sizeof *g_xmod_tags);
+        if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_xmod_tags = grown;
+    }
+    char *nm = (char *)malloc(eff->len + 1);
+    if (!nm) { fprintf(stderr, "tur: oom\n"); abort(); }
+    memcpy(nm, eff->name, eff->len);
+    nm[eff->len] = '\0';
+    g_xmod_tags[g_xmod_tags_n].tag = tag;
+    g_xmod_tags[g_xmod_tags_n].name = nm;
+    g_xmod_tags_n++;
+    return tag;
+}
+
 static bool binding_in_s(const Binding *b) {
     if (!b) return false;
     for (size_t i = 0; i < g_ents_n; i++)
         if (g_ents[i].bind == b) return g_ents[i].in_s;
-    return false;
+    /* Another module's function whose exported `__cps` entry a call threads
+     * into: in S, in its own unit. */
+    return xmod_threads(b);
 }
 static bool binding_cps_reachable(const Binding *b) {
     if (!b) return false;
     for (size_t i = 0; i < g_ents_n; i++)
         if (g_ents[i].bind == b) return g_ents[i].in_s || g_ents[i].mono_template;
-    return false;
+    return xmod_threads(b);
 }
 
 static const char *find_mono_clone_for_call(EmitCtx *ctx, const Binding *fn,
@@ -5239,6 +5607,8 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                  * lambda (the CPS translator rewrites it so). */
                 const Binding *lt = cps_ir_letrec_member_target(e->as.call_.fn_binding);
                 eff_acc_add_callee(acc, lt ? lt : e->as.call_.fn_binding);
+                /* A call into another module performs what its callee can. */
+                xmod_mark_call_effects(e->as.call_.fn_binding, acc->perf);
                 if (g_addr_collecting && e->as.call_.forwards_site &&
                     e->as.call_.fn_binding->is_global)
                     pap_fwd_add(e->as.call_.fn_binding);
@@ -7115,6 +7485,9 @@ static void ensure_S(const Expr *program) {
 
     /* Coloring is idempotent (cps.c resets first); guarantee it ran. */
     cps_color_program(&g_arena, (Expr *)program);
+    /* Cross-module threading: the other modules' callees this unit threads
+     * into, before anything is translated (the translator asks). */
+    xmod_callees_build();
 
     /* Enter EVERY colored top-level fn into the table.  Candidates (scalar sig,
      * core-only CTerm, not main/exported) start in S; non-candidates are kept
@@ -7629,6 +8002,7 @@ static SEnt *ent_of_binding(const Binding *b) {
 }
 static const FnDef *cps_fd_of_binding(const Binding *b) {
     SEnt *fe = ent_of_binding(b);
+    if (!fe && xmod_threads(b)) return xmod_callee_fd(b);
     return fe ? fe->fd : NULL;
 }
 
@@ -8851,7 +9225,19 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
 }
 
 static char *callee_name(const Binding *fn) {
+    /* Another module's threaded callee: its own binding's name, which is what
+     * its module's `__cps` twin is spelled from (an import's `:refer` binding
+     * is a second Binding of the same function). */
+    if (xmod_threads(fn)) return raw_name_for_binding(xmod_callee_fd(fn)->binding);
     return raw_name_for_binding(fn);   /* malloc'd */
+}
+/* Cross-module threading: a cps->cps call site names another module's `__cps`
+ * twin.  One ledger line, so the build can check that module exports it. */
+static void xmod_note_call(const Binding *fn) {
+    if (!xmod_threads(fn)) return;
+    char *sym = xmod_cps_symbol(xmod_callee_fd(fn));
+    xmod_line_add(sym, true);
+    free(sym);
 }
 /* The spelling of a `via_registry` callee.  A thread LOCAL
  * (cps_ir_thread_local_add) is a let-bound local of the function being
@@ -10165,6 +10551,11 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
              * carrier-erased typeclass-method dispatch to the concrete per-spec
              * instance (same as the CT_TAILCALL arm); self-gating, so no-op for an
              * ordinary call. */
+            /* Cross-module threading: a direct call into another module's
+             * effectful function seeds a fresh root -- refused. */
+            if (t->as.letcall.call_expr)
+                (void)emit_cps_ir_xmod_refuse_direct_call(t->as.letcall.fn,
+                                                          t->as.letcall.call_expr->span);
             char *rr_lc = t->as.letcall.call_expr
                 ? emit_reresolve_method_call(ce->ctx, t->as.letcall.call_expr) : NULL;
             const char *mclone_lc = rr_lc ? NULL : find_mono_clone_for_call(
@@ -10449,6 +10840,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
             bool force_direct = region_scope_call_bracketed(t->as.tailcall.fn,
                                                             t->as.tailcall.call_expr);
             if (!rr && !force_direct && (callee_colored || clone_is_cps)) {
+                if (!clone) xmod_note_call(t->as.tailcall.fn);
                 /* cps->cps: both colored and emitted -- thread the continuation
                  * straight through, no trampoline.  The threaded continuation is
                  * the function's own k (KK_RET) or, inside a reset's delimited
@@ -10636,6 +11028,11 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 /* cps->direct: the callee is uncolored or a colored function that
                  * fell back to direct-style; call it synchronously and deliver
                  * the ordinary result value to the continuation. */
+                /* Cross-module threading: ...which another module's effectful
+                 * function must not be -- refused. */
+                if (t->as.tailcall.call_expr)
+                    (void)emit_cps_ir_xmod_refuse_direct_call(
+                        t->as.tailcall.fn, t->as.tailcall.call_expr->span);
                 char *tmp = fresh_tmp(ce->ctx);
                 /* Cast each arg to the callee's DECLARED param C type, exactly as
                  * the cps->cps branch does -- a pointer/fat-fn arg into an int64
@@ -12362,6 +12759,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         ? (hj_clone && !binding_in_s(call->as.tailcall.fn) ? strdup(hj_clone)
                                                             : registry_callee_name(ce, call->as.tailcall.fn))
         : atom_str(ce, &call->as.tailcall.fn_atom);  /* E2c: field-load callee */
+    if (call->as.tailcall.fn && !hj_clone) xmod_note_call(call->as.tailcall.fn);
     char *argv = atoms_csv_call(ce, call->as.tailcall.args, call->as.tailcall.n);
     /* The join frame is spliced onto cur_k and threaded into the callee in tail
      * position; register it for a single-node reap at the outermost entry
@@ -14338,7 +14736,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
      * (__dk_group_release). */
     buf_printf(&chain, "%sdk_frame_resume_group_end(%s, %s, %s)%s", uw, kname, hkenv, ce->cur_k, uwc);
     for (int ci = (int)nc - 1; ci >= 0; ci--) {
-        int tag = effect_tag(t->as.handle.cases[ci].effect);
+        int tag = effect_emit_tag(t->as.handle.cases[ci].effect);
         /* E7: a deep case that reduces to a TAIL resume installs with
          * dk_handler_tail so dk_perform yields it to the entry driver (flat).
          * emit_resume for that case emits the matching dk_tail_resume. */
@@ -14415,7 +14813,7 @@ static bool perform_cont_trivial(const CTerm *t) {
 }
 
 static void emit_perform(CE *ce, const CTerm *t) {
-    int tag = effect_tag(t->as.perform.effect);
+    int tag = effect_emit_tag(t->as.perform.effect);
     /* The effect's name rides along for the unhandled-effect abort only: a tag
      * is numbered per unit, so the perform site is what can name it
      * (effect-continuation-followups Part B). */
@@ -15080,11 +15478,26 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
          * a stdlib defn's CPS body with external linkage, for a colored
          * caller in the client unit. */
         buf_printf(file, "%sint64_t %s__cps(",
-                   emit_split_lib_owns(fd->binding) ? "" : "static ", cn);
+                   xmod_exports_cps(fd) ? XMOD_CPS_LINKAGE
+                   : emit_split_lib_owns(fd->binding) ? "" : "static ", cn);
         emit_params(ctx, file, fd);
         if (fd->n_params) buf_puts(file, ", ");
         buf_puts(file, "DK *__kont);\n");
         free(cn);
+    }
+    /* Cross-module threading: the `__cps` twins of the other modules'
+     * functions this unit threads into.  Spelled from the callee's own FnDef
+     * exactly as its module spells the definition (emit_params); its types are
+     * in scope through the import's header. */
+    for (uint32_t i = 0; i < g_xmod_callees_n; i++) {
+        if (!g_xmod_callees[i].ok) continue;
+        const FnDef *fd = g_xmod_callees[i].fd;
+        char *xn = xmod_cps_symbol(fd);
+        buf_printf(file, "extern " XMOD_CPS_LINKAGE "int64_t %s(", xn);
+        emit_params(ctx, file, fd);
+        if (fd->n_params) buf_puts(file, ", ");
+        buf_puts(file, "DK *__kont);   /* another module's CPS entry */\n");
+        free(xn);
     }
     /* G3b: forward-declare each mono-template monomorph's `<clone>__cps`, since a
      * cps->cps caller (a DK peer) references it before the spec-body emit loop
@@ -15121,6 +15534,8 @@ void emit_cps_ir_forget(void) {
     g_fwd_done = false;
     g_eff_n = 0;
     ctg_reset();
+    xmod_callees_reset();
+    g_xmod_refused_n = 0;
     if (g_cap_arena_live) { arena_free(&g_cap_arena); g_cap_arena_live = false; }
 }
 
@@ -15873,6 +16288,13 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
      * spellings + slot tiers in the reused generic CTerm resolve through the
      * active spec (g_cps_mono_resolver, set around the emit below). */
     char *cn = mono_emit ? strdup(spec->clone_name) : raw_name_for_binding(fd->binding);
+    /* Cross-module threading: this unit defines the twin with external
+     * linkage (below), so say so in the build's ledger. */
+    if (!mono_emit && xmod_exports_cps(fd)) {
+        char *xn = xmod_cps_symbol(fd);
+        xmod_line_add(xn, false);
+        free(xn);
+    }
     const Type *mono_ret = NULL;
     if (mono_emit) {
         g_cps_mono_resolver = ctx;
@@ -16085,7 +16507,8 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
             buf_puts(file, ";\n");
             grp->declared = true;
         }
-        buf_printf(file, "static int64_t %s__cps(", cn);
+        buf_printf(file, "%sint64_t %s__cps(",
+                   (xmod_exports_cps(fd) && !mono_emit) ? XMOD_CPS_LINKAGE : "static ", cn);
         emit_params(ctx, file, fd);
         if (fd->n_params) buf_puts(file, ", ");
         buf_printf(file, "DK *__kont) {\n    return %s(%d", grp->name, ctg_idx);
@@ -16110,7 +16533,8 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     } else {
     /* ---- CPS body: int64_t <name>__cps(<params>, DK *__kont) ---- */
     buf_printf(file, "%sint64_t %s__cps(",
-               (emit_split_lib_owns(fd->binding) && !mono_emit) ? "" : "static ", cn);
+               (xmod_exports_cps(fd) && !mono_emit) ? XMOD_CPS_LINKAGE
+               : (emit_split_lib_owns(fd->binding) && !mono_emit) ? "" : "static ", cn);
     emit_params(ctx, file, fd);
     if (fd->n_params) buf_puts(file, ", ");
     buf_puts(file, "DK *__kont) {\n");
