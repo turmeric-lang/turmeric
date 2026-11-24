@@ -202,8 +202,8 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [wasm-mir-interp-tail-call-keeps-allocas](wasm-mir-interp-tail-call-keeps-allocas.md) | medium (planned wasm JIT) | On wasm the MIR interpreter's `bend` is a no-op, so a tail call from a function that allocated keeps its allocas and a frame: about 350 B per call, and the module traps after about 24k calls at 16 MiB. A C-level stack restore does not help, because LLVM caches `eval`'s SP. An interpreter-owned frame arena would |
-| [c2mir-wasm-vararg-buffer-allocas-per-call](c2mir-wasm-vararg-buffer-allocas-per-call.md) | high (planned wasm JIT) | On wasm32, c2mir allocas a variadic call's argument buffer at the call site, so `printf` in a loop (`println` on an int) grows the stack 16 B per iteration until the function returns. About 1M prints overflow 16 MiB, with signs of memory corruption |
+| ~~[wasm-mir-interp-tail-call-keeps-allocas](../archive/wasm-mir-interp-tail-call-keeps-allocas.md)~~ | medium (planned wasm JIT) | **RESOLVED 2026-11-24** (archived): on wasm the MIR interpreter's `bend` is a no-op, so a tail call from a function that allocated kept its allocas and a frame, and a long chain trapped. The interpreter now keeps its frames and allocas on a stack of its own there (turmeric-lang/mir#22), which a tail call, `bend`, a return and a `longjmp` reset. Pinned by `tools/wasm-jit-spike` and the fork's `wasm-tests` |
+| ~~[c2mir-wasm-vararg-buffer-allocas-per-call](../archive/c2mir-wasm-vararg-buffer-allocas-per-call.md)~~ | high (planned wasm JIT) | **RESOLVED 2026-11-24** (archived): on wasm32, c2mir allocated a variadic call's argument buffer at the call site, so `printf` in a loop grew the stack 16 B per iteration. The buffer is now one per function (turmeric-lang/mir#21, vendored with mir#22). Pinned by `tools/wasm-jit-spike` and the fork's `wasm-tests` |
 
 ## Found by the quote-data corpus sweep (filed 2026-10-24)
 

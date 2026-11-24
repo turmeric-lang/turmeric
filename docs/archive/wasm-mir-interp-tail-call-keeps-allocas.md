@@ -1,5 +1,7 @@
 # On wasm, a MIR-interpreted tail call from a function that allocated keeps its allocas and a frame
 
+**Status: RESOLVED 2026-11-24** (see [Resolution](#resolution)).
+
 **Severity:** medium for the planned wasm JIT (wasm-jit-plan; its engine is
 the MIR interpreter), none today -- nothing ships the interpreter on wasm yet.
 A tail-call chain through a function with any address-taken or aggregate
@@ -9,43 +11,9 @@ about 24,000 calls, and a module that has trapped this way cannot be used again
 (wasm-jit-plan section 5.8). Natively the same chain runs in constant stack.
 
 Filed 2026-10-24. This is the wasm residue noted by the resolved
-[mir-interp-tail-calls-grow-the-stack](../archive/mir-interp-tail-calls-grow-the-stack.md)
+[mir-interp-tail-calls-grow-the-stack](mir-interp-tail-calls-grow-the-stack.md)
 and in wasm-jit-plan section 5.8. Until now it was written down only in an
 archived report and a plan paragraph, with no open finding to track it.
-
-## Status: fixed in the fork, not yet vendored (2026-11-24)
-
-[turmeric-lang/mir#22](https://github.com/turmeric-lang/mir/pull/22) takes the
-first fix direction below. On wasm, `eval`'s frames and the `MIR_ALLOCA`
-blocks come from a per-context stack the interpreter owns: 256 KiB chunks
-from the context's allocator, with an explicit top. A tail call, `BEND`, a
-return and a `longjmp` back into interpreted code reset that top. Running out
-raises `MIR_alloc_error` instead of trapping.
-
-Measured with `tools/wasm-jit-spike/run.sh`, which now carries the repro
-(emcc 6.0.10, node 22). The number is how far the aggregate and the linear
-stack pointer moved between the first call and the last:
-
-| n | vendored MIR (`d00e8c15`) | fork branch (`SPIKE_MIR=<checkout>`) |
-| --- | --- | --- |
-| 10 | 23360 | 0 |
-| 1000 | 2336000 | 0 |
-| 100000 | `RuntimeError: memory access out of bounds` | 0 |
-
-What is left, in order:
-
-1. mir#22 merges.
-2. `bash tools/update-mir.sh <merge commit>`, a line in
-   `external/mir/VENDORED.md`, and `bash tests/run-jit.sh`.
-3. `sh tools/wasm-jit-spike/run.sh` exits 0 on the vendored copy. Until
-   then it exits 1 with `FAIL: a tail-call chain grew the stack`.
-4. Drop the "one wasm-specific residue" sentence from wasm-jit-plan section
-   5.8 and move this report to `docs/archive/`.
-
-The spike's `loop_tail` row and its warm-up call now run at depth 500, not
-1000. Since mir#17 put a `setjmp` frame under every interpreted call the
-depth limit under node is about 900, so the spike had been ending in an
-uncaught `RangeError` before it printed that row.
 
 ## Repro (measured, emcc 6.0.13, node 22)
 
@@ -108,3 +76,44 @@ no-op stub is not just an omission.
   rest of wasm-jit-plan P1's fork fixes.
 - Pin it with the repro above in the spike (`withalloc` constant like
   `noalloc`).
+
+## Resolution
+
+Fixed in the fork by
+[turmeric-lang/mir#22](https://github.com/turmeric-lang/mir/pull/22) (merged as
+`dc4be67`) and vendored the same day. It takes the first fix direction. On
+wasm, `eval`'s frames and the `MIR_ALLOCA` blocks come from a per-context
+stack the interpreter owns (`MIR_INTERP_OWN_STACK` in `mir-interp.c`): 256 KiB
+chunks from the context's allocator, with an explicit top. A tail call,
+`BEND`, a return and a `longjmp` back into interpreted code reset that top, so
+`BSTART`/`BEND` work on wasm too. Running out raises `MIR_alloc_error` instead
+of trapping. Native targets compile the same code as before.
+
+`tools/wasm-jit-spike/run.sh` carries the repro and exits 1 when a chain
+leaves anything behind. It measures how far the aggregate and the linear stack
+pointer moved between the first call and the last (emcc 6.0.10, node 22):
+
+| n | before (`d00e8c15`) | after (`dc4be671`) |
+| --- | --- | --- |
+| 10 | 23360 | 0 |
+| 1000 | 2336000 | 0 |
+| 100000 | `RuntimeError: memory access out of bounds` | 0 |
+
+`bash tests/run-jit.sh` on the re-synced copy: 4179 passed, 0 failed. The
+fork's `wasm-tests/run.sh` covers the chain, `bstart`/`bend`, `longjmp` and
+frames across chunks.
+
+Two things an embedder should know:
+
+- An interpreted local array is heap memory on wasm now, not linear-stack
+  memory. Recursion depth is still bounded by the engine's call stack, because
+  every interpreted call nests a wasm frame of `eval`.
+- If the error function leaves the interpreter with its own `longjmp`, or a
+  JS exception unwinds it, the frames that were live stay allocated until
+  `MIR_finish`. That is a leak, not corruption. The page already rebuilds the
+  context after a failure (wasm-jit-plan section 5.8).
+
+The spike's `loop_tail` row and its warm-up call now run at depth 500, not
+1000. Since mir#17 put a `setjmp` frame under every interpreted call the
+depth limit under node is about 900, so the spike had been ending in an
+uncaught `RangeError` before it printed that row.

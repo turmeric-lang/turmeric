@@ -25,6 +25,9 @@ int wa (int n) { struct S s; s.x[0] = n; use (&s); if (sp0 == 0) { sp0 = sp_now 
   if (n == 0) { int d = (int) (sp0 - sp_now ()) + (int) (first > (char *) &s ? first - (char *) &s : (char *) &s - first); sp0 = 0; return d; }
   __attribute__((musttail)) return wb (n - 1); }
 int wb (int n) { __attribute__((musttail)) return wa (n); }
+/* A variadic call in a loop: c2mir's wasm32 va buffer is one per function,
+   not an alloca per call (c2mir-wasm-vararg-buffer-allocas-per-call). */
+int pf (int n) { long long b = sp_now (); for (int i = 0; i < n; i++) printf ("", i); return (int) (b - sp_now ()); }
 `;
   if (compile(src) !== 0) { console.log('compile failed'); return; }
   // A JS exception thrown through wasm frames does not unwind the wasm linear
@@ -47,5 +50,10 @@ int wb (int n) { __attribute__((musttail)) return wa (n); }
     if (r !== 0) bad++;
     console.log(`tail-call chain ${fn} n=${n}: bytes left behind = ${r}`);
   }
-  if (bad) { console.log('FAIL: a tail-call chain grew the stack'); process.exitCode = 1; }
+  for (const n of [10, 2000000]) {
+    let r; try { r = call('pf', n); } catch (e) { r = String(e).split('\n')[0]; }
+    if (r !== 0) bad++;
+    console.log(`variadic call in a loop pf n=${n}: stack grown = ${r}`);
+  }
+  if (bad) { console.log('FAIL: a tail-call chain or a variadic loop grew the stack'); process.exitCode = 1; }
 });

@@ -506,9 +506,13 @@ tail calls the T5 fusion did not collapse do not count against it: the
 emitter's `TUR_MUSTTAIL` is a MIR tail call, which the interpreter runs in the
 caller's activation
 ([mir-interp-tail-calls-grow-the-stack](../archive/mir-interp-tail-calls-grow-the-stack.md),
-fixed 2026-10-24). One wasm-specific residue: the interpreter cannot reset the
-stack pointer there, so a tail call from a function that allocated (a local
-aggregate) leaves those allocas and a frame behind until the chain returns.
+fixed 2026-10-24). That holds on wasm for a function that allocated (a local
+aggregate) too, since 2026-11-24: the interpreter cannot reset the wasm stack
+pointer, so there it keeps its frames and allocas on a stack of its own, which
+a tail call resets
+([wasm-mir-interp-tail-call-keeps-allocas](../archive/wasm-mir-interp-tail-call-keeps-allocas.md)).
+An interpreted local array is therefore heap memory on the page, not
+linear-stack memory.
 The AOT wasm target is in the same family at a higher ceiling:
 [wasm-target-stack-is-emcc-default](../archive/wasm-target-stack-is-emcc-default.md).
 Between them they are the "real program that needs more than 1 GiB of

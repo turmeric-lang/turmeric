@@ -385,4 +385,30 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     (docs/archive/c2mir-paste-of-u8-prefixed-token.md).  Covered by
     c-tests/new/narrow-u8-string-encoding.c and
     c-tests/new/u8-prefixed-identifier.c.
+
+  52e52a7 (merged as 9d86c04, turmeric-lang/mir#21) -- c2mir, wasm32: a
+    variadic call's argument buffer was a MIR_ALLOCA at the call site, so it
+    ran on every execution of the call and stayed until the function
+    returned: `printf` in a loop (`println` on an int) grew the linear stack
+    16 bytes an iteration, and about a million prints overflowed 16 MiB with
+    signs of memory corruption.  The buffer is now one per function, an
+    alloca in its prologue sized to the largest variadic tail
+    (docs/archive/c2mir-wasm-vararg-buffer-allocas-per-call.md).  wasm32
+    only.  Covered by wasm-tests/ffi-test.c; tools/wasm-jit-spike pins it.
+
+  f4f9098 (merged as dc4be67, turmeric-lang/mir#22) -- wasm32: a tail call
+    from a function that had made an alloca (any local aggregate) kept that
+    function's frame and allocas, because the interpreter allocates both
+    with C alloca and drops them through bend, which cannot work on wasm:
+    LLVM keeps the stack pointer in a local of eval and writes it back at
+    the next alloca.  A tail-call chain trapped after tens of thousands of
+    calls (docs/archive/wasm-mir-interp-tail-call-keeps-allocas.md).  There
+    eval's frames and the MIR_ALLOCA blocks now come from a per-context
+    stack the interpreter owns (MIR_INTERP_OWN_STACK): 256 KiB chunks from
+    the context's allocator with an explicit top, which a tail call, BEND, a
+    return and a longjmp back into interpreted code reset.  BSTART/BEND
+    work on wasm as a result.  An interpreted local array is therefore heap
+    memory there, and running out is MIR_alloc_error, not a trap.  Native
+    targets compile the code they did (run-jit.sh: 4179 passed before and
+    after).  Covered by wasm-tests/ffi-test.c; tools/wasm-jit-spike pins it.
 ```

@@ -1,5 +1,7 @@
 # On wasm32, every variadic call c2mir compiles allocates stack that lasts until the function returns
 
+**Status: RESOLVED 2026-11-24** (see [Resolution](#resolution)).
+
 **Severity:** high for the planned wasm JIT (wasm-jit-plan), none today --
 nothing ships it yet. `(println i)` on an int is `printf("%lld\n", ...)`
 (`src/compiler/builtins.c:410`), and the emitter turns self tail calls into
@@ -11,7 +13,7 @@ overflows. The overflow failed as
 stack-overflow trap, which suggests memory was corrupted.
 
 Filed 2026-10-24, found while checking the wasm residue of
-[mir-interp-tail-calls-grow-the-stack](../archive/mir-interp-tail-calls-grow-the-stack.md)
+[mir-interp-tail-calls-grow-the-stack](mir-interp-tail-calls-grow-the-stack.md)
 (see [wasm-mir-interp-tail-call-keeps-allocas](wasm-mir-interp-tail-call-keeps-allocas.md)).
 Native targets are not affected: there c2mir passes the variadic tail as call
 arguments.
@@ -56,3 +58,15 @@ function returns.
   wasm JIT's corpus with a print loop of at least 2e6 iterations once P1 runs
   fixtures.
 - Batch it into the fork's one open PR (CLAUDE.md "MIR fork" rule).
+
+## Resolution
+
+Fixed in the fork by
+[turmeric-lang/mir#21](https://github.com/turmeric-lang/mir/pull/21) (merged as
+`9d86c04`), which takes the first fix direction: one va buffer per function,
+an alloca in its prologue sized to the function's largest variadic tail. It
+was vendored on 2026-11-24 with the sibling fix (`external/mir` at
+`dc4be671`). `tools/wasm-jit-spike/run.sh` carries the loop above and exits 1
+when it grows the stack: `pf` measures 0 at n = 10 and at n = 2000000 (emcc
+6.0.10, node 22). The fork's `wasm-tests/run.sh` runs two million variadic
+calls and checks the stack pointer is where it was.

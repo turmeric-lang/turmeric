@@ -727,6 +727,10 @@ void *_MIR_get_ff_call (MIR_context_t ctx, size_t nres, MIR_type_t *res_types, s
    _MIR_get_wrapper and the lazy-generation hooks remain inert: those exist for
    the code generator, which this target does not have. */
 
+/* Unused: the interpreter keeps its frames and allocas on a stack of its own
+   here (MIR_INTERP_OWN_STACK in mir-interp.c), and BSTART/BEND read and reset
+   that.  A C function cannot do it for the linear stack: LLVM keeps the stack
+   pointer in a local of the caller, which writes it back at its next alloca. */
 static void *bstart_func (void) {
   static char buf[16];
   return buf;

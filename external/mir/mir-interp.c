@@ -95,6 +95,16 @@ DEF_HTAB (ff_interface_t);
 
 DEF_VARR (_MIR_arg_desc_t);
 
+/* Whether the interpreter keeps its frames on a stack of its own: see
+   istack_alloc. */
+#ifndef MIR_INTERP_OWN_STACK
+#if defined(__wasm32__) || defined(__EMSCRIPTEN__)
+#define MIR_INTERP_OWN_STACK 1
+#else
+#define MIR_INTERP_OWN_STACK 0
+#endif
+#endif
+
 struct interp_ctx {
 #if DIRECT_THREADED_DISPATCH
   void *dispatch_label_tab[IC_INSN_BOUND];
@@ -109,6 +119,10 @@ struct interp_ctx {
 #endif
   void *(*bstart_builtin) (void);
   void (*bend_builtin) (void *);
+#if MIR_INTERP_OWN_STACK
+  struct istack_chunk *istack_cur, *istack_spare; /* the current chunk, a popped one kept */
+  char *istack_top;                                 /* next free byte of the current chunk */
+#endif
   void *jret_addr;
   VARR (_MIR_arg_desc_t) * call_arg_descs_varr;
   _MIR_arg_desc_t *call_arg_descs;
@@ -133,6 +147,157 @@ struct interp_ctx {
 #define call_arg_descs interp_ctx->call_arg_descs
 #define ff_interface_tab interp_ctx->ff_interface_tab
 #define thunk_func_tab interp_ctx->thunk_func_tab
+
+#if defined(__GNUC__)
+#define NOINLINE_ISTACK __attribute__ ((noinline))
+#else
+#define NOINLINE_ISTACK
+#endif
+
+/* Where eval's frames and the MIR_ALLOCA blocks live.  Natively that is the C
+   stack: a tail call drops the caller's frame and allocas by resetting the
+   stack pointer (bend_builtin), and BSTART/BEND do the same for a block.  A
+   wasm function cannot reset the stack pointer under its caller -- LLVM keeps
+   it in a local of eval and writes that back at the next alloca -- so there
+   the interpreter owns a stack of its own, a list of malloc'ed chunks with an
+   explicit top, and the three operations become "read the top" and "reset
+   the top".  The memory is the heap's, so running out is MIR_alloc_error,
+   not a trap.  MIR_INTERP_OWN_STACK can be set to 1 on any target, to run
+   the c-tests over it; only wasm needs it.  */
+#if MIR_INTERP_OWN_STACK
+#ifndef MIR_INTERP_STACK_CHUNK_SIZE
+#define MIR_INTERP_STACK_CHUNK_SIZE (256 * 1024)
+#endif
+#define ISTACK_ALIGN 16
+
+struct istack_chunk {
+  struct istack_chunk *prev;
+  char *start, *end; /* the chunk's memory, START aligned to ISTACK_ALIGN */
+};
+
+#define istack_cur interp_ctx->istack_cur
+#define istack_spare interp_ctx->istack_spare
+#define istack_top interp_ctx->istack_top
+
+static struct istack_chunk *istack_new_chunk (MIR_context_t ctx, size_t size) {
+  size_t hdr = (sizeof (struct istack_chunk) + ISTACK_ALIGN - 1) / ISTACK_ALIGN * ISTACK_ALIGN;
+  struct istack_chunk *chunk;
+  char *mem;
+
+  if (size > SIZE_MAX - hdr - ISTACK_ALIGN
+      || (mem = MIR_malloc (ctx->alloc, hdr + ISTACK_ALIGN + size)) == NULL)
+    MIR_get_error_func (ctx) (MIR_alloc_error, "no memory for the interpreter stack");
+  chunk = (struct istack_chunk *) mem;
+  chunk->start = mem + hdr;
+  chunk->start += (ISTACK_ALIGN - (uintptr_t) chunk->start % ISTACK_ALIGN) % ISTACK_ALIGN;
+  chunk->end = chunk->start + size;
+  return chunk;
+}
+
+/* SIZE bytes do not fit in the current chunk: continue in another one. */
+static NOINLINE_ISTACK void *istack_alloc_slow (MIR_context_t ctx, size_t size) {
+  struct interp_ctx *interp_ctx = ctx->interp_ctx;
+  struct istack_chunk *chunk = istack_spare;
+
+  if (chunk != NULL && (size_t) (chunk->end - chunk->start) >= size) {
+    istack_spare = NULL;
+  } else {
+    chunk = istack_new_chunk (ctx, size > MIR_INTERP_STACK_CHUNK_SIZE
+                                     ? size
+                                     : MIR_INTERP_STACK_CHUNK_SIZE);
+  }
+  chunk->prev = istack_cur;
+  istack_cur = chunk;
+  istack_top = chunk->start + size;
+  return chunk->start;
+}
+
+static inline void *istack_alloc (MIR_context_t ctx, size_t size) {
+  struct interp_ctx *interp_ctx = ctx->interp_ctx;
+  char *res = istack_top;
+
+  if (size > SIZE_MAX - ISTACK_ALIGN) size = SIZE_MAX - ISTACK_ALIGN; /* fails in malloc */
+  size = (size + ISTACK_ALIGN - 1) / ISTACK_ALIGN * ISTACK_ALIGN;
+  if ((size_t) (istack_cur->end - res) < size) return istack_alloc_slow (ctx, size);
+  istack_top = res + size;
+  return res;
+}
+
+/* MARK is in a chunk under the current one: free the chunks above it, keeping
+   the biggest as the spare, so that a call chain that crosses a chunk boundary
+   back and forth does not malloc each time. */
+static NOINLINE_ISTACK void istack_reset_slow (MIR_context_t ctx, char *mark) {
+  struct interp_ctx *interp_ctx = ctx->interp_ctx;
+  struct istack_chunk *chunk;
+
+  while ((chunk = istack_cur) != NULL && !(chunk->start <= mark && mark <= chunk->end)) {
+    istack_cur = chunk->prev;
+    if (istack_spare == NULL) {
+      istack_spare = chunk;
+    } else if (istack_spare->end - istack_spare->start < chunk->end - chunk->start) {
+      MIR_free (ctx->alloc, istack_spare);
+      istack_spare = chunk;
+    } else {
+      MIR_free (ctx->alloc, chunk);
+    }
+  }
+  if (chunk == NULL) { /* a BEND of something BSTART did not give */
+    istack_cur = istack_spare;
+    istack_spare = NULL;
+    istack_cur->prev = NULL;
+    istack_top = istack_cur->start;
+    MIR_get_error_func (ctx) (MIR_invalid_insn_error, "bend of an address not on the stack");
+  }
+  istack_top = mark;
+}
+
+static inline void istack_reset (MIR_context_t ctx, void *mark) {
+  struct interp_ctx *interp_ctx = ctx->interp_ctx;
+
+  if (istack_cur->start <= (char *) mark && (char *) mark <= istack_cur->end)
+    istack_top = mark;
+  else
+    istack_reset_slow (ctx, mark);
+}
+
+static void istack_init (MIR_context_t ctx) {
+  struct interp_ctx *interp_ctx = ctx->interp_ctx;
+
+  istack_spare = NULL;
+  istack_cur = istack_new_chunk (ctx, MIR_INTERP_STACK_CHUNK_SIZE);
+  istack_cur->prev = NULL;
+  istack_top = istack_cur->start;
+}
+
+static void istack_finish (MIR_context_t ctx) {
+  struct interp_ctx *interp_ctx = ctx->interp_ctx;
+  struct istack_chunk *chunk, *prev;
+
+  for (chunk = istack_cur; chunk != NULL; chunk = prev) {
+    prev = chunk->prev;
+    MIR_free (ctx->alloc, chunk);
+  }
+  if (istack_spare != NULL) MIR_free (ctx->alloc, istack_spare);
+}
+
+/* The frame has one more reserved slot, for the top at a setjmp: a longjmp
+   back restores the C stack, and this is what restores ours. */
+#define FRAME_RESERVED 3
+#define FRAME_MARK() ((void *) istack_top)
+#define FRAME_ALLOC(size) istack_alloc (ctx, size)
+#define FRAME_RESET(mark) istack_reset (ctx, mark)
+#define FRAME_LEAVE(mark) istack_reset (ctx, mark)
+#define SETJMP_SAVE_TOP(bp) ((bp)[-3].a = istack_top)
+#define SETJMP_RESTORE_TOP(bp) istack_reset (ctx, (bp)[-3].a)
+#else
+#define FRAME_RESERVED 2
+#define FRAME_MARK() bstart_builtin ()
+#define FRAME_ALLOC(size) alloca (size)
+#define FRAME_RESET(mark) bend_builtin (mark)
+#define FRAME_LEAVE(mark) ((void) 0) /* the return does it */
+#define SETJMP_SAVE_TOP(bp) ((void) 0)
+#define SETJMP_RESTORE_TOP(bp) ((void) 0)
+#endif
 
 static void get_icode (struct interp_ctx *interp_ctx, MIR_val_t *v, int code) {
 #if DIRECT_THREADED_DISPATCH
@@ -1183,10 +1348,10 @@ static void OPTIMIZE eval (MIR_context_t ctx, func_desc_t func_desc, MIR_val_t *
     END_INSN;                  \
   }
 
-  entry_sp = bstart_builtin ();
+  entry_sp = FRAME_MARK ();
   frame_nregs = func_desc->nregs;
-  bp = alloca ((frame_nregs + 2) * sizeof (MIR_val_t));
-  bp++; /* reserved for setjmp/longjmp */
+  bp = FRAME_ALLOC ((frame_nregs + FRAME_RESERVED) * sizeof (MIR_val_t));
+  bp += FRAME_RESERVED - 1; /* reserved for setjmp/longjmp */
   bp[0].a = va;
   bp++;
   if (frame_nregs < nargs + 1) nargs = frame_nregs - 1;
@@ -1684,7 +1849,9 @@ common_addr:;
       MIR_item_t proto_item = get_a (ops + 3);
       size_t start = proto_item->u.proto->nres + 5;
       bp[-2].a = pc;
+      SETJMP_SAVE_TOP (bp);
       res = INTERP_SETJMP (func_addr, *get_aop (bp, ops + start));
+      SETJMP_RESTORE_TOP (bp);
       ops = pc = bp[-2].a;
       nops = get_i (ops);
       bp[get_i (ops + 5)].i = res;
@@ -1703,7 +1870,9 @@ common_addr:;
       MIR_item_t proto_item = get_a (ops + 3);
       size_t start = proto_item->u.proto->nres + 5;
       bp[-2].a = pc;
+      SETJMP_SAVE_TOP (bp);
       res = INTERP_SETJMP (func_addr, *get_aop (bp, ops + start));
+      SETJMP_RESTORE_TOP (bp);
       ops = pc = bp[-2].a;
       nops = get_i (ops);
       bp[get_i (ops + 5)].i = res;
@@ -1740,12 +1909,11 @@ common_addr:;
   tail_call: /* run the callee in this activation: */
     if (func_desc->nregs > frame_nregs) {
       /* Drop the frame and the allocas made since entry, and allocate a frame
-         of the callee's size.  (Where bend_builtin is a no-op, wasm, nothing
-         is dropped: as for BSTART/BEND, the allocas stay until we return.) */
-      bend_builtin (entry_sp);
+         of the callee's size. */
+      FRAME_RESET (entry_sp);
       frame_nregs = func_desc->nregs;
-      bp = alloca ((frame_nregs + 2) * sizeof (MIR_val_t));
-      bp += 2; /* reserved for setjmp/longjmp and va */
+      bp = FRAME_ALLOC ((frame_nregs + FRAME_RESERVED) * sizeof (MIR_val_t));
+      bp += FRAME_RESERVED; /* reserved for setjmp/longjmp and va */
     }
     if (func_desc->nregs < tail_nargs + 1) tail_nargs = func_desc->nregs - 1;
     bp[-1].a = NULL;
@@ -1788,12 +1956,14 @@ common_addr:;
     int64_t nops = get_i (ops); /* #ops */
     for (int64_t i = 0; i < nops; i++) results[i] = bp[get_i (ops + i + 1)];
     pc += nops + 1;
+    FRAME_LEAVE (entry_sp);
     return;
     END_INSN;
   }
 
   CASE (MIR_JRET, 0) {
     jret_addr = bp[get_i (ops)].a; /* pc for continuation */
+    FRAME_LEAVE (entry_sp);
     return;
     END_INSN;
   }
@@ -1802,17 +1972,17 @@ common_addr:;
     int64_t *r, s;
 
     r = get_2iops (bp, ops, &s);
-    *r = (uint64_t) alloca (s);
+    *r = (uint64_t) (uintptr_t) FRAME_ALLOC (s);
     frame_nregs = 0;
     END_INSN;
   }
   CASE (MIR_BSTART, 1) {
     int64_t *p = get_iop (bp, ops);
 
-    *p = (int64_t) (uintptr_t) bstart_builtin ();
+    *p = (int64_t) (uintptr_t) FRAME_MARK ();
     END_INSN;
   }
-  SCASE (MIR_BEND, 1, bend_builtin (*get_aop (bp, ops)));
+  SCASE (MIR_BEND, 1, FRAME_RESET (*get_aop (bp, ops)));
   CASE (MIR_VA_ARG, 3) {
     int64_t *r, va, tp;
 
@@ -2094,6 +2264,9 @@ static void interp_init (MIR_context_t ctx) {
 #endif
   bstart_builtin = _MIR_get_bstart_builtin (ctx);
   bend_builtin = _MIR_get_bend_builtin (ctx);
+#if MIR_INTERP_OWN_STACK
+  istack_init (ctx);
+#endif
 }
 
 static void interp_finish (MIR_context_t ctx) {
@@ -2106,6 +2279,9 @@ static void interp_finish (MIR_context_t ctx) {
   HTAB_DESTROY (ff_interface_t, ff_interface_tab);
   HTAB_DESTROY (MIR_item_t, thunk_func_tab);
   /* Clear func descs???  */
+#if MIR_INTERP_OWN_STACK
+  istack_finish (ctx);
+#endif
   MIR_free (ctx->alloc, ctx->interp_ctx);
   ctx->interp_ctx = NULL;
 }
