@@ -144,11 +144,16 @@ def stderr_tail(src, n=40):
     return "\n".join("  | " + l for l in lines[-n:])
 
 
-def run(src, reclaim, asan="detect_leaks=0"):
+def run(src, reclaim, asan="detect_leaks=0", extra=None):
     env = dict(os.environ)
     env["ASAN_OPTIONS"] = asan
     env["TUR_TURI_FRAME_RECLAIM"] = "1" if reclaim else "0"
-    p = subprocess.Popen([TUR, "--interpret", src], stdout=subprocess.PIPE,
+    prefix = []
+    if extra:
+        extra = dict(extra)
+        prefix = extra.pop("__prefix", [])
+        env.update(extra)
+    p = subprocess.Popen(prefix + [TUR, "--interpret", src], stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, env=env)
     out = p.stdout.read().decode()
     STDERR[src] = p.stderr.read().decode(errors="replace")
@@ -157,6 +162,64 @@ def run(src, reclaim, asan="detect_leaks=0"):
     # below read 272 KiB of growth there as 272 MB.
     per_mb = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
     return out, status, ru.ru_maxrss / per_mb   # MB
+
+
+def sh(cmd):
+    try:
+        return subprocess.run(cmd, shell=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, timeout=60).stdout.decode(
+                                  errors="replace").strip()
+    except Exception as e:   # a diagnostic must never fail the check itself
+        return "(%s)" % e
+
+
+def diagnose_callcc():
+    with tempfile.TemporaryDirectory() as d:
+        cc = os.path.join(d, "callcc.tur")
+        with open(cc, "w") as f:
+            f.write(CALLCC_PROGRAM)
+        diagnose_callcc_in(cc)
+
+
+def diagnose_callcc_in(cc):
+    """turi-callcc-frame-reclaim-check-fails-in-ci: the call/cc program dies
+    only on CI's runners (reproduced on none of: gcc 13.3 / glibc 2.39, gcc
+    15.2 / glibc 2.43 in an Ubuntu 26.04 userland, the 26.04 libasan).  Run it
+    again with one mechanism changed at a time, so a red run says which one it
+    needs.  Only ever runs after the FAIL line."""
+    print("  diagnose: kernel %s" % sh("uname -r"))
+    print("  diagnose: cpu %s" % sh("grep -m1 'model name' /proc/cpuinfo"))
+    print("  diagnose: cpu shadow-stack flags: %s"
+          % (sh("grep -m1 -o -w -E 'user_shstk|shstk' /proc/cpuinfo | sort -u | tr '\\n' ' '") or "none"))
+    print("  diagnose: glibc %s" % sh("ldd --version | head -1"))
+    print("  diagnose: ld.so CET state:\n    %s"
+          % sh("/lib64/ld-linux-x86-64.so.2 --list-diagnostics 2>/dev/null"
+               " | grep -i -E 'shstk|ibt|feature_1|feature_active|cet' | head -12"
+               " | sed 's/^/    /'").lstrip())
+    print("  diagnose: tur CET notes: %s"
+          % sh("readelf -n %s 2>/dev/null | grep -i -E 'Properties|SHSTK|IBT' | head -3"
+               " | tr '\\n' ' '" % TUR))
+    noq = "detect_leaks=0:quarantine_size_mb=0"
+    variants = [
+        ("again, as the check runs it", noq, None),
+        ("again, as the check runs it (2)", noq, None),
+        ("ASan quarantine on (a malloc use-after-free is reported)", "detect_leaks=0", None),
+        ("shadow stack off (GLIBC_TUNABLES=glibc.cpu.x86_shstk=off)", noq,
+         {"GLIBC_TUNABLES": "glibc.cpu.x86_shstk=off"}),
+        ("pool sweep off (TUR_TURI_POOL_GC=0)", noq, {"TUR_TURI_POOL_GC": "0"}),
+        ("continuation sweep off (TUR_TURI_CONT_GC=0)", noq, {"TUR_TURI_CONT_GC": "0"}),
+        ("frame reclaim off", noq, None),
+        ("ASLR off (setarch -R)", noq, {"__prefix": ["setarch", os.uname().machine, "-R"]}),
+        ("ASLR off (setarch -R) (2)", noq, {"__prefix": ["setarch", os.uname().machine, "-R"]}),
+    ]
+    print("  diagnose: mmap_rnd_bits %s, randomize_va_space %s"
+          % (sh("cat /proc/sys/vm/mmap_rnd_bits"), sh("cat /proc/sys/kernel/randomize_va_space")))
+    for i, (what, asan, extra) in enumerate(variants):
+        out, st, _ = run(cc, what != "frame reclaim off", asan, extra)
+        verdict = "ok" if st == 0 and out == CALLCC_EXPECTED else "FAILS (status %d)" % st
+        print("  diagnose: %-60s %s" % (what, verdict))
+        if verdict != "ok" and i == 2:
+            print(stderr_tail(cc, 80))
 
 
 def main():
@@ -275,7 +338,8 @@ def main():
     if st_cc != 0 or out_cc != CALLCC_EXPECTED:
         print("FAIL check-turi-frame-reclaim: call/cc program printed %r (status %d), want %r"
               % (out_cc, st_cc, CALLCC_EXPECTED))
-        print(stderr_tail(cc))
+        print(stderr_tail(cc, 80))
+        diagnose_callcc()
         ok = False
     elif grow_cc > cc_bound:
         print("FAIL check-turi-frame-reclaim: %s -- a capture pins every later frame" % cmsg)
