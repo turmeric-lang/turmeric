@@ -14,7 +14,8 @@ set -e
 cd "$(dirname "$0")"
 ROOT=../..
 rm -rf build && mkdir -p build
-M=$ROOT/external/mir
+# SPIKE_MIR=<checkout> measures a MIR change before it is vendored.
+M=${SPIKE_MIR:-$ROOT/external/mir}
 COMMON="-I$M -I$M/c2mir spike.c $M/mir.c $M/c2mir/c2mir.c --embed-file hdr@/hdr \
   -sMODULARIZE -sEXPORT_NAME=Spike -sALLOW_TABLE_GROWTH -sALLOW_MEMORY_GROWTH \
   -sINITIAL_MEMORY=128mb -sSTACK_SIZE=16mb \

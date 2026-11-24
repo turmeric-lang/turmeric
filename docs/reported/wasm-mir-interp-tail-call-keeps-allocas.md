@@ -13,6 +13,40 @@ Filed 2026-10-24. This is the wasm residue noted by the resolved
 and in wasm-jit-plan section 5.8. Until now it was written down only in an
 archived report and a plan paragraph, with no open finding to track it.
 
+## Status: fixed in the fork, not yet vendored (2026-11-24)
+
+[turmeric-lang/mir#22](https://github.com/turmeric-lang/mir/pull/22) takes the
+first fix direction below. On wasm, `eval`'s frames and the `MIR_ALLOCA`
+blocks come from a per-context stack the interpreter owns: 256 KiB chunks
+from the context's allocator, with an explicit top. A tail call, `BEND`, a
+return and a `longjmp` back into interpreted code reset that top. Running out
+raises `MIR_alloc_error` instead of trapping.
+
+Measured with `tools/wasm-jit-spike/run.sh`, which now carries the repro
+(emcc 6.0.10, node 22). The number is how far the aggregate and the linear
+stack pointer moved between the first call and the last:
+
+| n | vendored MIR (`d00e8c15`) | fork branch (`SPIKE_MIR=<checkout>`) |
+| --- | --- | --- |
+| 10 | 23360 | 0 |
+| 1000 | 2336000 | 0 |
+| 100000 | `RuntimeError: memory access out of bounds` | 0 |
+
+What is left, in order:
+
+1. mir#22 merges.
+2. `bash tools/update-mir.sh <merge commit>`, a line in
+   `external/mir/VENDORED.md`, and `bash tests/run-jit.sh`.
+3. `sh tools/wasm-jit-spike/run.sh` exits 0 on the vendored copy. Until
+   then it exits 1 with `FAIL: a tail-call chain grew the stack`.
+4. Drop the "one wasm-specific residue" sentence from wasm-jit-plan section
+   5.8 and move this report to `docs/archive/`.
+
+The spike's `loop_tail` row and its warm-up call now run at depth 500, not
+1000. Since mir#17 put a `setjmp` frame under every interpreted call the
+depth limit under node is about 900, so the spike had been ending in an
+uncaught `RangeError` before it printed that row.
+
 ## Repro (measured, emcc 6.0.13, node 22)
 
 Build `tools/wasm-jit-spike/spike.c` as `tools/wasm-jit-spike/run.sh` does,
