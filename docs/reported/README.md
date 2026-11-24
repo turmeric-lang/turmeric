@@ -113,7 +113,6 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-callcc-frame-reclaim-check-fails-in-ci](turi-callcc-frame-reclaim-check-fails-in-ci.md) | medium (CI red) | `tur_turi_frame_reclaim`'s call/cc program exits 1 with empty stdout in nearly every `Auxiliary suites (ubuntu-latest)` run since 2026-11-13 (5/5 recent `main` runs); does not reproduce locally (88/88 runs, alone and 6-way parallel). The check now prints the failing program's stderr so the next red run names the cause |
 
 ## Found running the corpus through the browser JIT module (filed 2026-10-28)
 
