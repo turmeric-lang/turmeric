@@ -10874,6 +10874,7 @@ static void context_finish (c2m_ctx_t c2m_ctx) {
 
 static const char *FP_NAME = "fp";
 static const char *RET_ADDR_NAME = "Ret_Addr";
+static const char *MIR_UNUSED VA_BUF_NAME = "Va_Buf"; /* see get_va_buf_reg */
 
 /* New attribute for non-empty label LIST is a MIR label.  */
 
@@ -10950,6 +10951,10 @@ struct gen_ctx {
   MIR_item_t memset_proto, memset_item;
   MIR_item_t memcpy_proto, memcpy_item;
   VARR (MIR_op_t) * call_ops, *ret_ops, *switch_ops, *va_buf_ops;
+  /* VA_BUF_TARGET_P: the current function's one variadic buffer, an alloca in
+     its prologue sized to the largest variadic tail seen so far.  NULL until
+     the function makes a lowered variadic call. */
+  MIR_insn_t va_buf_alloca;
   VARR (case_t) * switch_cases;
   int curr_mir_proto_num;
   HTAB (MIR_item_t) * proto_tab;
@@ -10975,6 +10980,7 @@ struct gen_ctx {
 #define memcpy_item gen_ctx->memcpy_item
 #define call_ops gen_ctx->call_ops
 #define va_buf_ops gen_ctx->va_buf_ops
+#define va_buf_alloca gen_ctx->va_buf_alloca
 #define ret_ops gen_ctx->ret_ops
 #define switch_ops gen_ctx->switch_ops
 #define switch_cases gen_ctx->switch_cases
@@ -11057,7 +11063,8 @@ static MIR_type_t reg_type (c2m_ctx_t c2m_ctx, MIR_reg_t reg) {
   const char *n = MIR_reg_name (ctx, reg, curr_func->u.func);
   MIR_type_t res;
 
-  if (strcmp (n, FP_NAME) == 0 || strcmp (n, RET_ADDR_NAME) == 0) return MIR_POINTER_TYPE;
+  if (strcmp (n, FP_NAME) == 0 || strcmp (n, RET_ADDR_NAME) == 0 || strcmp (n, VA_BUF_NAME) == 0)
+    return MIR_POINTER_TYPE;
   res = (n[0] == 'I'   ? MIR_T_I64
          : n[0] == 'U' ? MIR_T_U64
          : n[0] == 'i' ? MIR_T_I32
@@ -11302,6 +11309,36 @@ static MIR_insn_code_t tp_mov (MIR_type_t t) {
    does not have to be preprocessed out as well. */
 static size_t MIR_UNUSED va_buf_slot_size (MIR_type_t t) {
   return (t == MIR_T_I64 || t == MIR_T_U64 || t == MIR_T_D || t == MIR_T_LD) ? 8 : 4;
+}
+
+/* The register holding the address of the current function's variadic
+   buffer, of at least SIZE bytes.  There is one buffer per function, not one
+   per call: an alloca at the call site would run on every execution of the
+   call and nothing would release it before the function returns, so a loop
+   around printf grew the stack on each iteration.  Sharing is safe because a
+   call's buffer is filled only after all its arguments, nested calls
+   included, have been evaluated, and is dead once the call returns.  The
+   alloca goes right after the frame's, so MIR's simplification makes the two
+   one allocation. */
+static MIR_reg_t MIR_UNUSED get_va_buf_reg (c2m_ctx_t c2m_ctx, size_t size) {
+  gen_ctx_t gen_ctx = c2m_ctx->gen_ctx;
+  MIR_context_t ctx = c2m_ctx->ctx;
+  MIR_insn_t head;
+
+  if (va_buf_alloca == NULL) {
+    MIR_reg_t reg = MIR_new_func_reg (ctx, curr_func->u.func, MIR_T_I64, VA_BUF_NAME);
+
+    va_buf_alloca = MIR_new_insn (ctx, MIR_ALLOCA, MIR_new_reg_op (ctx, reg),
+                                  MIR_new_int_op (ctx, (int64_t) size));
+    head = DLIST_HEAD (MIR_insn_t, curr_func->u.func->insns);
+    if (head != NULL && head->code == MIR_ALLOCA) /* the frame, see N_FUNC_DEF */
+      MIR_insert_insn_after (ctx, curr_func, head, va_buf_alloca);
+    else
+      MIR_prepend_insn (ctx, curr_func, va_buf_alloca);
+  } else if ((size_t) va_buf_alloca->ops[1].u.i < size) {
+    va_buf_alloca->ops[1].u.i = (int64_t) size;
+  }
+  return va_buf_alloca->ops[0].u.reg;
 }
 
 static void emit_insn (c2m_ctx_t c2m_ctx, MIR_insn_t insn) {
@@ -14823,17 +14860,12 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
         if (param != NULL) param = NL_NEXT (param);
       }
       if (va_buf_p) {
-        /* Allocate the buffer and fill it, then hand its address over as the
+        /* Fill the function's buffer, then hand its address over as the
            single trailing argument.  A zero-length tail still gets a slot, so
            that va_arg on an absent argument reads addressable memory rather
            than running off whatever preceded it. */
-        op_t buf = get_new_temp (c2m_ctx, MIR_T_I64);
+        MIR_reg_t buf_reg = get_va_buf_reg (c2m_ctx, va_buf_size == 0 ? 8 : va_buf_size);
 
-        MIR_append_insn (ctx, curr_func,
-                         MIR_new_insn (ctx, MIR_ALLOCA, buf.mir_op,
-                                       MIR_new_int_op (ctx, (int64_t) (va_buf_size == 0
-                                                                         ? 8
-                                                                         : va_buf_size))));
         for (size_t i = va_buf_ops_start; i < VARR_LENGTH (MIR_op_t, va_buf_ops); i += 3) {
           MIR_op_t val = VARR_GET (MIR_op_t, va_buf_ops, i);
           MIR_type_t vt = (MIR_type_t) VARR_GET (MIR_op_t, va_buf_ops, i + 1).u.i;
@@ -14841,11 +14873,11 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
 
           MIR_append_insn (ctx, curr_func,
                            MIR_new_insn (ctx, tp_mov (vt),
-                                         MIR_new_mem_op (ctx, vt, off, buf.mir_op.u.reg, 0, 1),
+                                         MIR_new_mem_op (ctx, vt, off, buf_reg, 0, 1),
                                          val));
         }
         VARR_TRUNC (MIR_op_t, va_buf_ops, va_buf_ops_start);
-        VARR_PUSH (MIR_op_t, call_ops, buf.mir_op);
+        VARR_PUSH (MIR_op_t, call_ops, MIR_new_reg_op (ctx, buf_reg));
       }
       call_insn = MIR_new_insn_arr (ctx,
                                     (jcall_p    ? MIR_JCALL
@@ -15006,6 +15038,7 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
                                          VARR_LENGTH (MIR_var_t, proto_info.arg_vars),
                                          VARR_ADDR (MIR_var_t, proto_info.arg_vars)));
     func_decl->u.item = curr_func;
+    va_buf_alloca = NULL;
     DLIST_INIT (MIR_insn_t, slow_code_part);
     if (ns->stack_var_p /* we can have empty struct only with size 0 and still need a frame: */
         || ns->size > 0) {

@@ -385,4 +385,33 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     (docs/archive/c2mir-paste-of-u8-prefixed-token.md).  Covered by
     c-tests/new/narrow-u8-string-encoding.c and
     c-tests/new/u8-prefixed-identifier.c.
+
+  52e52a7 (merged as 9d86c04, turmeric-lang/mir#21) -- wasm32: c2mir built a
+    variadic call's tail in a MIR_ALLOCA at the call site, so the alloca ran
+    on every execution of the call and lasted until the function returned.
+    `printf` in a loop (`println` on an int) grew the linear stack 16 bytes
+    an iteration, and about a million prints in one function overflowed
+    16 MiB with signs of memory corruption
+    (docs/archive/c2mir-wasm-vararg-buffer-allocas-per-call.md).  The
+    buffer is now one prologue alloca sized to the function's largest
+    variadic tail, filled from offset 0 by every call.  Native targets
+    compile none of it (VA_BUF_TARGET_P is 0 there).  Covered by
+    wasm-tests/ffi-test.c.
+
+  f4f9098 (merged as dc4be67, turmeric-lang/mir#22) -- wasm32: a tail call
+    from a function that had made an alloca (any local aggregate) kept that
+    function's frame and allocas, because eval allocates both with C alloca
+    and bend_builtin is a no-op on wasm; a C-level bend cannot help, since
+    LLVM's wasm backend caches the stack pointer in eval's own local.  So the
+    chain grew ~350 bytes a call and trapped after ~24k calls at 16 MiB, and
+    BSTART/BEND did nothing
+    (docs/archive/wasm-mir-interp-tail-call-keeps-allocas.md).  Under
+    MIR_INTERP_OWN_STACK (on for wasm, settable on any target) eval's frames
+    and MIR_ALLOCA blocks come from a per-context stack of 256 KiB chunks with
+    an explicit top; entry, the tail call's drop, BSTART, BEND, return and a
+    setjmp return read or reset it.  Running out is MIR_alloc_error, not
+    corruption.  Native targets compile the same code as before; with the
+    stack forced on and 4 KiB chunks the interpreter c-tests pass on x86-64.
+    Supersedes the wasm residue noted under mir#14 above.  Covered by
+    wasm-tests/run.sh.
 ```

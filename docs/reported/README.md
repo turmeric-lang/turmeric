@@ -200,8 +200,8 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [wasm-mir-interp-tail-call-keeps-allocas](wasm-mir-interp-tail-call-keeps-allocas.md) | medium (planned wasm JIT) | On wasm the MIR interpreter's `bend` is a no-op, so a tail call from a function that allocated keeps its allocas and a frame: about 350 B per call, and the module traps after about 24k calls at 16 MiB. A C-level stack restore does not help, because LLVM caches `eval`'s SP. An interpreter-owned frame arena would |
-| [c2mir-wasm-vararg-buffer-allocas-per-call](c2mir-wasm-vararg-buffer-allocas-per-call.md) | high (planned wasm JIT) | On wasm32, c2mir allocas a variadic call's argument buffer at the call site, so `printf` in a loop (`println` on an int) grows the stack 16 B per iteration until the function returns. About 1M prints overflow 16 MiB, with signs of memory corruption |
+| ~~[wasm-mir-interp-tail-call-keeps-allocas](../archive/wasm-mir-interp-tail-call-keeps-allocas.md)~~ | medium (planned wasm JIT) | **RESOLVED 2026-11-24** (archived): on wasm the MIR interpreter takes its frames and `MIR_ALLOCA` blocks from a stack it owns, so a tail call drops the caller's allocas and `BSTART`/`BEND` work (mir#22). Pinned by the fork's `wasm-tests/run.sh` |
+| ~~[c2mir-wasm-vararg-buffer-allocas-per-call](../archive/c2mir-wasm-vararg-buffer-allocas-per-call.md)~~ | high (planned wasm JIT) | **RESOLVED 2026-11-24** (archived): c2mir makes one prologue va buffer per function, sized to its largest variadic tail, so `printf` in a loop no longer grows the stack (mir#21). Pinned by the fork's `wasm-tests/ffi-test.c` |
 
 ## Found by the quote-data corpus sweep (filed 2026-10-24)
 
