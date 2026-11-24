@@ -1,13 +1,19 @@
 # On the browser JIT, a Turmeric recursion overflows about 300 calls deep, not 1,700
 
+**RESOLVED 2026-11-24: both wasm links use wasm-native `setjmp`.** The JIT
+module since 2026-10-30, and now `tur_wasm` (`src/CMakeLists.txt`, the
+Interpret module) too, so neither carries a JavaScript `invoke_*` wrapper; see
+"Fixed for `tur_wasm`" at the end. What is left belongs to plans:
+heap-allocated interpreter frames are wasm-jit-plan 5.8's option 3, and the
+playground chose JSPI (raylib-web-playground-plan J4).
+
 **Severity:** medium (browser JIT, user-visible). **Cause confirmed
 2026-10-29** (below): `eval`'s own `setjmp` call, since mir#17. **Fixed 2026-10-30**:
 `tools/wasm-jit/build-module.sh` links `setjmp` on wasm exception handling
 (`-fwasm-exceptions -sSUPPORT_LONGJMP=wasm`), which removes the wrappers with
 no MIR change: 300 -> 700 in the worker, 575 -> 1,100 on a main thread. The
-page's note says ~700. Open here: four wasm frames per interpreted call
-remain, and the Interpret module (`turmeric.wasm`) still links the JS
-`setjmp`; see "What to do". JSPI stands in for Asyncify where the playground
+page's note says ~700. Four wasm frames per interpreted call remain (that is
+wasm-jit-plan 5.8's option 3). JSPI stands in for Asyncify where the playground
 needs a blocking loop to yield. Try Turmeric's Compile
 engine said "recursion depth ~1,700"; a plain non-tail recursion overflows at
 about 310 calls in Chromium's worker and about 590 under node. A program that
@@ -183,19 +189,20 @@ raylib-web-playground-plan's, recorded there under prerequisite 3.
    No fork change; Try's Compile engine gets 700 frames in the worker.
    **Done 2026-10-30** (`SJLJ_CFLAGS` in the script; the worker notes the
    stderr line; `jit-engine.spec.js` 7/7, the examples gate, and the corpus
-   baseline regenerated on the new module). Not done, and the same change
-   would apply: `turmeric.wasm`, the Interpret module, whose tree-walker's
-   `eval_expr_impl` carries 335 of the same wrappers (depth is heap-bounded
-   there, so only its call speed under older V8s is at stake).
+   baseline regenerated on the new module). `turmeric.wasm`, the Interpret
+   module, whose tree-walker's `eval_expr_impl` carried 335 of the same
+   wrappers, followed on 2026-11-24 ("Fixed for `tur_wasm`" below).
 2. The playground decides Asyncify (second object set) against JSPI
    (Chrome-first) for the blocking style, or goes callback-first.
+   **Decided 2026-10-30: JSPI** (raylib-web-playground-plan J4).
 3. The two-`eval` fork change below is then unnecessary. It stays recorded in
    case a JS-`setjmp` link is ever needed again.
 4. Longer term, heap-allocated interpreter frames (wasm-jit-plan 5.8's third
    response), since four wasm frames per interpreted call remain either way
    (`eval` -> `call_insn_execute` -> the stub -> `wasm_ff_dispatch` -> `eval`;
    recognising an interpreted thunk in `call()` before the foreign-call
-   interface would drop two, the small ones).
+   interface would drop two, the small ones). Tracked as wasm-jit-plan 5.8's
+   option 3, which that plan lists for its next fork PR.
 
 ### Two `eval`s (a fork change; needed only while the link keeps the JS `setjmp`)
 
@@ -253,4 +260,44 @@ executed in one activation: a loop installing an effect handler N times
 (`emit_effects.c`'s `TUR_SETJMP` per `handle`, `emit_dk_runtime.c`'s per
 bounce) would grow the stack N deep where today it stays flat. Not that.
 
-Meanwhile the page says ~300 (`web/engine.js`).
+The page's note (`web/engine.js`) says ~700.
+
+## Fixed for `tur_wasm` (2026-11-24)
+
+`tur_wasm`, the Interpret module, was the one link left on Emscripten's JS
+`setjmp`. It now passes `-fwasm-exceptions -sSUPPORT_LONGJMP=wasm`; one emcc
+there both compiles and links, so the pair covers both, as `SJLJ_CFLAGS` does
+in `build-module.sh`. Nothing in it uses Asyncify, which wasm EH rules out.
+Measured with emcc 6.0.10 (CI's pin), node 22, a small driver that boots
+`turmeric.js` and calls `_turi_wasm_eval`:
+
+| | before | after |
+| --- | --- | --- |
+| `invoke_*` imports / call sites (`wasm-dis`) | 15 / 361 | 0 / 0 |
+| `turmeric.wasm` | 2,826,931 bytes | 2,919,931 (+3.3%) |
+| `(deep 200000)`, a non-tail recursion | ran | ran (depth is heap-bounded since C4, either way) |
+| `(fib 28)`, steady-state runs, three instances each | 459-573 ms | 463-507 ms |
+
+So under node 22 the tree-walker's speed does not move outside noise: its
+calls in the hot path are not the wrapped ones. The change is for uniformity
+(both modules on one SjLj mode) and the wrappers' JS frames, not a measured
+speed-up.
+
+**Correctness.** The 968 fixtures whose source mentions a panic, `handle`,
+`catch-unwind`, `resume`, `perform`, `defer`, `abort`, `shift`/`reset` or
+`call/cc`, each in a fresh module, both builds: 962 identical outputs, no
+timeouts on either. The other 6 (`effect-console`, `effect-rc`, `effect-ref`,
+`effect-with-fail`, `effect-with-getenv`, `effect-with-write`) fail on both
+builds alike, aborting on `emscripten_fiber_swap` (this module has no Asyncify
+and never had); only the exception's text changed.
+
+**That text is the one behaviour change**, as the JIT module saw: an abort
+still prints `Aborted(<reason>)` through printErr, but what JavaScript catches
+is a bare `RuntimeError: unreachable`. `web/public/eval-worker.js` now notes
+the last `Aborted(` line of a message and puts it in that message's error, so
+the page reads `Error: RuntimeError: Aborted(<reason>)` as before (checked in
+Chromium with the new module and both the old and the new worker: the old
+worker showed `RuntimeError: unreachable`). Playwright `smoke`, `run-session`,
+`trace`, `meta-commands` and `repl-intelligence` (desktop) pass, except two
+tests that fail the same way on the old module in a checkout without
+`doc-names.json` (`tur run docs` not run).

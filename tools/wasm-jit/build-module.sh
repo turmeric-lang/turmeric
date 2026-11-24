@@ -83,7 +83,7 @@ put_rsp() {   # put_rsp FILE FLAG...
 # every call a JS round trip.  Under wasm EH the landing is a try region and
 # the calls are plain; measured 700 frames in the worker, 1,500 under node,
 # and no change across the corpus
-# (docs/reported/wasm-jit-recursion-depth-is-about-300.md).  The one thing
+# (docs/archive/wasm-jit-recursion-depth-is-about-300.md).  The one thing
 # this rules out is Asyncify, which the module never used; a page that needs
 # a compiled program to yield uses JSPI on this build
 # (tools/wasm-jit-spike/jspi/).

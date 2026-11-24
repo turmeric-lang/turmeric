@@ -144,10 +144,12 @@ def stderr_tail(src, n=40):
     return "\n".join("  | " + l for l in lines[-n:])
 
 
-def run(src, reclaim, asan="detect_leaks=0"):
+def run(src, reclaim, asan="detect_leaks=0", extra=None):
     env = dict(os.environ)
     env["ASAN_OPTIONS"] = asan
     env["TUR_TURI_FRAME_RECLAIM"] = "1" if reclaim else "0"
+    if extra:
+        env.update(extra)
     p = subprocess.Popen([TUR, "--interpret", src], stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, env=env)
     out = p.stdout.read().decode()
@@ -157,6 +159,28 @@ def run(src, reclaim, asan="detect_leaks=0"):
     # below read 272 KiB of growth there as 272 MB.
     per_mb = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
     return out, status, ru.ru_maxrss / per_mb   # MB
+
+
+def images_reaching_stack_base(cc):
+    """turi-callcc-frame-reclaim-check-fails-in-ci: the call/cc program's
+    capture runs under no top-level form's prompt (a `define`'s value), and its
+    image used to run up to the thread's stack base -- on tur's interpreter
+    thread, a pthread, that is above the thread's static TLS and control
+    block, so every re-entry wrote a stale copy of them back.  That crashed
+    only where the stale bytes happened to matter (ASan's allocator, on CI's
+    runners, with ASLR), so the crash is no test; the range is.  Returns the
+    traced captures whose image reaches the stack base (empty: fixed), or
+    None when the tur under test prints no trace."""
+    run(cc, True, "detect_leaks=0", {"TUR_R7K_TRACE": "1"})
+    caps = [l for l in STDERR[cc].splitlines() if l.startswith("r7k-trace: capture ")]
+    if not caps:
+        return None
+    bad = []
+    for l in caps:
+        f = dict(kv.split("=", 1) for kv in l.split() if "=" in kv)
+        if f.get("top") and f.get("top") == f.get("stack_base"):
+            bad.append(l)
+    return bad
 
 
 def main():
@@ -199,6 +223,7 @@ def main():
         with open(cc, "w") as f:
             f.write(CALLCC_PROGRAM)
         out_cc, st_cc, rss_cc = run(cc, True, noq)
+        cc_bad = images_reaching_stack_base(cc)
         _, _, rss_on_noq = run(src, True, noq)
     ok = True
     for label, out, st in (("reclaim on", out_on, st_on),
@@ -275,13 +300,24 @@ def main():
     if st_cc != 0 or out_cc != CALLCC_EXPECTED:
         print("FAIL check-turi-frame-reclaim: call/cc program printed %r (status %d), want %r"
               % (out_cc, st_cc, CALLCC_EXPECTED))
-        print(stderr_tail(cc))
+        print(stderr_tail(cc, 80))
         ok = False
     elif grow_cc > cc_bound:
         print("FAIL check-turi-frame-reclaim: %s -- a capture pins every later frame" % cmsg)
         ok = False
     else:
         print("PASS check-turi-frame-reclaim: %s" % cmsg)
+    if cc_bad is None:
+        print("SKIP check-turi-frame-reclaim: this tur prints no TUR_R7K_TRACE, so the "
+              "call/cc image's range is not checked")
+    elif cc_bad:
+        print("FAIL check-turi-frame-reclaim: a call/cc image outside every form's prompt "
+              "runs up to the thread's stack base, over its TLS (%d of them):" % len(cc_bad))
+        for l in cc_bad[:4]:
+            print("  | " + l)
+        ok = False
+    else:
+        print("PASS check-turi-frame-reclaim: call/cc images stop below the thread's TLS")
     return 0 if ok else 1
 
 

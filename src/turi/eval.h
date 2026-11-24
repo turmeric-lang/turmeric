@@ -773,6 +773,16 @@ void           turi_cont_state_free(TuriContState *s);
 /* Free every continuation `env` captured (env teardown; defined with the
  * R7RS natives, interpreter_natives.c). */
 void           turi_cont_release_env(TuriEnv *env);
+/* turi-callcc-frame-reclaim-check-fails-in-ci: the frame of the outermost
+ * call into the interpreter on this thread (turi_eval_with_sink, turi_call),
+ * which bounds a call/cc image taken outside every top-level form's prompt.
+ * Without it the image ran up to the thread's stack base, and on a pthread
+ * that is above the thread's static TLS and control block (glibc keeps both
+ * at the top of the stack block): every re-entry wrote a stale copy of them
+ * back.  `enter` sets it only when none is set and returns the previous
+ * value, for `leave`.  Defined with the R7RS natives. */
+void          *turi_cont_entry_enter(void *frame);
+void           turi_cont_entry_leave(void *prev);
 
 /* r7rs-callcc-memory-never-freed: the marker of the continuation-image sweep
  * (eval.c says what it walks and why it is conservative).  The R7RS natives
