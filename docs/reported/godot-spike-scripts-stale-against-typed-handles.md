@@ -6,6 +6,10 @@ driver prints a failure and then "all assertions passed". The drivers are run
 by hand only -- CI builds the extension and never launches Godot -- so all of
 this went unnoticed.
 
+> Status: **fixed in
+> [turmeric-godot#7](https://github.com/turmeric-lang/turmeric-godot/pull/7)
+> (2026-11-24), open.** Held here until it merges. See "Fix" at the end.
+
 **Severity:** Low. Test-suite rot, not a product fault, with one possible
 exception (the `bool` export default below).
 
@@ -46,3 +50,28 @@ claims success.
   non-zero and skip the success line when `fail_count` is not 0.
 - Give CI a leg that downloads a headless Godot and runs the drivers, so the
   next one fails a build instead of a reader.
+
+## Fix (2026-11-24, turmeric-godot#7)
+
+All three directions, plus what turned up on the way.
+
+- **The `bool` default was a real fault.** `tg_turi_to_variant_typed` took a
+  `bool` default only from a `TURI_BOOL` and returned `false` for anything
+  else, so the `1` in `(godot-export "alive" "bool" 1)` was dropped without a
+  word. An int default is now taken by truthiness, as `float` and `int`
+  already take each other. `exports.tur` declares one bool with `true`, one
+  with `1` and one with `0`, and `exports.gd` counts failures and exits 1.
+- **The scripts are ported**: `node/vec2` and `node/color` for the builders,
+  `(:: ... :Vec2Handle)` on what `godot-prop-get` returns, `nh->int` for the
+  null test on a `NodeHandle`, and `node2d-handle->canvasitem-handle` for an
+  inherited method. A fourth, `dict_array_roundtrip.tur`, passed `1` to
+  `dict-set-b`; it and two others had no driver at all, so
+  `driverless_scripts.gd` loads and runs them.
+- **CI runs them.** `tools/run-drivers.sh` runs every driver; a driver passes
+  when it exits 0 and prints no `FAIL` or `SCRIPT ERROR` line. The Linux
+  x86-64 leg downloads Godot 4.3 and calls it.
+
+30 of 30 pass against turmeric `v0.73.0` and against `main`. Against `v0.44.2`
+one fails, and it is the old turmeric's fault rather than a script's: a second
+reload of a script dies with `defmacro: 'defgodot-export' is already defined`.
+That is why the pin moved.

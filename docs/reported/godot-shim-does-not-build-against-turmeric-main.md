@@ -6,10 +6,10 @@ in turmeric `v0.44.2`, the tag the shim's CI pins, and is gone from `main`, so
 a build against a sibling `main` checkout -- the layout `SConstruct` defaults
 to (`../turmeric`) and the README describes -- stops at the first AOT file.
 
-> Status: **fixed on the `claude/godot-packed-array-push-fy8kv9` branch of
-> `turmeric-godot` (commit `10956a8`, 2026-11-24), not yet merged.** Held
-> open until it ships. The drift went further than the header: see "What it
-> took" at the end.
+> Status: **fixed in
+> [turmeric-godot#7](https://github.com/turmeric-lang/turmeric-godot/pull/7)
+> (2026-11-24), open.** Held here until it merges. The drift went further
+> than the header: see "What it took" at the end.
 
 **Severity:** Low today (CI is pinned and green), but it is what will break
 the day the pin is bumped, and it already breaks the documented local build.
@@ -52,7 +52,7 @@ side knew it had a consumer.
 Only the first missing header was observed; the build stops there, so there
 may be further drift behind it.
 
-## What it took (2026-11-24, on the branch above)
+## What it took (2026-11-24, turmeric-godot#7)
 
 Getting past the header exposed one more drift, and one fault that was never
 drift at all.
@@ -84,8 +84,11 @@ under `TURMERIC_GODOT_AOT=1` (ball and paddle load 110 exports and report
 `first dispatch routed via AOT`), and the 27 spike drivers give the same
 results on both.
 
-The CI pin was left at `v0.44.2`; bumping it is now possible but is its own
-decision. macOS and Windows were not run.
+The CI pin moves from `v0.44.2` to `v0.73.0` in the same PR, and its Linux
+x86-64 leg now launches Godot and runs every driver, pong a second time under
+AOT with the dispatch lines required -- so a header that disappears, a facade
+that stops evaluating, or a staged library that stops loading fails a build.
+macOS and Windows build in CI and were not run.
 
-Left over, the same on both turmerics and so not drift:
+What the drivers turned up once something ran them:
 [godot-spike-scripts-stale-against-typed-handles](godot-spike-scripts-stale-against-typed-handles.md).
