@@ -2121,6 +2121,20 @@ if(TUR_WASM)
                 # docs/archive/wasm-linear-stack-overflow-unchecked.md.
                 -sSTACK_OVERFLOW_CHECK=2
                 -sCHECK_NULL_WRITES=0
+                # setjmp/longjmp on wasm exception handling, as the browser
+                # JIT module links (build-module.sh's SJLJ_CFLAGS).  Under
+                # Emscripten's default JS setjmp every call out of a function
+                # that calls setjmp goes through a JavaScript invoke_*
+                # wrapper, and the tree-walker's eval_expr_impl is one: its
+                # calls left wasm and came back through JS on every step.
+                # One emcc both compiles and links here, so the pair covers
+                # both.  No Asyncify in this module, which wasm EH rules out.
+                # The linear-stack abort above then throws a bare
+                # `unreachable` (its message still goes to printErr, which
+                # eval-worker.js notes).
+                # docs/archive/wasm-jit-recursion-depth-is-about-300.md.
+                -fwasm-exceptions
+                -sSUPPORT_LONGJMP=wasm
                 -sINITIAL_MEMORY=67108864
                 # _turi_wasm_read_file is deliberately a named operation rather
                 # than adding FS to EXPORTED_RUNTIME_METHODS: it reads .tur

@@ -282,7 +282,7 @@ As built in P3 (2026-10-28). The design originally added the engine to the
   `-sSUPPORT_LONGJMP=wasm`: `setjmp`/`longjmp` on wasm exception handling,
   not Emscripten's JS-based default, because `eval`'s own `setjmp` (P5,
   mir#17) otherwise puts a JS `invoke_*` frame under every interpreted call
-  ([wasm-jit-recursion-depth-is-about-300](../reported/wasm-jit-recursion-depth-is-about-300.md)).
+  ([wasm-jit-recursion-depth-is-about-300](../archive/wasm-jit-recursion-depth-is-about-300.md)).
   Asyncify cannot be added to this module; JSPI can
   (`tools/wasm-jit-spike/jspi/`).
 - `jit_engine.c`'s `__EMSCRIPTEN__` arm stays small. It has no `dlopen`
@@ -501,7 +501,7 @@ again 2026-10-29 on Turmeric code since P5: about 300 calls in Chromium's
 worker, 590 under node, because `eval`'s `setjmp` (mir#17) puts a JS
 `invoke_*` frame under every call; linking with wasm-native `setjmp`
 (`-fwasm-exceptions -sSUPPORT_LONGJMP=wasm`, the link since 2026-10-30) gives 700 and 1,500 --
-[wasm-jit-recursion-depth-is-about-300](../reported/wasm-jit-recursion-depth-is-about-300.md).) Mutual
+[wasm-jit-recursion-depth-is-about-300](../archive/wasm-jit-recursion-depth-is-about-300.md).) Mutual
 tail calls the T5 fusion did not collapse do not count against it: the
 emitter's `TUR_MUSTTAIL` is a MIR tail call, which the interpreter runs in the
 caller's activation

@@ -7,7 +7,7 @@
 //              and run on MIR's interpreter, as `tur jit` runs it, so inline C
 //              works.  Each Run is a whole program; recursion is bounded by
 //              the JS stack: about 700 Turmeric calls deep in Chromium's
-//              worker (docs/reported/wasm-jit-recursion-depth-is-about-300.md).
+//              worker (docs/archive/wasm-jit-recursion-depth-is-about-300.md).
 //
 // The choice is a per-browser convenience, kept in localStorage; when storage
 // is unavailable it lasts the page's lifetime.  It is offered in the
