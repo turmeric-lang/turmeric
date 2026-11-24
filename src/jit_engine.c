@@ -22,6 +22,16 @@
  * Without it, cmd_jit (src/driver/jit.c) reports the missing capability.
  */
 
+/* RTLD_DEFAULT is a GNU extension to <dlfcn.h>: glibc before 2.36 declares
+ * it only under _GNU_SOURCE, and src/CMakeLists.txt asks for no more than
+ * _DEFAULT_SOURCE on top of -std=c11.  Without this the file fails on
+ * Ubuntu 22.04 (glibc 2.35) with "'RTLD_DEFAULT' undeclared", while newer
+ * glibc, which follows POSIX.1-2024 in exposing it unconditionally, builds it
+ * either way.  Must precede every #include. */
+#ifndef _GNU_SOURCE
+#  define _GNU_SOURCE
+#endif
+
 #include "jit_engine.h"
 
 #ifdef _WIN32
