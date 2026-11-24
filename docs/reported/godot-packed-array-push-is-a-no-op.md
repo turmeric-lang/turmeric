@@ -7,6 +7,11 @@ nothing and reports no error. Every `Packed*Array` a script builds stays empty.
 `godot-array-push` and `godot-dict-set` are unaffected -- Godot's `Array` and
 `Dictionary` are reference types, so mutating a copy mutates the shared body.
 
+> Status: **fixed on the `claude/godot-packed-array-push-fy8kv9` branch of
+> `turmeric-godot` (2026-11-24), not yet merged.** Held open until the fix
+> ships, as `godot-baked-in-prelude-fails-to-eval` was; archive it then. See
+> "Fix" at the end.
+
 **Severity:** Medium. It is silent -- no diagnostic, no crash, just an array
 that is always size 0 -- and it defeats the whole T3.D `PackedXxxArray` surface
 (vertex buffers, tilemap cell arrays, byte blobs), which is the reason those
@@ -91,3 +96,30 @@ Found while building the AOT C entry points for these natives
 ([godot-aot-staged-build-lacks-godot-natives.md](godot-aot-staged-build-lacks-godot-natives.md)).
 The AOT path forwards to the same implementations, so it inherits the bug
 exactly -- fixing it once fixes both routes.
+
+## Fix (2026-11-24, on the branch above)
+
+The write-back route. `variant_arena_replace(handle, Variant)` in
+`src/bridge/variant_marshal.{h,cpp}` overwrites the arena slot a handle names,
+and each of the nine push natives calls it after `push_back`. The comment
+above the T3.D block claimed Packed* arrays share a backing store the way
+`Array`/`Dictionary` do; it now says the opposite, which is the truth.
+
+Pinned by `examples/spike/scripts/packed_array_push.{tur,gd}`: one array per
+family, handed back through `set_meta`, compared element for element against a
+GDScript literal. On Linux x86-64 with Godot 4.3 and turmeric `v0.44.2` the
+driver reports ten failures (every array `[]`) before the change and passes
+after it:
+
+```sh
+godot --headless --path examples/spike --script scripts/packed_array_push.gd
+```
+
+Two things turned up on the way:
+
+- `packed_array_roundtrip.tur`, the T3.D smoke script, had never loaded: it
+  passed the untyped `(godot-vec2 ...)` to `packed-vec2-push`, which is a
+  TUR-E0001 (`expected Vec2Handle, got int`). It now uses `node/vec2`. It has
+  no driver and prints rather than asserts, so nothing noticed.
+- `turmeric-godot` does not compile against turmeric `main`:
+  [godot-shim-does-not-build-against-turmeric-main](godot-shim-does-not-build-against-turmeric-main.md).
