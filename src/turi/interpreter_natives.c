@@ -3508,8 +3508,12 @@ typedef struct R7kCont {
      * keeps the interpreter's answer the compiled prelude's. */
     pthread_t       owner;
     /* The stack address the image runs up to (r7k_snapshot's `base`): the
-     * top-level form's mark, or the thread's stack base outside any form. */
+     * top-level form's mark, or outside any form the outermost interpreter
+     * frame (the thread's stack base only when no entry frame is set). */
     unsigned char  *base;
+    /* The base is the outermost interpreter frame (a capture outside every
+     * form's prompt), so a restore needs that same frame live. */
+    bool            entry_bound;
     /* r7rs-callcc-memory-never-freed: the handle the program holds (see the
      * handle table below), how many live deltas are taken against this
      * image, and whether its own continuation was reclaimed -- a whole image
@@ -3561,6 +3565,17 @@ static void r7k_key_put(R7kCont *c) {
     if (old && old != c) r7k_key_release(old);
 }
 static _Thread_local unsigned char *r7k_base_tls;
+/* turi_cont_entry_enter (eval.h): the outermost interpreter frame on this
+ * thread, the bound of an image taken outside every form's prompt. */
+static _Thread_local unsigned char *g_r7k_entry_base;
+void *turi_cont_entry_enter(void *frame) {
+    void *prev = g_r7k_entry_base;
+    if (!prev) g_r7k_entry_base = (unsigned char *)frame;
+    return prev;
+}
+void turi_cont_entry_leave(void *prev) {
+    if (!prev) g_r7k_entry_base = NULL;
+}
 /* r7rs-toplevel-reentry-reruns-forms: the top of the current top-level
  * form's frames (r7rs-toplevel__ below sets it), which bounds a capture in
  * place of the thread's stack base.  See the prelude's twin. */
@@ -3619,13 +3634,24 @@ static int r7k_snapshot(R7kCont *c, unsigned char *mark) {
      * is the escape wherever r7k_stack_base finds none. */
     unsigned char *sb = r7k_stack_base();
     if (!sb) return 0;
-    unsigned char *base = (g_r7k_form_base && g_r7k_form_base > mark)
-                          ? g_r7k_form_base : sb;
+    /* Inside a top-level form: up to its mark.  Outside every form (a
+     * top-level `define`'s value, which runs under no prompt): up to the
+     * outermost interpreter frame, never the thread's stack base -- on a
+     * pthread that lies above the thread's static TLS and control block,
+     * which a restore would then overwrite with the capture's stale copy
+     * (turi-callcc-frame-reclaim-check-fails-in-ci: ASan's allocator state
+     * among them, which crashed it in its stack depot on CI's runners).
+     * The stack base stays the last resort, for an embedder that entered by
+     * a path that sets no entry frame. */
+    unsigned char *base = (g_r7k_form_base && g_r7k_form_base > mark)  ? g_r7k_form_base
+                        : (g_r7k_entry_base && g_r7k_entry_base > mark) ? g_r7k_entry_base
+                        : sb;
     unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
     if (!base || base <= lo) return 0;
     c->lo  = lo;
     c->n   = (size_t)(base - lo) & ~(sizeof(uintptr_t) - 1);
     c->base = base;
+    c->entry_bound = base == g_r7k_entry_base && base != g_r7k_form_base;
     R7kCont *key = r7k_key_find(lo, c->n);
     if (key && c->n / sizeof(uintptr_t) <= UINT32_MAX) {
         size_t nw = c->n / sizeof(uintptr_t), cap = nw / 8;
@@ -3831,6 +3857,15 @@ void turi_cont_release_env(TuriEnv *env) {
 }
 
 static int g_r7k_form_depth;   /* r7rs-toplevel__ prompts live (defined below) */
+/* turi-callcc-frame-reclaim-check-fails-in-ci: TUR_R7K_TRACE=1 prints each
+ * capture's and restore's stack range, each form's mark, and the thread's
+ * stack base and a TLS address beside them; tests/check-turi-frame-reclaim.py
+ * reads it to check that no image runs over the thread's TLS. */
+static int r7k_trace_on(void) {
+    static int on = -1;
+    if (on < 0) { const char *t = getenv("TUR_R7K_TRACE"); on = t && t[0] == '1'; }
+    return on;
+}
 static TuriValue native_r7rs_cont_capture(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)a; (void)n; (void)ud;
     /* S-5: outside a top-level form's prompt the image would run up to the
@@ -3862,6 +3897,13 @@ static TuriValue native_r7rs_cont_capture(TuriEnv *env, TuriValue *a, uint32_t n
         if (sl) r7k_slot_free((uint32_t)(sl - g_r7k_slots));
         return turi_int(0);
     }
+    if (r7k_trace_on())
+        fprintf(stderr, "r7k-trace: capture lo=%p n=%zu top=%p base=%p form_base=%p "
+                        "depth=%d mark=%p stack_base=%p tls=%p %s\n",
+                (void *)c->lo, c->n, (void *)(c->lo + c->n), (void *)c->base,
+                (void *)g_r7k_form_base, g_r7k_form_depth, (void *)mark,
+                (void *)r7k_stack_base(), (void *)&g_r7k_form_base,
+                c->img ? "whole" : "delta");
     return turi_int(c->handle);
 }
 static TuriValue native_r7rs_cont_resumed(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -3912,6 +3954,8 @@ static TuriValue native_r7rs_toplevel(TuriEnv *env, TuriValue *a, uint32_t n, vo
     g_r7k_form_saved[d] = g_r7k_form_base;
     g_r7k_boundary_saved[d] = turi_cont_set_drive_boundary(turi_cont_drive_mark());
     g_r7k_form_base = (unsigned char *)&jb;
+    if (r7k_trace_on())
+        fprintf(stderr, "r7k-trace: form depth=%d mark=%p\n", d, (void *)&jb);
     if (R7K_SETJMP(jb) == 0) {
         g_r7k_form_results[d] = turi_call(env, a[0], NULL, 0);
         r7k_longjmp(jb);
@@ -3945,6 +3989,21 @@ static TuriValue native_r7rs_cont_restore(TuriEnv *env, TuriValue *a, uint32_t n
          !pthread_equal(c->owner, pthread_self())))
         return turi_error("r7rs-cont-restore__: the continuation was captured "
                           "under another prompt (S-5)");
+    /* An image bounded by the outermost interpreter frame is copied up to
+     * that frame, so the frame must be the one live now: a continuation
+     * taken in one call into the interpreter and invoked from another would
+     * otherwise overwrite whatever frames now sit there. */
+    if (c->entry_bound && c->base != g_r7k_entry_base)
+        return turi_error("r7rs-cont-restore__: the continuation was captured in "
+                          "another call into the interpreter, which has returned");
+    if (r7k_trace_on()) {
+        unsigned char here;
+        fprintf(stderr, "r7k-trace: restore lo=%p n=%zu top=%p base=%p form_base=%p "
+                        "depth=%d sp~%p stack_base=%p %s\n",
+                (void *)c->lo, c->n, (void *)(c->lo + c->n), (void *)c->base,
+                (void *)g_r7k_form_base, g_r7k_form_depth, (void *)&here,
+                (void *)r7k_stack_base(), c->img ? "whole" : "delta");
+    }
     turi_cont_release_drives(c->lo + c->n);
     turi_r7rs_embed_cont_restore(c->embed, c->lo + c->n);
     r7k_restore(c);

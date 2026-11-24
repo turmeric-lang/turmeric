@@ -41,7 +41,7 @@ node tools/wasm-jit-spike/asyncify/drive.js /tmp/async tools/wasm-jit-spike/asyn
 ## `jspi/` -- wasm-native `setjmp`, and JSPI in place of Asyncify (2026-10-30)
 
 The measured fix of
-[wasm-jit-recursion-depth-is-about-300](../../docs/reported/wasm-jit-recursion-depth-is-about-300.md)
+[wasm-jit-recursion-depth-is-about-300](../../docs/archive/wasm-jit-recursion-depth-is-about-300.md)
 and the JSPI half of raylib-web-playground-plan's prerequisite 3. The spike
 measured the module compiled with `-fwasm-exceptions` and linked with
 `-sSUPPORT_LONGJMP=wasm` (so `eval`'s `setjmp` brings no JS `invoke_*`

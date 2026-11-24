@@ -27,8 +27,23 @@ function postPrint(text) {
     if (!muted) self.postMessage({ type: 'print', text });
 }
 
+// Emscripten's abort prints its reason through printErr, then throws.  The
+// module links setjmp on wasm exception handling (tur_wasm in
+// src/CMakeLists.txt), under which what is thrown is a bare
+// `RuntimeError: unreachable` rather than `RuntimeError: Aborted(<reason>)`,
+// so the printed line is the one that says why: a message's error carries it,
+// in the shape it had before.  Cleared as each message starts.
+let lastAbort = null;
+
 function postPrintErr(text) {
+    if (typeof text === 'string' && text.startsWith('Aborted(')) lastAbort = text;
     if (!muted) self.postMessage({ type: 'printErr', text });
+}
+
+function errorText(err) {
+    const s = String(err);
+    if (lastAbort && !s.includes('Aborted(')) return 'RuntimeError: ' + lastAbort;
+    return s;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +100,7 @@ function drainQueue() {
 
 function handleMessage(msg) {
     const id = msg.id;
+    lastAbort = null;
 
     if (msg.type === 'eval') {
         muted = !!msg.quiet;
@@ -102,7 +118,7 @@ function handleMessage(msg) {
             if (resultPtr) turiModule._free(resultPtr);
             self.postMessage({ type: 'eval-result', id, result });
         } catch (err) {
-            self.postMessage({ type: 'error', id, error: String(err) });
+            self.postMessage({ type: 'error', id, error: errorText(err) });
         } finally {
             // Still inside the mute window: a quiet replay's leftovers are
             // dropped here rather than surfacing on the next run.
@@ -125,7 +141,7 @@ function handleMessage(msg) {
             turiModule._free(resultPtr);
             self.postMessage({ type: 'format-result', id, result });
         } catch (err) {
-            self.postMessage({ type: 'error', id, error: String(err) });
+            self.postMessage({ type: 'error', id, error: errorText(err) });
         }
 
     } else if (msg.type === 'doc') {
@@ -155,7 +171,7 @@ function handleMessage(msg) {
             const result = resultPtr ? turiModule.UTF8ToString(resultPtr) : '';
             self.postMessage({ type: 'type-of-result', id, result });
         } catch (err) {
-            self.postMessage({ type: 'type-of-result', id, result: 'Error: ' + String(err) });
+            self.postMessage({ type: 'type-of-result', id, result: 'Error: ' + errorText(err) });
         }
 
     } else if (msg.type === 'explain') {
@@ -171,7 +187,7 @@ function handleMessage(msg) {
             const result = resultPtr ? turiModule.UTF8ToString(resultPtr) : '';
             self.postMessage({ type: 'explain-result', id, result });
         } catch (err) {
-            self.postMessage({ type: 'explain-result', id, result: 'Error: ' + String(err) });
+            self.postMessage({ type: 'explain-result', id, result: 'Error: ' + errorText(err) });
         }
 
     } else if (msg.type === 'lang-registry') {
@@ -216,7 +232,7 @@ function handleMessage(msg) {
             }
             self.postMessage({ type: 'trace-run-result', id, steps, stats });
         } catch (err) {
-            self.postMessage({ type: 'trace-run-result', id, steps: -1, error: String(err) });
+            self.postMessage({ type: 'trace-run-result', id, steps: -1, error: errorText(err) });
         }
 
     } else if (msg.type === 'trace-seek') {
@@ -233,7 +249,7 @@ function handleMessage(msg) {
             }
             self.postMessage({ type: 'trace-state', id, state });
         } catch (err) {
-            self.postMessage({ type: 'error', id, error: String(err) });
+            self.postMessage({ type: 'error', id, error: errorText(err) });
         }
 
     } else if (msg.type === 'trace-site-at') {
@@ -248,7 +264,7 @@ function handleMessage(msg) {
             }
             self.postMessage({ type: 'trace-sites', id, sites: out });
         } catch (err) {
-            self.postMessage({ type: 'error', id, error: String(err) });
+            self.postMessage({ type: 'error', id, error: errorText(err) });
         }
 
     } else if (msg.type === 'trace-find-line') {
@@ -263,7 +279,7 @@ function handleMessage(msg) {
             const found = p ? JSON.parse(turiModule.UTF8ToString(p)) : null;
             self.postMessage({ type: 'trace-found', id, found });
         } catch (err) {
-            self.postMessage({ type: 'error', id, error: String(err) });
+            self.postMessage({ type: 'error', id, error: errorText(err) });
         }
 
     } else if (msg.type === 'trace-download') {
@@ -282,7 +298,7 @@ function handleMessage(msg) {
             self.postMessage({ type: 'trace-bytes', id, bytes: copy.buffer },
                              [copy.buffer]);
         } catch (err) {
-            self.postMessage({ type: 'error', id, error: String(err) });
+            self.postMessage({ type: 'error', id, error: errorText(err) });
         }
 
     } else if (msg.type === 'trace-release') {
@@ -290,7 +306,7 @@ function handleMessage(msg) {
             turiModule._turi_wasm_trace_release();
             self.postMessage({ type: 'trace-released', id });
         } catch (err) {
-            self.postMessage({ type: 'error', id, error: String(err) });
+            self.postMessage({ type: 'error', id, error: errorText(err) });
         }
 
     } else if (msg.type === 'rewind') {
@@ -301,7 +317,7 @@ function handleMessage(msg) {
                 turiModule._turi_wasm_rewind_to_prelude();
             self.postMessage({ type: 'reset-done', id });
         } catch (err) {
-            self.postMessage({ type: 'error', id, error: String(err) });
+            self.postMessage({ type: 'error', id, error: errorText(err) });
         }
 
     } else if (msg.type === 'reset') {
@@ -309,7 +325,7 @@ function handleMessage(msg) {
             turiModule._turi_wasm_reset();
             self.postMessage({ type: 'reset-done', id });
         } catch (err) {
-            self.postMessage({ type: 'error', id, error: String(err) });
+            self.postMessage({ type: 'error', id, error: errorText(err) });
         }
     }
 }
@@ -379,7 +395,7 @@ self.addEventListener('message', function (e) {
             });
             drainQueue();
         }).catch(function (err) {
-            self.postMessage({ type: 'init-error', error: String(err) });
+            self.postMessage({ type: 'init-error', error: errorText(err) });
         });
         return;
     }

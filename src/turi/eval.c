@@ -16707,6 +16707,10 @@ static TuriValue turi_eval_with_sink(TuriEnv *env, const char *src, const char *
     uint32_t saved_user_line = g_synthetic_user_from_line;
     g_synthetic_user_from_line = (env && env->src_pin_len) ? env->pin_next_line : 0;
 
+    /* The bound of a call/cc image taken outside every top-level form
+     * (turi_cont_entry_enter, eval.h): this frame, when it is the outermost
+     * call into the interpreter on the thread. */
+    void *prev_entry = turi_cont_entry_enter(__builtin_frame_address(0));
     TuriValue r;
     if (!env || !env->diag_sink) {
         r = turi_eval_impl(env, src, path, out_type_tag, tag_cap);
@@ -16717,6 +16721,7 @@ static TuriValue turi_eval_with_sink(TuriEnv *env, const char *src, const char *
         r = turi_eval_impl(env, src, path, out_type_tag, tag_cap);
         diag_set_sink(prev, prev_ud);
     }
+    turi_cont_entry_leave(prev_entry);
 
     g_interpret_mode = saved_mode;
     g_elab_toplevel_imports = saved_toplevel_imports;
@@ -19169,11 +19174,18 @@ TuriValue turi_call(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args
         return turi_errorf("turi_call: expected closure, got tag %d", fn.tag);
     /* S-5: an embedder (or the macro env) calling straight into a restricted
      * env gets the same host-exit pad turi_eval installs. */
+    /* An embedder's call is an entry too (turi_cont_entry_enter, eval.h); the
+     * interpreter's own calls through here find one set and change nothing. */
+    void *prev_entry = turi_cont_entry_enter(__builtin_frame_address(0));
+    TuriValue r;
     if (!(env->caps & TURI_CAP_PROC) && !env->host_exit_jmp) {
         CallRun c = { fn.as_closure, args, n_args };
-        return host_guarded_run(env, call_run, &c, true);
+        r = host_guarded_run(env, call_run, &c, true);
+    } else {
+        r = eval_apply(env, fn.as_closure, args, n_args);
     }
-    return eval_apply(env, fn.as_closure, args, n_args);
+    turi_cont_entry_leave(prev_entry);
+    return r;
 }
 
 /* SEQ (stdlib/seq): public bridges so the seq inline-C natives in
