@@ -11009,6 +11009,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             Binding *fn_binding = e->as.call_.fn_binding;
 
+            /* sepcomp-cross-module-effect-unhandled: a call into another
+             * module's function that can perform a user effect, made here on
+             * the direct path, enters it through its plain entry -- a fresh
+             * root, where the `perform` finds no handler.  The CPS backend
+             * threads such a call; one that reaches this emitter is refused. */
+            (void)emit_cps_ir_xmod_refuse_direct_call(fn_binding, e->span);
+
             /* jit-ffi-c2mir-plan F3: `(call-ptr p [sig] args...)` -- an
              * indirect call through a raw address with an explicit C
              * signature.  Pure codegen: cast the pointer to the stated

@@ -1,0 +1,14 @@
+;; sepcomp-cross-module-effect-unhandled: the performer's module.  Nothing
+;; here handles Ask or Scale; the handlers are in api.tur, another C unit.
+(defmodule fx/ask
+  (export ask-plus scale count-down)
+  (defeffect Ask [] : int)
+  (defeffect Scale [x : float] : float)
+  (defn ask-plus [n : int] : int
+    (+ n (perform (Ask))))
+  (defn scale [x : float] : float
+    (+ 0.5 (perform (Scale x))))
+  (defn count-down [n : int acc : int] : int
+    (if (= n 0)
+      acc
+      (count-down (- n 1) (+ acc (perform (Ask)))))))

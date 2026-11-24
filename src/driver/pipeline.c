@@ -913,6 +913,9 @@ int compile_to_h(const char *path, Buf *out_h, const char *module_name,
                                    forced, n_forced) != 0) {
             rc = 1;
         }
+        /* The unit is emitted: what its effect check published for the
+         * emitter points into the arena freed below. */
+        effect_check_set_separate_compilation(false);
         prof_exit(PROF_EMIT);
     }
 
@@ -1014,6 +1017,9 @@ int compile_to_implementation(const char *path, Buf *out_c, const char *module_n
         ctx.reader_macros   = &reader_macros_reg;
         rc = run_core_passes(&ctx);
         prof_enter(PROF_EMIT);
+        /* sepcomp-cross-module-effect-unhandled: this unit's lines in the
+         * build's `__cps` export/import ledger start over. */
+        emit_cps_xmod_unit_begin(module_name);
         if (rc == 0 && emit_implementation(out_c, module_name, ctx.prog, true,
                                            forced, n_forced,
                                            out_borrow_specs, out_n_borrow_specs) != 0) {
@@ -1028,6 +1034,9 @@ int compile_to_implementation(const char *path, Buf *out_c, const char *module_n
             if (emit_exports_manifest(out_manifest, ctx.prog) != 0) rc = 1;
             else manifest_keep_defined(out_manifest, mfrom, out_c);
         }
+        /* As in compile_to_h: nothing may ask about this unit's published
+         * callees once its arena is gone. */
+        effect_check_set_separate_compilation(false);
         prof_exit(PROF_EMIT);
     }
 

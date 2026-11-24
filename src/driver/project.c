@@ -449,6 +449,13 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
     uint32_t *all_n_borrow = (uint32_t *)calloc(n_files, sizeof(uint32_t));
     if (!all_borrow || !all_n_borrow) { fprintf(stderr, "tur: oom\n"); return 2; }
 
+    /* sepcomp-cross-module-effect-unhandled: a fresh `__cps` export/import
+     * ledger for this build (checked after pass 2). */
+    emit_cps_xmod_build_begin();
+    if (n_own < n_files)
+        emit_cps_xmod_set_unlinked_modules((const char *const *)(mod_names + n_own),
+                                           n_files - n_own);
+
     /* Pass 1: Compile each .tur file to .h and .c (no forced specs yet). */
     for (int i = 0; i < n_files; i++) {
         int rm_n = 0;
@@ -620,6 +627,41 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
         }
         buf_free(&c_out);
         free_reader_macro_paths(rm_p, rm_n);
+    }
+
+    /* sepcomp-cross-module-effect-unhandled: every unit is emitted, so the
+     * ledger is complete.  A unit that threads a call into a `__cps` entry no
+     * unit exports -- the callee left the CPS backend's subset in its own
+     * module -- is recompiled with that entry denied; the call is then made on
+     * the direct path, where it is refused with a located error.  Without
+     * this the build would stop at the linker ("undefined reference"). */
+    for (int i = 0; i < n_files; i++) {
+        if (!emit_cps_xmod_deny_unsatisfied(mod_names[i])) continue;
+        int rm_n = 0;
+        char **rm_p = discover_manifest_reader_macros(tur_files[i], &rm_n);
+        Buf c_out;
+        buf_init(&c_out);
+        int c_rc = compile_to_implementation(tur_files[i], &c_out, mod_names[i],
+                                             inc, n_inc,
+                                             (const char **)rm_p, rm_n, NULL,
+                                             forced_for[i], n_forced_for[i],
+                                             NULL, NULL);
+        if (c_rc == 0) {
+            hoist_tur_include_directives(&c_out);
+            if (buf_to_path(&c_out, c_files[i]) != 0) c_rc = 2;
+        }
+        buf_free(&c_out);
+        free_reader_macro_paths(rm_p, rm_n);
+        if (c_rc != 0) {
+            fprintf(stderr, "tur: failed to compile %s to implementation\n", tur_files[i]);
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
+            free(h_files); free(c_files); free(mod_names);
+            for (int j = 0; j < n_files; j++) free(forced_for[j]);
+            free(forced_for); free(n_forced_for); free(cap_forced_for);
+            free_borrow_specs(all_borrow, all_n_borrow, n_files);
+            free_tur_files(tur_files, n_files);
+            return 1;
+        }
     }
 
     /* J5: Write .tur-abi-cache/index with ownership information.

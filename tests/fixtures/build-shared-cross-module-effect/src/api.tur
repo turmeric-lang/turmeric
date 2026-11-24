@@ -1,0 +1,14 @@
+;; sepcomp-cross-module-effect-unhandled: handlers for effects performed in
+;; fx/ask, a separately compiled unit of the same library.
+(defmodule api
+  (export run-ask run-scale run-loop)
+  (import fx/ask :as fx)
+  (defn run-ask [] : int
+    (handle (+ 1 (fx/ask-plus 5))
+      (Ask [] k) (resume k 10)))
+  (defn run-scale [x : float] : float
+    (handle (fx/scale x)
+      (Scale [v] k) (resume k (* v 10.0))))
+  (defn run-loop [n : int] : int
+    (handle (fx/count-down n 0)
+      (Ask [] k) (resume k 1))))

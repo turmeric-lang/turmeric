@@ -54,6 +54,9 @@ shared runtime TU is in the
    declares or keeps a `static` copy**. Stdlib code is always a per-TU
    `static` copy. A generic specialization a borrower needs is pushed back to
    its owner in a second pass ("forced specs").
+7. An effect crosses units: a module exports the `__cps` twin of each exported
+   function it CPS-emits, an importer threads its chain into it, and all units
+   share one DK machine. What cannot thread is refused at the call site.
 
 ---
 
@@ -69,7 +72,8 @@ shared runtime TU is in the
 | `src/compiler/emit_module.c` | `emit_header`, `emit_implementation`, `emit_abi_clone_name`, `emit_inst_method_wants_external`, `emit_imported_adt_ctors`, the r7rs split helpers (`emit_split_lib_owns`) |
 | `src/compiler/emit.h` | `ForcedAbiSpec`, `BorrowSpecInfo`, the public emit entry points |
 | `src/compiler/emit_fns.c` | `emit_fn_def`: the `needs_static` linkage decision |
-| `src/compiler/emit_cps_ir.c` | The CPS entry wrapper's matching linkage decision |
+| `src/compiler/emit_cps_ir.c` | The CPS entry wrapper's matching linkage decision; cross-module effect threading (`xmod_*`, `effect_emit_tag`, the `__cps` export/import ledger) |
+| `src/passes/effect_check.c` | Infers the rows of the other modules' callees a unit reaches (`foreign_scan`) and publishes the effectful ones (`effect_check_foreign_effects`) |
 | `src/compiler/emit_split.h` | The r7rs LIB/IMP/CLIENT split -- a different mechanism, see [below](#not-this-the-r7rs-prelude-split) |
 
 ---
@@ -340,12 +344,16 @@ found on the `-I` dirs.
    clone name).
 4. **Pass 2.** Recompile (header and implementation) every owner that has
    forced specs.
-5. Write `.tur-abi-cache/index` (unless disabled).
-6. Write `obj/_main.c` (executables only; it only `#include`s the module
+5. **Ledger check.** For each module, `emit_cps_xmod_deny_unsatisfied`: if it
+   threads a call into a `__cps` entry that no unit exports, recompile its
+   implementation with that entry denied. See
+   [CPS functions across TUs](#cps-functions-across-tus).
+6. Write `.tur-abi-cache/index` (unless disabled).
+7. Write `obj/_main.c` (executables only; it only `#include`s the module
    headers -- `main` must come from a module), `obj/tur_runtime.h`, and
    `obj/tur_runtime.c` (`#define TUR_RT_OWNER 1`, the one owner of the
    runtime's globals).
-7. One `cc` call over all of it. `TUR_SHOW_CC=1` prints it.
+8. One `cc` call over all of it. `TUR_SHOW_CC=1` prints it.
 
 So a module is elaborated two to four times as a build target, plus once per
 TU that imports it. The intermediates stay in `<build-dir>/obj/` for
@@ -419,7 +427,8 @@ In order, with `separate_compilation` true:
 | Spec clone of a stdlib generic | `static` copy | its own `static` copy |
 | Exported `def` | external definition | `extern` in the header |
 | Constructors of an ADT | `static` | `static` copy if it constructs one |
-| `__cps` twin of a colored defn | `static` | nothing |
+| `__cps` twin of an exported, CPS-emitted defn | external, hidden (`TUR_RT_LOCAL`) | an `extern` declaration in each unit that reaches it |
+| `__cps` twin of any other colored defn | `static` | nothing |
 | CPS entry wrapper (plain name) | linkage of the defn | as the defn |
 
 The function decision is `needs_static` in `emit_fn_def` (`emit_fns.c`):
@@ -508,11 +517,93 @@ An instance in the module's own file keeps a strong definition.
 
 Coloring and classification (`ensure_S`, see the
 [CPS internals guide](cps-dk-internals-guide.md)) run over the program being
-emitted, which under separate compilation is one module. The `__cps` twin is
-always `static`. A call into another module's colored function is therefore an
-ordinary direct call to its **entry wrapper**, which seeds a fresh root
-continuation with `__dk_enter0`. Handlers installed by the caller are not on
-that continuation.
+emitted, which under separate compilation is one module. A call into another
+module's function is normally an ordinary direct call to its **entry
+wrapper**, which seeds a fresh root continuation with `__dk_enter0`.
+
+That is wrong for one kind of callee: a function that can perform a user
+effect, whose handler may be installed by the caller. Such a call has to hand
+the callee the caller's chain. Four mechanisms do that
+([sepcomp-cross-module-effect-unhandled](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sepcomp-cross-module-effect-unhandled.md),
+resolved 2026-11-24). All four apply under separate compilation only.
+
+1. **The owner exports the twin.** A module gives the `__cps` twin of every
+   *exported* function it CPS-emits external linkage (`xmod_exports_cps`).
+   The twin is `TUR_RT_LOCAL` (hidden), so a `--shared` library exports no
+   `__cps` symbol.
+2. **The importer threads into it.** `effect_check.c` infers the rows of the
+   other modules' callees a unit reaches and publishes the ones that can
+   perform a user effect. (A capability tag and `Unsafe` are not performed and
+   are never published.) `ensure_S` turns those into the unit's set of
+   threaded callees (`xmod_callees_build`): the callee is exported, is not
+   generic, its signature has a CPS ABI (`fn_sig_ok`), and its module is
+   linked into this output. For a callee in the set:
+   - the CPS translator treats a call as a call to a colored function
+     (`cps_ir_foreign_cps_has`), so it becomes a `CT_TAILCALL`;
+   - `binding_in_s` answers true, so the emitter takes the cps->cps arm and
+     writes `return <owner>__<fn>__cps(args, k)`;
+   - the unit declares the twin `extern`, spelled from the callee's own
+     `FnDef` with `emit_params`, exactly as its module spells the definition;
+   - the classification credits the caller with the callee's effects
+     (`xmod_mark_call_effects`), as if the caller performed them. The taint
+     rules then keep the handler and the call on the DK machine together.
+3. **Effect tags come from the effect's name.** `effect_emit_tag` is FNV-1a of
+   the name, folded into `[2, INT32_MAX]`. Every unit computes the same tag
+   with no shared table, so a library built on its own agrees too. Two names
+   that fold to one tag are a build error (checked against every name the
+   build has seen), since a shared tag would run the wrong handler silently.
+   A whole-program build keeps the per-program counter (`effect_tag`).
+4. **The units share one DK machine.** The machine's *functions* are per-unit
+   `static` copies, like the rest of the non-rc runtime. Its *state* is one
+   instance per linked output, defined in the `TUR_RT_OWNER` unit and declared
+   `extern` elsewhere (`emit_dk_shared_state`, `emit_module.c`): the driver
+   landing, resume chain and value, reap list, entry depth, pending-perform
+   list, handler-group counter, the pin flag and the re-opening slot. Before,
+   each unit had its own. A `perform` then ran on the performer's copy and
+   the handler's tail resume on the handler's, so a nested-handler program
+   delivered its answer past the code after the `handle`.
+
+In the two-module project of the report (`effects/ask` performs, `myapp`
+handles), built in a directory named `demo`:
+
+```
+$ tur build . && ./build/bin/demo
+99
+$ grep -n "ask_hyeffect__cps\|dk_perform(2\|handler_tail_inplace(2" build/obj/*.c     (trimmed)
+effects__ask.c:5378:TUR_RT_LOCAL int64_t effects__ask__ask_hyeffect__cps(DK *__kont) {
+effects__ask.c:5379:    return dk_perform(2096980404, "Ask", (tur_dkw)(0), __kont);
+myapp.c:2993:extern TUR_RT_LOCAL int64_t effects__ask__ask_hyeffect__cps(DK *__kont);   /* another module's CPS entry */
+myapp.c:5392:    DK *__h0 = ... dk_handler_tail_inplace(2096980404, myapp__run_hc0_0, 0, ...
+myapp.c:5393:    return effects__ask__ask_hyeffect__cps(__h0); /* cps->cps */
+```
+
+**What is refused.** A call that would enter such a callee through its plain
+entry is an error at the call site
+(`emit_cps_ir_xmod_refuse_direct_call`, called from the direct emitter's
+`EX_CALL`, the backend's cps->direct arms, and the evicted-`handle` walk). The
+message names the side that could not thread it:
+
+| Message | Cause |
+|---|---|
+| "The call is not threaded here" | The *caller* left the CPS backend's subset (for example a `(Vec int)` parameter), so the direct emitter makes the call |
+| "Its module exports no threaded entry for it" | The *callee* has no CPS ABI, or left the subset in its own module |
+| "Its module is not linked into this library" | The callee is a `:spices` dependency of a `--shared` build without `--bundle-deps`. It runs on another library's DK machine |
+
+The importer cannot see the second case while it compiles: whether the owner
+kept the callee in `S` is the owner's classification. So the build keeps a
+**ledger** (`xmod_line_add`): each unit records the twins it exports and the
+twins it calls. After the last pass the driver asks, per module,
+`emit_cps_xmod_deny_unsatisfied`. A module that calls a twin no unit exported
+is recompiled with that twin denied. The call is then no longer threaded, and
+the refusal above fires with its location. Without the ledger that build
+stopped at the linker with `undefined reference to '<fn>__cps'`.
+
+Still per-unit, and not affected: the E2 twin registry (`__tur_cps_reg`), the
+serial-continuation registry (`__sk_registry`) and the `call/cc` escape state.
+An effectful *function value* passed into another module's higher-order
+function is therefore not threaded across units. A whole-program build of
+modules refuses that shape too
+([module-effectful-fn-value-has-no-lowering](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/module-effectful-fn-value-has-no-lowering.md)).
 
 `emit_split_lib_owns` is not involved: it belongs to the r7rs split below and
 returns false whenever that split is off.
@@ -586,7 +677,9 @@ Then look at the evidence:
 | `static declaration follows non-static declaration`, `conflicting types` | The header prototype and the `.c` definition disagree (linkage or parameter spelling) -- e.g. [sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch.md) |
 | `unknown type name 'tur_adt_X'`, `field has incomplete type` | A typedef the header did not carry or ordered wrongly -- e.g. [sepcomp-recursive-byval-fixpoint-adt-incomplete-header-type](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sepcomp-recursive-byval-fixpoint-adt-incomplete-header-type.md) |
 | `redefinition of 'Result__...'` | A monomorph typedef without its include guard ([result-typedef-duplicated-across-modules](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/result-typedef-duplicated-across-modules.md)) |
-| ``error: `f` (module m) can perform the effect `E`, and this call crosses into it from another module`` | A call into another module whose callee can perform a user effect. Refused at build time since 2026-10-18; before, it built and aborted at run time with `tur: unhandled effect (tag N)` |
+| ``error: `f` (module m) can perform the effect `E`, and this call crosses into it from another module`` | A call into another module's effectful function that could not be threaded. The sentence after it says which side failed; see [CPS functions across TUs](#cps-functions-across-tus). Such a call is threaded since 2026-11-24; every one was refused from 2026-10-18, and before that built and aborted at run time with `tur: unhandled effect (tag N)` |
+| `error "tur: the DK runtime's state changed its spelling"` from `tur_runtime.h` | A state declaration in `emit_dk_runtime.c` no longer matches its row in `emit_dk_shared_state`. Update the row; otherwise that piece of state would silently go back to one copy per unit |
+| `undefined reference to '<mod>__<fn>__cps'` | A unit threaded a call into a twin its module did not export, and the ledger missed the call site. Every cps->cps arm that can name another module's twin must call `xmod_note_call` |
 
 ### A worked failure (fixed 2026-10-21)
 
@@ -620,7 +713,7 @@ this guide was written; link the reports here once they are.
 | Gap | Where |
 |---|---|
 | A forced spec at a by-value struct only the CALLER can see (its own) cannot be emitted by the generic's module, and is refused there with a diagnostic naming the struct; one at a third module's struct both import builds ([forced-spec-at-foreign-aggregate](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/forced-spec-at-foreign-aggregate.md), resolved 2026-10-22) | `forced_spec_pos_type` resolves the type from the owner's items, then the defs its elaboration saw (`ctor_census_find_adt`) |
-| An effect performed in one module's TU cannot reach a `handle` in another's. It is refused at the call site, not threaded | per-TU coloring; `static` `__cps` twins; the entry wrapper's fresh root continuation; the refusal is `effect_check.c` (`foreign_check`) |
+| An effectful *function value* is not threaded into another module's higher-order function (the E2 twin registry is per unit). Direct calls are threaded since 2026-11-24 | `__tur_cps_reg` in `emit_dk_runtime.c`; see [CPS functions across TUs](#cps-functions-across-tus) |
 | Nested imports resolve against the entry file's directory, and the diagnostic calls it the importing file's | `elab_module.c:elab_load_module_impl` (`module_base_dir`) |
 
 ---
@@ -633,20 +726,14 @@ this guide was written; link the reports here once they are.
 | Project builds, manifest descent, `--shared`, the runtime owner TU | `tests/run-build-project.sh` |
 | Two headers carrying one monomorph | `tests/run-result-typedef-multi-module.sh` (ctest `tur_result_typedef_multi_module`) |
 | Forced specs at the owner's by-value structs | `tests/run-forced-spec-aggregate.sh` (ctest `tur_forced_spec_aggregate`) |
+| An effect across modules: threaded shapes, the shared DK state, the two refusals | `build-project-sepcomp-*` in `tests/run-build-project.sh` |
+| The same inside a `--shared` library, and that it exports neither the twins nor the machine's state | `build-shared-cross-module-effect*` in `tests/run-build-shared.sh` |
 
 Most `module-*` fixtures run whole-program, so they do not exercise the split.
 A change to header or implementation emission wants a case in
 `run-build-project.sh` (or a bare-directory build) as well.
 
 ---
-
-## Bugs found while writing this guide
-
-Each was reproduced against the compiler this guide describes and filed in
-[`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
-update the passage above that describes it and drop it from this list.
-
-- [sepcomp-cross-module-effect-unhandled](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sepcomp-cross-module-effect-unhandled.md) -- Separately compiled: an effect performed in one module cannot reach a handler in another (refused at build time since 2026-10-18)
 
 ## Maintenance
 
@@ -656,7 +743,9 @@ Update this guide in the same PR when you:
   resolution;
 - change which `tur build` shapes take the whole-program route;
 - change a linkage rule (`needs_static`, `emit_inst_method_wants_external`,
-  spec `external_linkage`) or the header contents;
+  spec `external_linkage`, `xmod_exports_cps`) or the header contents;
+- change which callees a unit threads into (`xmod_callees_build`), how effect
+  tags are derived, or which DK state is shared (`emit_dk_shared_state`);
 - change `emit_abi_clone_name`, `ForcedAbiSpec` or `BorrowSpecInfo`;
 - start reading `.tur-abi-cache/`, or delete it;
 - close one of the [known gaps](#known-gaps) -- move it to the failure-shape

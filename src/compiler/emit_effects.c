@@ -126,6 +126,12 @@ static bool handle_report_performs(const Expr *c, void *ud) {
         w->n++;
         return false;
     }
+    /* sepcomp-cross-module-effect-unhandled: a call into another module's
+     * effectful function is the `perform` this handle was waiting for; the
+     * refusal at the call says so, and says which side could not thread it. */
+    if (c->kind == EX_CALL
+        && emit_cps_ir_xmod_refuse_direct_call(c->as.call_.fn_binding, c->span))
+        w->n++;
     return cps_visit_children(c, handle_report_performs, ud);
 }
 
@@ -431,7 +437,7 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_printf(body, "%s->entries[0].cont_kind = %d;\n", tbl, (int)c->cont_kind);
     if (dk_emitted) {
         indent_buf(body, ctx->indent);
-        buf_printf(body, "%s->entries[0].dk_tag = %d;\n", tbl, effect_tag(c->effect_name));
+        buf_printf(body, "%s->entries[0].dk_tag = %d;\n", tbl, effect_emit_tag(c->effect_name));
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s->entries[0].dk_fn = %s;\n", tbl, dkfn_name);
     }

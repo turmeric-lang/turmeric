@@ -95,6 +95,7 @@ static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
     if (!ecd_borrow || !ecd_n_borrow) { fprintf(stderr, "tur: oom\n"); return 2; }
 
     int rc = 0;
+    emit_cps_xmod_build_begin();   /* sepcomp-cross-module-effect-unhandled */
     for (int i = 0; i < n_inputs && rc == 0; i++) {
         int rm_n = 0;
         char **rm_p = discover_manifest_reader_macros(inputs[i], &rm_n);
@@ -174,6 +175,25 @@ static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
         }
         for (int i = 0; i < n_inputs; i++) free(ecd_forced[i]);
         free(ecd_forced); free(ecd_n_forced); free(ecd_cap_forced);
+    }
+
+    /* sepcomp-cross-module-effect-unhandled: a unit that threads a call into
+     * a `__cps` entry no unit exports is recompiled with that entry denied,
+     * which reports the call (see cmd_build_multi_files). */
+    for (int i = 0; i < n_inputs && rc == 0; i++) {
+        if (!emit_cps_xmod_deny_unsatisfied(ecd_mod_names[i])) continue;
+        int rm_n = 0;
+        char **rm_p = discover_manifest_reader_macros(inputs[i], &rm_n);
+        Buf c_buf;
+        buf_init(&c_buf);
+        int c_rc = compile_to_implementation(inputs[i], &c_buf, ecd_mod_names[i],
+                                             include_dirs, n_include_dirs,
+                                             (const char **)rm_p, rm_n, NULL,
+                                             NULL, 0, NULL, NULL);
+        free_reader_macro_paths(rm_p, rm_n);
+        if (c_rc != 0) rc = c_rc;
+        else if (buf_to_path(&c_buf, ecd_c_paths[i]) != 0) rc = 2;
+        buf_free(&c_buf);
     }
 
     /* J5: Write .tur-abi-cache/index for emit-c --output-dir.
