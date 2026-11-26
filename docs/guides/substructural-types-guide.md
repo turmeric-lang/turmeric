@@ -91,8 +91,9 @@ is `TUR-E0100`.
 
 Two shapes are still not followed, and leak without a diagnostic: a fresh
 linear value passed straight to a `^borrow` parameter, and a linear value
-stored in a field of a struct that is not itself `^linear`. Bind the first;
-see [linear-values-without-a-binding-are-not-checked](../reported/linear-values-without-a-binding-are-not-checked.md).
+stored in a field of a struct that is not itself `^linear`. Bind the first.
+The open report is
+`docs/reported/linear-values-without-a-binding-are-not-checked.md`.
 
 **A linear value may be bound at module level.** Linearity constrains how many
 times a value is *used*, not where it may live, so a top-level `def` holding
