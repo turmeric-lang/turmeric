@@ -86,3 +86,14 @@ right flags; the generate step dies first on the directory line.
 2. Pin it with a `spice-resolver-tests.sh` case next to
    `cmake-dir-markers-dropped-without-a-warning`: an INTERFACE target whose
    `INTERFACE_LINK_LIBRARIES` names a static library and a bare `m`.
+
+## Resolved 2026-11-26: fix direction 1
+
+`link_dirs` for a `:targets` dep is now computed at configure time by
+`_tur_append_artifact_dir`, which emits `$<TARGET_FILE_DIR:t>` only for a
+target whose `TYPE` is in `_TUR_LINKABLE` -- the same guard the artifact
+already had (`emit_link_flags_prelude` / `emit_link_lines`,
+`src/compiler/pkg.c`). The repro fetches, and its manifest has
+`"link_dirs": []` and `"link_flags": [".../libtop.a", "m"]`; the program
+prints `42`. Pinned as `cmake-dep-interface-target-in-targets` in
+`tests/spice-resolver-tests.sh`.

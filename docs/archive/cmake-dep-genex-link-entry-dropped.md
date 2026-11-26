@@ -97,3 +97,43 @@ literal text".
    should print one line -- `spice: link dependency '$<...>' of target 'top'
    is a generator expression tur cannot follow` -- instead of vanishing. The
    failure today names a symbol, not the dependency that was dropped or why.
+
+## Resolved 2026-11-26: fix directions 2 and 3
+
+`_tur_walk_iface` (emitted by `emit_link_iface_helper`, `src/compiler/pkg.c`)
+no longer discards an entry that starts with `$<`. It passes each entry to a
+new helper, `_tur_reduce_genex`, which evaluates innermost-first the
+expressions that depend only on things known at configure time: `LINK_ONLY`,
+`BUILD_INTERFACE`, `BUILD_LOCAL_INTERFACE`, `INSTALL_INTERFACE`,
+`COMPILE_ONLY`, `0`/`1`, `BOOL`, `NOT`, `AND`, `OR`, `IF`, `STREQUAL`,
+`TARGET_EXISTS`, `TARGET_NAME_IF_EXISTS`, `PLATFORM_ID`, `CONFIG`,
+`C_COMPILER_ID` and `CXX_COMPILER_ID`. What comes back is classified and
+walked like any other entry, so a target reached this way contributes its
+artifact and its own requirements. An expression that holds a list
+(`$<$<PLATFORM_ID:Linux>:dl;pthread>`) is cut in two by the property's own
+separators; the walk rejoins the pieces first.
+
+An entry that still holds an expression afterwards is dropped as before, but
+`tur fetch` now prints one line naming the entry and the target (fix
+direction 3).
+
+Direction 1 (`$<GENEX_EVAL:...>` at generate time) was not taken: the result
+could no longer be walked for its own requirements, which is what
+`cmake-dep-link-walk-stops-at-archive` fixed.
+
+The repro prints `42`.
+
+Manifold itself needed one thing more. Its entry reduces to `TBB::tbb`, an
+imported target that Manifold's own `find_package(TBB)` creates, and such a
+target is visible only in the directory that found it. In the generated
+top-level `CMakeLists.txt`, where the walk runs, `if(TARGET TBB::tbb)` was
+false, so the name went through as a bare library and the consumer dropped it
+for its `::`. The generated file now sets `CMAKE_FIND_PACKAGE_TARGETS_GLOBAL`
+(CMake 3.24+; older versions ignore it and keep the old behavior). With both
+changes, Manifold v3.5.5 with `MANIFOLD_PAR=ON` and the system's oneTBB
+fetches, links `libtbb.so` with an rpath, and runs (Linux, CMake 3.28).
+
+Pinned as `cmake-dep-genex-link-entry-reduced` in
+`tests/spice-resolver-tests.sh`, which covers a conditional target, a list
+inside an expression, a false condition, an expression that cannot be decided
+(the warning), and an imported target made by the dep's own `find_package`.

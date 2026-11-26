@@ -1806,6 +1806,192 @@ else
 fi
 rm -f "$MK_ERR" "$MK_ERR.run" "$MK_ERR.run2"; rm -rf "$MK"
 
+# The next three share one app shape: a :path cmake-dep with one :targets
+# entry, and a main that prints what one C function returns.  Hermetic.
+#   cmake_dep_app <root> <dep> <target> <c prototype> <c call>
+cmake_dep_app() {
+    mkdir -p "$1/app/src"
+    cat >"$1/app/build.tur" <<EOF
+(defpackage app
+  :name "app"
+  :version "0.1.0"
+  :cmake-deps #map{
+    "$2" #map{:path "../../deps/$2" :targets ["$3"]}})
+EOF
+    cat >"$1/app/src/main.tur" <<EOF
+(defn answer [] : int
+  \`\`\`c
+  extern int $4;
+  return $5;
+  \`\`\`)
+(defn main [] : int
+  (println (answer))
+  0)
+EOF
+}
+
+# cmake-dep-genex-link-entry-dropped: a dependency linked through a generator
+# expression -- the usual spelling of an optional one, $<$<BOOL:${WITH_X}>:x>
+# -- was skipped by the link walk, so the program failed on undefined
+# references and nothing said why.  The walk now reduces the expressions it
+# can decide at configure time, including one that holds a list, and names
+# the ones it cannot.  The last entry is the shape that started this
+# (manifold's $<$<BOOL:${MANIFOLD_PAR}>:TBB::tbb>): an imported target the
+# dep's own find_package made, which is only visible from the generated
+# CMakeLists because that sets CMAKE_FIND_PACKAGE_TARGETS_GLOBAL (CMake 3.24+).
+GX=$(mktemp -d)
+mkdir -p "$GX/deps/lib/cmake"
+cat >"$GX/deps/lib/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.20)
+project(lib C)
+option(WITH_CORE "link core" ON)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+find_package(TurSysM REQUIRED)
+add_library(core STATIC core.c)
+add_library(top STATIC top.c)
+target_link_libraries(top PRIVATE
+  $<$<BOOL:${WITH_CORE}>:core>
+  $<$<NOT:$<PLATFORM_ID:NoSuchOS>>:dl;pthread>
+  $<$<BOOL:OFF>:tur_absent_lib>
+  $<$<LINK_LANGUAGE:C>:tur_unknown_lib>
+  $<$<BOOL:${WITH_CORE}>:TurSys::m>)
+EOF
+cat >"$GX/deps/lib/cmake/FindTurSysM.cmake" <<'EOF'
+if(NOT TARGET TurSys::m)
+  add_library(TurSys::m INTERFACE IMPORTED)
+  set_target_properties(TurSys::m PROPERTIES INTERFACE_LINK_LIBRARIES "m")
+endif()
+set(TurSysM_FOUND TRUE)
+EOF
+printf 'int core_value(void) { return 41; }\n' >"$GX/deps/lib/core.c"
+printf 'int core_value(void);\nint top_value(void) { return core_value() + 1; }\n' >"$GX/deps/lib/top.c"
+cmake_dep_app "$GX" lib top "top_value(void)" "top_value()"
+GX_ERR=$(mktemp)
+( cd "$GX/app" && "$TUR_ABS" fetch ) >/dev/null 2>"$GX_ERR"
+gx_rc=$?
+GX_MAN="$GX/app/cmake/spice-deps-manifest.json"
+GX_OUT=$( cd "$GX/app" && "$TUR_ABS" run src/main.tur 2>"$GX_ERR.run" )
+gx_run=$?
+# CMake older than 3.24 leaves the imported target directory-scoped; the rest
+# of the case still holds there.
+gx_tail='"dl", "pthread", "m"\]'
+if ! cmake --version | awk 'NR==1 { split($3, v, "."); exit !(v[1] > 3 || (v[1] == 3 && v[2] >= 24)) }'; then
+    gx_tail='"dl", "pthread"'
+fi
+if [ "$gx_rc" -eq 0 ] && [ "$gx_run" -eq 0 ] && [ "$GX_OUT" = "42" ] \
+   && grep -q "libtop\\.a\", \"[^\"]*libcore\\.a\", $gx_tail" "$GX_MAN" \
+   && ! grep -qF 'tur_absent_lib' "$GX_MAN" \
+   && ! grep -qF 'tur_unknown_lib' "$GX_MAN" \
+   && grep -qF "spice: warning: link dependency" "$GX_ERR" \
+   && grep -qF 'tur_unknown_lib' "$GX_ERR" \
+   && ! grep -qF 'tur_absent_lib' "$GX_ERR"; then
+    echo "PASS cmake-dep-genex-link-entry-reduced"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL cmake-dep-genex-link-entry-reduced (fetch rc=$gx_rc run rc=$gx_run out='$GX_OUT')"
+    echo "  fetch stderr:"; sed 's/^/    /' "$GX_ERR"
+    echo "  run stderr:"; sed 's/^/    /' "$GX_ERR.run"
+    [ -f "$GX_MAN" ] && { echo "  manifest:"; sed 's/^/    /' "$GX_MAN"; }
+    FAIL=$((FAIL + 1))
+    FAILED+=("cmake-dep-genex-link-entry-reduced")
+fi
+rm -f "$GX_ERR" "$GX_ERR.run"; rm -rf "$GX"
+
+# cmake-dep-cxx-runtime-not-linked: a static C++ library built and then failed
+# to link (undefined operator new, __cxa_*), because tur links with the C
+# driver and no CMake target lists the C++ runtime.  The generated CMake now
+# appends the runtime the C++ compiler links implicitly -- for a :targets dep
+# and for one that links by its guessed -l name.  A plain C dep gets nothing.
+CX=$(mktemp -d)
+mkdir -p "$CX/deps/vecsum"
+cat >"$CX/deps/vecsum/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.20)
+project(vecsum C CXX)
+add_library(vecsum STATIC vecsum.cpp)
+add_library(plainc STATIC plainc.c)
+EOF
+cat >"$CX/deps/vecsum/vecsum.cpp" <<'EOF'
+#include <vector>
+extern "C" int vecsum(int n) {
+  std::vector<int> v;
+  for (int i = 1; i <= n; i++) v.push_back(i);
+  int s = 0;
+  for (int x : v) s += x;
+  return s;
+}
+EOF
+printf 'int plainc(int n) { return n + 1; }\n' >"$CX/deps/vecsum/plainc.c"
+cmake_dep_app "$CX" vecsum vecsum "vecsum(int)" "vecsum(10)"
+CX_ERR=$(mktemp)
+CX_MAN="$CX/app/cmake/spice-deps-manifest.json"
+( cd "$CX/app" && "$TUR_ABS" fetch ) >/dev/null 2>"$CX_ERR"
+cx_rc=$?
+CX_OUT=$( cd "$CX/app" && "$TUR_ABS" run src/main.tur 2>>"$CX_ERR" )
+CX_FLAGS=$(grep '"link_flags"' "$CX_MAN" 2>/dev/null)
+# The same library with no :targets, linked as -lvecsum.
+sed -i.bak 's/ :targets \["vecsum"\]//' "$CX/app/build.tur"
+( cd "$CX/app" && "$TUR_ABS" fetch ) >/dev/null 2>>"$CX_ERR"
+cx_rc2=$?
+CX_OUT2=$( cd "$CX/app" && "$TUR_ABS" run src/main.tur 2>>"$CX_ERR" )
+CX_FLAGS2=$(grep '"link_flags"' "$CX_MAN" 2>/dev/null)
+# A C library in the same project: no runtime.
+cmake_dep_app "$CX" vecsum plainc "plainc(int)" "plainc(41)"
+( cd "$CX/app" && "$TUR_ABS" fetch ) >/dev/null 2>>"$CX_ERR"
+cx_rc3=$?
+CX_OUT3=$( cd "$CX/app" && "$TUR_ABS" run src/main.tur 2>>"$CX_ERR" )
+CX_FLAGS3=$(grep '"link_flags"' "$CX_MAN" 2>/dev/null)
+if [ "$cx_rc" -eq 0 ] && [ "$CX_OUT" = "55" ] \
+   && [ "$cx_rc2" -eq 0 ] && [ "$CX_OUT2" = "55" ] \
+   && [ "$cx_rc3" -eq 0 ] && [ "$CX_OUT3" = "42" ] \
+   && echo "$CX_FLAGS"  | grep -qE 'libvecsum\.a", "(stdc\+\+|c\+\+)"' \
+   && echo "$CX_FLAGS2" | grep -qE '\["(stdc\+\+|c\+\+)"' \
+   && ! echo "$CX_FLAGS3" | grep -qF 'c++'; then
+    echo "PASS cmake-dep-cxx-runtime-linked"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL cmake-dep-cxx-runtime-linked (rc=$cx_rc/$cx_rc2/$cx_rc3 out='$CX_OUT'/'$CX_OUT2'/'$CX_OUT3')"
+    echo "  link_flags: $CX_FLAGS | $CX_FLAGS2 | $CX_FLAGS3"
+    echo "  stderr:"; sed 's/^/    /' "$CX_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("cmake-dep-cxx-runtime-linked")
+fi
+rm -f "$CX_ERR"; rm -rf "$CX"
+
+# cmake-dep-interface-target-fails-generate: an INTERFACE library in :targets
+# (a header-only library's own target, or a bundle of others) failed the
+# CMake generate step on an unguarded $<TARGET_FILE_DIR:t>.  link_dirs is
+# guarded like the artifact now; the target's INTERFACE_LINK_LIBRARIES still
+# reach the link line.
+IFT=$(mktemp -d)
+mkdir -p "$IFT/deps/lib"
+cat >"$IFT/deps/lib/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.20)
+project(lib C)
+add_library(top STATIC top.c)
+add_library(bundle INTERFACE)
+target_link_libraries(bundle INTERFACE top m)
+EOF
+printf '#include <math.h>\nint top_value(void) { return (int)floor(42.5); }\n' >"$IFT/deps/lib/top.c"
+cmake_dep_app "$IFT" lib bundle "top_value(void)" "top_value()"
+IFT_ERR=$(mktemp)
+( cd "$IFT/app" && "$TUR_ABS" fetch ) >/dev/null 2>"$IFT_ERR"
+ift_rc=$?
+IFT_MAN="$IFT/app/cmake/spice-deps-manifest.json"
+IFT_OUT=$( cd "$IFT/app" && "$TUR_ABS" run src/main.tur 2>>"$IFT_ERR" )
+if [ "$ift_rc" -eq 0 ] && [ "$IFT_OUT" = "42" ] \
+   && grep -q '"link_dirs": *\[\]' "$IFT_MAN" \
+   && grep -q '"link_flags": *\["[^"]*libtop\.a", "m"\]' "$IFT_MAN"; then
+    echo "PASS cmake-dep-interface-target-in-targets"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL cmake-dep-interface-target-in-targets (fetch rc=$ift_rc out='$IFT_OUT')"
+    echo "  stderr:"; sed 's/^/    /' "$IFT_ERR"
+    [ -f "$IFT_MAN" ] && { echo "  manifest:"; sed 's/^/    /' "$IFT_MAN"; }
+    FAIL=$((FAIL + 1))
+    FAILED+=("cmake-dep-interface-target-in-targets")
+fi
+rm -f "$IFT_ERR"; rm -rf "$IFT"
+
 # cmake-dep-path-through-missing-cmake-dir: a dependency spice declares a
 # `:path` cmake-dep, written relative to its own generated `cmake/` dir.  The
 # consumer joined it onto `<spice>/cmake/` and, when realpath() failed because

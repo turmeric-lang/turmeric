@@ -123,3 +123,27 @@ declared with a plain `:url` and no `:targets` -- link today. They were not
 built while investigating this (they need ALSA headers the sandbox lacked).
 If they link, something about their shape supplies the runtime and is worth
 knowing before choosing a fix.
+
+## Resolved 2026-11-26: fix direction 1
+
+The generated `cmake/CMakeLists.txt` now does what the shim did. The link walk
+calls `_tur_note_cxx` on every target it reaches; that records a static (or
+object) library as C++ when its `LINKER_LANGUAGE` is `CXX`, when one of its
+`SOURCES` has an extension in `CMAKE_CXX_SOURCE_FILE_EXTENSIONS`, or, for an
+imported target, when `IMPORTED_LINK_INTERFACE_LANGUAGES` names `CXX`. When
+one was recorded, `_tur_append_cxx_runtime` appends the `stdc++` / `c++` /
+`c++abi` entries of `CMAKE_CXX_IMPLICIT_LINK_LIBRARIES` to that dep's
+`link_flags`, after its archives and before its `:link-flags`
+(`emit_link_flags_prelude`, `src/compiler/pkg.c`). A dep with no `:targets` is
+checked by the name it links, which covers the `rtaudio` / `rtmidi` shape.
+
+The repro prints `55`, with `"link_flags": [".../libvecsum.a", "stdc++"]`.
+Manifold v3.5.5 fetched by a plain `:url` with `:targets ["manifoldc"]` links
+and runs with no wrapper project. Verified on Linux with GNU; the macOS branch
+(`c++`) is the same code path but was not run. Pinned as
+`cmake-dep-cxx-runtime-linked` in `tests/spice-resolver-tests.sh`, which also
+checks that a C library in the same project gets no runtime.
+
+The "Not established" question is answered by reading the two manifests:
+`rtaudio` and `rtmidi` set `BUILD_SHARED_LIBS OFF` and declare nothing that
+would supply the runtime, so they had this bug too.
