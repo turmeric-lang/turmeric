@@ -111,6 +111,45 @@ let [^affine k generate-key()]
   initialize(k)
 ```
 
+Uses are counted per path. The arms of an `if` or a `match` are alternatives,
+so a use in each arm is one use, and a value consumed in only some arms is
+still fine:
+
+```turmeric
+;; OK: one use on either path
+(let [^affine k (generate-key)]
+  (if fast?
+    (initialize k)
+    (initialize-slowly k)))
+
+;; OK: used on one path, discarded on the other
+(let [^affine k (generate-key)]
+  (when fast? (initialize k))
+  0)
+```
+
+```sweet-exp
+;; OK: one use on either path
+let [^affine k generate-key()]
+  if fast?
+    initialize(k)
+    initialize-slowly(k)
+
+;; OK: used on one path, discarded on the other
+let [^affine k generate-key()]
+  when fast? initialize(k)
+  0
+```
+
+When the type has a `Drop` instance (the owning-handle shape
+`stdlib/numvec.tur` uses), "discarded" means dropped, and that holds per path
+too: the arm that did not hand the value on drops it, and the value is gone
+after the `if` on every path. Using it there is a use-after-move, and handing
+it on inside a `while` body is refused, since a second iteration would hand it
+on again. See
+[emitted-code-ownership-guide](emitted-code-ownership-guide.md) for the
+mechanism.
+
 ### `^relevant` -- use at least once
 
 Use `^relevant` for values that must be observed but may be inspected multiple times.

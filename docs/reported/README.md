@@ -37,17 +37,17 @@ directory is worse for triage than no index.
 ## Found building `spices/manifold` (filed 2026-11-26)
 
 Manifold is the first spice to weigh `^linear` against `^affine` + `Drop` for
-a handle that expressions pass around as a temporary. Every row has an offline
+a handle that expressions pass around as a temporary. The row has an offline
 repro that was run on `main` at `d4ad1b0` under `TUR_SANITIZE_PROGRAMS=1`.
 
-Three `:cmake-deps` reports were filed with these and resolved the same day;
-they are in `docs/archive/`: `cmake-dep-cxx-runtime-not-linked`,
-`cmake-dep-genex-link-entry-dropped` and
-`cmake-dep-interface-target-fails-generate`.
+Four reports filed with this one were resolved the same day and are in
+`docs/archive/`: `cmake-dep-cxx-runtime-not-linked`,
+`cmake-dep-genex-link-entry-dropped`,
+`cmake-dep-interface-target-fails-generate` and
+`affine-drop-handle-consumed-in-one-branch-double-frees`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [affine-drop-handle-consumed-in-one-branch-double-frees](affine-drop-handle-consumed-in-one-branch-double-frees.md) | high (double free from a program that compiled) | An `^affine` handle with a `Drop` instance that is consumed on one side of an `if` is dropped again at scope exit; consuming it on both sides is rejected with TUR-E0150. `^linear` rejects the first (TUR-E0104) and accepts the second |
 | [linear-values-without-a-binding-are-not-checked](linear-values-without-a-binding-are-not-checked.md) | medium (silent leaks; one double free) | The `^linear` check follows named bindings only: a temporary passed to a `^borrow` parameter, a discarded linear result and a linear struct field are dropped with no TUR-E0100. Also: `^linear` + `Drop` double-frees on every explicit consume, and `(set! h (f h))` on a `^mut` linear binding is TUR-E0101 |
 
 ## Found executing sepcomp-cross-module-effect-unhandled (filed 2026-11-24)

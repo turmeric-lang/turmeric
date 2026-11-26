@@ -1962,6 +1962,39 @@ uint32_t move_state_snapshot_bindings(const Scope *scope,
     bool **out_states);
 bool *move_state_capture_current(Binding **bindings, uint32_t n);
 void move_state_restore(Binding **bindings, const bool *states, uint32_t n);
+UsageState *usage_state_capture_current(Binding **bindings, uint32_t n);
+void usage_state_restore(Binding **bindings, const UsageState *states, uint32_t n);
+bool usage_state_is_per_path(const Binding *b);
+bool elab_path_consumed(const Binding *b, bool moved_before, bool moved,
+                        UsageState usage_before, UsageState usage);
+Expr *elab_branch_with_scope_drop(Elab *e, Expr *branch, Binding *b, Span span);
+
+/* The move and usage state of every visible binding across the arms of a
+ * `match`.  Arms are alternatives: each is elaborated from the state before
+ * the match (arm_moves_enter), its outcome is recorded (arm_moves_leave), and
+ * the outcomes are merged once (arm_moves_merge) -- moved after the match
+ * only if every arm that reaches the merge moved it.  A Drop-owning local
+ * that only some arms hand on is released by the others, which
+ * arm_moves_apply wraps once the arm bodies are final.  arm_moves_free is
+ * safe to call more than once. */
+typedef struct ArmMoves {
+    Binding    **b;
+    uint32_t     n, n_arms;
+    bool        *moved_before;
+    UsageState  *usage_before;
+    bool       **arm_moved;     /* [n_arms] rows of n; NULL = arm not reached */
+    UsageState **arm_usage;
+    bool        *arm_leaves;    /* the arm is a `return` / panic / `!` */
+    Binding    **drop_binding;  /* pending (arm, binding) drops, n_drops long */
+    uint32_t    *drop_arm;
+    uint32_t     n_drops, cap_drops;
+} ArmMoves;
+void arm_moves_begin(Elab *e, ArmMoves *am, uint32_t n_arms);
+void arm_moves_enter(ArmMoves *am);
+void arm_moves_leave(ArmMoves *am, uint32_t ai, const Expr *body);
+void arm_moves_merge(ArmMoves *am);
+void arm_moves_apply(Elab *e, ArmMoves *am, MatchArm *arms, Span span);
+void arm_moves_free(ArmMoves *am);
 uint32_t linear_state_snapshot_bindings(const Scope *scope,
     Binding ***out_bindings,
     bool **out_states);

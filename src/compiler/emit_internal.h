@@ -1373,7 +1373,7 @@ uint32_t emit_do_trailing_drop_glue(const struct Expr *e);
 void emit_frame_note_pending_drops(const char *frame, const struct Expr *e);
 void emit_frame_clear_pending_drops(const char *frame);
 bool emit_frame_has_pending_drops(const EmitCtx *ctx);
-void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const struct Expr *ret_value);
+void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const struct Expr *ret);
 char *fresh_defer_thunk(EmitCtx *ctx);
 char *fresh_defer_env(EmitCtx *ctx);
 void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,

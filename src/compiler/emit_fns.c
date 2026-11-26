@@ -2035,6 +2035,15 @@ static void emit_tail_hand_on_arming(EmitCtx *ctx, Buf *body, const Expr *e,
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                       const Expr *e, TypeKind result_kind, bool is_main) {
     switch (e->kind) {
+        case EX_RETURN:
+            /* A `return` in tail position is otherwise just its value.  One
+             * that a branch join left drops to run (return_.owed_drops) has to
+             * go through the statement emitter, which runs them. */
+            if (e->as.return_.n_owed > 0) {
+                emit_stmt(ctx, body, e);
+                return;
+            }
+            break;
         case EX_BUILTIN:
             /* tail-grammar-skips-and-or-and-carrier-lets: `(and a ... z)` is
              * `if (!a) return false; ... <tail z>`, and `(or a ... z)` is

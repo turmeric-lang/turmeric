@@ -1,0 +1,119 @@
+;; affine-drop-branch-paths: a let-bound move-only Drop opaque that only SOME
+;; paths hand on is released exactly once on every path.
+;;
+;; The scope-exit drop is decided once per let, from whether the local reads
+;; as moved when the body ends.  An `if` that consumed it on one side read as
+;; "not moved", so the consuming path freed it twice
+;; (docs/archive/affine-drop-handle-consumed-in-one-branch-double-frees.md);
+;; a literal `match` read as "moved", so the other arms leaked it; and
+;; consuming it on both sides was TUR-E0150.  The join now has the arm that
+;; kept the value release it.
+;;
+;; Every shape runs once per path.  The counters prove each run balances (live
+;; 0 afterwards) without LeakSanitizer; a double drop shows as a negative
+;; count.
+;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
+(defn ctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (ctr 0) (:: 1 Widget))
+(defn rel [w : Widget] : void (ctr 1) (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn peek [^borrow w : Widget] : int 1)
+;; bump -- consumes its argument and returns a fresh Widget.
+(defn bump [w : Widget] : Widget (rel w) (mk))
+;; take -- consumes its argument and returns a plain int.
+(defn take [w : Widget] : int (rel w) 5)
+
+(defdata Shape (Dot) (Line) (Box))
+
+;; one side of an if consumes
+(defn s1 [c : bool] : int
+  (let [h (mk)]
+    (if c (rel h) nil)
+    1))
+;; an if with no else consumes
+(defn s2 [c : bool] : int
+  (let [h (mk)]
+    (when c (rel h))
+    1))
+;; both sides consume: one use per path, not two
+(defn s3 [c : bool] : int
+  (let [h (mk)]
+    (if c (rel h) (rel h))
+    1))
+;; both sides consume and the if is the new owner
+(defn s4 [c : bool] : int
+  (let [h (mk)
+        g (if c (bump h) (bump (bump h)))]
+    (peek g)))
+;; one side leaves the function, the other consumes
+(defn s5 [c : bool] : int
+  (let [h (mk)]
+    (if c (return 0) (rel h))
+    1))
+;; the side that leaves consumes in its return value
+(defn s6 [c : bool] : int
+  (let [h (mk)]
+    (if c (return (take h)) nil)
+    (peek h)))
+;; one arm of a literal match consumes
+(defn s7 [n : int] : int
+  (let [h (mk)]
+    (match n
+      1 (rel h)
+      _ nil)
+    1))
+;; one arm of a constructor match consumes, one leaves
+(defn s8 [s : Shape] : int
+  (let [h (mk)]
+    (match s
+      (Dot)  (take h)
+      (Line) (return 2)
+      (Box)  0)))
+;; every arm consumes
+(defn s9 [s : Shape] : int
+  (let [h (mk)]
+    (match s
+      (Dot)  (take h)
+      (Line) (+ 1 (take h))
+      (Box)  (take h))))
+;; nested: the inner if consumes one of two locals on each side
+(defn s10 [c : bool d : bool] : int
+  (let [h (mk)
+        k (mk)]
+    (if c
+      (if d (rel h) (rel k))
+      nil)
+    1))
+;; the consuming side's value is used
+(defn s11 [c : bool] : int
+  (let [h (mk)
+        v (if c (take h) 3)]
+    v))
+
+(defn print-live [] : nil
+  (println (- (ctr 2) (ctr 3))))
+
+(defn main [] : int
+  (s1 true) (print-live) (s1 false) (print-live)
+  (s2 true) (print-live) (s2 false) (print-live)
+  (s3 true) (print-live) (s3 false) (print-live)
+  (s4 true) (print-live) (s4 false) (print-live)
+  (s5 true) (print-live) (s5 false) (print-live)
+  (s6 true) (print-live) (s6 false) (print-live)
+  (s7 1) (print-live) (s7 2) (print-live)
+  (s8 (Dot)) (print-live) (s8 (Line)) (print-live) (s8 (Box)) (print-live)
+  (s9 (Dot)) (print-live) (s9 (Line)) (print-live) (s9 (Box)) (print-live)
+  (s10 true true) (print-live) (s10 true false) (print-live)
+  (s10 false true) (print-live)
+  (s11 true) (print-live) (s11 false) (print-live)
+  (println (ctr 2))
+  (println (ctr 3))
+  0)

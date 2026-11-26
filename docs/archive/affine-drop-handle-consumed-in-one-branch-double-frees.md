@@ -141,3 +141,72 @@ drop then has no per-path "already moved" fact to consult.
 3. Until then, say so in `stdlib/numvec.tur`'s ownership note and in
    `substructural-types-guide.md`: an `^affine` + `Drop` value must not be
    consumed inside a branch.
+
+## Resolved 2026-11-26: fix directions 1 and 2
+
+**Root cause, traced.** `elab_if` snapshots `is_moved` per branch and merges
+it as `before || (then && else)`, so a local moved on one side read as *not
+moved* after the `if`, and `elab_let` appended its scope-exit drop: the
+consuming path freed it twice. The ST1 usage count that raises TUR-E0150 was
+not snapshotted at all, so a use in each branch counted as two.
+
+**What changed** (`src/compiler/elab_forms.c`, `elab_structs.c`):
+
+- The usage count is rewound before each arm and merged as the maximum, in
+  `if` and in both `match` paths. Program 2 compiles.
+- `Binding.scope_drop_inst` records, when a let binding is made, the Drop
+  instance its scope exit would release it through. At a join, a local that
+  owes that drop and was consumed by some arms but not others is released by
+  the arms that kept it (`elab_branch_with_scope_drop` appends the same
+  `(defer (<Drop.drop> b))` glue to the arm), and reads as moved afterwards.
+  An `if` with no else gets one. Program 1 compiles and frees once per path.
+- "Consumed" is a move, or for an affine binding a use that survived (a
+  `^borrow` use is un-counted by the call), which covers a branch whose own
+  value is the local.
+- A branch that leaves no longer votes in `if`'s merge (it already did not in
+  `match`): the state after the `if` is the other branch's. A `return` arm
+  that still owns the local runs the drop itself, after computing its value
+  (`return_.owed_drops`, honoured by the C emitter in statement and tail
+  position and by the interpreter). A `return` reached after the local was
+  handed on records it (`return_.moved`), and the emitter's pending-drop pass
+  skips it.
+- The literal `match` path had no per-arm move state; it shares the ADT path's
+  now (`ArmMoves`).
+- `init_yields_fresh_owner` follows an `if` whose arms all yield fresh values,
+  so the `g` of program 2 is owned and dropped.
+- Handing such a local on inside a `while` body is TUR-E0005.
+
+**Found on the way, same cause, all changed by the above** (each was run
+under `TUR_SANITIZE_PROGRAMS=1` on `main` at `d4ad1b0` and on the fix):
+
+| Shape | Before | After |
+|---|---|---|
+| `(when c (h-free h))` | double free | clean |
+| `(if c (return 0) (h-free h))` | double free | clean |
+| `(if c (return (h-take h)) nil) (h-peek h)` | TUR-E0150 | clean |
+| one arm of a constructor `match` consumes | double free | clean |
+| one arm of a literal `match` consumes | leak on the other arms | clean |
+| `(if c (h-free h) nil) (h-peek h)` | TUR-E0150 | TUR-E0201 (use after move) |
+| `(while ... (h-free h))` | double free | TUR-E0005 |
+
+Pinned by `tests/fixtures/affine-drop-branch-paths` (25 path runs, counted
+allocations and frees, also under `run-leak-check.sh`),
+`affine-drop-branch-paths-trace` (no inline C, so the interpreter runs it),
+and `errors/affine-drop-moved-in-loop-body` /
+`errors/affine-drop-used-after-branch-move`.
+
+**Not changed.**
+
+- An owned Drop-opaque *parameter* is never dropped by its function, in a
+  branch or otherwise: `(defn take [h : H c : bool] : int (if c (h-free h) nil) 1)`
+  leaks `h` when `c` is false. Only let-bound fresh owners carry a scope-exit
+  drop. A leak, not a double free; it predates this report.
+- A branch that panics while still owning the local does not release it.
+- A `do` that ends in `return` is not recognised as leaving (only a bare
+  `(return ...)` arm is), so `(if c (do (h-free h) (return)) nil)` followed by
+  a use of `h` is refused as a use-after-move although no path reaches it
+  moved.
+- The other scope-exit drops `elab_let` injects (`ref<T>`, `rc<T>`, owning
+  fields) take the same one-decision-per-let shape and were not examined.
+- CPS-lowered (colored) functions do not go through the `return` emitter that
+  reads `owed_drops` / `moved`.
