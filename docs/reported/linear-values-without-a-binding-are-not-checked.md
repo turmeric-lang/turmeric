@@ -1,14 +1,16 @@
-# The `^linear` check follows named bindings only: an unbound linear value is dropped without a diagnostic (and three related gaps)
+# A fresh `^linear` value lent to a `^borrow` parameter, or stored in a non-linear aggregate, is dropped without a diagnostic
 
-**Severity:** medium (silent leaks from programs the linearity check accepted;
-one of the related gaps is a double free). `^linear` promises "used exactly
-once". That holds for a value bound with `let` or passed as a parameter. A
-linear value that never gets a name -- a temporary, a discarded result, a
-struct field -- is not followed at all, so it can be dropped with no TUR-E0100.
+**Severity:** medium (silent leaks from programs the linearity check accepted).
+`^linear` promises "used exactly once". That holds for a value bound with
+`let` or passed as a parameter, and -- since 2026-11-26 -- for a call result
+written as a statement. Two shapes of a linear value that never gets a name
+are still not followed: a temporary handed straight to a borrowing function,
+and a field of an aggregate that is not itself linear.
 
 Found 2026-11-26 prototyping `spices/manifold` in turmeric-spices on `^linear`
 handles; that spice's operations consume their operands, and its README lists
-the shapes below, because of section 1. Verified on `main` at `d4ad1b0`.
+these shapes. First verified on `main` at `d4ad1b0`. This report originally
+carried four more findings; they are fixed, and listed at the end.
 
 All repros share one 16-byte heap handle:
 
@@ -46,7 +48,7 @@ All repros share one 16-byte heap handle:
   ```)
 ```
 
-## 1. Unbound linear values leak silently
+## The two open shapes
 
 Prelude plus, as `l1/main.tur`:
 
@@ -55,18 +57,12 @@ Prelude plus, as `l1/main.tur`:
 
 (defn temp-to-borrow [] : int (h-peek (h-new 7)))
 
-(defn discarded-result [] : int
-  (let [h (h-new 7)]
-    (h-bump h)
-    1))
-
 (defn in-a-struct [] : int
   (let [b (Box (h-new 7) 3)]
     (.n b)))
 
 (defn main [] : int
   (println (temp-to-borrow))
-  (println (discarded-result))
   (println (in-a-struct))
   0)
 ```
@@ -77,89 +73,81 @@ TUR_SANITIZE_PROGRAMS=1 tur test l1
 ```
 
 ```
-SUMMARY: AddressSanitizer: 24 byte(s) leaked in 3 allocation(s).
+SUMMARY: AddressSanitizer: 16 byte(s) leaked in 2 allocation(s).
 ```
-
-One leak per function:
 
 | Function | Shape | Why nothing consumes it |
 |---|---|---|
 | `temp-to-borrow` | a fresh linear value passed straight to a `^borrow` parameter | the callee only borrows; the caller never named it |
-| `discarded-result` | a call returning a linear value, in statement position | the result is thrown away |
 | `in-a-struct` | a linear value as a field of a non-linear struct (a vector literal does the same) | the aggregate is not linear, so dropping it is allowed |
 
-Binding the value first turns each of these into the expected TUR-E0100:
+Binding the value first turns the first into the expected TUR-E0100:
 `(let [t (h-new 7)] (h-peek t))` is rejected as "linear value 't' dropped
 without being consumed".
 
 For `^affine` + `Drop` the first shape is handled -- the temporary is hoisted
 and dropped after the call
 ([borrowed-drop-temporary-leaks-outside-the-hoist](borrowed-drop-temporary-leaks-outside-the-hoist.md)
-tracks what is left of that). A linear type has no drop to synthesise, so the
+tracks what is left of that). The same hoist covers a `^linear` type that has
+a `Drop` instance. A linear type without one has no drop to synthesise, so the
 only correct outcomes are a diagnostic or an owner.
+
+## Why the borrowed temporary is not simply an error
+
+It was tried (2026-11-26): TUR-E0100 for a call of linear type, with no `Drop`
+instance, in a `^borrow` argument slot. `tests/run.sh` stayed green, but a
+`tur check` sweep of every source and test in turmeric-spices found seven new
+errors in three files, and none of them is a leak:
+
+| Where | Code | What it is |
+|---|---|---|
+| `spices/postgres/src/postgres/typed.tur` | `(rows-count (__int->rows (trows-handle r)))` | a re-wrap: an int handle the caller does not own, cast to the linear `Rows` the borrower's signature wants |
+| `spices/sqlite/src/sqlite/typed.tur` | `(stmt-bind-int (__int->stmt (tstmt-handle s)) i v)` | the same, for `Stmt` |
+| `spices/ecs/tests/sized-defsystem.tur` | `(set-Pos! (:: (make-write-cap Pos-cid) (WriteCap Pos)) ...)` | a capability token: nothing to release |
+
+A call that allocates and a call that re-wraps look the same to the checker,
+and the re-wrap has no correct spelling under the strict rule -- binding it
+first is TUR-E0100 too, because a view must not be consumed. So the check was
+taken back out.
 
 ### Fix directions
 
-- Treat a call whose result type is linear, in a position where the result is
-  not bound, returned, or passed to a consuming parameter, as TUR-E0100. That
-  covers the first two rows.
-- For the third: either make an aggregate with a linear field linear itself,
-  or reject a linear field in a type that is not declared `^linear`.
+- Give the re-wrap a spelling first: a way to say a function's result is a
+  borrowed view of its argument, not a fresh owner (a `^borrow` result, or a
+  `borrow-as` cast form). The lifetime machinery already distinguishes owned
+  from borrowed for `&T`; an opaque handle has no equivalent. With that in
+  place the temporary-to-borrow shape can be TUR-E0100.
+- Short of that, a warning rather than an error, which the three files above
+  would need a way to silence.
+- For the struct field: either make an aggregate with a linear field linear
+  itself, or reject a linear field in a type that is not declared `^linear`.
+  stdlib has `^linear` handles in non-linear containers today (a `Result`
+  payload is the common one), so this needs its own sweep.
 
-## 2. `^linear` with a `Drop` instance: every explicit free is a double free
+## Resolved 2026-11-26
 
-Prelude plus:
+Four findings filed here are fixed (`src/compiler/elab_forms.c`,
+`elab_fns.c`):
 
-```turmeric
-(definstance Drop [H] (drop [x] : void (h-free x)))
+- **A discarded linear call result.** `(h-bump h)` written as a statement is
+  TUR-E0100, "linear value of type H is discarded here without being
+  consumed" (`elab_note_discarded_linear`, called where `do`, `let`, function
+  and `while` bodies are sequenced). The same sweep of turmeric-spices found
+  no instance; one fixture in this repo had one
+  (`size-arith-guards`, `(do (bytes-alloc -1) 0)`), now bound and freed.
+- **`^linear` with a `Drop` instance double-freed on every explicit consume.**
+  The scope-exit drop honoured a move and not a linear consumption; it now
+  skips a binding whose `is_linear_consumed` is set.
+- **`(set! h (h-bump h))` on a `^mut` linear binding was TUR-E0101** at the
+  next use, because the old value's "consumed" mark stayed on the cell.
+  `elab_set` clears it: the cell holds a value nobody has consumed. A loop can
+  accumulate into a linear value, and into an `^affine` + `Drop` one (whose
+  last value the scope exit drops).
+- **The complement:** `set!` on a linear binding whose current value was not
+  consumed is TUR-E0100, "overwritten without being consumed". A `ref<T>`,
+  which is only inferred linear and is auto-dropped, keeps its old rule.
 
-(defn main [] : int
-  (let [h (h-new 7)
-        v (h-peek h)]
-    (h-free h)
-    (println v)
-    0))
-```
-
-```
-==314==ERROR: AddressSanitizer: attempting double-free on 0x502000000010 in thread T0:
-```
-
-The program is the textbook linear usage -- bind, borrow, consume once -- and
-it compiles. The `Drop` instance makes the scope exit drop `h` as well, even
-though `h-free` already consumed it. The same program with `^affine` runs
-clean, so the scope-exit drop honours an affine move and not a linear
-consumption.
-
-Either the combination should be rejected at the `definstance` ("a `^linear`
-type is consumed explicitly; it cannot also have `Drop`"), or the drop glue
-should treat a linear consumption as a move.
-
-## 3. A `^mut` linear binding cannot be reassigned
-
-Prelude plus:
-
-```turmeric
-(defn main [] : int
-  (let [^mut h (h-new 7)]
-    (set! h (h-bump h))
-    (let [v (h-peek h)]
-      (h-free h)
-      (println v)
-      0)))
-```
-
-```
-error [TUR-E0101]: linear value 'h' used after being consumed
-```
-
-`(set! h (h-bump h))` consumes the old value and stores a fresh one, so `h`
-holds a live handle again -- but the checker still has it marked consumed. The
-consequence is that a loop cannot accumulate into a linear value
-(`(while ... (set! acc (step acc)))`); `spices/manifold` works around it with a
-borrowed vector that the loop pushes into. A recursive function whose
-accumulator is a parameter is accepted.
-
-Fix direction: a `set!` whose right-hand side type-checks should clear the
-consumed mark on its target (and, if the target was *not* consumed, the old
-value is being overwritten without a consumer -- that is a TUR-E0100).
+Pinned by `tests/fixtures/linear-set-reinitialises` (counted allocations and
+frees, also under `run-leak-check.sh`),
+`errors/linear-call-result-discarded` and
+`errors/linear-set-overwrites-unconsumed`.

@@ -1995,6 +1995,23 @@ void arm_moves_leave(ArmMoves *am, uint32_t ai, const Expr *body);
 void arm_moves_merge(ArmMoves *am);
 void arm_moves_apply(Elab *e, ArmMoves *am, MatchArm *arms, Span span);
 void arm_moves_free(ArmMoves *am);
+
+/* linear-values-without-a-binding-are-not-checked (1): a fresh ^linear value
+ * that never gets a name has no consumer the checker can hold to "exactly
+ * once".  elab_fresh_linear_unowned answers whether `x` is one -- a call whose
+ * result type is linear and has no Drop instance to release it through.
+ * elab_note_discarded_linear reports the statement-position shape for the
+ * first `n` items of a sequence (TUR-E0100); the diagnostic fails the build
+ * without unwinding the caller.
+ *
+ * The same value handed straight to a `^borrow` parameter is NOT reported,
+ * though it has no consumer either: a call cannot be told from a re-wrap.
+ * `(rows-count (__int->rows h))` casts a handle it does not own to the linear
+ * type the borrower wants, and `(set-Pos! (make-write-cap id) ...)` mints a
+ * capability token; both are in turmeric-spices, and neither has a consumer
+ * to name.  The open report has the measurements. */
+bool elab_fresh_linear_unowned(Elab *e, const Expr *x);
+void elab_note_discarded_linear(Elab *e, Expr *const *items, uint32_t n);
 uint32_t linear_state_snapshot_bindings(const Scope *scope,
     Binding ***out_bindings,
     bool **out_states);

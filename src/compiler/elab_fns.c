@@ -12976,6 +12976,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     }
                 }
             }
+            elab_note_discarded_linear(e, items, n_body - 1);
             body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
             body->as.do_.items = items;
             body->as.do_.n = n_body;
@@ -15535,6 +15536,7 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
                     return NULL;
                 }
             }
+            elab_note_discarded_linear(e, items, n_body - 1);
             body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
             body->as.do_.items = items;
             body->as.do_.n = n_body;

@@ -842,6 +842,22 @@ Expr *elab_branch_with_scope_drop(Elab *e, Expr *branch, Binding *b, Span span) 
     return d;
 }
 
+bool elab_fresh_linear_unowned(Elab *e, const Expr *x) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || x->kind != EX_CALL || x->type.copy_kind != CK_LINEAR) return false;
+    return elab_fresh_sole_owner_drop_inst(e, &x->type, x) == NULL;
+}
+
+void elab_note_discarded_linear(Elab *e, Expr *const *items, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        if (!items[i] || !elab_fresh_linear_unowned(e, items[i])) continue;
+        diag_emit_with_code(DIAG_ERROR, items[i]->span, TUR_E0100_LINEAR_DROPPED,
+                            "linear value of type %s is discarded here without "
+                            "being consumed -- bind it and consume it",
+                            type_name(items[i]->type));
+    }
+}
+
 void arm_moves_begin(Elab *e, ArmMoves *am, uint32_t n_arms) {
     memset(am, 0, sizeof(*am));
     am->n_arms = n_arms;
@@ -2544,6 +2560,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                     if (!items[k]) { rc = -1; break; }
                 }
                 if (rc == 0) {
+                    elab_note_discarded_linear(e, items, body_count - 1);
                     body = expr_new(e->arena, EX_DO, items[body_count - 1]->type, call->span);
                     body->as.do_.items = items;
                     body->as.do_.n = body_count;
@@ -2706,6 +2723,11 @@ Expr *elab_let(Elab *e, const Form *call) {
                 else if (binding_closure_drop_inst(e, binds[k].binding, binds[k].init) &&
                          !binding_moved_during_init[k] &&
                          !binds[k].binding->is_moved &&
+                         /* A ^linear type with a Drop instance: its explicit
+                          * consumption is the release, as a move is for an
+                          * affine one.  Without this every consumed linear
+                          * handle was dropped again at scope exit. */
+                         !binds[k].binding->is_linear_consumed &&
                          !is_binding_consumed(body, binds[k].binding)) {
                     n_refs++;
                 }
@@ -2795,6 +2817,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                             binding_closure_drop_inst(e, binds[k].binding, binds[k].init);
                         if (di && !binding_moved_during_init[k] &&
                             !binds[k].binding->is_moved &&
+                            !binds[k].binding->is_linear_consumed &&
                             !is_binding_consumed(body, binds[k].binding)) {
                             new_items[defer_idx++] =
                                 elab_drop_glue_defer(e, binds[k].binding, di, call->span);
@@ -3366,6 +3389,7 @@ Expr *elab_do(Elab *e, const Form *call) {
         }
     }
     
+    elab_note_discarded_linear(e, items, n - 1);
     Expr *out = expr_new(e->arena, EX_DO, items[n - 1]->type, call->span);
     out->as.do_.items = items;
     out->as.do_.n = n;
@@ -5344,6 +5368,10 @@ Expr *elab_set(Elab *e, const Form *call) {
                           symtab_intern(e->st, strslice("any", 3)));
         value_form = form_list(e->arena, value_form->span, asc, 3);
     }
+    /* The target's ownership state before the value is elaborated: the value
+     * may consume the target itself, as `(set! acc (step acc))` does. */
+    bool lin_consumed_before = b->is_linear_consumed;
+    UsageState usage_before_set = b->usage_state;
     Expr *value = elab_form(e, value_form);
     if (!value) return NULL;
     /* let-bound-generic-call-result-in-generic-truncates: a `^mut` cell whose
@@ -5395,6 +5423,41 @@ Expr *elab_set(Elab *e, const Form *call) {
     /* Phase 11: Move tracking - if value is a CK_MOVE binding reference, poison it */
     if (value->kind == EX_VAR && type_is_move(value->as.var.binding->type)) {
         binding_mark_moved(value->as.var.binding, value->span);
+    }
+
+    /* linear-values-without-a-binding-are-not-checked (3): an assignment
+     * gives the cell a value nobody has consumed yet.  The checker used to
+     * keep the old value's "consumed" mark on it, so `(set! h (bump h))` left
+     * `h` unusable and a loop could not accumulate into an owned value.
+     *
+     * ^linear: the old value must be consumed by now -- before the `set!`,
+     * or by the value expression itself -- or it is being overwritten with
+     * no consumer, which is the TUR-E0100 a scope exit would report. */
+    if (b->is_linear && !b->is_global && b->type.kind != TY_REF) {
+        /* (A `ref<T>` is only INFERRED linear and is auto-dropped at scope
+         * exit, so it keeps its old rule: `(set! a b)` is a plain store.) */
+        if (!b->is_linear_consumed) {
+            diag_emit_with_code(DIAG_ERROR, target->span, TUR_E0100_LINEAR_DROPPED,
+                                "set!: linear value '%s' is overwritten without "
+                                "being consumed -- consume the old value first, or "
+                                "in the new value's own expression",
+                                b->name->name);
+            return NULL;
+        }
+        (void)lin_consumed_before;
+        b->is_linear_consumed = false;
+        b->is_moved = false;
+        b->usage_state = USAGE_UNUSED;
+    } else if (b->scope_drop_inst &&
+               elab_path_consumed(b, false, b->is_moved, usage_before_set,
+                                  b->usage_state) &&
+               init_yields_fresh_owner(value, NULL, 0, 0)) {
+        /* A Drop-owning local whose value expression handed the old value on
+         * and yields a fresh one: the cell owns that, and the scope exit
+         * drops it.  (An old value that was NOT handed on is still
+         * overwritten without a drop.) */
+        b->is_moved = false;
+        b->usage_state = USAGE_UNUSED;
     }
 
     Expr *out = expr_new(e->arena, EX_SET, TYPE_NIL, call->span);
@@ -5518,11 +5581,13 @@ static Expr *elab_while_inner(Elab *e, const Form *call) {
             if (!items[i]) body_ok = false;
         }
         if (body_ok) {
+            elab_note_discarded_linear(e, items, n);
             body = expr_new(e->arena, EX_DO, TYPE_NIL, call->span);
             body->as.do_.items = items;
             body->as.do_.n = n;
         }
     }
+    if (body_ok && n == 1) elab_note_discarded_linear(e, &body, 1);
     if (body_ok) {
         /* A body that always leaves the function runs at most once. */
         const Expr *tail = body;

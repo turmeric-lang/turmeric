@@ -53,6 +53,47 @@ defn copy-file [src dst : cstr] : unit
 annotation is present. You must explicitly `(drop! r)` or consume the ref --
 it will not be silently freed.
 
+**A linear call result written as a statement is `TUR-E0100`.** Nothing can
+consume a value that was never bound:
+
+```turmeric
+(let [fh (open-file src)]
+  (reopen fh)        ;; ERROR TUR-E0100: the FileHandle it returns is discarded
+  0)
+```
+
+```sweet-exp
+let [fh open-file(src)]
+  reopen(fh)         ;; ERROR TUR-E0100: the FileHandle it returns is discarded
+  0
+```
+
+**`set!` gives a `^mut` linear binding a fresh value.** The old value has to
+be consumed by then -- before the `set!`, or by the new value's own
+expression -- so a loop can thread a linear value through each iteration:
+
+```turmeric
+(let [^mut acc (start)]
+  (while (more?)
+    (set! acc (step acc)))   ; `step` consumes the old acc, acc holds the new one
+  (finish acc))
+```
+
+```sweet-exp
+let [^mut acc start()]
+  while more?()
+    set!(acc step(acc))      ; `step` consumes the old acc, acc holds the new one
+  finish(acc)
+```
+
+Overwriting a value nobody consumed -- `(set! acc (start))` on a live `acc` --
+is `TUR-E0100`.
+
+Two shapes are still not followed, and leak without a diagnostic: a fresh
+linear value passed straight to a `^borrow` parameter, and a linear value
+stored in a field of a struct that is not itself `^linear`. Bind the first;
+see [linear-values-without-a-binding-are-not-checked](../reported/linear-values-without-a-binding-are-not-checked.md).
+
 **A linear value may be bound at module level.** Linearity constrains how many
 times a value is *used*, not where it may live, so a top-level `def` holding
 one is fine:

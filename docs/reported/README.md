@@ -48,7 +48,7 @@ Four reports filed with this one were resolved the same day and are in
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [linear-values-without-a-binding-are-not-checked](linear-values-without-a-binding-are-not-checked.md) | medium (silent leaks; one double free) | The `^linear` check follows named bindings only: a temporary passed to a `^borrow` parameter, a discarded linear result and a linear struct field are dropped with no TUR-E0100. Also: `^linear` + `Drop` double-frees on every explicit consume, and `(set! h (f h))` on a `^mut` linear binding is TUR-E0101 |
+| [linear-values-without-a-binding-are-not-checked](linear-values-without-a-binding-are-not-checked.md) | medium (silent leaks) | A fresh `^linear` value passed straight to a `^borrow` parameter, or stored in a field of a non-linear struct, is dropped with no TUR-E0100. The borrowed-temporary check was tried and taken out: it cannot tell an allocation from a handle re-wrap, and turmeric-spices has three files of the latter. The discarded-result, `^linear` + `Drop` and `set!` findings filed with it are fixed |
 
 ## Found executing sepcomp-cross-module-effect-unhandled (filed 2026-11-24)
 
