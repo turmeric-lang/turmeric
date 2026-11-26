@@ -34,6 +34,22 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found building `spices/manifold` (filed 2026-11-26)
+
+Manifold is the first `:cmake-deps` library here that is C++ behind a C API
+with `:targets` declared, and the first spice to weigh `^linear` against
+`^affine` + `Drop` for a handle that expressions pass around as a temporary.
+Every row has an offline repro that was run on `main` at `d4ad1b0`; the
+ownership ones were run under `TUR_SANITIZE_PROGRAMS=1`.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [affine-drop-handle-consumed-in-one-branch-double-frees](affine-drop-handle-consumed-in-one-branch-double-frees.md) | high (double free from a program that compiled) | An `^affine` handle with a `Drop` instance that is consumed on one side of an `if` is dropped again at scope exit; consuming it on both sides is rejected with TUR-E0150. `^linear` rejects the first (TUR-E0104) and accepts the second |
+| [linear-values-without-a-binding-are-not-checked](linear-values-without-a-binding-are-not-checked.md) | medium (silent leaks; one double free) | The `^linear` check follows named bindings only: a temporary passed to a `^borrow` parameter, a discarded linear result and a linear struct field are dropped with no TUR-E0100. Also: `^linear` + `Drop` double-frees on every explicit consume, and `(set! h (f h))` on a `^mut` linear binding is TUR-E0101 |
+| [cmake-dep-cxx-runtime-not-linked](cmake-dep-cxx-runtime-not-linked.md) | medium (link failure for every static C++ dep) | tur links with `cc` and no target reports the C++ runtime, so a static C++ `:cmake-deps` library fails on undefined `operator new` / `__cxa_*`; `:link-flags ["-lstdc++"]` is wrong on macOS and there is no per-platform key |
+| [cmake-dep-genex-link-entry-dropped](cmake-dep-genex-link-entry-dropped.md) | medium (link failure, nothing printed) | `_tur_walk_iface` skips any `INTERFACE_LINK_LIBRARIES` entry that is still a generator expression, so a dependency linked as `$<$<BOOL:${OPT}>:dep>` never reaches the link line |
+| [cmake-dep-interface-target-fails-generate](cmake-dep-interface-target-fails-generate.md) | low-medium (hard configure failure) | An INTERFACE library in `:targets` dies in the generate step on an unguarded `$<TARGET_FILE_DIR:t>` in `link_dirs`; the artifact line beside it is already type-guarded |
+
 ## Found executing sepcomp-cross-module-effect-unhandled (filed 2026-11-24)
 
 | Report | Severity | One line |
