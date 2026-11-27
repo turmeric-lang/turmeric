@@ -40,7 +40,7 @@ directory is worse for triage than no index.
 left. These are those leftovers, each measured on `main` at `853f866`, plus
 what was found while measuring and fixing them.
 
-Four more were fixed the same day and are in `docs/archive/`:
+Five more were fixed the same day and are in `docs/archive/`:
 
 - `cps-pass-drops-return-drop-lists`, a regression #1486 introduced: one
   `perform` or `handle` anywhere in a program made every function's `return`
@@ -52,12 +52,11 @@ Four more were fixed the same day and are in `docs/archive/`:
   TUR-E0101 / TUR-E0104.
 - `return-in-match-arm-does-not-return`: a `return` in a `match` arm was
   compiled as the arm's value unless the match ended the function.
-
-The last of those left the `if-branch-...` row below.
+- `if-branch-with-inner-return-loses-its-value`: an `if` used for its value
+  never assigned it when a branch could return early and did not.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [if-branch-with-inner-return-loses-its-value](if-branch-with-inner-return-loses-its-value.md) | **high** (uninitialized read / invalid C) | `(if c (do (if d (return 1)) 5) 7)` used for its value yields garbage when `c` is true and `d` is false: `emit_if_value` emits a branch as a statement when it contains a `return` anywhere, not when it always leaves, so the result is never assigned. Both branches doing it is C that does not compile. The interpreter is right. Predates #1486. |
 | [owned-drop-parameter-is-never-dropped](owned-drop-parameter-is-never-dropped.md) | medium (silent leak) | A move-only Drop opaque passed by value is dropped by nobody unless the callee consumes it by hand: only `let` bindings get a scope-exit drop. The reason `spices/manifold` stays `^linear`. |
 | [caught-panic-skips-scope-exit-drops](caught-panic-skips-scope-exit-drops.md) | medium (leak per caught panic) | Under `catch-unwind`, explicit `defer`s run and compiler-injected drops (Drop opaques, `ref<T>`) do not: they are appended after the `let` body, so they are not registered while it runs. |
 | [cmake-dep-directory-scoped-imported-target-not-followed](cmake-dep-directory-scoped-imported-target-not-followed.md) | medium (link failure, no warning) | A library a dependency links through its own non-`GLOBAL` imported target is invisible to the link walk, which runs one directory up; the `Ns::name` goes into the manifest as a library name. #1486 covered only `find_package` targets on CMake 3.24+. |

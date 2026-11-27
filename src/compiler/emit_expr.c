@@ -5889,25 +5889,35 @@ static bool emit_match_arm_yields_value(const Expr *arm_body) {
 }
 
 static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
-    /* Phase 3/4: Check if branches contain return or throw */
-    bool then_has_return_or_throw = expr_contains_return_or_throw(e->as.if_.then_);
-    bool else_has_return_or_throw = e->as.if_.else_or_null ? 
-        expr_contains_return_or_throw(e->as.if_.else_or_null) : false;
-    bool any_has_return_or_throw = then_has_return_or_throw || else_has_return_or_throw;
+    /* Does each branch always leave (return / throw / panic)?  Such a branch
+     * yields nothing and is emitted as a statement.
+     *
+     * This used to ask expr_contains_return_or_throw -- "is there a `return`
+     * anywhere in it" -- so a branch that returns early on one path and
+     * yields a value on another, `(do (if d (return 1)) 5)`, was emitted as a
+     * statement too and its value never reached the merge temp: an
+     * uninitialized read, or no temp at all when both branches had the shape
+     * (docs/archive/if-branch-with-inner-return-loses-its-value.md).
+     * expr_is_divergent is the question emit_let_value and emit_do_value ask
+     * for the same decision. */
+    bool then_leaves = expr_is_divergent(e->as.if_.then_);
+    bool else_leaves = e->as.if_.else_or_null ?
+        expr_is_divergent(e->as.if_.else_or_null) : false;
+    bool any_leaves = then_leaves || else_leaves;
     
     char *tmp = NULL;
     bool nil_result = (e->type.kind == TY_NIL);
     /* Phase R1: Also create temp if only then-branch has return/throw and else doesn't */
-    bool else_no_return = e->as.if_.else_or_null ? !else_has_return_or_throw : false;
+    bool else_no_return = e->as.if_.else_or_null ? !else_leaves : false;
     /* panic-in-value-if-branch: mirror of the Phase R1 case -- only the
      * else-branch diverges (return/throw/panic) and the then-branch yields the
      * value, e.g. `(if cond value (panic ...))`.  Without this the temp is not
      * created, the value-producing then-branch is emitted as a discarded
      * statement, and the diverging else-branch is (wrongly) emitted as a value
      * assigned into the null temp -> `(null) = ((void)0);`. */
-    bool then_no_return = !then_has_return_or_throw;
-    bool only_then_diverges = then_has_return_or_throw && else_no_return;
-    bool only_else_diverges = else_has_return_or_throw && then_no_return;
+    bool then_no_return = !then_leaves;
+    bool only_then_diverges = then_leaves && else_no_return;
+    bool only_else_diverges = else_leaves && then_no_return;
     /* Phase 5 carrier-bridge deletion: if either arm is a by-value Option/Result
      * producer (a monomorphized ^construct spec), the merge temp must be that
      * by-value struct -- the if's own `e->type` is collapsed to the int64
@@ -5916,7 +5926,7 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * carrier-producing arm (carrier->concrete; a deref, never a dangling
      * stack spill). */
     Type if_bv = type_simple(TY_UNKNOWN, CK_COPY);
-    if (!nil_result && ( !any_has_return_or_throw || only_then_diverges || only_else_diverges)) {
+    if (!nil_result && ( !any_leaves || only_then_diverges || only_else_diverges)) {
         tmp = fresh_tmp(ctx);
         if_bv = fn_body_tail_byvalue_carrier_type(ctx, e);
         if (if_bv.kind != TY_UNKNOWN) {
@@ -5946,7 +5956,7 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * diverges (return/throw/panic) or the whole `if` is nil-typed.  When only
      * the *else*-branch diverges the then-branch still yields the merged value
      * and must be assigned into the temp -- see panic-in-value-if-branch. */
-    if (nil_result || then_has_return_or_throw) {
+    if (nil_result || then_leaves) {
         emit_stmt(ctx, body, e->as.if_.then_);
         emit_if_dead_branch_zero(body, ctx->indent, tmp, e->as.if_.then_);
     } else {
@@ -6011,7 +6021,7 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
          * If only the then-branch has return/throw, emit the else-branch as a value.
          * This allows the ? operator to work: (if (err? x) (return ...) (ok-val x))
          */
-        if (nil_result || else_has_return_or_throw) {
+        if (nil_result || else_leaves) {
             emit_stmt(ctx, body, e->as.if_.else_or_null);
             emit_if_dead_branch_zero(body, ctx->indent, tmp, e->as.if_.else_or_null);
         } else {
@@ -6131,37 +6141,6 @@ void emit_frame_push_defer(EmitCtx *ctx, Buf *body, const char *frame_var,
  *   - Early `return` is not yet a language feature
  *
  * Future: Proper thunk generation with captures (effects-plan.md §6.10). */
-/* A `return` in a `match` arm somewhere under `x`.  expr_contains_return_or_throw
- * does not look into a match, and the callers that read it for an `if` or a
- * `let` must not start to: they emit the form as a statement when it answers
- * yes, which is only right for a form that yields nothing. */
-static bool do_item_returns_from_match_arm(const Expr *x) {
-    if (!x) return false;
-    switch (x->kind) {
-        case EX_MATCH:
-            for (uint32_t i = 0; i < x->as.match_.n_arms; i++) {
-                const Expr *b = x->as.match_.arms[i].body;
-                if (expr_contains_return_or_throw(b) ||
-                    do_item_returns_from_match_arm(b))
-                    return true;
-            }
-            return false;
-        case EX_DO:
-            for (uint32_t i = 0; i < x->as.do_.n; i++)
-                if (do_item_returns_from_match_arm(x->as.do_.items[i])) return true;
-            return false;
-        case EX_LET:
-            return do_item_returns_from_match_arm(x->as.let_.body);
-        case EX_IF:
-            return do_item_returns_from_match_arm(x->as.if_.then_) ||
-                   do_item_returns_from_match_arm(x->as.if_.else_or_null);
-        case EX_WHILE:
-            return do_item_returns_from_match_arm(x->as.while_.body);
-        default:
-            return false;
-    }
-}
-
 static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     uint32_t n = e->as.do_.n;
     if (n == 0) return atom_nil();
@@ -6169,23 +6148,14 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if there's a return/throw or defer in this do block */
     bool has_return_or_throw = false;
     bool has_defers = false;
-    bool match_arm_returns = false;
     for (uint32_t i = 0; i < n; i++) {
         const Expr *it = e->as.do_.items[i];
         if (it->kind == EX_DEFER) {
             has_defers = true;
         } else if (expr_contains_return_or_throw(it)) {
             has_return_or_throw = true;
-        } else if (do_item_returns_from_match_arm(it)) {
-            match_arm_returns = true;
         }
     }
-    /* A `do` with defers and no `return` in it pushes the defers before it
-     * computes its last item.  A `return` in a match arm of that item then
-     * fired them -- including the scope-exit drop of a value the arm had just
-     * handed on, which the in-order path below keeps pending and skips
-     * (return_.moved).  Take that path. */
-    if (has_defers && match_arm_returns) has_return_or_throw = true;
     
     /* If there's a return/throw, we need frame support for defer firing */
     if (has_return_or_throw) {

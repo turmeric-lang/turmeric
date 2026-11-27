@@ -1,5 +1,8 @@
 # An `if` branch that can return early loses its value
 
+> **Status: fixed 2026-11-27.** `emit_if_value` asks whether a branch always
+> leaves, not whether it contains a `return`. See [Resolution](#resolution).
+
 **Severity:** high (an uninitialized read, or C that does not compile; in
 compiled code only).
 
@@ -8,7 +11,7 @@ path and yields a value on another, computes nothing on the yielding path:
 the branch is emitted as a statement and the `if`'s result is never assigned.
 
 Found 2026-11-27 while fixing
-[return-in-match-arm-does-not-return](../archive/return-in-match-arm-does-not-return.md).
+[return-in-match-arm-does-not-return](return-in-match-arm-does-not-return.md).
 The pre-#1486 `main` (`d4ad1b0`) behaves the same.
 
 ## Repro
@@ -97,3 +100,29 @@ failure. The question it needs is "does this branch always leave", which
   should be read for the same confusion. It does not look into a `match`,
   and must not start to before this is fixed.
 - Fixture: the repro, with all three calls, on both engines.
+
+## Resolution
+
+Fixed 2026-11-27, by the first direction.
+
+- `emit_if_value` reads `expr_is_divergent` for each branch: a branch is a
+  statement when the `if` is nil-typed or the branch always leaves, and goes
+  through `emit_value` otherwise. `expr_is_divergent` is what
+  `emit_let_value` and `emit_do_value` already asked for the same decision,
+  which is why the `let` form above was right. The result variable is
+  declared unless both branches always leave.
+- With that done, `expr_contains_return_or_throw` looks into a `match`'s
+  arms. It replaces the narrower test
+  [return-in-match-arm-does-not-return](return-in-match-arm-does-not-return.md)
+  had added to `emit_do_value` alone, so a `let` around a match with a
+  returning arm also takes its early-return path.
+- The other callers were read. `emit_let_value` (both copies) and
+  `emit_do_value` choose statement or value from `expr_is_divergent`; the two
+  in `emit_fns.c` and the one in `emit_stmt.c` only use a yes to turn an
+  optimisation off. None had the confusion.
+
+Fixture: `if-branch-with-inner-return` -- the two repros, the nested `if` and
+`when` forms, the same shape as a match arm, a match with a returning arm as
+an `if` branch, and the `if` in last position; compiled and interpreted agree.
+
+`bash tests/run.sh`: 4347 passed, 0 failed.

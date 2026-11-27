@@ -57,13 +57,14 @@ Two places, both in `src/compiler/emit_expr.c`.
 - `emit_match_arm_yields_value`: an arm that leaves (`expr_tail_diverges`) is
   emitted as a statement, as a `!`-typed arm already was. All five sites use
   it.
-- `emit_do_value` takes the in-order path when the `do` has defers and one of
-  its items returns from a match arm (`do_item_returns_from_match_arm`).
-  `expr_contains_return_or_throw` itself is unchanged: `emit_if_value` reads
-  it to decide a branch is a statement, and teaching it about `match` would
-  have spread the defect in
-  [if-branch-with-inner-return-loses-its-value](../reported/if-branch-with-inner-return-loses-its-value.md)
-  to matches.
+- `expr_contains_return_or_throw` looks into a match's arms, so
+  `emit_do_value` takes the in-order path for a `do` whose item returns from
+  one. This landed in two steps: first as a test local to `emit_do_value`,
+  because `emit_if_value` read the shared predicate to decide a branch is a
+  statement and would have lost a match's value; then in the predicate
+  itself, once
+  [if-branch-with-inner-return-loses-its-value](if-branch-with-inner-return-loses-its-value.md)
+  was fixed.
 
 Fixtures: `return-in-match-arm` (the table's first four rows, both engines)
 and the `leaving-arm*` functions of `linear-join-paths-agree` (the last row,
