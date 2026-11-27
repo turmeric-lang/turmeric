@@ -154,7 +154,11 @@ Not changed:
 - The second direction, releasing the ref on the path that skipped the
   branch, as #1486 does for a Drop opaque. It would make `(when c (sink r))`
   legal, and to be coherent the two-armed form would have to stop being
-  TUR-E0104 as well; that is a language decision, not a bug fix.
-- The other places two paths meet. A loop body, a `match` on literal
-  patterns and `and` / `or` do not reconcile linear consumption either:
-  [linear-consumption-not-reconciled-at-loops-and-literal-match](../reported/linear-consumption-not-reconciled-at-loops-and-literal-match.md).
+  TUR-E0104 as well. Decided against on 2026-11-27: rejecting is the rule,
+  and it can be relaxed to releasing later without breaking a program, which
+  the other order cannot.
+
+The other places two paths meet -- a loop body, a `match` on literal patterns
+and `and` / `or` -- had the same gap and were closed the same day, by the same
+rule:
+[linear-consumption-not-reconciled-at-loops-and-literal-match](linear-consumption-not-reconciled-at-loops-and-literal-match.md).

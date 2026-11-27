@@ -1,0 +1,19 @@
+;; A ^linear value consumed inside a loop body: once per iteration, or never.
+(defopaque ^linear H :int)
+(defn mk [] : H (:: 7 :H))
+(defn close [h : H] : int
+  ```c
+  (void)h; return 0;
+  ```)
+
+(defn f [n : int] : int
+  (let [h      (mk)
+        ^mut i 0]
+    (while (< i n)
+      (close h)
+      (set! i (+ i 1)))
+    1))
+
+(defn main [] : int
+  (println (f 2))
+  0)

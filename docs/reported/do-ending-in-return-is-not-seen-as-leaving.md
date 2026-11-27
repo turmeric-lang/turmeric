@@ -71,6 +71,10 @@ returned value's type, not `TY_NEVER`. The linear check next to it
   `elab_tail_leaves` (`src/compiler/elab_forms.c`, added 2026-11-27 for the
   linear check on an `if` with no else) is that helper without the
   `if` / `match` case; the move check and `ArmMoves` do not call it yet.
+- The same family: after a `while` whose body always leaves, a value the
+  body moved still reads as moved, so `(while c (return (sink r)))` followed
+  by `@r` is TUR-E0201. `elab_while` rewinds the linear state there and not
+  the move state.
 - `elab_branch_with_scope_drop` (`:818`) has to agree: an arm that is a `do`
   ending in `return` needs its owed drop attached to that inner `return`,
   not appended after the `do`.

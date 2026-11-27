@@ -5876,6 +5876,18 @@ void emit_panic_with_call(Buf *body, Span span, int type_tag, const char *payloa
     buf_printf(body, "\", %u);\n", span.line);
 }
 
+/* Does a match arm's body hand a value to the match's result temp?  Not when
+ * it is `!`-typed (a panic arm), and not when it leaves: `(return x)` is typed
+ * as `x`, so the type alone sent a returning arm through emit_value, which
+ * emits a `return` in value position as its value.  The arm then assigned
+ * `x` to the temp and carried on past the match -- the `return` never ran
+ * (docs/archive/return-in-match-arm-does-not-return.md); an arm that did
+ * something first, `(do (log) (return x))`, assigned `((void)0)` and did not
+ * compile.  Such an arm is a statement, as it is in an `if`. */
+static bool emit_match_arm_yields_value(const Expr *arm_body) {
+    return arm_body->type.kind != TY_NEVER && !expr_tail_diverges(arm_body);
+}
+
 static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if branches contain return or throw */
     bool then_has_return_or_throw = expr_contains_return_or_throw(e->as.if_.then_);
@@ -6119,6 +6131,37 @@ void emit_frame_push_defer(EmitCtx *ctx, Buf *body, const char *frame_var,
  *   - Early `return` is not yet a language feature
  *
  * Future: Proper thunk generation with captures (effects-plan.md §6.10). */
+/* A `return` in a `match` arm somewhere under `x`.  expr_contains_return_or_throw
+ * does not look into a match, and the callers that read it for an `if` or a
+ * `let` must not start to: they emit the form as a statement when it answers
+ * yes, which is only right for a form that yields nothing. */
+static bool do_item_returns_from_match_arm(const Expr *x) {
+    if (!x) return false;
+    switch (x->kind) {
+        case EX_MATCH:
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++) {
+                const Expr *b = x->as.match_.arms[i].body;
+                if (expr_contains_return_or_throw(b) ||
+                    do_item_returns_from_match_arm(b))
+                    return true;
+            }
+            return false;
+        case EX_DO:
+            for (uint32_t i = 0; i < x->as.do_.n; i++)
+                if (do_item_returns_from_match_arm(x->as.do_.items[i])) return true;
+            return false;
+        case EX_LET:
+            return do_item_returns_from_match_arm(x->as.let_.body);
+        case EX_IF:
+            return do_item_returns_from_match_arm(x->as.if_.then_) ||
+                   do_item_returns_from_match_arm(x->as.if_.else_or_null);
+        case EX_WHILE:
+            return do_item_returns_from_match_arm(x->as.while_.body);
+        default:
+            return false;
+    }
+}
+
 static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     uint32_t n = e->as.do_.n;
     if (n == 0) return atom_nil();
@@ -6126,14 +6169,23 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if there's a return/throw or defer in this do block */
     bool has_return_or_throw = false;
     bool has_defers = false;
+    bool match_arm_returns = false;
     for (uint32_t i = 0; i < n; i++) {
         const Expr *it = e->as.do_.items[i];
         if (it->kind == EX_DEFER) {
             has_defers = true;
         } else if (expr_contains_return_or_throw(it)) {
             has_return_or_throw = true;
+        } else if (do_item_returns_from_match_arm(it)) {
+            match_arm_returns = true;
         }
     }
+    /* A `do` with defers and no `return` in it pushes the defers before it
+     * computes its last item.  A `return` in a match arm of that item then
+     * fired them -- including the scope-exit drop of a value the arm had just
+     * handed on, which the in-order path below keeps pending and skips
+     * (return_.moved).  Take that path. */
+    if (has_defers && match_arm_returns) has_return_or_throw = true;
     
     /* If there's a return/throw, we need frame support for defer firing */
     if (has_return_or_throw) {
@@ -21688,7 +21740,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * same everywhere else. */
                         ctx->match_tail->emit_arm(ctx, body, arm->body,
                                                   ctx->match_tail->env);
-                    } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                    } else if (!nil_result && emit_match_arm_yields_value(arm->body)) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
@@ -21813,7 +21865,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * same everywhere else. */
                         ctx->match_tail->emit_arm(ctx, body, arm->body,
                                                   ctx->match_tail->env);
-                    } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                    } else if (!nil_result && emit_match_arm_yields_value(arm->body)) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
@@ -21983,7 +22035,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * same everywhere else. */
                             ctx->match_tail->emit_arm(ctx, body, arm->body,
                                                       ctx->match_tail->env);
-                        } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                        } else if (!nil_result && emit_match_arm_yields_value(arm->body)) {
                             char *bv = emit_value(ctx, body, arm->body);
                             bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                             indent_buf(body, ctx->indent);
@@ -22678,7 +22730,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * same everywhere else. */
                         ctx->match_tail->emit_arm(ctx, body, arm->body,
                                                   ctx->match_tail->env);
-                    } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                    } else if (!nil_result && emit_match_arm_yields_value(arm->body)) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
@@ -23160,7 +23212,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * same everywhere else. */
                         ctx->match_tail->emit_arm(ctx, body, arm->body,
                                                   ctx->match_tail->env);
-                    } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                    } else if (!nil_result && emit_match_arm_yields_value(arm->body)) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);

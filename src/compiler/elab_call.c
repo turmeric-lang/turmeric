@@ -7167,8 +7167,40 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
 
     Expr **args = (n_args == 0) ? NULL :
         (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
+    /* `and` / `or` run each operand after the first only when the ones
+     * before it did not settle the answer, so such an operand is a branch
+     * with no else: what it consumes is consumed on one path and not on the
+     * other.  It is held to the rule the no-else `if` has (TUR-E0104).  Read
+     * off the name's own row rather than `spec`, which is NULL when the first
+     * operand is a Saffron `any`. */
+    const BuiltinSpec *sc_row = builtin_first_with_name(name);
+    bool short_circuit = sc_row && (sc_row->shape == BS_AND_SC ||
+                                    sc_row->shape == BS_OR_SC);
     for (uint32_t i = 0; i < n_args; i++) {
+        Binding **sc_lin = NULL;
+        bool *sc_before = NULL;
+        uint32_t sc_n = 0;
+        if (short_circuit && i > 0)
+            sc_n = linear_state_snapshot_bindings(e->scope, &sc_lin, &sc_before);
         args[i] = (i == 0) ? arg0_peek : elab_form(e, call->as.list.items[1 + i]);
+        bool sc_ok = true;
+        for (uint32_t k = 0; args[i] && k < sc_n && !elab_tail_leaves(args[i]); k++) {
+            if (sc_before[k] || !sc_lin[k]->is_linear_consumed) continue;
+            diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                                TUR_E0104_LINEAR_BRANCH_MISMATCH,
+                                "linear value '%s' consumed in an operand of `%s` that "
+                                "runs only when the operands before it do not settle "
+                                "the answer -- consume it before the `%s`, or on both "
+                                "arms of an `if`",
+                                sc_lin[k]->name->name, name->name, name->name);
+            sc_ok = false;
+        }
+        /* An operand that leaves took what it consumed with it. */
+        if (args[i] && sc_n > 0 && sc_ok && elab_tail_leaves(args[i]))
+            linear_state_restore(sc_lin, sc_before, sc_n);
+        free(sc_lin);
+        free(sc_before);
+        if (!sc_ok) return NULL;
         if (!args[i]) return NULL;
         /* Phase 11: Move tracking - if arg is a CK_MOVE binding reference, poison it.
          * UT2 exception: ^unique ^mut bindings represent exclusive mutable access;

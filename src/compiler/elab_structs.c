@@ -4335,6 +4335,13 @@ Expr *elab_match(Elab *e, const Form *call) {
              * next, and as moved after the match on every path. */
             ArmMoves lm;
             arm_moves_begin(e, &lm, n_arms);
+            /* ...and linear consumption with it.  This path used to leave it
+             * running straight through the arms as if they were a sequence:
+             * a value every arm consumed was "used after being consumed" in
+             * the second, and one a single arm consumed read as consumed on
+             * every path. */
+            ArmLinear ll;
+            arm_linear_begin(e, &ll, n_arms);
             for (uint32_t ai = 0; ai < n_arms; ai++) {
                 uint32_t base     = arm_start[ai];
                 Form *pat_form    = call->as.list.items[base];
@@ -4369,7 +4376,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                     diag_emit(DIAG_ERROR, pat_form->span,
                               "match: pattern must be a literal value, _ wildcard, "
                               "or variable capture when matching a primitive type");
-                    arm_moves_free(&lm);
+                    arm_moves_free(&lm); arm_linear_free(&ll);
                     return NULL;
                 }
 
@@ -4386,6 +4393,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                 bool arm_ok = true;
                 bool _s_lit = e->in_match_arm; e->in_match_arm = true;
                 arm_moves_enter(&lm);
+                arm_linear_enter(&ll);
                 if (pat->is_var && pat->var_sym) {
                     Binding *vb = binding_new(e, pat->var_sym, scrutinee->type,
                                               false, false, pat_form->span);
@@ -4410,14 +4418,15 @@ Expr *elab_match(Elab *e, const Form *call) {
                     body = arm_ok ? elab_form(e, body_form) : NULL;
                 }
                 e->in_match_arm = _s_lit;
-                if (!arm_ok || !body) { arm_moves_free(&lm); return NULL; }
+                if (!arm_ok || !body) { arm_moves_free(&lm); arm_linear_free(&ll); return NULL; }
                 arm_moves_leave(&lm, ai, body);
+                arm_linear_leave(&ll, ai, body);
                 /* Parity with the ADT path: a when-guard must be a bool. */
                 if (guard && guard->type.kind != TY_BOOL) {
                     diag_emit(DIAG_ERROR, guard_raw->span,
                               "match: when-guard must have type bool, got %s",
                               typekind_to_string(guard->type.kind));
-                    arm_moves_free(&lm);
+                    arm_moves_free(&lm); arm_linear_free(&ll);
                     return NULL;
                 }
                 lit_arms[ai].guard = guard;
@@ -4478,14 +4487,20 @@ Expr *elab_match(Elab *e, const Form *call) {
                               "match: non-exhaustive patterns -- a match on literal values "
                               "needs a wildcard arm (`_ ...`) for every other value%s",
                               any_bool && !any_lit ? " (or both `true` and `false`)" : "");
-                    arm_moves_free(&lm);
+                    arm_moves_free(&lm); arm_linear_free(&ll);
                     return NULL;
                 }
             }
 
             arm_moves_merge(&lm);
+            if (!arm_linear_merge(&ll, call->span)) {
+                arm_moves_free(&lm);
+                arm_linear_free(&ll);
+                return NULL;
+            }
             arm_moves_apply(e, &lm, lit_arms, call->span);
             arm_moves_free(&lm);
+            arm_linear_free(&ll);
             Expr *out = expr_new(e->arena, EX_MATCH, lit_result, call->span);
             out->as.match_.scrutinee = scrutinee;
             out->as.match_.arms      = lit_arms;

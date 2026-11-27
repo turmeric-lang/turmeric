@@ -1996,6 +1996,28 @@ void arm_moves_merge(ArmMoves *am);
 void arm_moves_apply(Elab *e, ArmMoves *am, MatchArm *arms, Span span);
 void arm_moves_free(ArmMoves *am);
 
+/* The linear-consumption half of the same join, for a `match` whose arms the
+ * LT1 block in elab_match does not reach (the literal-pattern path): rewind
+ * is_linear_consumed before each arm, capture it after, and at the merge hold
+ * the arms that carry on to one answer (TUR-E0104).  arm_linear_merge returns
+ * false after reporting a disagreement.  arm_linear_free is safe to call more
+ * than once. */
+typedef struct ArmLinear {
+    Binding **b;
+    uint32_t  n, n_arms;
+    bool     *before;
+    bool    **arm;          /* [n_arms] rows of n; NULL = arm not reached */
+    bool     *arm_leaves;
+} ArmLinear;
+void arm_linear_begin(Elab *e, ArmLinear *al, uint32_t n_arms);
+void arm_linear_enter(ArmLinear *al);
+void arm_linear_leave(ArmLinear *al, uint32_t ai, const Expr *body);
+bool arm_linear_merge(ArmLinear *al, Span span);
+void arm_linear_free(ArmLinear *al);
+
+/* Does control never fall out of the end of `x`?  (elab_forms.c) */
+bool elab_tail_leaves(const Expr *x);
+
 /* linear-values-without-a-binding-are-not-checked (1): a fresh ^linear value
  * that never gets a name has no consumer the checker can hold to "exactly
  * once".  elab_fresh_linear_unowned answers whether `x` is one -- a call whose

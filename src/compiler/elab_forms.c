@@ -846,7 +846,7 @@ Expr *elab_branch_with_scope_drop(Elab *e, Expr *branch, Binding *b, Span span) 
  * `!`-typed expression leaves; so does a `do` or `let` body whose last item
  * leaves.  The scope-exit drops a `let` appends after its body are skipped:
  * they sit behind a last item that already left. */
-static bool elab_tail_leaves(const Expr *x) {
+bool elab_tail_leaves(const Expr *x) {
     while (x) {
         if (x->type.kind == TY_NEVER || x->kind == EX_RETURN ||
             x->kind == EX_PANIC || x->kind == EX_PANIC_WITH)
@@ -993,6 +993,69 @@ void arm_moves_free(ArmMoves *am) {
     free(am->drop_binding);
     free(am->drop_arm);
     memset(am, 0, sizeof(*am));
+}
+
+void arm_linear_begin(Elab *e, ArmLinear *al, uint32_t n_arms) {
+    memset(al, 0, sizeof(*al));
+    al->n_arms = n_arms;
+    al->n = linear_state_snapshot_bindings(e->scope, &al->b, &al->before);
+    uint32_t na = n_arms ? n_arms : 1;
+    al->arm = (bool **)calloc(na, sizeof(bool *));
+    al->arm_leaves = (bool *)calloc(na, sizeof(bool));
+    if (!al->arm || !al->arm_leaves) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+}
+
+void arm_linear_enter(ArmLinear *al) {
+    if (al->b) linear_state_restore(al->b, al->before, al->n);
+}
+
+void arm_linear_leave(ArmLinear *al, uint32_t ai, const Expr *body) {
+    if (!al->b || ai >= al->n_arms) return;
+    free(al->arm[ai]);
+    al->arm[ai] = linear_state_capture_current(al->b, al->n);
+    al->arm_leaves[ai] = elab_tail_leaves(body);
+    arm_linear_enter(al);
+}
+
+bool arm_linear_merge(ArmLinear *al, Span span) {
+    if (!al->b) return true;
+    /* The first arm that carries on is the reference; an arm that leaves
+     * never reaches the merge and does not vote. */
+    int ref = -1;
+    for (uint32_t ai = 0; ai < al->n_arms && ref < 0; ai++)
+        if (al->arm[ai] && !al->arm_leaves[ai]) ref = (int)ai;
+    bool ok = true;
+    for (uint32_t i = 0; i < al->n; i++) {
+        if (ref < 0 || al->before[i]) {
+            al->b[i]->is_linear_consumed = al->before[i];
+            continue;
+        }
+        bool want = al->arm[ref][i];
+        for (uint32_t ai = (uint32_t)ref + 1; ai < al->n_arms; ai++) {
+            if (!al->arm[ai] || al->arm_leaves[ai] || al->arm[ai][i] == want) continue;
+            diag_emit_with_code(DIAG_ERROR, span, TUR_E0104_LINEAR_BRANCH_MISMATCH,
+                                "linear value '%s' consumed in some match arms but "
+                                "not others -- consume it in all arms or none",
+                                al->b[i]->name->name);
+            ok = false;
+            break;
+        }
+        al->b[i]->is_linear_consumed = want;
+    }
+    return ok;
+}
+
+void arm_linear_free(ArmLinear *al) {
+    if (al->arm)
+        for (uint32_t ai = 0; ai < al->n_arms; ai++) free(al->arm[ai]);
+    free(al->arm);
+    free(al->arm_leaves);
+    free(al->before);
+    free(al->b);
+    memset(al, 0, sizeof(*al));
 }
 
 /* ---- special forms ---- */
@@ -5542,24 +5605,40 @@ static const char *while_loc_str(Elab *e, Span sp) {
     return arena_strdup(e->arena, buf, strlen(buf));
 }
 
-static Expr *elab_while_inner(Elab *e, const Form *call);
+typedef struct WhileLinear {
+    Binding **b;
+    bool     *before, *after_cond;
+    uint32_t  n;
+} WhileLinear;
+static Expr *elab_while_inner(Elab *e, const Form *call, WhileLinear *wl);
 
 /* borrow-checks-gaps: a `while`'s condition and body run again after each
  * other, which program order does not show (elab_borrow_check_write). */
 Expr *elab_while(Elab *e, const Form *call) {
+    /* The linear values in scope, and whether each was consumed before the
+     * loop and after its condition's first evaluation (elab_while_inner). */
+    WhileLinear wl;
+    memset(&wl, 0, sizeof(wl));
+    wl.n = linear_state_snapshot_bindings(e->scope, &wl.b, &wl.before);
+    wl.after_cond = linear_state_capture_current(wl.b, wl.n);
     elab_borrow_loop_push(e);
-    Expr *out = elab_while_inner(e, call);
+    Expr *out = elab_while_inner(e, call, &wl);
     elab_borrow_loop_pop(e);
+    free(wl.b);
+    free(wl.before);
+    free(wl.after_cond);
     return out;
 }
 
-static Expr *elab_while_inner(Elab *e, const Form *call) {
+static Expr *elab_while_inner(Elab *e, const Form *call, WhileLinear *wl) {
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span, "while requires a condition");
         return NULL;
     }
     Expr *cond = elab_form(e, call->as.list.items[1]);
     if (!cond) return NULL;
+    for (uint32_t i = 0; i < wl->n; i++)
+        wl->after_cond[i] = wl->b[i]->is_linear_consumed;
     /* saffron-dynamic-surface-pass (low): `while` is the THIRD bool slot a
      * Saffron `any` can reach, after the `if`/`when` condition and the
      * `#refine{...}` predicate.  It had no wrap, so `if/when/and/or` applied
@@ -5666,6 +5745,29 @@ static Expr *elab_while_inner(Elab *e, const Form *call) {
                 diag_emit(DIAG_NOTE, lb->moved_at, "moved here");
             body_ok = false;
         }
+        /* The same for linear consumption, which the move state above does
+         * not carry: a `ref<T>` or ^linear value the condition or the body
+         * consumes is consumed once per iteration and not at all by a loop
+         * that never runs -- a ref was freed on every pass
+         * (docs/archive/linear-consumption-not-reconciled-at-loops-and-literal-match.md).
+         * A body that leaves runs at most once, after exactly one evaluation
+         * of the condition, so what the condition consumed stands and what
+         * the body consumed belongs to the path that left. */
+        bool lin_leaves = leaves || elab_tail_leaves(body);
+        for (uint32_t i = 0; body_ok && !lin_leaves && i < wl->n; i++) {
+            if (wl->before[i] || !wl->b[i]->is_linear_consumed) continue;
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                                TUR_E0101_LINEAR_USE_AFTER_CONSUME,
+                                "linear value '%s' is consumed inside this loop, so a "
+                                "second iteration would consume it again and a loop "
+                                "that never runs would not consume it -- consume it "
+                                "before or after the loop",
+                                wl->b[i]->name->name);
+            body_ok = false;
+        }
+        if (body_ok)
+            for (uint32_t i = 0; i < wl->n; i++)
+                wl->b[i]->is_linear_consumed = wl->after_cond[i];
     }
     free(loop_bindings);
     free(loop_moved_before);

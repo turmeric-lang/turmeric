@@ -217,7 +217,10 @@ every path that carries on, or the compiler reports TUR-E0104. An `if` with no
 else, and `when`, count the path that skips the branch, so
 `(when c (sink r))` is refused: one path would have given the cell away and
 the other would still free it. A branch that `return`s is exempt, because it
-meets no other path.
+meets no other path. The same holds wherever paths meet: the arms of a
+`match` must agree, the second operand of `and` / `or` may not hand a cell on
+(it may not run), and neither may a loop body (it may run twice, or never --
+TUR-E0101).
 
 ```turmeric
 (defn main [] : int

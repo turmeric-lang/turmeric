@@ -1,5 +1,8 @@
 # Linear consumption is not reconciled at a loop body, a literal `match`, or `and` / `or`
 
+> **Status: fixed 2026-11-27.** All three are rejected where the paths
+> disagree, the rule `if` has. See [Resolution](#resolution).
+
 **Severity:** high (a double free in a program the compiler accepts; the
 other shapes leak, skip a must-consume, or refuse valid code).
 
@@ -10,7 +13,7 @@ consumption at all, so a `ref<T>` or a `^linear` value consumed on one path is
 read as consumed -- or not -- on all of them.
 
 Found 2026-11-27 while fixing
-[ref-moved-in-if-without-else-double-frees](../archive/ref-moved-in-if-without-else-double-frees.md),
+[ref-moved-in-if-without-else-double-frees](ref-moved-in-if-without-else-double-frees.md),
 which closed the `if` with no else. Every shape below behaves the same on the
 pre-#1486 `main` (`d4ad1b0`).
 
@@ -134,3 +137,44 @@ same with `(f true)`.
   the no-else `if` now has.
 - Fixtures: the double free and the leaks need `requires.leak-check`; the
   plain suite compares printed output only.
+
+## Resolution
+
+Fixed 2026-11-27, each by rejecting the disagreement -- the route chosen for
+the `if` with no else, over releasing the value on the path that kept it.
+
+- **Loop** (`elab_while`, `src/compiler/elab_forms.c`). A linear value the
+  condition or the body consumes is TUR-E0101: "consumed inside this loop, so
+  a second iteration would consume it again and a loop that never runs would
+  not consume it". A body that always leaves is exempt, and what it consumed
+  belongs to the path that left.
+- **Literal `match`** (`elab_match`, `src/compiler/elab_structs.c`). The
+  literal path now rewinds linear state before each arm and merges after
+  (`ArmLinear`, beside `ArmMoves`). Arms that carry on must agree
+  (TUR-E0104, the constructor path's message); an arm that leaves does not
+  vote. Every arm consuming compiles, where it was TUR-E0101.
+- **`and` / `or`** (`elab_call_inner`, `src/compiler/elab_call.c`). An
+  operand after the first is a branch with no else: a linear value it
+  consumes is TUR-E0104, unless the operand leaves.
+
+Fixtures: `errors/ref-consumed-in-loop`, `errors/linear-consumed-in-loop`,
+`errors/linear-literal-match-arm-mismatch`,
+`errors/ref-consumed-in-and-operand`, `errors/ref-consumed-in-or-operand`;
+and `linear-join-paths-agree` for the shapes that are sound, under
+`requires.leak-check`.
+
+Writing that last fixture turned up an emitter defect the exemption for a
+leaving arm depends on: a `return` in a `match` arm did not return. It is
+fixed in the same change --
+[return-in-match-arm-does-not-return](return-in-match-arm-does-not-return.md).
+
+Not changed:
+
+- The constructor path of `elab_match` keeps its own copy of the agreement
+  check; it was not moved onto `ArmLinear`. Its "does this arm leave" test is
+  still the top node only
+  ([do-ending-in-return-is-not-seen-as-leaving](../reported/do-ending-in-return-is-not-seen-as-leaving.md)).
+- After a `while` whose body always leaves, a value the body moved still
+  reads as moved (`(while c (return (sink r)))` then `@r` is TUR-E0201). The
+  linear state is rewound there; the move state is not. A false rejection,
+  the same family as the report above.
