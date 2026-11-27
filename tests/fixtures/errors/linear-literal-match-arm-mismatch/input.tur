@@ -1,0 +1,20 @@
+;; A match on literal patterns is held to the rule a match on constructors
+;; has: the arms that carry on agree on what they consumed.  This was
+;; accepted, and the wildcard arm's path never consumed `h`.
+(defopaque ^linear H :int)
+(defn mk [] : H (:: 7 :H))
+(defn close [h : H] : int
+  ```c
+  (void)h; return 0;
+  ```)
+
+(defn f [c : int] : int
+  (let [h (mk)]
+    (match c
+      0 (close h)
+      _ 0)
+    1))
+
+(defn main [] : int
+  (println (f 1))
+  0)

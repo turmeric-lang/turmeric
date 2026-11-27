@@ -1,0 +1,104 @@
+;; Linear consumption where paths meet, in the shapes that are sound: every
+;; path that carries on agrees, and a path that leaves takes what it consumed
+;; with it.  Each cell is freed exactly once (requires.leak-check).
+;;
+;; The shapes where the paths disagree are TUR-E0104 / TUR-E0101:
+;; errors/linear-literal-match-arm-mismatch, errors/ref-consumed-in-loop,
+;; errors/linear-consumed-in-loop, errors/ref-consumed-in-and-operand,
+;; errors/ref-consumed-in-or-operand.
+(defn sink [r : ref<int>] : int
+  (let [v @r]
+    (drop! r)
+    v))
+
+(defopaque ^linear H :int)
+(defn mk [] : H (:: 7 :H))
+(defn close [h : H] : int
+  (println "close")
+  (- (:: h :int) 7))
+
+;; A match on literal patterns whose arms all consume.  The second arm used to
+;; be refused: "linear value 'h' used after being consumed".
+(defn all-arms [c : int] : int
+  (let [h (mk)]
+    (match c
+      0 (close h)
+      _ (+ 1 (close h)))))
+
+(defn all-arms-ref [c : int] : int
+  (let [r (ref 30)]
+    (match c
+      0 (sink r)
+      1 (+ 1 (sink r))
+      _ (+ 2 (sink r)))))
+
+;; One arm consumes and returns; the others read and carry on.  The match is
+;; mid-body, then the let's last expression, then over constructors.
+(defn leaving-arm [c : int] : int
+  (let [r (ref 50)]
+    (match c
+      0 (return (sink r))
+      _ @r)
+    (+ @r 1)))
+
+(defn leaving-arm-last [c : int] : int
+  (let [r (ref 70)]
+    (match c
+      0 (return (sink r))
+      _ (+ @r 1))))
+
+(defdata Tag (TA) (TB))
+
+(defn leaving-arm-adt [t : Tag] : int
+  (let [r (ref 80)]
+    (match t
+      (TA) (return (sink r))
+      (TB) (+ @r 1))))
+
+;; A loop body that reads, and one that consumes on the pass that returns.
+(defn loop-reads [n : int] : int
+  (let [r        (ref 2)
+        ^mut i   0
+        ^mut acc 0]
+    (while (< i n)
+      (set! acc (+ acc @r))
+      (set! i (+ i 1)))
+    acc))
+
+(defn loop-leaves [n : int] : int
+  (let [r      (ref 60)
+        ^mut i 0]
+    (while (< i n)
+      (if (= i 1) (return (sink r)))
+      (set! i (+ i 1)))
+    (+ @r 1)))
+
+;; `and` / `or` operands that read.
+(defn reads-and [c : bool] : int
+  (let [r (ref 41)]
+    (if (and c (= 41 @r)) 1 0)))
+
+(defn reads-or [c : bool] : int
+  (let [r (ref 41)]
+    (if (or c (= 40 @r)) 1 0)))
+
+(defn main [] : int
+  (println (all-arms 0))
+  (println (all-arms 5))
+  (println (all-arms-ref 0))
+  (println (all-arms-ref 1))
+  (println (all-arms-ref 9))
+  (println (leaving-arm 0))
+  (println (leaving-arm 1))
+  (println (leaving-arm-last 0))
+  (println (leaving-arm-last 1))
+  (println (leaving-arm-adt (TA)))
+  (println (leaving-arm-adt (TB)))
+  (println (loop-reads 3))
+  (println (loop-leaves 3))
+  (println (loop-leaves 1))
+  (println (reads-and true))
+  (println (reads-and false))
+  (println (reads-or true))
+  (println (reads-or false))
+  0)

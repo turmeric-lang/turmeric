@@ -1,0 +1,1 @@
+under --interpret an early return skips an injected scope-exit drop: docs/reported/turi-early-return-skips-injected-drops.md

@@ -201,6 +201,16 @@ struct Binding {
      * elaborated; an `if` / `match` inside that body needs the answer at its
      * join, to release the value on the paths that did not hand it on. */
     struct TypeClassInstance *scope_drop_inst;
+    /* owned-drop-parameter-is-never-dropped: a by-value parameter of an
+     * ^affine move-only Drop opaque, in a Turmeric-bodied `defn`.  The caller
+     * gave the value up when it passed it, so the function owns its release
+     * (scope_drop_inst is set as for a let local).  A parameter is not an
+     * ^affine BINDING -- a second use is not TUR-E0150 -- so this flag is
+     * what makes the elaborator count its uses, quietly, for the one question
+     * the drop needs answered: did this path hand it on?  usage_state goes
+     * UNUSED -> USED_ONCE on a use, back to UNUSED when that use turns out to
+     * be a ^borrow argument, and to USED_MANY on any further use. */
+    bool          owned_drop_param;
     /* local-struct-drop (fn-field): set by the elaborator's byvalue-struct-field
      * drop pass when this let-bound by-value struct local (a) passes the same
      * moved/consumed/escape guards that admit an rc/ref field auto-drop and (b)

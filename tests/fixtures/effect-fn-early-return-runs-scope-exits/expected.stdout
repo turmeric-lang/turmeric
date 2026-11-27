@@ -1,0 +1,53 @@
+e8 true
+  deferred
+0
+e8 false
+  deferred
+101
+nested 0
+  inner defer
+  outer defer
+101
+nested 1
+  inner end
+  inner defer
+  outer defer
+30
+nested 2
+  inner end
+  inner defer
+  outer defer
+102
+late 0
+1
+late 1
+  late defer
+2
+late 2
+  late defer
+103
+in-block 0
+  block defer
+1
+in-block 1
+  block defer
+  fn defer
+101
+in-block 2
+  block defer
+  fn defer
+201
+e9 0
+0
+e9 1
+41
+e9 2
+141
+e5 true
+  mk
+  rel
+0
+e5 false
+  mk
+  rel
+100

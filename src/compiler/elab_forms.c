@@ -606,11 +606,18 @@ static bool init_yields_fresh_owner(const Expr *init, const LetBinding *locals,
 struct TypeClassInstance *elab_fresh_sole_owner_drop_inst(Elab *e, const Type *t,
                                                           const Expr *init) {
     if (!t || !init) return NULL;
+    /* fresh-producing initializer: a call, or a block yielding a fresh local */
+    if (!init_yields_fresh_owner(init, NULL, 0, 0)) return NULL;
+    return elab_sole_owner_drop_inst(e, t);
+}
+
+/* The type half of the above: the Drop instance of `t` when it is a
+ * move-only (Drop, no Clone) opaque, else NULL. */
+struct TypeClassInstance *elab_sole_owner_drop_inst(Elab *e, const Type *t) {
+    if (!t) return NULL;
     /* opaque ADT newtype only */
     if (t->kind != TY_ADT || !t->as.adt_.def || !t->as.adt_.def->is_opaque)
         return NULL;
-    /* fresh-producing initializer: a call, or a block yielding a fresh local */
-    if (!init_yields_fresh_owner(init, NULL, 0, 0)) return NULL;
     /* Drop instance present, Clone instance absent (move-only sole owner) */
     const Symbol *drop_name  = intern_cstr(e->st, "Drop");
     const Symbol *clone_name = intern_cstr(e->st, "Clone");
@@ -807,6 +814,33 @@ Expr *elab_drop_glue_defer(Elab *e, Binding *b, struct TypeClassInstance *di,
     return defer_expr;
 }
 
+/* defer-reads-local-after-its-scope-exit-drop: the body a `let` appends its
+ * scope-exit drops to.
+ *
+ * A `do` fires its defers last-registered-first, and the drops are appended
+ * after the body, so in one `do` they ran BEFORE every `(defer ...)` the body
+ * declared -- a defer that read the local read a freed cell.  The bindings
+ * are older than anything in the body; their release is the last thing the
+ * scope does.  So when the body declares a defer of its own it becomes the
+ * single item of an outer `do`, and the drops go on that one: the inner
+ * block's defers fire as it ends, on every kind of exit, and the drops after
+ * them.  A body with no defer of its own is returned as it is. */
+Expr *elab_body_under_scope_drops(Elab *e, Expr *body, Span span) {
+    if (!body || body->kind != EX_DO) return body;
+    bool own_defer = false;
+    for (uint32_t i = 0; i < body->as.do_.n && !own_defer; i++) {
+        const Expr *it = body->as.do_.items[i];
+        own_defer = it && it->kind == EX_DEFER && !it->as.defer_.is_drop_glue;
+    }
+    if (!own_defer) return body;
+    Expr **items = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+    items[0] = body;
+    Expr *outer = expr_new(e->arena, EX_DO, body->type, span);
+    outer->as.do_.items = items;
+    outer->as.do_.n = 1;
+    return outer;
+}
+
 /* affine-drop-handle-consumed-in-one-branch-double-frees: `branch` is an arm
  * of an `if` / `match` that did not hand the Drop-owning local `b` on, while
  * a sibling arm did.  After the join nothing can tell the two paths apart, so
@@ -840,6 +874,28 @@ Expr *elab_branch_with_scope_drop(Elab *e, Expr *branch, Binding *b, Span span) 
     d->as.do_.items = items;
     d->as.do_.n = 2;
     return d;
+}
+
+/* Does control never fall out of the end of `x`?  A `return`, a panic or a
+ * `!`-typed expression leaves; so does a `do` or `let` body whose last item
+ * leaves.  The scope-exit drops a `let` appends after its body are skipped:
+ * they sit behind a last item that already left. */
+bool elab_tail_leaves(const Expr *x) {
+    while (x) {
+        if (x->type.kind == TY_NEVER || x->kind == EX_RETURN ||
+            x->kind == EX_PANIC || x->kind == EX_PANIC_WITH)
+            return true;
+        if (x->kind == EX_LET) { x = x->as.let_.body; continue; }
+        if (x->kind != EX_DO) return false;
+        uint32_t n = x->as.do_.n;
+        while (n > 0 && x->as.do_.items[n - 1] &&
+               x->as.do_.items[n - 1]->kind == EX_DEFER &&
+               x->as.do_.items[n - 1]->as.defer_.is_drop_glue)
+            n--;
+        if (n == 0) return false;
+        x = x->as.do_.items[n - 1];
+    }
+    return false;
 }
 
 bool elab_fresh_linear_unowned(Elab *e, const Expr *x) {
@@ -971,6 +1027,69 @@ void arm_moves_free(ArmMoves *am) {
     free(am->drop_binding);
     free(am->drop_arm);
     memset(am, 0, sizeof(*am));
+}
+
+void arm_linear_begin(Elab *e, ArmLinear *al, uint32_t n_arms) {
+    memset(al, 0, sizeof(*al));
+    al->n_arms = n_arms;
+    al->n = linear_state_snapshot_bindings(e->scope, &al->b, &al->before);
+    uint32_t na = n_arms ? n_arms : 1;
+    al->arm = (bool **)calloc(na, sizeof(bool *));
+    al->arm_leaves = (bool *)calloc(na, sizeof(bool));
+    if (!al->arm || !al->arm_leaves) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+}
+
+void arm_linear_enter(ArmLinear *al) {
+    if (al->b) linear_state_restore(al->b, al->before, al->n);
+}
+
+void arm_linear_leave(ArmLinear *al, uint32_t ai, const Expr *body) {
+    if (!al->b || ai >= al->n_arms) return;
+    free(al->arm[ai]);
+    al->arm[ai] = linear_state_capture_current(al->b, al->n);
+    al->arm_leaves[ai] = elab_tail_leaves(body);
+    arm_linear_enter(al);
+}
+
+bool arm_linear_merge(ArmLinear *al, Span span) {
+    if (!al->b) return true;
+    /* The first arm that carries on is the reference; an arm that leaves
+     * never reaches the merge and does not vote. */
+    int ref = -1;
+    for (uint32_t ai = 0; ai < al->n_arms && ref < 0; ai++)
+        if (al->arm[ai] && !al->arm_leaves[ai]) ref = (int)ai;
+    bool ok = true;
+    for (uint32_t i = 0; i < al->n; i++) {
+        if (ref < 0 || al->before[i]) {
+            al->b[i]->is_linear_consumed = al->before[i];
+            continue;
+        }
+        bool want = al->arm[ref][i];
+        for (uint32_t ai = (uint32_t)ref + 1; ai < al->n_arms; ai++) {
+            if (!al->arm[ai] || al->arm_leaves[ai] || al->arm[ai][i] == want) continue;
+            diag_emit_with_code(DIAG_ERROR, span, TUR_E0104_LINEAR_BRANCH_MISMATCH,
+                                "linear value '%s' consumed in some match arms but "
+                                "not others -- consume it in all arms or none",
+                                al->b[i]->name->name);
+            ok = false;
+            break;
+        }
+        al->b[i]->is_linear_consumed = want;
+    }
+    return ok;
+}
+
+void arm_linear_free(ArmLinear *al) {
+    if (al->arm)
+        for (uint32_t ai = 0; ai < al->n_arms; ai++) free(al->arm[ai]);
+    free(al->arm);
+    free(al->arm_leaves);
+    free(al->before);
+    free(al->b);
+    memset(al, 0, sizeof(*al));
 }
 
 /* ---- special forms ---- */
@@ -2467,7 +2586,8 @@ Expr *elab_let(Elab *e, const Form *call) {
             } else {
                 /* No room to check it: spend the arguments after all. */
                 for (uint32_t q = 0; q < pending_pap_n; q++) {
-                    if (pending_pap[q]->is_affine) pending_pap[q]->usage_state = USAGE_USED_ONCE;
+                    if (pending_pap[q]->is_affine || pending_pap[q]->owned_drop_param)
+                        pending_pap[q]->usage_state = USAGE_USED_ONCE;
                     if (pending_pap[q]->is_linear) pending_pap[q]->is_linear_consumed = true;
                 }
             }
@@ -2738,6 +2858,7 @@ Expr *elab_let(Elab *e, const Form *call) {
             
             if (n_refs > 0) {
                 /* Create new items array with space for defers */
+                body = elab_body_under_scope_drops(e, body, call->span);
                 uint32_t new_n = body->as.do_.n + n_refs;
                 Expr **new_items = (Expr **)arena_alloc(e->arena, new_n * sizeof(Expr *));
                 
@@ -2937,6 +3058,7 @@ Expr *elab_let(Elab *e, const Form *call) {
 
         if (n_rc_drops > 0) {
             /* Create new items array with space for rc drop defers */
+            body = elab_body_under_scope_drops(e, body, call->span);
             uint32_t new_n = body->as.do_.n + n_rc_drops;
             Expr **new_items = (Expr **)arena_alloc(e->arena, new_n * sizeof(Expr *));
 
@@ -3195,6 +3317,7 @@ Expr *elab_let(Elab *e, const Form *call) {
         }
 
         if (n_field_drops > 0) {
+            body = elab_body_under_scope_drops(e, body, call->span);
             uint32_t new_n = body->as.do_.n + n_field_drops;
             Expr **new_items =
                 (Expr **)arena_alloc(e->arena, new_n * sizeof(Expr *));
@@ -4869,10 +4992,44 @@ Expr *elab_if(Elab *e, const Form *call) {
                 mb->is_moved = true;
             }
         }
-        /* LT1: Without else, then-branch linear consumption is not guaranteed;
-         * restore to the pre-if state so scope-exit checking fires if needed. */
+        /* LT1: the missing else is a path that consumes nothing, so a
+         * then-branch that carries on must consume nothing either -- the same
+         * agreement the two-armed form is held to.  Restoring the pre-if
+         * state alone answered "is it certainly consumed" and left "who
+         * releases it" open: a `ref<T>` the branch handed on was still
+         * dropped at scope exit (a double free), and a ^linear value could
+         * be consumed again after the `if`
+         * (docs/archive/ref-moved-in-if-without-else-double-frees.md).  A
+         * then-branch that leaves does not reach the join, so it may consume
+         * what it likes -- including one that does something first and then
+         * returns, which `then_diverges` (the top node only) does not see. */
         if (n_lin > 0) {
+            bool lin_ok = true;
+            bool then_leaves = then_diverges || elab_tail_leaves(then_);
+            for (uint32_t i = 0; !then_leaves && i < n_lin; i++) {
+                if (lin_before[i] || !lin_then[i]) continue;
+                diag_emit_with_code(DIAG_ERROR, call->span,
+                                    TUR_E0104_LINEAR_BRANCH_MISMATCH,
+                                    "linear value '%s' consumed in an `if` / `when` with"
+                                    " no else branch -- consume it in an else branch"
+                                    " too, or in neither",
+                                    lin_bindings[i]->name->name);
+                lin_ok = false;
+            }
             linear_state_restore(lin_bindings, lin_before, n_lin);
+            if (!lin_ok) {
+                free(drop_in_then);
+                free(drop_in_else);
+                free(usage_then);
+                free(usage_before);
+                free(then_states);
+                free(move_bindings);
+                free(before_states);
+                free(lin_then);
+                free(lin_bindings);
+                free(lin_before);
+                return NULL;
+            }
         }
     }
 
@@ -5486,24 +5643,40 @@ static const char *while_loc_str(Elab *e, Span sp) {
     return arena_strdup(e->arena, buf, strlen(buf));
 }
 
-static Expr *elab_while_inner(Elab *e, const Form *call);
+typedef struct WhileLinear {
+    Binding **b;
+    bool     *before, *after_cond;
+    uint32_t  n;
+} WhileLinear;
+static Expr *elab_while_inner(Elab *e, const Form *call, WhileLinear *wl);
 
 /* borrow-checks-gaps: a `while`'s condition and body run again after each
  * other, which program order does not show (elab_borrow_check_write). */
 Expr *elab_while(Elab *e, const Form *call) {
+    /* The linear values in scope, and whether each was consumed before the
+     * loop and after its condition's first evaluation (elab_while_inner). */
+    WhileLinear wl;
+    memset(&wl, 0, sizeof(wl));
+    wl.n = linear_state_snapshot_bindings(e->scope, &wl.b, &wl.before);
+    wl.after_cond = linear_state_capture_current(wl.b, wl.n);
     elab_borrow_loop_push(e);
-    Expr *out = elab_while_inner(e, call);
+    Expr *out = elab_while_inner(e, call, &wl);
     elab_borrow_loop_pop(e);
+    free(wl.b);
+    free(wl.before);
+    free(wl.after_cond);
     return out;
 }
 
-static Expr *elab_while_inner(Elab *e, const Form *call) {
+static Expr *elab_while_inner(Elab *e, const Form *call, WhileLinear *wl) {
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span, "while requires a condition");
         return NULL;
     }
     Expr *cond = elab_form(e, call->as.list.items[1]);
     if (!cond) return NULL;
+    for (uint32_t i = 0; i < wl->n; i++)
+        wl->after_cond[i] = wl->b[i]->is_linear_consumed;
     /* saffron-dynamic-surface-pass (low): `while` is the THIRD bool slot a
      * Saffron `any` can reach, after the `if`/`when` condition and the
      * `#refine{...}` predicate.  It had no wrap, so `if/when/and/or` applied
@@ -5610,6 +5783,29 @@ static Expr *elab_while_inner(Elab *e, const Form *call) {
                 diag_emit(DIAG_NOTE, lb->moved_at, "moved here");
             body_ok = false;
         }
+        /* The same for linear consumption, which the move state above does
+         * not carry: a `ref<T>` or ^linear value the condition or the body
+         * consumes is consumed once per iteration and not at all by a loop
+         * that never runs -- a ref was freed on every pass
+         * (docs/archive/linear-consumption-not-reconciled-at-loops-and-literal-match.md).
+         * A body that leaves runs at most once, after exactly one evaluation
+         * of the condition, so what the condition consumed stands and what
+         * the body consumed belongs to the path that left. */
+        bool lin_leaves = leaves || elab_tail_leaves(body);
+        for (uint32_t i = 0; body_ok && !lin_leaves && i < wl->n; i++) {
+            if (wl->before[i] || !wl->b[i]->is_linear_consumed) continue;
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                                TUR_E0101_LINEAR_USE_AFTER_CONSUME,
+                                "linear value '%s' is consumed inside this loop, so a "
+                                "second iteration would consume it again and a loop "
+                                "that never runs would not consume it -- consume it "
+                                "before or after the loop",
+                                wl->b[i]->name->name);
+            body_ok = false;
+        }
+        if (body_ok)
+            for (uint32_t i = 0; i < wl->n; i++)
+                wl->b[i]->is_linear_consumed = wl->after_cond[i];
     }
     free(loop_bindings);
     free(loop_moved_before);
@@ -5933,16 +6129,27 @@ Expr *elab_return(Elab *e, const Form *call) {
     out->as.return_.moved = NULL;
     out->as.return_.n_moved = 0;
     /* Which Drop-owning locals this path has already handed on -- see
-     * return_.moved.  Two passes: count, then fill. */
+     * return_.moved.  Two passes: count, then fill.
+     *
+     * A `ref<T>` local is on the list under the two flags its let reads to
+     * decide the scope-exit `drop!` (elab_let: is_moved, is_linear_consumed).
+     * The let decides once, after the whole body, so a ref handed on only on
+     * the path that returns here still has its drop pending at this `return`
+     * -- which then freed it a second time
+     * (docs/archive/ref-moved-in-if-without-else-double-frees.md). */
     for (int pass = 0; pass < 2; pass++) {
         uint32_t n = 0;
         for (const Scope *cur = e->scope; cur && cur != &e->global; cur = cur->parent) {
             for (uint32_t i = 0; i < cur->n; i++) {
                 Binding *b = cur->bindings[i];
-                if (!b->scope_drop_inst) continue;
-                if (!elab_path_consumed(b, false, b->is_moved, USAGE_UNUSED,
-                                        b->usage_state))
-                    continue;
+                bool gone;
+                if (b->scope_drop_inst)
+                    gone = elab_path_consumed(b, false, b->is_moved, USAGE_UNUSED,
+                                              b->usage_state);
+                else
+                    gone = b->type.kind == TY_REF &&
+                           (b->is_moved || b->is_linear_consumed);
+                if (!gone) continue;
                 if (pass == 1) out->as.return_.moved[n] = b;
                 n++;
             }

@@ -1,0 +1,11 @@
+;; A ref<T> handed on in an `if` with no else: the missing else is a path that
+;; still owns it, so the two paths disagree about who frees it.  This was
+;; accepted, and freed the ref twice whenever the branch ran.
+(defn f [c : bool] : int
+  (let [r (ref 41)]
+    (if c (let [tmp r] 0))
+    1))
+
+(defn main [] : int
+  (println (f true))
+  0)

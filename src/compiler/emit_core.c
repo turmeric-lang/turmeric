@@ -688,6 +688,18 @@ bool expr_contains_return_or_throw(const Expr *e) {
         case EX_WHILE:
             /* Check body */
             return expr_contains_return_or_throw(e->as.while_.body);
+        case EX_MATCH:
+            /* An arm is a branch like an `if`'s.  This case was missing, so a
+             * `do` or `let` around a match with a returning arm was emitted
+             * as if nothing in it could leave: its defers were pushed before
+             * the match ran and the arm's `return` fired them
+             * (docs/archive/return-in-match-arm-does-not-return.md). */
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (expr_contains_return_or_throw(e->as.match_.arms[i].guard) ||
+                    expr_contains_return_or_throw(e->as.match_.arms[i].body))
+                    return true;
+            }
+            return false;
         /* Phase 19: Algebraic effects - discontinue is like throw */
         case EX_DISCONTINUE:
             return true;

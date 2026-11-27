@@ -1,0 +1,21 @@
+returns
+  mk
+  defer
+1
+  rel
+1
+  mk
+  defer
+1
+  rel
+2
+panics
+  mk
+  defer
+1
+  rel
+  mk
+  defer
+1
+  rel
+2

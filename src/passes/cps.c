@@ -2315,6 +2315,25 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
                 cps_mark_expr(a, e->as.return_.value) : NULL;
             Expr *out = expr_new(a, EX_RETURN, e->type, e->span);
             out->as.return_.value = new_value;
+            /* The elaborator hangs this return's drop bookkeeping on the node
+             * itself: the bindings already handed on along this path (moved)
+             * and the drops a branch join left for it to run (owed_drops).
+             * The emitter and the interpreter read both, so a rebuilt node
+             * that carries only the value leaks the owed handles and frees
+             * the moved ones a second time
+             * (docs/archive/cps-pass-drops-return-drop-lists.md).  Bindings
+             * are shared, not cloned, by this pass, so `moved` copies as-is;
+             * the owed drops are expressions and are rebuilt like the value. */
+            out->as.return_.moved = e->as.return_.moved;
+            out->as.return_.n_moved = e->as.return_.n_moved;
+            if (e->as.return_.n_owed > 0) {
+                uint32_t n = e->as.return_.n_owed;
+                Expr **owed = (Expr **)arena_alloc(a, n * sizeof(Expr *));
+                for (uint32_t i = 0; i < n; i++)
+                    owed[i] = cps_mark_expr(a, e->as.return_.owed_drops[i]);
+                out->as.return_.owed_drops = owed;
+                out->as.return_.n_owed = n;
+            }
             return out;
         }
         

@@ -1,0 +1,19 @@
+;; A ref<T> handed on inside a loop body is handed on once per iteration, and
+;; not at all by a loop that never runs.  This was accepted, and freed the
+;; cell on every pass.
+(defn sink [r : ref<int>] : int
+  (let [v @r]
+    (drop! r)
+    v))
+
+(defn f [n : int] : int
+  (let [r      (ref 41)
+        ^mut i 0]
+    (while (< i n)
+      (sink r)
+      (set! i (+ i 1)))
+    1))
+
+(defn main [] : int
+  (println (f 2))
+  0)

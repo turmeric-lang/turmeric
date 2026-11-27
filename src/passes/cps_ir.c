@@ -91,6 +91,14 @@ typedef struct CpsB {
      * than heap-lowering to a CT_AWAIT the handler-case admission cannot host.
      * An `await` in a plain async body (depth 0) still heap-lowers via build_await. */
     uint32_t       in_handler_case;
+    /* colored-fn-early-return-skips-scope-exits: the scope exits open at the
+     * point being translated -- the `(defer D)` items an early `return` there
+     * leaves behind, outermost first.  `glue` marks an injected scope-exit
+     * drop (which a `return` that already handed the value on skips), `raw`
+     * one the O1-b plan emits by delegation.  cps_return fires them. */
+    struct { const Expr *body; bool glue, raw; } open_exits[64];
+    uint32_t       n_open;
+    bool           open_overflow;
 } CpsB;
 
 /* cps-while-native: index of `bd` among the active loop-carried vars, or -1. */
@@ -2933,7 +2941,12 @@ static CTerm *build_handle_core(CpsB *b, HandleExpr *h, Expr *body_expr,
          * the case-body descent so a nested `await` delegates to the fiber path
          * (CT_LETRAW) instead of a CT_AWAIT the handler-case admission cannot host. */
         b->in_handler_case++;
+        /* A case body is a callee of the chain, not a continuation of it:
+         * the exits open around the `handle` are not its to run. */
+        uint32_t open_mark = b->n_open;
+        b->n_open = 0;
         cs[ci].case_body = cps_tail(b, c->body, kont_prompt(c->body ? c->body->type.kind : TY_INT));
+        b->n_open = open_mark;
         b->in_handler_case--;
     }
     t->as.handle.cases = cs;
@@ -3493,6 +3506,157 @@ static int do_defer_threadable(CpsB *b, const Expr *e) {
     return has_defer ? tail_idx : -1;
 }
 
+/* ---- colored-fn-early-return-skips-scope-exits ---------------------------- *
+ * A `__cps` function has no defer frame: a block's `(defer D)` items run
+ * because the block's continuation is built to run them.  An early `return`
+ * leaves that continuation, so it has to run them itself.  The builder keeps
+ * the exits open at the point it is translating (CpsB.open_exits); a block
+ * pushes its own around each item it lowers, and cps_return reads the stack.
+ * ------------------------------------------------------------------------- */
+static void open_exit_push(CpsB *b, const Expr *body, bool glue, bool raw) {
+    if (b->n_open >= sizeof b->open_exits / sizeof b->open_exits[0]) {
+        b->open_overflow = true;
+        return;
+    }
+    b->open_exits[b->n_open].body = body;
+    b->open_exits[b->n_open].glue = glue;
+    b->open_exits[b->n_open].raw = raw;
+    b->n_open++;
+}
+
+/* The index of the first of `do` block `e`'s trailing injected drops (its
+ * item count when it has none) -- emit_do_trailing_drop_glue's answer. */
+static uint32_t do_trailing_glue_at(const Expr *e) {
+    uint32_t k = e->as.do_.n;
+    while (k > 0) {
+        const Expr *it = ascribe_peel(e->as.do_.items[k - 1]);
+        if (!it || it->kind != EX_DEFER || !it->as.defer_.is_drop_glue) break;
+        k--;
+    }
+    return k;
+}
+
+/* Push what a `return` inside item `i` of a P5b-threaded `do` leaves behind:
+ * the defers declared before it, which control has reached, and the trailing
+ * injected drops, which belong to the enclosing `let`'s locals and are owed
+ * from the block's first item on (the direct emitter's pending drops). */
+static void open_exits_push_for_item(CpsB *b, const Expr *e, uint32_t i) {
+    Expr **items = e->as.do_.items;
+    uint32_t glue_at = do_trailing_glue_at(e);
+    for (uint32_t j = 0; j < i && j < glue_at; j++) {
+        const Expr *it = ascribe_peel(items[j]);
+        if (it && it->kind == EX_DEFER)
+            open_exit_push(b, it->as.defer_.body, it->as.defer_.is_drop_glue, false);
+    }
+    for (uint32_t j = glue_at; j < e->as.do_.n; j++) {
+        const Expr *it = ascribe_peel(items[j]);
+        if (it && it->kind == EX_DEFER)
+            open_exit_push(b, it->as.defer_.body, true, false);
+    }
+}
+
+/* The local an injected drop discharges (emit_drop_glue_root): the root of
+ * `(drop! x)`, `(rc/drop x)`, `(drop! (.f o))` or a Drop-method call on `x`. */
+static const Binding *open_exit_glue_root(const Expr *d) {
+    d = ascribe_peel(d);
+    const Expr *arg = NULL;
+    if (!d) return NULL;
+    if (d->kind == EX_RC_DROP) arg = d->as.rc_drop_.expr;
+    else if (d->kind == EX_BUILTIN && d->as.builtin.n == 1) arg = d->as.builtin.args[0];
+    else if (d->kind == EX_CALL && d->as.call_.n_args == 1) arg = d->as.call_.args[0];
+    return arg ? autodrop_root_local(arg) : NULL;
+}
+
+/* Does a `return`'s value hand `bd` itself to the caller?
+ * (emit_value_moves_binding) */
+static bool ret_value_moves_binding(const Expr *v, const Binding *bd) {
+    v = ascribe_peel(v);
+    if (!v) return false;
+    switch (v->kind) {
+        case EX_VAR:       return v->as.var.binding == bd;
+        case EX_GET_FIELD: return ret_value_moves_binding(v->as.get_field_.struct_expr, bd);
+        case EX_DO:
+            return v->as.do_.n > 0 &&
+                   ret_value_moves_binding(v->as.do_.items[v->as.do_.n - 1], bd);
+        case EX_LET: case EX_LETREC:
+            return ret_value_moves_binding(v->as.let_.body, bd);
+        case EX_IF:
+            return ret_value_moves_binding(v->as.if_.then_, bd) ||
+                   ret_value_moves_binding(v->as.if_.else_or_null, bd);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < v->as.make_struct_.n_fields; i++)
+                if (ret_value_moves_binding(v->as.make_struct_.field_values[i], bd))
+                    return true;
+            return false;
+        case EX_CALL:
+            if (!v->as.call_.ctor) return false;
+            for (uint32_t i = 0; i < v->as.call_.n_args; i++)
+                if (ret_value_moves_binding(v->as.call_.args[i], bd)) return true;
+            return false;
+        default:           return false;
+    }
+}
+
+/* Is open exit `k` skipped by `ret`?  Only an injected drop is, when this
+ * path has already handed its local on: in the value being returned, or
+ * earlier (return_.moved). */
+static bool open_exit_skipped(CpsB *b, uint32_t k, const Expr *ret) {
+    if (!b->open_exits[k].glue && !b->open_exits[k].raw) return false;
+    const Binding *root = open_exit_glue_root(b->open_exits[k].body);
+    if (!root) return false;
+    if (ret_value_moves_binding(ret->as.return_.value, root)) return true;
+    for (uint32_t m = 0; m < ret->as.return_.n_moved; m++)
+        if (ret->as.return_.moved[m] == root) return true;
+    return false;
+}
+
+/* `(return v)`: bind v, run the scope exits this path leaves, deliver v to
+ * the function's return continuation.  The order is the direct emitter's
+ * (emit_stmt.c, EX_RETURN): the value first; the registered defers, LIFO;
+ * the enclosing lets' injected drops; the drops a branch join left for this
+ * `return` (return_.owed_drops).  With nothing to run it is the plain
+ * delivery it always was. */
+static CTerm *cps_return(CpsB *b, Expr *e) {
+    Expr *v = e->as.return_.value;
+    bool any = e->as.return_.n_owed > 0;
+    for (uint32_t k = 0; !any && k < b->n_open; k++)
+        any = !open_exit_skipped(b, k, e);
+    if (!any) return cps_tail(b, v, b->retk);
+    if (b->open_overflow) return unsupported_form(b, e);
+
+    CVar x = fresh_cvar(b, v ? &v->type : &e->type);
+    CTerm *chain = new_term(b, CT_APPCONT);
+    chain->as.appcont.kont = b->retk;
+    if (v) {
+        chain->as.appcont.v = atom_cvar(x);
+    } else {
+        CAtom u; memset(&u, 0, sizeof u); u.kind = CA_UNIT; u.ty = TY_NIL;
+        chain->as.appcont.v = u;
+    }
+    /* Built back to front: owed drops last, so prepended first. */
+    for (uint32_t od = e->as.return_.n_owed; od-- > 0; ) {
+        Expr *d = e->as.return_.owed_drops[od];
+        chain = cps_bind(b, d, fresh_cvar(b, &d->type), chain);
+    }
+    for (int pass = 0; pass < 2; pass++) {
+        /* pass 0 prepends the injected drops, pass 1 the defers, so the
+         * defers run first; within a pass the outermost is prepended last
+         * of its kind's run -- innermost scope fires first. */
+        for (uint32_t k = 0; k < b->n_open; k++) {
+            bool glue = b->open_exits[k].glue || b->open_exits[k].raw;
+            if (glue != (pass == 0) || open_exit_skipped(b, k, e)) continue;
+            Expr *d = (Expr *)b->open_exits[k].body;
+            if (b->open_exits[k].raw) {
+                chain = build_letraw(b, d, fresh_cvar(b, &d->type), chain);
+            } else {
+                chain = cps_bind(b, d, fresh_cvar(b, &d->type), chain);
+                chain = defer_marker(b, chain, NULL, d);
+            }
+        }
+    }
+    return v ? cps_bind(b, v, x, chain) : chain;
+}
+
 /* P5b (cps-runtime-finish): thread `do` block `e`'s `(defer D)` items into its
  * continuation.  The block's value (item `tail_idx`) is bound to `x`, then each
  * defer body fires, in reverse-declaration (LIFO) order, then `rest` runs.  A
@@ -3526,14 +3690,19 @@ static CTerm *cps_do_thread_defers(CpsB *b, const Expr *e, int tail_idx,
     /* Bind the value item (threading any perform continuation), then
      * push-mark the defers declared between the previous non-defer item and
      * it: they are pending while it runs. */
+    uint32_t open_mark = b->n_open;
+    open_exits_push_for_item(b, e, (uint32_t)tail_idx);
     chain = cps_bind(b, items[tail_idx], x, chain);
+    b->n_open = open_mark;
     chain = defer_pushes_before(b, items, (uint32_t)tail_idx, chain);
     /* Prepend the non-defer statements before the value, in order. */
     for (int i = tail_idx - 1; i >= 0; i--) {
         const Expr *it = ascribe_peel(items[i]);
         if (it && it->kind == EX_DEFER) continue;
         CVar discard = fresh_cvar(b, &items[i]->type);
+        open_exits_push_for_item(b, e, (uint32_t)i);
         chain = cps_bind(b, items[i], discard, chain);
+        b->n_open = open_mark;
         chain = defer_pushes_before(b, items, (uint32_t)i, chain);
     }
     return chain;
@@ -3615,6 +3784,17 @@ static CTerm *cps_emit_hoisted_drops(CpsB *b, const AutodropPlan *pl, CTerm *res
         rest = build_letraw(b, pl->drops[k], dx, rest);
     }
     return rest;
+}
+
+/* colored-fn-early-return-skips-scope-exits: the plan's drops are owed from
+ * the block's first item until the point they are emitted; a `return` in an
+ * item lowered while they are pushed here runs them (cps_return).  Returns
+ * the mark to restore. */
+static uint32_t open_exits_push_plan(CpsB *b, const AutodropPlan *pl) {
+    uint32_t mark = b->n_open;
+    for (uint32_t k = 0; k < pl->n_drops; k++)
+        open_exit_push(b, pl->drops[k], true, true);
+    return mark;
 }
 
 /* Extract the inlinable partial application from a let-binding init.  The
@@ -5990,11 +6170,13 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                     CTerm *ac = new_term(b, CT_APPCONT);
                     ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
                     rest = cps_emit_hoisted_drops(b, &pl, ac);
+                    uint32_t om = open_exits_push_plan(b, &pl);
                     rest = cps_bind(b, items[nr - 1], x, rest);
                     for (int i = (int)nr - 2; i >= 0; i--) {
                         CVar discard = fresh_cvar(b, &items[i]->type);
                         rest = cps_bind(b, items[i], discard, rest);
                     }
+                    b->n_open = om;
                 } else {
                     /* Deliver the tail item, then splice the drops in just before
                      * the first control barrier (after every use of the refs). */
@@ -6004,10 +6186,12 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                         rest = cps_bind(b, items[i], discard, rest);
                     }
                     rest = cps_emit_hoisted_drops(b, &pl, rest);
+                    uint32_t om = open_exits_push_plan(b, &pl);
                     for (int i = (int)fc - 1; i >= 0; i--) {
                         CVar discard = fresh_cvar(b, &items[i]->type);
                         rest = cps_bind(b, items[i], discard, rest);
                     }
+                    b->n_open = om;
                 }
                 return rest;
             }
@@ -6046,7 +6230,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return rest;
         }
         case EX_RETURN:
-            return cps_tail(b, e->as.return_.value, b->retk);
+            return cps_return(b, e);
         case EX_SET: {
             /* cps-while-native: a loop-carried set! in tail position -- bind its
              * $next CVar, then take the loop back-edge (KK_LOOP) or deliver unit. */
@@ -6572,11 +6756,13 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 if (fc == nr) {
                     /* No barrier: value -> x, drop refs at scope exit, then rest. */
                     r = cps_emit_hoisted_drops(b, &pl, rest);
+                    uint32_t om = open_exits_push_plan(b, &pl);
                     r = cps_bind(b, items[nr - 1], x, r);
                     for (int i = (int)nr - 2; i >= 0; i--) {
                         CVar discard = fresh_cvar(b, &items[i]->type);
                         r = cps_bind(b, items[i], discard, r);
                     }
+                    b->n_open = om;
                 } else {
                     r = cps_bind(b, items[nr - 1], x, rest);
                     for (int i = (int)nr - 2; i >= (int)fc; i--) {
@@ -6584,10 +6770,12 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                         r = cps_bind(b, items[i], discard, r);
                     }
                     r = cps_emit_hoisted_drops(b, &pl, r);
+                    uint32_t om = open_exits_push_plan(b, &pl);
                     for (int i = (int)fc - 1; i >= 0; i--) {
                         CVar discard = fresh_cvar(b, &items[i]->type);
                         r = cps_bind(b, items[i], discard, r);
                     }
+                    b->n_open = om;
                 }
                 return r;
             }
@@ -6605,7 +6793,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             return r;
         }
         case EX_RETURN:
-            return cps_tail(b, e->as.return_.value, b->retk);
+            return cps_return(b, e);
         case EX_RESET: {
             CTerm *t = new_term(b, CT_RESET);
             t->as.reset.x = x;
@@ -6797,6 +6985,8 @@ CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd) {
     b.n_loop = 0;   /* cps-while-native: not inside a loop body */
     b.rs_n = 0;     /* cps-while-native: read-after-set version map empty */
     b.in_handler_case = 0;  /* cps-async: not inside a handler-case body */
+    b.n_open = 0;
+    b.open_overflow = false;
     /* Phase-1 keystone (control-free colour-only shape): a colored function whose
      * whole body is delegatable (no control op, no colored call -- colored only by
      * a capturing closure it builds) emits as a single CT_LETRAW, so the direct

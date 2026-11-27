@@ -1,0 +1,18 @@
+;; A ^linear value consumed in an `if` with no else and again after it: the
+;; no-else path used to restore "not consumed", so the second consumption was
+;; accepted and the value was consumed twice whenever the branch ran.
+(defopaque ^linear H :int)
+(defn mk [] : H (:: 7 :H))
+(defn close [h : H] : int
+  ```c
+  (void)h; return 0;
+  ```)
+
+(defn f [c : bool] : int
+  (let [h (mk)]
+    (if c (close h))
+    (close h)))
+
+(defn main [] : int
+  (println (f true))
+  0)

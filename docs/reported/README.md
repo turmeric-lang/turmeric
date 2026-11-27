@@ -34,6 +34,45 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Follow-ups to #1486 (filed 2026-11-27)
+
+#1486 fixed four of the five reports from `spices/manifold` and listed what it
+left. These are those leftovers, each measured on `main` at `853f866`, plus
+what was found while measuring and fixing them.
+
+Eight more were fixed the same day and are in `docs/archive/`:
+
+- `cps-pass-drops-return-drop-lists`, a regression #1486 introduced: one
+  `perform` or `handle` anywhere in a program made every function's `return`
+  lose its per-path drop records.
+- `ref-moved-in-if-without-else-double-frees`: a `ref<T>` handed on in an
+  `if` with no else was freed twice. Now TUR-E0104.
+- `linear-consumption-not-reconciled-at-loops-and-literal-match`: the same
+  gap at a loop body, a `match` on literal patterns and `and` / `or`. Now
+  TUR-E0101 / TUR-E0104.
+- `return-in-match-arm-does-not-return`: a `return` in a `match` arm was
+  compiled as the arm's value unless the match ended the function.
+- `if-branch-with-inner-return-loses-its-value`: an `if` used for its value
+  never assigned it when a branch could return early and did not.
+- `colored-fn-early-return-skips-scope-exits`: in a function that performs
+  an effect, an early `return` skipped every `defer` and scope-exit drop.
+- `defer-reads-local-after-its-scope-exit-drop`: a `let`'s scope-exit drop
+  ran before the body's own defers, so a defer that read the local read a
+  freed cell.
+- `owned-drop-parameter-is-never-dropped`: an `^affine` Drop value passed
+  by value was released by nobody unless the callee consumed it. It left the
+  `early-return-before-...` row below.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [early-return-before-later-consume-leaks](early-return-before-later-consume-leaks.md) | medium (leak) | `(let [h (mk)] (if c (return 9) nil) (take h))` never releases `h` when `c` is true: the let appends no scope-exit drop because the body hands `h` on later, and the early `return` was left nothing to run. A `ref<T>` local leaks its cell the same way, and so does an owned parameter. Predates #1486. |
+| [caught-panic-skips-scope-exit-drops](caught-panic-skips-scope-exit-drops.md) | medium (leak per caught panic) | Under `catch-unwind`, explicit `defer`s run and compiler-injected drops (Drop opaques, `ref<T>`) do not: they are appended after the `let` body, so they are not registered while it runs. |
+| [cmake-dep-directory-scoped-imported-target-not-followed](cmake-dep-directory-scoped-imported-target-not-followed.md) | medium (link failure, no warning) | A library a dependency links through its own non-`GLOBAL` imported target is invisible to the link walk, which runs one directory up; the `Ns::name` goes into the manifest as a library name. #1486 covered only `find_package` targets on CMake 3.24+. |
+| [turi-early-return-skips-injected-drops](turi-early-return-skips-injected-drops.md) | low (interpreter only) | Under `tur --interpret`, an early `return` skips the scope-exit drop of an enclosing `let`: a Drop instance does not run on that path. The compiled program runs it. No effect involved. |
+| [do-ending-in-return-is-not-seen-as-leaving](do-ending-in-return-is-not-seen-as-leaving.md) | low (false rejection) | `(if c (do (rel h) (return 0)) 0)` followed by a use of `h` is TUR-E0201: only a bare `return` arm counts as leaving. |
+| [cmake-dep-undecidable-link-genex-is-not-linked](cmake-dep-undecidable-link-genex-is-not-linked.md) | low (warns) | A link entry behind an expression the configure-time reducer does not know (version comparisons, `TARGET_PROPERTY`, ...) is left out, with a warning whose `:link-flags` remedy cannot name a library in the build tree. |
+| [tur-fetch-builds-cmake-deps-serially](tur-fetch-builds-cmake-deps-serially.md) | low (time) | `cmake --build` with no `--parallel`: a cold `spices/manifold` fetch is 3 min 44 s, and 1 min 5 s with `CMAKE_BUILD_PARALLEL_LEVEL=4`. |
+
 ## Found building `spices/manifold` (filed 2026-11-26)
 
 Manifold is the first spice to weigh `^linear` against `^affine` + `Drop` for
