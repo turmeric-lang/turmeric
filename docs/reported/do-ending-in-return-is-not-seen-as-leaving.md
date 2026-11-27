@@ -68,6 +68,9 @@ returned value's type, not `TY_NEVER`. The linear check next to it
 - One helper, "does this expression always leave": true for `return`,
   `panic`, a `TY_NEVER` expression, a `do` or `let` whose last item leaves,
   and an `if` / `match` whose arms all leave. Use it at the three sites.
+  `elab_tail_leaves` (`src/compiler/elab_forms.c`, added 2026-11-27 for the
+  linear check on an `if` with no else) is that helper without the
+  `if` / `match` case; the move check and `ArmMoves` do not call it yet.
 - `elab_branch_with_scope_drop` (`:818`) has to agree: an arm that is a `do`
   ending in `return` needs its owed drop attached to that inner `return`,
   not appended after the `do`.

@@ -1490,6 +1490,20 @@ static const DiagExplanation diag_explanations_[] = {
       "    (if cond do-something do-something-else)\n"
       "    (consume x))    ; consumed after if -- OK\n"
       "\n"
+      "An `if` with no else branch, and `when`, have a second path all the\n"
+      "same: the one that skips the branch, which consumes nothing. So a\n"
+      "branch that carries on must consume nothing either. A branch that\n"
+      "leaves the function never meets the other path, and may:\n"
+      "  (let [^linear x 42]\n"
+      "    (when cond (consume x))        ; ERROR: skipped when cond is false\n"
+      "    0)\n"
+      "  (let [^linear x 42]\n"
+      "    (if cond (return (consume x))) ; OK: this path leaves\n"
+      "    (consume x))\n"
+      "\n"
+      "This covers ref<T> too: a ref handed on in one branch and auto-dropped\n"
+      "on the other would be freed by two different owners.\n"
+      "\n"
       "Enable with: turc -Xlinear myfile.tur\n",
     },
     /* UT1: Uniqueness type explanations */

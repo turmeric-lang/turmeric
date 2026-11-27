@@ -1,5 +1,9 @@
 # A `ref<T>` moved inside an `if` with no else is freed twice
 
+> **Status: fixed 2026-11-27.** The shape is TUR-E0104 now, as the two-armed
+> form already was, and a `return` no longer re-drops a ref its own path
+> handed on. See [Resolution](#resolution).
+
 **Severity:** high (a double free, and a use after free, in programs the
 compiler accepts).
 
@@ -102,3 +106,55 @@ exempt from that one because it auto-drops.
   it needs a ref variant.
 - Either way, add the three double-free shapes to a fixture under
   `tests/run-leak-check.sh` with a condition that is true.
+
+## Resolution
+
+Fixed 2026-11-27, by the first direction: the shape is rejected.
+
+- **The check** (`elab_if`, the no-else path, `src/compiler/elab_forms.c`).
+  A linear binding the then-branch consumed, in an `if` or `when` with no
+  else, is TUR-E0104 when the branch carries on. It reads the linear
+  consumption state the two-armed check reads, so it covers every linear
+  value and not only `ref<T>`: a `^linear` opaque consumed in the `if` and
+  again after it was accepted too, and ran its consumer twice. A `^linear`
+  value consumed only in the `if` used to be TUR-E0100 at its binding; it is
+  TUR-E0104 at the `if` now.
+- **A branch that leaves is exempt**, including one that does something first:
+  `(if c (do (log) (return (sink r))))`. The new `elab_tail_leaves` looks
+  through a `do` or `let` to its last item, so this check does not have the
+  top-node-only test
+  [do-ending-in-return-is-not-seen-as-leaving](../reported/do-ending-in-return-is-not-seen-as-leaving.md)
+  describes.
+- **The `return` half** (`elab_return`). Exempting such a branch is only right
+  if the `return` in it does not run the ref's pending scope-exit drop, and
+  it did: `(if c (return (sink r)))` followed by `@r` freed the cell twice
+  when `c` was true. That is older than this report and was not in it. A
+  `return` now lists the `ref<T>` locals its path has consumed in
+  `return_.moved`, next to the Drop opaques #1486 put there, and the emitter
+  skips their drops as it already did for those.
+- `tur explain TUR-E0104` describes the no-else form.
+
+Fixtures:
+
+- `errors/ref-if-no-else-consumed`, `errors/ref-when-no-else-consumed`,
+  `errors/linear-if-no-else-consumed-twice`: the three accepted shapes, now
+  TUR-E0104.
+- `ref-if-branch-move-suppression` pinned this bug with a dead branch. It is
+  rewritten to what "a move in a branch does not poison the outer path" can
+  soundly mean -- a branch that returns -- with every condition taken both
+  ways, and it carries `requires.leak-check`. On a compiler without the
+  `return` half it aborts in the plain suite too (`free(): double free
+  detected`).
+
+`bash tests/run.sh`: 4339 passed, 0 failed. `tests/run-leak-check.sh`: 297
+passed, 0 failed, 8 known-open.
+
+Not changed:
+
+- The second direction, releasing the ref on the path that skipped the
+  branch, as #1486 does for a Drop opaque. It would make `(when c (sink r))`
+  legal, and to be coherent the two-armed form would have to stop being
+  TUR-E0104 as well; that is a language decision, not a bug fix.
+- The other places two paths meet. A loop body, a `match` on literal
+  patterns and `and` / `or` do not reconcile linear consumption either:
+  [linear-consumption-not-reconciled-at-loops-and-literal-match](../reported/linear-consumption-not-reconciled-at-loops-and-literal-match.md).

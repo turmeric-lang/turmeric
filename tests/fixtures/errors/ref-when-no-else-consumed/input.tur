@@ -1,0 +1,14 @@
+;; The same through `when`, with the ref passed by value to a callee.
+(defn sink [r : ref<int>] : int
+  (let [v @r]
+    (drop! r)
+    v))
+
+(defn f [c : bool] : int
+  (let [r (ref 41)]
+    (when c (sink r))
+    1))
+
+(defn main [] : int
+  (println (f true))
+  0)

@@ -842,6 +842,28 @@ Expr *elab_branch_with_scope_drop(Elab *e, Expr *branch, Binding *b, Span span) 
     return d;
 }
 
+/* Does control never fall out of the end of `x`?  A `return`, a panic or a
+ * `!`-typed expression leaves; so does a `do` or `let` body whose last item
+ * leaves.  The scope-exit drops a `let` appends after its body are skipped:
+ * they sit behind a last item that already left. */
+static bool elab_tail_leaves(const Expr *x) {
+    while (x) {
+        if (x->type.kind == TY_NEVER || x->kind == EX_RETURN ||
+            x->kind == EX_PANIC || x->kind == EX_PANIC_WITH)
+            return true;
+        if (x->kind == EX_LET) { x = x->as.let_.body; continue; }
+        if (x->kind != EX_DO) return false;
+        uint32_t n = x->as.do_.n;
+        while (n > 0 && x->as.do_.items[n - 1] &&
+               x->as.do_.items[n - 1]->kind == EX_DEFER &&
+               x->as.do_.items[n - 1]->as.defer_.is_drop_glue)
+            n--;
+        if (n == 0) return false;
+        x = x->as.do_.items[n - 1];
+    }
+    return false;
+}
+
 bool elab_fresh_linear_unowned(Elab *e, const Expr *x) {
     while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
     if (!x || x->kind != EX_CALL || x->type.copy_kind != CK_LINEAR) return false;
@@ -4869,10 +4891,44 @@ Expr *elab_if(Elab *e, const Form *call) {
                 mb->is_moved = true;
             }
         }
-        /* LT1: Without else, then-branch linear consumption is not guaranteed;
-         * restore to the pre-if state so scope-exit checking fires if needed. */
+        /* LT1: the missing else is a path that consumes nothing, so a
+         * then-branch that carries on must consume nothing either -- the same
+         * agreement the two-armed form is held to.  Restoring the pre-if
+         * state alone answered "is it certainly consumed" and left "who
+         * releases it" open: a `ref<T>` the branch handed on was still
+         * dropped at scope exit (a double free), and a ^linear value could
+         * be consumed again after the `if`
+         * (docs/archive/ref-moved-in-if-without-else-double-frees.md).  A
+         * then-branch that leaves does not reach the join, so it may consume
+         * what it likes -- including one that does something first and then
+         * returns, which `then_diverges` (the top node only) does not see. */
         if (n_lin > 0) {
+            bool lin_ok = true;
+            bool then_leaves = then_diverges || elab_tail_leaves(then_);
+            for (uint32_t i = 0; !then_leaves && i < n_lin; i++) {
+                if (lin_before[i] || !lin_then[i]) continue;
+                diag_emit_with_code(DIAG_ERROR, call->span,
+                                    TUR_E0104_LINEAR_BRANCH_MISMATCH,
+                                    "linear value '%s' consumed in an `if` / `when` with"
+                                    " no else branch -- consume it in an else branch"
+                                    " too, or in neither",
+                                    lin_bindings[i]->name->name);
+                lin_ok = false;
+            }
             linear_state_restore(lin_bindings, lin_before, n_lin);
+            if (!lin_ok) {
+                free(drop_in_then);
+                free(drop_in_else);
+                free(usage_then);
+                free(usage_before);
+                free(then_states);
+                free(move_bindings);
+                free(before_states);
+                free(lin_then);
+                free(lin_bindings);
+                free(lin_before);
+                return NULL;
+            }
         }
     }
 
@@ -5933,16 +5989,27 @@ Expr *elab_return(Elab *e, const Form *call) {
     out->as.return_.moved = NULL;
     out->as.return_.n_moved = 0;
     /* Which Drop-owning locals this path has already handed on -- see
-     * return_.moved.  Two passes: count, then fill. */
+     * return_.moved.  Two passes: count, then fill.
+     *
+     * A `ref<T>` local is on the list under the two flags its let reads to
+     * decide the scope-exit `drop!` (elab_let: is_moved, is_linear_consumed).
+     * The let decides once, after the whole body, so a ref handed on only on
+     * the path that returns here still has its drop pending at this `return`
+     * -- which then freed it a second time
+     * (docs/archive/ref-moved-in-if-without-else-double-frees.md). */
     for (int pass = 0; pass < 2; pass++) {
         uint32_t n = 0;
         for (const Scope *cur = e->scope; cur && cur != &e->global; cur = cur->parent) {
             for (uint32_t i = 0; i < cur->n; i++) {
                 Binding *b = cur->bindings[i];
-                if (!b->scope_drop_inst) continue;
-                if (!elab_path_consumed(b, false, b->is_moved, USAGE_UNUSED,
-                                        b->usage_state))
-                    continue;
+                bool gone;
+                if (b->scope_drop_inst)
+                    gone = elab_path_consumed(b, false, b->is_moved, USAGE_UNUSED,
+                                              b->usage_state);
+                else
+                    gone = b->type.kind == TY_REF &&
+                           (b->is_moved || b->is_linear_consumed);
+                if (!gone) continue;
                 if (pass == 1) out->as.return_.moved[n] = b;
                 n++;
             }

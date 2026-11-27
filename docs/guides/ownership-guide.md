@@ -211,6 +211,14 @@ What each is for:
 `ptr<T>`). Reading a `ref` or `rc` does not consume it; reading an `lref` does --
 that is how an `lref` is used up.
 
+A `ref` or `lref` handed on along one path through an `if` -- moved into
+another binding, or passed by value to a call -- must be handed on along
+every path that carries on, or the compiler reports TUR-E0104. An `if` with no
+else, and `when`, count the path that skips the branch, so
+`(when c (sink r))` is refused: one path would have given the cell away and
+the other would still free it. A branch that `return`s is exempt, because it
+meets no other path.
+
 ```turmeric
 (defn main [] : int
   (let [r (ref 41)]
