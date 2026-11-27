@@ -807,6 +807,33 @@ Expr *elab_drop_glue_defer(Elab *e, Binding *b, struct TypeClassInstance *di,
     return defer_expr;
 }
 
+/* defer-reads-local-after-its-scope-exit-drop: the body a `let` appends its
+ * scope-exit drops to.
+ *
+ * A `do` fires its defers last-registered-first, and the drops are appended
+ * after the body, so in one `do` they ran BEFORE every `(defer ...)` the body
+ * declared -- a defer that read the local read a freed cell.  The bindings
+ * are older than anything in the body; their release is the last thing the
+ * scope does.  So when the body declares a defer of its own it becomes the
+ * single item of an outer `do`, and the drops go on that one: the inner
+ * block's defers fire as it ends, on every kind of exit, and the drops after
+ * them.  A body with no defer of its own is returned as it is. */
+static Expr *elab_body_under_scope_drops(Elab *e, Expr *body, Span span) {
+    if (!body || body->kind != EX_DO) return body;
+    bool own_defer = false;
+    for (uint32_t i = 0; i < body->as.do_.n && !own_defer; i++) {
+        const Expr *it = body->as.do_.items[i];
+        own_defer = it && it->kind == EX_DEFER && !it->as.defer_.is_drop_glue;
+    }
+    if (!own_defer) return body;
+    Expr **items = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+    items[0] = body;
+    Expr *outer = expr_new(e->arena, EX_DO, body->type, span);
+    outer->as.do_.items = items;
+    outer->as.do_.n = 1;
+    return outer;
+}
+
 /* affine-drop-handle-consumed-in-one-branch-double-frees: `branch` is an arm
  * of an `if` / `match` that did not hand the Drop-owning local `b` on, while
  * a sibling arm did.  After the join nothing can tell the two paths apart, so
@@ -2823,6 +2850,7 @@ Expr *elab_let(Elab *e, const Form *call) {
             
             if (n_refs > 0) {
                 /* Create new items array with space for defers */
+                body = elab_body_under_scope_drops(e, body, call->span);
                 uint32_t new_n = body->as.do_.n + n_refs;
                 Expr **new_items = (Expr **)arena_alloc(e->arena, new_n * sizeof(Expr *));
                 
@@ -3022,6 +3050,7 @@ Expr *elab_let(Elab *e, const Form *call) {
 
         if (n_rc_drops > 0) {
             /* Create new items array with space for rc drop defers */
+            body = elab_body_under_scope_drops(e, body, call->span);
             uint32_t new_n = body->as.do_.n + n_rc_drops;
             Expr **new_items = (Expr **)arena_alloc(e->arena, new_n * sizeof(Expr *));
 
@@ -3280,6 +3309,7 @@ Expr *elab_let(Elab *e, const Form *call) {
         }
 
         if (n_field_drops > 0) {
+            body = elab_body_under_scope_drops(e, body, call->span);
             uint32_t new_n = body->as.do_.n + n_field_drops;
             Expr **new_items =
                 (Expr **)arena_alloc(e->arena, new_n * sizeof(Expr *));
