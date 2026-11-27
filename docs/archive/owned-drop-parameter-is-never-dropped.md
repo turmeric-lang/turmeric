@@ -140,4 +140,4 @@ Not changed, each measured on the fixed tree:
 - **An early `return` taken before a later hand-off.**
   `(if c (return 9) nil) (take w)` leaks `w` when `c` is true. A `let` local
   has the same gap, older than this report:
-  [early-return-before-later-consume-leaks](../reported/early-return-before-later-consume-leaks.md).
+  [early-return-before-later-consume-leaks](early-return-before-later-consume-leaks.md).

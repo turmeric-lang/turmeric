@@ -2326,6 +2326,8 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
              * the owed drops are expressions and are rebuilt like the value. */
             out->as.return_.moved = e->as.return_.moved;
             out->as.return_.n_moved = e->as.return_.n_moved;
+            out->as.return_.owned = e->as.return_.owned;
+            out->as.return_.n_owned = e->as.return_.n_owned;
             if (e->as.return_.n_owed > 0) {
                 uint32_t n = e->as.return_.n_owed;
                 Expr **owed = (Expr **)arena_alloc(a, n * sizeof(Expr *));

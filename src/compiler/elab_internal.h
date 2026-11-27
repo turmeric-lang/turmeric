@@ -1000,6 +1000,14 @@ typedef struct Elab {
      * elab_fn/elab_defn).  check_cloneable_capture stops here so bindings
      * from outer function scopes are not falsely flagged as needing Clone. */
     struct Scope    *fn_entry_outer_scope;
+    /* early-return-before-later-consume-leaks: every `return` elaborated, in
+     * order.  A let (and a defn, for its owned parameters) notes the length
+     * before its body and, when it appends no scope-exit drop for a value
+     * because a later statement handed it on, releases it at the returns
+     * logged since that still owned it (elab_returns_release). */
+    Expr           **ret_log;
+    uint32_t         n_ret_log;
+    uint32_t         cap_ret_log;
     /* borrow-checks-gaps: last-use liveness for `let`-held borrows.  Every
      * use of a binding that holds a borrow stamps borrow_clock on it; a
      * `set!` of the borrowed place while such a binding is in scope is
@@ -1980,6 +1988,11 @@ bool usage_state_is_per_path(const Binding *b);
 bool elab_path_consumed(const Binding *b, bool moved_before, bool moved,
                         UsageState usage_before, UsageState usage);
 Expr *elab_branch_with_scope_drop(Elab *e, Expr *branch, Binding *b, Span span);
+/* early-return-before-later-consume-leaks: `b` gets no scope-exit drop from
+ * its let (or defn) because a later statement handed it on.  Each `return`
+ * logged since `log_start` whose path still owned `b` releases it itself:
+ * `(drop! b)` for a `ref<T>`, else through `b->scope_drop_inst`. */
+void elab_returns_release(Elab *e, uint32_t log_start, Binding *b, Span span);
 
 /* The move and usage state of every visible binding across the arms of a
  * `match`.  Arms are alternatives: each is elaborated from the state before
@@ -2432,7 +2445,8 @@ void elab_owned_params_mark(Elab *e, const Form *call, uint32_t body_start,
                             const Symbol *fn_name,
                             Binding **params, uint32_t n_params);
 Expr *elab_owned_params_append_drops(Elab *e, const Symbol *fn_name, Expr *body,
-                                     Binding **params, uint32_t n_params, Span span);
+                                     Binding **params, uint32_t n_params,
+                                     uint32_t ret_log_start, Span span);
 void elab_drop_method_disarm_helpers(Elab *e, const Expr *method_body,
                                      const Binding *self_param);
 struct TypeClassInstance *elab_fresh_sole_owner_drop_inst(Elab *e, const Type *t,

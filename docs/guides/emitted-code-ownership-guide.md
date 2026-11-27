@@ -203,7 +203,15 @@ a use-after-move. An arm that is a `return` cannot reach a trailing defer; the
 `return` runs the drop itself, after its value is computed
 (`return_.owed_drops`). A `return` reached after the local was handed on
 records that too (`return_.moved`), so a drop still pending in an enclosing
-`let` is not run for it. An arm that panics releases nothing. A `while` body
+`let` is not run for it. A `return` reached *before* a later statement hands
+the local on is the third case: the `let` appends no drop, so nothing is
+pending there. Each `return` records what its path still owns
+(`return_.owned`, this function's locals and owned parameters only), and when
+the `let` -- or the `defn`, for a parameter -- declines the drop because the
+flags say the value was handed on, `elab_returns_release` gives the drop to
+each such `return` that still owned it
+(`docs/archive/early-return-before-later-consume-leaks.md`). An arm that
+panics releases nothing. A `while` body
 may not hand such a local on at all (TUR-E0005): no single answer covers zero
 iterations and two. `init_yields_fresh_owner` also follows an `if` whose arms
 all yield fresh values, so `(let [g (if c (mk) (bump (mk)))] ...)` owns `g`.
