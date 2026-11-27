@@ -3386,7 +3386,10 @@ const char *emit_frame_parent(const char *frame) {
  * runs the noted drops along its own frame chain (emit_frame_run_pending_drops).
  * Keyed by frame like g_frame_parents, so a lambda body -- which starts with no
  * frame -- never sees its enclosing function's. */
-static struct { char *frame; const Expr *const *items; uint32_t n; } *g_frame_drops = NULL;
+/* caught-panic-skips-scope-exit-drops: `panic_ok[j]` says the drop at
+ * items[j] may also run on the PANIC exit of any call in the body
+ * (emit_frame_run_pending_drops_on_panic) -- see emit_drop_owned_at_every_panic. */
+static struct { char *frame; const Expr *const *items; uint32_t n; bool *panic_ok; } *g_frame_drops = NULL;
 static uint32_t g_frame_drops_n = 0, g_frame_drops_cap = 0;
 
 uint32_t emit_do_trailing_drop_glue(const Expr *e) {
@@ -3395,6 +3398,127 @@ uint32_t emit_do_trailing_drop_glue(const Expr *e) {
            e->as.do_.items[k - 1]->as.defer_.is_drop_glue)
         k--;
     return k;
+}
+
+static const Binding *emit_drop_glue_root(const Expr *d);
+
+/* caught-panic-skips-scope-exit-drops: may `x` hand `b` on -- name it
+ * anywhere but as a direct argument at a `^borrow` parameter of a named
+ * function, or under `@`?  Conservative: anything unrecognised that names `b`
+ * (a closure capturing it, inline C) answers yes. */
+typedef struct { const Binding *b; } HandOnUd;
+static bool expr_may_hand_on(const Expr *x, const Binding *b);
+static bool hand_on_visit(const Expr *x, void *ud) {
+    return expr_may_hand_on(x, ((const HandOnUd *)ud)->b);
+}
+static bool expr_may_hand_on(const Expr *x, const Binding *b) {
+    if (!x) return false;
+    switch (x->kind) {
+    case EX_VAR:
+        return x->as.var.binding == b;
+    case EX_DEREF: {
+        const Expr *s = x->as.deref_.expr;
+        while (s && s->kind == EX_ASCRIBE) s = s->as.ascribe_.inner;
+        if (s && s->kind == EX_VAR && s->as.var.binding == b) return false;
+        break;
+    }
+    case EX_CALL: {
+        const Binding *fb = x->as.call_.fn_binding;
+        const Type *ft = fb ? &fb->type : NULL;
+        bool direct = ft && ft->kind == TY_FN && ft->as.fn.arg_flags &&
+                      !fb->closure_fn_binding && !x->as.call_.ctor;
+        if (!direct) break;
+        for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
+            const Expr *a = x->as.call_.args[i];
+            const Expr *s = a;
+            while (s && s->kind == EX_ASCRIBE) s = s->as.ascribe_.inner;
+            if (s && s->kind == EX_VAR && s->as.var.binding == b &&
+                i < ft->as.fn.arity && FN_ARG_FLAG(ft->as.fn, i, FA_BORROW))
+                continue;
+            if (expr_may_hand_on(a, b)) return true;
+        }
+        Expr saved = *x;
+        saved.as.call_.n_args = 0;
+        HandOnUd u = { b };
+        return cps_visit_children(&saved, hand_on_visit, &u);
+    }
+    case EX_CLOSURE: {
+        const struct Closure *c = x->as.closure_.closure;
+        if (!c) return true;
+        for (uint32_t i = 0; i < c->n_captures; i++)
+            if (c->captures[i] == b) return true;
+        return false;
+    }
+    case EX_INLINE_C:
+        return true;
+    case EX_FN_DEF:
+        return false;
+    default:
+        break;
+    }
+    HandOnUd u = { b };
+    return cps_visit_children(x, hand_on_visit, &u);
+}
+
+/* Does control never fall out of the end of `x`?  (elab_tail_leaves.) */
+static bool emit_tail_leaves(const Expr *x) {
+    while (x) {
+        if (x->type.kind == TY_NEVER || x->kind == EX_RETURN ||
+            x->kind == EX_PANIC || x->kind == EX_PANIC_WITH)
+            return true;
+        if (x->kind == EX_LET) { x = x->as.let_.body; continue; }
+        if (x->kind != EX_DO) return false;
+        uint32_t n = emit_do_trailing_drop_glue(x);
+        if (n == 0) return false;
+        x = x->as.do_.items[n - 1];
+    }
+    return false;
+}
+
+/* Is there, anywhere in `x`, a branch arm that leaves (returns, panics) and
+ * may hand `b` on?  elab_let appends a scope-exit drop only when the body as a
+ * whole did not move `b`, and the join of an `if` / `match` ignores an arm that
+ * leaves -- so such an arm is the one way the body can have moved `b` on some
+ * path while its drop is still pending. */
+typedef struct { const Binding *b; } LeavingArmUd;
+static bool leaving_arm_hands_on(const Expr *x, const Binding *b);
+static bool leaving_arm_visit(const Expr *x, void *ud) {
+    return leaving_arm_hands_on(x, ((const LeavingArmUd *)ud)->b);
+}
+static bool leaving_arm_hands_on(const Expr *x, const Binding *b) {
+    if (!x) return false;
+    if (x->kind == EX_IF) {
+        const Expr *arms[2] = { x->as.if_.then_, x->as.if_.else_or_null };
+        for (int a = 0; a < 2; a++)
+            if (arms[a] && emit_tail_leaves(arms[a]) && expr_may_hand_on(arms[a], b))
+                return true;
+    } else if (x->kind == EX_MATCH) {
+        for (uint32_t a = 0; a < x->as.match_.n_arms; a++) {
+            const Expr *ab = x->as.match_.arms[a].body;
+            if (ab && emit_tail_leaves(ab) && expr_may_hand_on(ab, b)) return true;
+        }
+    } else if (x->kind == EX_RETURN) {
+        /* A `return` nested in a body item (not an arm) leaves too; its value
+         * can move `b` before a panic inside it. */
+        if (expr_may_hand_on(x, b)) return true;
+    }
+    LeavingArmUd u = { b };
+    return cps_visit_children(x, leaving_arm_visit, &u);
+}
+
+/* caught-panic-skips-scope-exit-drops: is the binding `d` releases still owned
+ * by this scope at every call in the body (items[0..k)) that can panic?  Then
+ * the panic exit of such a call may run `d` exactly as a normal scope exit
+ * would.  A drop whose root this cannot name is refused. */
+static bool emit_drop_owned_at_every_panic(const Expr *const *items, uint32_t k,
+                                           const Expr *d) {
+    if (!d || d->kind != EX_DEFER) return false;
+    const Binding *root = d->as.defer_.spec_drop_of;
+    if (!root) root = emit_drop_glue_root(d->as.defer_.body);
+    if (!root) return false;
+    for (uint32_t i = 0; i < k; i++)
+        if (leaving_arm_hands_on(items[i], root)) return false;
+    return true;
 }
 
 void emit_frame_note_pending_drops(const char *frame, const Expr *e) {
@@ -3407,9 +3531,16 @@ void emit_frame_note_pending_drops(const char *frame, const Expr *e) {
             g_frame_drops_cap * sizeof(*g_frame_drops));
         if (!g_frame_drops) { fprintf(stderr, "tur: oom\n"); abort(); }
     }
+    uint32_t nd = e->as.do_.n - k;
+    bool *ok = (bool *)malloc(nd * sizeof(bool));
+    if (!ok) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t j = 0; j < nd; j++)
+        ok[j] = emit_drop_owned_at_every_panic((const Expr *const *)e->as.do_.items,
+                                               k, e->as.do_.items[k + j]);
     g_frame_drops[g_frame_drops_n].frame = strdup(frame);
     g_frame_drops[g_frame_drops_n].items = (const Expr *const *)e->as.do_.items + k;
-    g_frame_drops[g_frame_drops_n].n = e->as.do_.n - k;
+    g_frame_drops[g_frame_drops_n].n = nd;
+    g_frame_drops[g_frame_drops_n].panic_ok = ok;
     g_frame_drops_n++;
 }
 
@@ -3531,7 +3662,54 @@ bool emit_frame_has_pending_drops(const EmitCtx *ctx) {
     return false;
 }
 
+/* caught-panic-skips-scope-exit-drops: while > 0 the drops being emitted are
+ * themselves pending-drop code (for a `return` or a panic exit), so the panic
+ * check after a call inside one must not run the pending drops again -- the
+ * one being emitted among them. */
+static int g_pending_drops_suppressed = 0;
+static void emit_frame_run_pending_drops_inner(EmitCtx *ctx, Buf *body, const Expr *ret);
+
+bool emit_frame_has_panic_drops(const EmitCtx *ctx, const char *frame) {
+    if (g_pending_drops_suppressed || !frame) return false;
+    (void)ctx;
+    for (uint32_t i = g_frame_drops_n; i-- > 0; ) {
+        if (g_frame_drops[i].n == 0 || strcmp(g_frame_drops[i].frame, frame) != 0)
+            continue;
+        for (uint32_t j = 0; j < g_frame_drops[i].n; j++)
+            if (g_frame_drops[i].panic_ok[j]) return true;
+    }
+    return false;
+}
+
+/* The pending scope-exit drops of `frame` on the PANIC exit of a call: the
+ * ones a do-emitter noted and has not pushed yet, which a frame fire cannot
+ * see.  LIFO, ahead of the frame's own fire (they would have been pushed last).
+ * Only the drops emit_drop_owned_at_every_panic admitted run; the rest keep
+ * the old behaviour (a leak on this path), never a release of a value a
+ * leaving arm may already have handed on. */
+void emit_frame_run_pending_drops_on_panic(EmitCtx *ctx, Buf *body, const char *frame) {
+    if (g_pending_drops_suppressed || !frame) return;
+    g_pending_drops_suppressed++;
+    for (uint32_t i = g_frame_drops_n; i-- > 0; ) {
+        if (g_frame_drops[i].n == 0 || strcmp(g_frame_drops[i].frame, frame) != 0)
+            continue;
+        for (uint32_t j = g_frame_drops[i].n; j-- > 0; ) {
+            if (!g_frame_drops[i].panic_ok[j]) continue;
+            const Expr *d = emit_defer_body(ctx, g_frame_drops[i].items[j]);
+            if (!d) continue;
+            emit_stmt(ctx, body, d);
+        }
+    }
+    g_pending_drops_suppressed--;
+}
+
 void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const Expr *ret) {
+    g_pending_drops_suppressed++;
+    emit_frame_run_pending_drops_inner(ctx, body, ret);
+    g_pending_drops_suppressed--;
+}
+
+static void emit_frame_run_pending_drops_inner(EmitCtx *ctx, Buf *body, const Expr *ret) {
     const Expr *ret_value = ret->as.return_.value;
     for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f)) {
         for (uint32_t i = g_frame_drops_n; i-- > 0; ) {

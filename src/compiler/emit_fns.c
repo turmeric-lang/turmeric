@@ -2276,6 +2276,22 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
             break;
     }
 
+    /* The panic leaf rule above, for any other `!`-typed tail -- a `do` that
+     * opens a frame to hold a drop registered ahead of a panicking arm
+     * (elab_branch_with_scope_drop, caught-panic-skips-scope-exit-drops) has
+     * no value to spell either. */
+    if (e->type.kind == TY_NEVER && !ctx->tail_void && ctx->current_fn_ret_ctype &&
+        strcmp(ctx->current_fn_ret_ctype, "void") != 0) {
+        char *z = emit_c_zero_of(ctx->current_fn_ret_ctype);
+        if (z) {
+            emit_stmt(ctx, body, e);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "return %s;\n", z);
+            free(z);
+            return;
+        }
+    }
+
     /* void-self-tail-call-not-lowered: a leaf of a `: nil` body is a
      * statement followed by the empty return -- there is no value to spell,
      * and a non-self call is not made a C tail call (`want_tail_call` below

@@ -1,0 +1,111 @@
+;; caught-panic-skips-scope-exit-drops: a panic caught by `catch-unwind` must
+;; run the scope-exit drops the compiler injects for the owning locals of every
+;; frame it unwinds -- not only the explicit `defer`s.  run-leak-check.sh
+;; checks the `ref` / `rc` / owning-field cases (they print nothing).
+
+(defopaque ^affine Widget :int)
+(defn mk [n : int] : Widget (println "  mk") (println n) (:: n Widget))
+(defn rel [w : Widget] : void (println "  rel") (println (:: w int)) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn peek [^borrow w : Widget] : int 1)
+(defn eat [w : Widget] : int (println "  eat") (rel w) 0)
+(defn callee-panics [] : int (panic "boom"))
+
+(defstruct Holder [cell : ref<int>])
+
+;; The report's pair: an explicit defer and an injected drop.
+(defn explicit [] : int
+  (let [x 3]
+    (defer (println "  deferred"))
+    (panic "boom")
+    x))
+
+(defn injected [] : int
+  (let [h (mk 1)]
+    (callee-panics)
+    (peek h)))
+
+;; Two nested scopes: the inner local is released first.
+(defn nested [] : int
+  (let [a (mk 1)]
+    (let [b (mk 2)]
+      (callee-panics)
+      (+ (peek a) (peek b)))))
+
+;; A local and a user defer in one scope: the defer fires, then the drop.
+(defn with-defer [] : int
+  (let [h (mk 1)]
+    (defer (println "  deferred"))
+    (callee-panics)
+    (peek h)))
+
+;; Handed on in an arm that then panics: released once (by `eat`), not twice.
+(defn moved-then-panic [c : bool] : int
+  (let [h (mk 1)]
+    (if c
+      (do (eat h) (callee-panics) (panic "x"))
+      (peek h))))
+
+;; Only borrowed in the arm that panics: still released.
+(defn borrowed-then-panic [c : bool] : int
+  (let [h (mk 1)]
+    (if c (do (peek h) (callee-panics) (panic "y")) (peek h))))
+
+;; A ref cell, a direct panic in its own scope.
+(defn ref-direct [] : int
+  (let [r (ref 41)]
+    (panic "boom")
+    @r))
+
+;; A ref cell, a panicking callee.
+(defn ref-callee [] : int
+  (let [r (ref 41)]
+    (callee-panics)
+    @r))
+
+;; An rc block.
+(defn rc-callee [] : int
+  (let [p (rc/of 7)]
+    (callee-panics)
+    @p))
+
+;; A by-value local's owning ref field.
+(defn field-callee [] : int
+  (let [o (Holder (ref 5))]
+    (callee-panics)
+    @(.cell o)))
+
+
+;; #1486's one-arm shape: handed on in one arm, the other panics.  The
+;; panicking arm still owns it and releases it on the unwind.
+(defn one-arm [c : bool] : int
+  (let [h (mk 1)]
+    (if c (eat h) (do (peek h) (callee-panics) (panic "z")))))
+
+;; The same, but the panicking arm hands it on in a nested arm that leaves:
+;; released once (by `eat`), not again by the unwind.
+(defn one-arm-nested [c : bool d : bool] : int
+  (let [h (mk 1)]
+    (if c
+      (eat h)
+      (do (if d (do (eat h) (panic "n")) nil)
+          (panic "z")))))
+
+(defn normal [] : int
+  (let [h (mk 9)] (peek h)))
+
+(defn main [] : int
+  (println "explicit")    (catch-unwind (fn [] : int (explicit)))
+  (println "injected")    (catch-unwind (fn [] : int (injected)))
+  (println "nested")      (catch-unwind (fn [] : int (nested)))
+  (println "with-defer")  (catch-unwind (fn [] : int (with-defer)))
+  (println "moved")       (catch-unwind (fn [] : int (moved-then-panic true)))
+  (println "borrowed")    (catch-unwind (fn [] : int (borrowed-then-panic true)))
+  (println "ref-direct")  (catch-unwind (fn [] : int (ref-direct)))
+  (println "ref-callee")  (catch-unwind (fn [] : int (ref-callee)))
+  (println "rc-callee")   (catch-unwind (fn [] : int (rc-callee)))
+  (println "field")       (catch-unwind (fn [] : int (field-callee)))
+  (println "one-arm")     (catch-unwind (fn [] : int (one-arm false)))
+  (println "one-arm-nested") (catch-unwind (fn [] : int (one-arm-nested false true)))
+  (println "normal")      (println (normal))
+  0)

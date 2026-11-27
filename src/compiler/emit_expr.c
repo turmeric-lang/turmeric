@@ -7023,6 +7023,45 @@ void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
      * same list `tur_frame_fire_chain` would walk at run time. */
     const char *fire_pre = "", *fire_post = "";
     char fire_buf[1024];
+    /* caught-panic-skips-scope-exit-drops: the scope-exit drops a `let`
+     * appends after its body are pushed onto the frame only once control
+     * reaches them, so a frame fire here cannot see them.  When any frame of
+     * the chain has one pending, the exit is written out as a block that runs
+     * them, frame by frame, ahead of that frame's own fire -- as the `return`
+     * emitter does (emit_frame_run_pending_drops). */
+    bool panic_drops = false;
+    for (const char *f = ctx->frame_var; f && !panic_drops; f = emit_frame_parent(f))
+        panic_drops = emit_frame_has_panic_drops(ctx, f);
+    bool cps_hook = rt && g_cps_panic_fire && g_cps_panic_fire_pending &&
+                    g_cps_panic_fire_pending(body);
+    if (panic_drops && !cps_hook && (rt || ctx->in_user_main)) {
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "if (tur_panicking) {\n");
+        ctx->indent += 4;
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "tur_panicking = 0;\n");
+        for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f)) {
+            emit_frame_run_pending_drops_on_panic(ctx, body, f);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "tur_frame_fire_lifo(&%s);\n", f);
+        }
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "tur_panicking = 1;\n");
+        indent_buf(body, ctx->indent);
+        if (!rt) {
+            buf_puts(body, "tur_panic_root_exit();\n");
+        } else if (strcmp(rt, "void") == 0) {
+            buf_puts(body, "return;\n");
+        } else {
+            char *rzero = emit_c_zero_of(rt);
+            buf_printf(body, "return %s;\n", rzero ? rzero : "0");
+            free(rzero);
+        }
+        ctx->indent -= 4;
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "}\n");
+        return;
+    }
     if (ctx->frame_var) {
         /* defer-skipped-on-panic-in-cps-function (direct half): the deferred
          * bodies run with the panic signal CLEARED.  They fire while
@@ -7045,7 +7084,7 @@ void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
      * the pending defers are not a frame but the CPS emitter's pending stack;
      * it installs this hook while it renders one, and the hook writes the
      * fires (and the same signal clear / raise) ahead of the return. */
-    if (rt && g_cps_panic_fire && g_cps_panic_fire_pending && g_cps_panic_fire_pending(body)) {
+    if (cps_hook) {
         indent_buf(body, ctx->indent);
         buf_puts(body, "if (tur_panicking) {\n");
         ctx->indent += 4;
@@ -7056,6 +7095,7 @@ void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
             indent_buf(body, ctx->indent);
             buf_puts(body, "tur_panicking = 0;\n");
             for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f)) {
+                emit_frame_run_pending_drops_on_panic(ctx, body, f);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "tur_frame_fire_lifo(&%s);\n", f);
             }

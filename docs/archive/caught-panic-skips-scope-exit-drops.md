@@ -11,6 +11,44 @@ drops the compiler injects for owning locals -- a move-only Drop opaque, a
 Predates #1486, which noted the one-arm case of it. Verified 2026-11-27 on
 `main` at `853f866`.
 
+**RESOLVED 2026-11-27 (compiled path).** Fix direction 1. The panic-signal
+return after a call (`emit_panic_signal_return`, `src/compiler/emit_expr.c`)
+now runs, frame by frame, the scope-exit drops a do-emitter has noted as
+pending and not pushed yet, ahead of that frame's own fire, with the panic
+signal cleared -- as the `return` emitter already did
+(`emit_frame_run_pending_drops_on_panic`, `src/compiler/emit_core.c`). It
+covers a panic raised directly in the body (`(panic ...)` ends in the same
+check) and one propagated from a callee, and the CPS-hook variant of the
+check.
+
+The moved-binding question is settled when the drops are noted, once per
+`do`: elab_let appends a drop only when the body as a whole did not hand the
+binding on, and an `if` / `match` join ignores an arm that leaves -- so the
+one way the body can have moved it on some path is a leaving arm (or a nested
+`return`). A drop whose binding such an arm names anywhere but at a `^borrow`
+argument or under `@` is left out of the panic exit (the old leak, never a
+double release); `emit_drop_owned_at_every_panic` is that test. A guard keeps
+the drops emitted on a `return` or panic exit from re-running the pending set
+at their own call checks.
+
+Pinned by `tests/fixtures/caught-panic-scope-exit-drops`, under
+`run-leak-check.sh`: the report's pair, nested scopes, a drop beside a user
+defer, a value handed on in an arm that then panics (released once), one only
+borrowed there (released), and the `ref` / `rc` / owning-field cases. The
+interpreter skips these drops on a panic exit as it does on a `return`; that
+is [turi-early-return-skips-injected-drops](../reported/turi-early-return-skips-injected-drops.md),
+and the fixture is `requires.compiled` until it is fixed.
+
+The arm-level half (#1486's one-arm shape, `(if c (eat h) (panic ...))`):
+`elab_branch_with_scope_drop` used to leave a panicking arm unchanged, so the
+value it still owned was never released. It now registers the drop AHEAD of
+such an arm -- `(do (defer (drop h)) <arm>)` -- so the unwind fires it, in
+both engines. Only when the arm uses the binding at most as a `^borrow`
+argument; a nested leaving arm could otherwise have handed it on first
+(pinned: `one-arm-nested`). That wrapper is a `!`-typed `do` with a frame,
+which `emit_tail` (`src/compiler/emit_fns.c`) now spells like a tail `panic`:
+the statement, then the function's zero.
+
 ## Repro
 
 `r/main.tur`:

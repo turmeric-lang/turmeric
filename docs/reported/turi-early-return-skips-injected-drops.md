@@ -58,12 +58,15 @@ is only the drop still pending at the end of an enclosing `let`.
 A panic that leaves the `let` does the same (measured 2026-11-27). With a
 `defer` in the body, `(let [h (mk)] (defer ...) (boom) (peek h))` under
 `catch-unwind` prints `rel` compiled and not interpreted. Without the defer
-neither engine releases the local; the compiled half of that is
-[caught-panic-skips-scope-exit-drops](caught-panic-skips-scope-exit-drops.md).
+the compiled program used to skip it too; that half is fixed
+([caught-panic-skips-scope-exit-drops](../archive/caught-panic-skips-scope-exit-drops.md),
+2026-11-27), so on a panic exit as on a `return` it is now only the
+interpreter that skips the drop.
 
-`tests/fixtures/defer-reads-let-local-drop-exits` and
-`effect-fn-early-return-drops-owned-local` are compiled-only because of this
-report; drop their `requires.compiled` when it is fixed.
+`tests/fixtures/defer-reads-let-local-drop-exits`,
+`effect-fn-early-return-drops-owned-local` and
+`caught-panic-scope-exit-drops` are compiled-only because of this report;
+drop their `requires.compiled` when it is fixed.
 
 ## Root cause
 

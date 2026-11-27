@@ -1374,6 +1374,10 @@ void emit_frame_note_pending_drops(const char *frame, const struct Expr *e);
 void emit_frame_clear_pending_drops(const char *frame);
 bool emit_frame_has_pending_drops(const EmitCtx *ctx);
 void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const struct Expr *ret);
+/* caught-panic-skips-scope-exit-drops: the same pending drops of one frame,
+ * on a call's panic exit (emit_panic_signal_return). */
+bool emit_frame_has_panic_drops(const EmitCtx *ctx, const char *frame);
+void emit_frame_run_pending_drops_on_panic(EmitCtx *ctx, Buf *body, const char *frame);
 char *fresh_defer_thunk(EmitCtx *ctx);
 char *fresh_defer_env(EmitCtx *ctx);
 void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,

@@ -862,11 +862,25 @@ Expr *elab_branch_with_scope_drop(Elab *e, Expr *branch, Binding *b, Span span) 
         branch->as.return_.n_owed = n + 1;
         return branch;
     }
-    /* An arm that panics (or is otherwise `!`) ends the computation; the
-     * value it still owns is not released on that path. */
+    /* An arm that panics (or is otherwise `!`) never reaches a trailing
+     * defer either.  Its unwind fires what the frame holds, so the drop is
+     * registered AHEAD of the arm: the arm still owns `b` throughout (it did
+     * not hand it on), and a `catch-unwind` that resumes the program then
+     * finds it released (caught-panic-skips-scope-exit-drops).  Only when
+     * the arm uses `b` at most as a `^borrow` argument: a nested arm that
+     * hands `b` on and then leaves does not count as consuming it at this
+     * arm's end, and a leading drop would release it a second time there. */
     if (branch->type.kind == TY_NEVER || branch->kind == EX_PANIC ||
-        branch->kind == EX_PANIC_WITH)
-        return branch;
+        branch->kind == EX_PANIC_WITH) {
+        if (!spec_drop_uses_ok(branch, b, 0)) return branch;
+        Expr **items = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+        items[0] = elab_drop_glue_defer(e, b, b->scope_drop_inst, span);
+        items[1] = branch;
+        Expr *d = expr_new(e->arena, EX_DO, branch->type, span);
+        d->as.do_.items = items;
+        d->as.do_.n = 2;
+        return d;
+    }
     Expr **items = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
     items[0] = branch;
     items[1] = elab_drop_glue_defer(e, b, b->scope_drop_inst, span);

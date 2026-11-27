@@ -1,0 +1,54 @@
+explicit
+  deferred
+injected
+  mk
+1
+  rel
+1
+nested
+  mk
+1
+  mk
+2
+  rel
+2
+  rel
+1
+with-defer
+  mk
+1
+  deferred
+  rel
+1
+moved
+  mk
+1
+  eat
+  rel
+1
+borrowed
+  mk
+1
+  rel
+1
+ref-direct
+ref-callee
+rc-callee
+field
+one-arm
+  mk
+1
+  rel
+1
+one-arm-nested
+  mk
+1
+  eat
+  rel
+1
+normal
+  mk
+9
+  rel
+9
+1
