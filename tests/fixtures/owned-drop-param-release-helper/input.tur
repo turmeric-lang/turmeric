@@ -1,0 +1,21 @@
+;; A type's Drop method that hands its value to a helper IS the release, so
+;; the helper does not drop the value again -- even one that never mentions
+;; its parameter, which any other function would have to drop
+;; (owned-drop-param).  Without that the helper's drop called the method, the
+;; method called the helper, and the program never ended.
+;;
+;; The helper is defined after the instance here, the order in which it would
+;; otherwise get the drop.
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (println "  mk") (:: 1 Widget))
+(definstance Drop [Widget] (drop [x] : void (release x)))
+
+(defn release [w : Widget] : void
+  (println "  release"))
+
+(defn ignore [w : Widget] : int 7)
+
+(defn main [] : int
+  (println (ignore (mk)))
+  (println (let [h (mk)] 8))
+  0)

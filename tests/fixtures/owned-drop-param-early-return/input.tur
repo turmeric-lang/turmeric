@@ -1,0 +1,32 @@
+;; owned-drop-param, for an early `return` on a path that still owns the
+;; parameter: the return releases it.
+;;
+;; Compiled only: under `tur --interpret` an early return skips an injected
+;; scope-exit drop in every function
+;; (docs/reported/turi-early-return-skips-injected-drops.md).
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (println "  mk") (:: 1 Widget))
+(defn rel [w : Widget] : void (println "  rel") (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn peek [^borrow w : Widget] : int 1)
+(defeffect Ask [] : int)
+
+(defn early [w : Widget c : bool] : int
+  (if c (return 9) nil)
+  (peek w))
+
+(defn asks [w : Widget c : bool] : int
+  (let [a (perform (Ask))]
+    (if c (return a) nil)
+    (+ a (peek w))))
+
+(defn run-asks [c : bool] : int
+  (handle (asks (mk) c)
+    (Ask [] k) (resume k 100)))
+
+(defn main [] : int
+  (println "early true") (println (early (mk) true))
+  (println "early false") (println (early (mk) false))
+  (println "asks true") (println (run-asks true))
+  (println "asks false") (println (run-asks false))
+  0)

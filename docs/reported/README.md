@@ -40,7 +40,7 @@ directory is worse for triage than no index.
 left. These are those leftovers, each measured on `main` at `853f866`, plus
 what was found while measuring and fixing them.
 
-Seven more were fixed the same day and are in `docs/archive/`:
+Eight more were fixed the same day and are in `docs/archive/`:
 
 - `cps-pass-drops-return-drop-lists`, a regression #1486 introduced: one
   `perform` or `handle` anywhere in a program made every function's `return`
@@ -59,10 +59,13 @@ Seven more were fixed the same day and are in `docs/archive/`:
 - `defer-reads-local-after-its-scope-exit-drop`: a `let`'s scope-exit drop
   ran before the body's own defers, so a defer that read the local read a
   freed cell.
+- `owned-drop-parameter-is-never-dropped`: an `^affine` Drop value passed
+  by value was released by nobody unless the callee consumed it. It left the
+  `early-return-before-...` row below.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [owned-drop-parameter-is-never-dropped](owned-drop-parameter-is-never-dropped.md) | medium (silent leak) | A move-only Drop opaque passed by value is dropped by nobody unless the callee consumes it by hand: only `let` bindings get a scope-exit drop. The reason `spices/manifold` stays `^linear`. |
+| [early-return-before-later-consume-leaks](early-return-before-later-consume-leaks.md) | medium (leak) | `(let [h (mk)] (if c (return 9) nil) (take h))` never releases `h` when `c` is true: the let appends no scope-exit drop because the body hands `h` on later, and the early `return` was left nothing to run. A `ref<T>` local leaks its cell the same way, and so does an owned parameter. Predates #1486. |
 | [caught-panic-skips-scope-exit-drops](caught-panic-skips-scope-exit-drops.md) | medium (leak per caught panic) | Under `catch-unwind`, explicit `defer`s run and compiler-injected drops (Drop opaques, `ref<T>`) do not: they are appended after the `let` body, so they are not registered while it runs. |
 | [cmake-dep-directory-scoped-imported-target-not-followed](cmake-dep-directory-scoped-imported-target-not-followed.md) | medium (link failure, no warning) | A library a dependency links through its own non-`GLOBAL` imported target is invisible to the link walk, which runs one directory up; the `Ns::name` goes into the manifest as a library name. #1486 covered only `find_package` targets on CMake 3.24+. |
 | [turi-early-return-skips-injected-drops](turi-early-return-skips-injected-drops.md) | low (interpreter only) | Under `tur --interpret`, an early `return` skips the scope-exit drop of an enclosing `let`: a Drop instance does not run on that path. The compiled program runs it. No effect involved. |

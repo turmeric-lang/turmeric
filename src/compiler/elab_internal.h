@@ -287,6 +287,18 @@ typedef struct Elab {
      * branches and elab_session_free). */
     struct TuriEnv *macro_env;
 
+    /* owned-drop-parameter-is-never-dropped: the scope-exit drop a `defn`
+     * appended for an owned parameter, keyed by the function's name and the
+     * parameter's position -- so the type's own Drop method can take it back
+     * for a helper it hands the value to (elab_drop_method_disarm_helpers).
+     * Arena-allocated. */
+    struct OwnedParamGlue {
+        const Symbol *fn;
+        uint32_t idx;
+        Expr *glue;
+        struct OwnedParamGlue *next;
+    } *owned_param_glue;
+
     /* Phase 3: Collect file-scope definitions (FN_DEF) from nested contexts */
     Expr       **file_scope_defs;
     uint32_t    n_file_scope_defs;
@@ -2413,6 +2425,16 @@ Expr *elab_tailcall(Elab *e, const Form *call);
 /* The Drop instance of a move-only (Drop, no Clone) opaque `t` when `init`
  * yields a fresh value of it, else NULL; and the `(defer (<Drop.drop> b))`
  * drop glue that releases such a local at scope exit. */
+struct TypeClassInstance *elab_sole_owner_drop_inst(Elab *e, const Type *t);
+Expr *elab_body_under_scope_drops(Elab *e, Expr *body, Span span);
+/* owned-drop-parameter-is-never-dropped (elab_fns.c). */
+void elab_owned_params_mark(Elab *e, const Form *call, uint32_t body_start,
+                            const Symbol *fn_name,
+                            Binding **params, uint32_t n_params);
+Expr *elab_owned_params_append_drops(Elab *e, const Symbol *fn_name, Expr *body,
+                                     Binding **params, uint32_t n_params, Span span);
+void elab_drop_method_disarm_helpers(Elab *e, const Expr *method_body,
+                                     const Binding *self_param);
 struct TypeClassInstance *elab_fresh_sole_owner_drop_inst(Elab *e, const Type *t,
                                                           const Expr *init);
 Expr *elab_drop_glue_defer(Elab *e, Binding *b, struct TypeClassInstance *di,

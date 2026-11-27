@@ -606,11 +606,18 @@ static bool init_yields_fresh_owner(const Expr *init, const LetBinding *locals,
 struct TypeClassInstance *elab_fresh_sole_owner_drop_inst(Elab *e, const Type *t,
                                                           const Expr *init) {
     if (!t || !init) return NULL;
+    /* fresh-producing initializer: a call, or a block yielding a fresh local */
+    if (!init_yields_fresh_owner(init, NULL, 0, 0)) return NULL;
+    return elab_sole_owner_drop_inst(e, t);
+}
+
+/* The type half of the above: the Drop instance of `t` when it is a
+ * move-only (Drop, no Clone) opaque, else NULL. */
+struct TypeClassInstance *elab_sole_owner_drop_inst(Elab *e, const Type *t) {
+    if (!t) return NULL;
     /* opaque ADT newtype only */
     if (t->kind != TY_ADT || !t->as.adt_.def || !t->as.adt_.def->is_opaque)
         return NULL;
-    /* fresh-producing initializer: a call, or a block yielding a fresh local */
-    if (!init_yields_fresh_owner(init, NULL, 0, 0)) return NULL;
     /* Drop instance present, Clone instance absent (move-only sole owner) */
     const Symbol *drop_name  = intern_cstr(e->st, "Drop");
     const Symbol *clone_name = intern_cstr(e->st, "Clone");
@@ -818,7 +825,7 @@ Expr *elab_drop_glue_defer(Elab *e, Binding *b, struct TypeClassInstance *di,
  * single item of an outer `do`, and the drops go on that one: the inner
  * block's defers fire as it ends, on every kind of exit, and the drops after
  * them.  A body with no defer of its own is returned as it is. */
-static Expr *elab_body_under_scope_drops(Elab *e, Expr *body, Span span) {
+Expr *elab_body_under_scope_drops(Elab *e, Expr *body, Span span) {
     if (!body || body->kind != EX_DO) return body;
     bool own_defer = false;
     for (uint32_t i = 0; i < body->as.do_.n && !own_defer; i++) {
@@ -2579,7 +2586,8 @@ Expr *elab_let(Elab *e, const Form *call) {
             } else {
                 /* No room to check it: spend the arguments after all. */
                 for (uint32_t q = 0; q < pending_pap_n; q++) {
-                    if (pending_pap[q]->is_affine) pending_pap[q]->usage_state = USAGE_USED_ONCE;
+                    if (pending_pap[q]->is_affine || pending_pap[q]->owned_drop_param)
+                        pending_pap[q]->usage_state = USAGE_USED_ONCE;
                     if (pending_pap[q]->is_linear) pending_pap[q]->is_linear_consumed = true;
                 }
             }

@@ -7531,7 +7531,8 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
                 ab->is_linear_consumed = false;
                 rolled = true;
             }
-            if (ab->is_affine && ab->usage_state == USAGE_USED_ONCE) {
+            if ((ab->is_affine || ab->owned_drop_param) &&
+                    ab->usage_state == USAGE_USED_ONCE) {
                 ab->usage_state = USAGE_UNUSED;
                 rolled = true;
             }
@@ -12212,7 +12213,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 }
                 /* Substructural affine: undo the single use the var-use path
                  * recorded so the borrow does not spend the at-most-once budget. */
-                if (arg_b3->is_affine
+                if ((arg_b3->is_affine || arg_b3->owned_drop_param)
                         && arg_b3->usage_state == USAGE_USED_ONCE) {
                     arg_b3->usage_state = USAGE_UNUSED;
                 }

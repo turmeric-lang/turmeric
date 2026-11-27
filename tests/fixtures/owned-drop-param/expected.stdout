@@ -1,0 +1,56 @@
+ignore
+  mk
+  rel
+7
+ignore, a local
+  mk
+  rel
+7
+reads
+  mk
+  rel
+2
+id
+  mk
+  rel
+1
+pass
+  mk
+  rel
+5
+maybe true
+  mk
+  rel
+5
+maybe false
+  mk
+  rel
+0
+keeps 1
+  mk
+  rel
+5
+keeps 0
+  mk
+  rel
+0
+early true
+  mk
+  rel
+5
+early false
+  mk
+  rel
+1
+looped
+  mk
+  rel
+2
+lent
+  mk
+  rel
+3
+asks false
+  mk
+  rel
+101

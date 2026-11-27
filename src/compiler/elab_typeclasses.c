@@ -5609,6 +5609,11 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
 
         FnDef *method_fd = mp->method_fd;
         method_fd->body = method_body;
+        /* owned-drop-parameter-is-never-dropped: a Drop method that hands its
+         * value to a helper is that helper's instruction to release it. */
+        if (tc->name && strcmp(tc->name->name, "Drop") == 0 &&
+            method_fd->n_params > 0)
+            elab_drop_method_disarm_helpers(e, method_body, method_fd->params[0]);
 
         /* constrained-generic-dispatch-tyvar-name-and-inlinec (Bug 2): stamp the
          * binding's `body_is_inline_c` flag here, the same way elab_fns.c does
@@ -7443,7 +7448,8 @@ static void method_arg_release_if_borrowed(Elab *e, const Form *call, uint32_t s
     if (!a || a->kind != EX_VAR || !a->as.var.binding) return;
     Binding *b = a->as.var.binding;
     if (b->is_linear) b->is_linear_consumed = false;
-    if (b->is_affine && b->usage_state == USAGE_USED_ONCE) b->usage_state = USAGE_UNUSED;
+    if ((b->is_affine || b->owned_drop_param) && b->usage_state == USAGE_USED_ONCE)
+        b->usage_state = USAGE_UNUSED;
 }
 
 
