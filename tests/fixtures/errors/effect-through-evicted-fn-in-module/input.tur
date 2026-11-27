@@ -1,0 +1,29 @@
+;; effect-through-evicted-fn-aborts-at-run-time: a handler that reaches its
+;; performer through an EVICTED function must be a build error, in a module
+;; as at top level.  `nested` performs through a call inside nested loops,
+;; which has no CPS lowering, so it is evicted and calls `ask-plus` through
+;; its plain entry -- a fresh root with no handler on it.  The classifier's
+;; "never called" test read the raw program items, where a `defmodule` is one
+;; opaque node: every unexported member read as unreached, its effects were
+;; zeroed, and the call-path taint had nothing to act on.  The program built,
+;; then aborted with "unhandled effect: Ask".
+(defmodule one
+  (defeffect Ask [] : int)
+  (defn ask-plus [n : int] : int
+    (+ n (perform (Ask))))
+  (defn nested [n : int] : int
+    (let [^mut i   0
+          ^mut acc 0]
+      (while (< i n)
+        (let [^mut j 0]
+          (while (< j n)
+            (set! acc (+ acc (ask-plus 1)))
+            (set! j (+ j 1))))
+        (set! i (+ i 1)))
+      acc))
+  (defn run-c [] : int
+    (handle (nested 2)
+      (Ask [] k) (resume k 10)))
+  (defn main [] : int
+    (println (run-c))
+    0))

@@ -602,8 +602,8 @@ Still per-unit, and not affected: the E2 twin registry (`__tur_cps_reg`), the
 serial-continuation registry (`__sk_registry`) and the `call/cc` escape state.
 An effectful *function value* passed into another module's higher-order
 function is therefore not threaded across units. A whole-program build of
-modules refuses that shape too
-([module-effectful-fn-value-has-no-lowering](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/module-effectful-fn-value-has-no-lowering.md)).
+modules has one registry and threads it, since 2026-11-27
+([module-effectful-fn-value-has-no-lowering](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/module-effectful-fn-value-has-no-lowering.md)).
 
 `emit_split_lib_owns` is not involved: it belongs to the r7rs split below and
 returns false whenever that split is off.

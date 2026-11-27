@@ -1,0 +1,13 @@
+;; effect-through-evicted-fn-aborts-at-run-time, the imported shape: the
+;; performer and the evicted function it is reached through live in another
+;; module of the same whole-program build.  Here it was the HANDLER (`run-c`,
+;; an unexported member of `app`) whose effects the classifier zeroed, so no
+;; handler-to-performer path existed to taint.  Must be a build error.
+(defmodule app
+  (import evicted/lib :as l)
+  (defn run-c [] : int
+    (handle (l/nested 2)
+      (Ask [] k) (resume k 10)))
+  (defn main [] : int
+    (println (run-c))
+    0))

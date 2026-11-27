@@ -47,10 +47,11 @@ always did):
 Tests: `build-project-sepcomp-*` in `tests/run-build-project.sh`,
 `build-shared-cross-module-effect*` in `tests/run-build-shared.sh`.
 
-Two whole-program defects turned up on the way and are filed separately:
-[effect-through-evicted-fn-aborts-at-run-time](../reported/effect-through-evicted-fn-aborts-at-run-time.md)
+Two whole-program defects turned up on the way and were filed separately,
+both resolved 2026-11-27:
+[effect-through-evicted-fn-aborts-at-run-time](effect-through-evicted-fn-aborts-at-run-time.md)
 and
-[module-effectful-fn-value-has-no-lowering](../reported/module-effectful-fn-value-has-no-lowering.md).
+[module-effectful-fn-value-has-no-lowering](module-effectful-fn-value-has-no-lowering.md).
 
 **History.** Narrowed 2026-10-18 (fix direction 2): the effect checker
 refused, at the call site, every call into another module whose callee could

@@ -6775,10 +6775,13 @@ static bool thin_alias_visit(const Expr *e, void *ud) {
     cps_visit_children(e, thin_alias_visit, ud);
     return false;
 }
-static void thin_alias_collect(const Expr *program) {
+/* Over ensure_S's flattened items, like every whole-program walk below: the
+ * raw program items hold a `defmodule` as one opaque node, which hid a
+ * module's fn-value uses from all of them. */
+static void thin_alias_collect(const Expr **items, uint32_t np) {
     g_thin_alias_n = 0;
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        const Expr *it = program->as.program.items[i];
+    for (uint32_t i = 0; i < np; i++) {
+        const Expr *it = items[i];
         if (!it) continue;
         thin_alias_visit((it->kind == EX_FN_DEF && it->as.fn_def_.fn)
                          ? it->as.fn_def_.fn->body : it, NULL);
@@ -6922,11 +6925,11 @@ static void fv_multi_free(FvMulti *m) {
 
 /* The same item walk, and the same per-item accumulator, as the single-target
  * fn_value_threadable / fnval_stored_in_struct. */
-static void fv_multi_tally(const Expr *program, FvMulti *m) {
+static void fv_multi_tally(const Expr *program, const Expr **items, uint32_t np,
+                           FvMulti *m) {
     EffSet sink = {0};
-    uint32_t np = program->as.program.n;
     for (uint32_t i = 0; i < np; i++) {
-        Expr *it = program->as.program.items[i];
+        const Expr *it = items[i];
         if (!it) continue;
         const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
                          ? it->as.fn_def_.fn->body : it;
@@ -7004,14 +7007,14 @@ static bool fn_sig_has_tyvar_slot(const Type *t) {
     return false;
 }
 
-static bool param_is_thread_safe(const Expr *program, const FnDef *fd, uint32_t pi) {
+static bool param_is_thread_safe(const Expr *program, const Expr **items, uint32_t np,
+                                 const FnDef *fd, uint32_t pi) {
     if (!program || program->kind != EX_PROGRAM || !fd || !fd->binding) return false;
-    uint32_t np = program->as.program.n;
     int seen = 0;
     /* A pure value is fine where the dispatch can call it directly. */
     bool lenient = e2a_param_fallback_ok(fd, pi);
     for (uint32_t i = 0; i < np; i++) {
-        Expr *it = program->as.program.items[i];
+        const Expr *it = items[i];
         if (!it) continue;
         const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
                          ? it->as.fn_def_.fn->body : it;
@@ -7336,7 +7339,14 @@ static void reach_refs_reset(void) {
     g_reach_refs_ready = false;
     reach_index_reset(&g_reach_ix);
 }
-static bool fn_unreached(const Expr *program, const FnDef *fd) {
+/* `items`/`np`: ensure_S's FLATTENED view of the program.  cps_visit_children
+ * does not enter a `defmodule` (a declaration node), so over the raw program
+ * items no call made inside a module was recorded, and every member a module
+ * did not export read as unreached -- its effects zeroed, and with them the
+ * taint that keeps a handler and its performer on one machine
+ * (effect-through-evicted-fn-aborts-at-run-time). */
+static bool fn_unreached(const Expr *program, const Expr **items, uint32_t np,
+                         const FnDef *fd) {
     const Binding *b = fd ? fd->binding : NULL;
     if (!b || !b->name || !program || program->kind != EX_PROGRAM) return false;
     /* User code only: a stdlib helper may be reached by a call the emitter
@@ -7346,8 +7356,8 @@ static bool fn_unreached(const Expr *program, const FnDef *fd) {
         || addr_taken_has(b))
         return false;
     if (!g_reach_refs_ready) {
-        for (uint32_t i = 0; i < program->as.program.n; i++) {
-            const Expr *it = program->as.program.items[i];
+        for (uint32_t i = 0; i < np; i++) {
+            const Expr *it = items[i];
             if (!it) continue;
             reach_refs_visit((it->kind == EX_FN_DEF && it->as.fn_def_.fn)
                              ? it->as.fn_def_.fn->body : it, &g_reach_refs);
@@ -7543,7 +7553,7 @@ static void ensure_S(const Expr *program) {
     g_direct_only_fn_n = 0;
     g_alias_target_n = 0;     /* refilled by the tally walk below */
     reach_refs_reset();       /* fn_unreached's walk, refilled on first use */
-    thin_alias_collect(program);
+    thin_alias_collect(items, np);
     cps_ir_thread_param_reset();
     bool trace = getenv("TUR_TRACE_EVICT") != NULL;
     /* Every target first, then one tally walk for all of them (FvMulti), then
@@ -7570,7 +7580,7 @@ static void ensure_S(const Expr *program) {
     }
     FvMulti fvm;
     fv_multi_init(&fvm, tg_b, ntg);
-    fv_multi_tally(program, &fvm);
+    fv_multi_tally(program, items, np, &fvm);
     for (int ti = 0; ti < ntg; ti++) {
         FnDef *fd = tg_fd[ti];
         int sl = fvm_slot(&fvm, fd->binding);
@@ -7651,7 +7661,7 @@ static void ensure_S(const Expr *program) {
             for (uint32_t pi = 0; pi < fd->n_params; pi++) {
                 PtClass pc = param_thread_class(fd, pi);
                 if ((pc == PT_NOW || pc == PT_NONTAIL)
-                    && param_is_thread_safe(program, fd, pi))
+                    && param_is_thread_safe(program, items, np, fd, pi))
                     cps_ir_thread_param_add(fd->params[pi]);
             }
         }
@@ -7797,7 +7807,7 @@ static void ensure_S(const Expr *program) {
                 /* Never runs, so it taints nothing (fn_unreached) -- neither as
                  * an evicted fn nor through a whole-body delegation's seeding of
                  * the base taint below. */
-                if (fn_unreached(program, fd)) {
+                if (fn_unreached(program, items, np, fd)) {
                     memset(&en->perf, 0, sizeof en->perf);
                     memset(&en->hand, 0, sizeof en->hand);
                     memset(&en->eff, 0, sizeof en->eff);
