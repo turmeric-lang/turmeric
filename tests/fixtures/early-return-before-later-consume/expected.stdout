@@ -1,0 +1,71 @@
+local
+  mk
+  rel
+9
+  mk
+  rel
+5
+cell
+9
+4
+param
+  mk
+  rel
+7
+  mk
+  rel
+5
+  mk
+  rel
+7
+  mk
+  rel
+8
+question
+  mk
+  rel
+-1
+  mk
+  rel
+8
+arm
+  mk
+  rel
+20
+  mk
+  rel
+5
+nested
+  mk
+  mk
+  rel
+  rel
+11
+  mk
+  mk
+  rel
+  rel
+5
+joined
+  mk
+  rel
+1
+  mk
+  rel
+2
+lambda
+  mk
+10
+  rel
+5
+  mk
+1
+  rel
+5
+given
+  mk
+  rel
+  mk
+  rel
+  mk
+  rel

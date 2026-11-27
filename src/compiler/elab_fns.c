@@ -10195,13 +10195,18 @@ void elab_owned_params_mark(Elab *e, const Form *call, uint32_t body_start,
 }
 
 Expr *elab_owned_params_append_drops(Elab *e, const Symbol *fn_name, Expr *body,
-                                     Binding **params, uint32_t n_params, Span span) {
+                                     Binding **params, uint32_t n_params,
+                                     uint32_t ret_log_start, Span span) {
     if (!body) return body;
     for (uint32_t i = 0; i < n_params; i++) {
         Binding *p = params[i];
         if (!p || !p->owned_drop_param || !p->scope_drop_inst) continue;
-        if (elab_path_consumed(p, false, p->is_moved, USAGE_UNUSED, p->usage_state))
+        if (elab_path_consumed(p, false, p->is_moved, USAGE_UNUSED, p->usage_state)) {
+            /* early-return-before-later-consume-leaks: handed on by the end,
+             * but maybe not yet at a `return` that left first. */
+            elab_returns_release(e, ret_log_start, p, span);
             continue;
+        }
         body = elab_body_under_scope_drops(e, body, span);
         Expr *glue = elab_drop_glue_defer(e, p, p->scope_drop_inst, span);
         uint32_t n = body->kind == EX_DO ? body->as.do_.n : 1;
@@ -12895,6 +12900,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
     e->current_fn_name = name_f->as.sym;
     if (fn_declared_unsafe) e->unsafe_depth++;
     elab_owned_params_mark(e, call, body_start, name_f->as.sym, params, n_params);
+    /* early-return-before-later-consume-leaks: the body's returns start here. */
+    const uint32_t param_ret_log_start = e->n_ret_log;
     /* van-laarhoven-lens-composition: expose this fn's single higher-kinded
      * constraint (`^Functor f`, tyvar `f : * -> *`) to its body so a nested call
      * to another constrained rank-2 fn at the same abstract functor can forward
@@ -13181,7 +13188,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
     }
     if (!lazy_defer)
         body = elab_owned_params_append_drops(e, name_f->as.sym, body, params,
-                                              n_params, call->span);
+                                              n_params, param_ret_log_start,
+                                              call->span);
     e->n_ret_tail_calls = saved_n_tail_calls;
     e->ret_tail_scalar = saved_tail_scalar;
     memcpy(e->ret_tail_calls, saved_tail_calls, sizeof saved_tail_calls);

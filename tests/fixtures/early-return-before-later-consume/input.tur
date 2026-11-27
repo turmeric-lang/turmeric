@@ -1,0 +1,112 @@
+;; An early `return` releases what its own path still owns, when a LATER
+;; statement is what hands the value on.  The let decides its scope-exit drop
+;; once, after its whole body: a value the body hands on gets none, so the
+;; `return` that left before the hand-off had nothing pending to run.
+;;
+;; Before, every `true` / `0` call below printed `mk` with no `rel` after it,
+;; and the ref cells of `cell` and `cellp` leaked.
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (println "  mk") (:: 1 Widget))
+(defn rel [w : Widget] : void (println "  rel") (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn take [w : Widget] : int (rel w) 5)
+
+(defn src [c : bool] : (Result int cstr) (if c (Err "bad") (Ok 3)))
+
+;; A let local, handed on after the `return`.
+(defn local [c : bool] : int
+  (let [h (mk)]
+    (if c (return 9) nil)
+    (take h)))
+
+;; An owned `ref<T>`, dropped explicitly after the `return`.
+(defn cell [c : bool] : int
+  (let [r (ref 4)]
+    (if c (return 9) nil)
+    (let [v @r]
+      (drop! r)
+      v)))
+
+;; The same two with an owned parameter in place of the local.
+(defn param [w : Widget c : bool] : int
+  (if c (return 7) nil)
+  (take w))
+
+(defn paramw [w : Widget c : bool] : int
+  (when c (return 7))
+  (rel w)
+  8)
+
+;; The early exit a `?` lowers to.
+(defn question [c : bool] : (Result int cstr)
+  (let [h (mk)]
+    (let [x (? (src c))]
+      (Ok (+ x (take h))))))
+
+;; A `return` in a match arm.
+(defn arm [k : int] : int
+  (let [h (mk)]
+    (match k
+      0 (return 20)
+      _ 0)
+    (take h)))
+
+;; Two lets: the `return` owes both locals.
+(defn nested [c : bool] : int
+  (let [a (mk)]
+    (let [b (mk)]
+      (if c (return 11) nil)
+      (take b))
+    (take a)))
+
+;; The join already gave the `return` arm the drop: it runs once.
+(defn joined [c : bool] : int
+  (let [h (mk)]
+    (if c (return 1) (rel h))
+    2))
+
+;; A `return` in a lambda leaves the lambda: it does not release `h`.
+(defn lambda [c : bool] : int
+  (let [h (mk)]
+    (let [k (fn [x : int] : int (if c (return 10) nil) x)]
+      (println (k 1))
+      (take h))))
+
+;; Returned: handed on by the value, not released.
+(defn given [c : bool] : Widget
+  (let [h (mk)]
+    (if c (return h) nil)
+    (rel h)
+    (mk)))
+
+(defn main [] : int
+  (println "local")
+  (println (local true))
+  (println (local false))
+  (println "cell")
+  (println (cell true))
+  (println (cell false))
+  (println "param")
+  (println (param (mk) true))
+  (println (param (mk) false))
+  (println (paramw (mk) true))
+  (println (paramw (mk) false))
+  (println "question")
+  (println (match (question true) (Ok v) v (Err e) -1))
+  (println (match (question false) (Ok v) v (Err e) -1))
+  (println "arm")
+  (println (arm 0))
+  (println (arm 1))
+  (println "nested")
+  (println (nested true))
+  (println (nested false))
+  (println "joined")
+  (println (joined true))
+  (println (joined false))
+  (println "lambda")
+  (println (lambda true))
+  (println (lambda false))
+  (println "given")
+  (rel (given true))
+  (rel (given false))
+  0)
