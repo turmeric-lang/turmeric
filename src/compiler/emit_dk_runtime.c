@@ -1393,6 +1393,18 @@ void emit_cps_runtime_prelude(Buf *out) {
      * the base). */
     buf_puts(out,
 "__attribute__((unused)) static tur_dkw __dk_reap_closure(tur_dkw p) { __dk_reap_push((void *)p, 2); return p; }\n"
+/* cps-byvalue-struct-with-closure-field: register a closure a continuation
+ * frame was DELIVERED -- a field of a struct a colored call returned -- unless
+ * it is registered already.  The frame can run more than once (a multi-shot
+ * resume inside the callee, after it built the struct, delivers the same
+ * closure each time), and the boundary frees every entry it holds. */
+"__attribute__((unused)) static tur_dkw __dk_reap_closure_once(tur_dkw p) {\n"
+"    if (!p) return p;\n"
+"    for (size_t i = __dk_reap_n; i-- > 0; )\n"
+"        if (__dk_reap_v[i] == (void *)p && __dk_reap_kind[i] == 2) return p;\n"
+"    __dk_reap_push((void *)p, 2);\n"
+"    return p;\n"
+"}\n"
 /* closure-let-in-self-tail-loop-leaks: a CPS self-tail loop's backedge frees
  * the closures that turn registered, instead of holding one per turn until the
  * outermost entry returns.  The entry comes OFF the list (order kept, so no
