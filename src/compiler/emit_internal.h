@@ -1378,6 +1378,13 @@ void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const struct Expr *re
  * on a call's panic exit (emit_panic_signal_return). */
 bool emit_frame_has_panic_drops(const EmitCtx *ctx, const char *frame);
 void emit_frame_run_pending_drops_on_panic(EmitCtx *ctx, Buf *body, const char *frame);
+/* > 0 while those drops are emitted: emit_panic_signal_return writes nothing. */
+extern int g_emit_in_panic_exit;
+/* `if (tur_panicking) goto <the scope's shared panic exit>;`, and the
+ * exits themselves, written when the frame's scope closes (every do-emitter
+ * that opens a frame calls the flush before restoring ctx->frame_var). */
+void emit_panic_exit_goto(EmitCtx *ctx, Buf *body, const char *ret_stmt);
+void emit_frame_flush_panic_exits(EmitCtx *ctx, Buf *body, const char *frame);
 char *fresh_defer_thunk(EmitCtx *ctx);
 char *fresh_defer_env(EmitCtx *ctx);
 void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,

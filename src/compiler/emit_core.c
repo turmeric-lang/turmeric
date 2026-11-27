@@ -3687,9 +3687,18 @@ bool emit_frame_has_panic_drops(const EmitCtx *ctx, const char *frame) {
  * Only the drops emit_drop_owned_at_every_panic admitted run; the rest keep
  * the old behaviour (a leak on this path), never a release of a value a
  * leaving arm may already have handed on. */
+int g_emit_in_panic_exit = 0;
+
 void emit_frame_run_pending_drops_on_panic(EmitCtx *ctx, Buf *body, const char *frame) {
     if (g_pending_drops_suppressed || !frame) return;
     g_pending_drops_suppressed++;
+    /* No panic check after a call inside these drops: they run while a panic
+     * is in progress (tur_panic_in_progress), so a panic one raises is the
+     * double panic tur_panic_at aborts on -- the check could never fire.
+     * Leaving it out keeps every call site's panic exit two calls long, not
+     * a frame fire per drop; that growth was enough to change gcc 15's
+     * inlining of an unrelated loop (tests/check-numvec-vectorized.py). */
+    g_emit_in_panic_exit++;
     for (uint32_t i = g_frame_drops_n; i-- > 0; ) {
         if (g_frame_drops[i].n == 0 || strcmp(g_frame_drops[i].frame, frame) != 0)
             continue;
@@ -3700,7 +3709,104 @@ void emit_frame_run_pending_drops_on_panic(EmitCtx *ctx, Buf *body, const char *
             emit_stmt(ctx, body, d);
         }
     }
+    g_emit_in_panic_exit--;
     g_pending_drops_suppressed--;
+}
+
+/* caught-panic-skips-scope-exit-drops: one shared panic exit per scope.
+ * Writing the drops out at every call that can panic multiplied a function's
+ * size by the number of its calls (each drop method inlines), which moved
+ * gcc's inlining enough to stop an unrelated loop vectorizing
+ * (tests/check-numvec-vectorized.py, gcc 15).  So a call site jumps instead
+ * -- `if (tur_panicking) goto __pexit_N;` -- to a block the innermost frame's
+ * do-emitter writes once, when it closes the scope
+ * (emit_frame_flush_panic_exits): `if (0) { __pexit_N: ... }`.  Every site
+ * that reaches one label has the same pending drops along the same chain,
+ * which `sig` records; a site after the frame pushed its own drops gets a
+ * label of its own.  The jump only goes forward and outward, to a block in
+ * the scope that declared the frame (and, before it, the bindings dropped),
+ * and the emitter declares no variably modified type it could skip. */
+typedef struct { char *frame; char *sig; char *label; char *text; } PanicExit;
+static PanicExit *g_pexits = NULL;
+static uint32_t g_pexits_n = 0, g_pexits_cap = 0;
+
+static char *panic_exit_sig(const EmitCtx *ctx) {
+    Buf s; buf_init(&s);
+    for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f)) {
+        buf_printf(&s, "%s", f);
+        for (uint32_t i = g_frame_drops_n; i-- > 0; )
+            if (g_frame_drops[i].n > 0 && strcmp(g_frame_drops[i].frame, f) == 0)
+                buf_printf(&s, ":%p/%u", (const void *)g_frame_drops[i].items,
+                           g_frame_drops[i].n);
+        buf_putc(&s, ';');
+    }
+    return s.data ? s.data : tur_strdup("");
+}
+
+void emit_panic_exit_goto(EmitCtx *ctx, Buf *body, const char *ret_stmt) {
+    char *sig = panic_exit_sig(ctx);
+    const char *label = NULL;
+    for (uint32_t i = 0; i < g_pexits_n && !label; i++)
+        if (strcmp(g_pexits[i].frame, ctx->frame_var) == 0 &&
+            strcmp(g_pexits[i].sig, sig) == 0)
+            label = g_pexits[i].label;
+    if (!label) {
+        Buf t; buf_init(&t);
+        int saved_indent = ctx->indent;
+        ctx->indent = 4;
+        indent_buf(&t, ctx->indent);
+        buf_puts(&t, "tur_panicking = 0;\n");
+        for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f)) {
+            emit_frame_run_pending_drops_on_panic(ctx, &t, f);
+            indent_buf(&t, ctx->indent);
+            buf_printf(&t, "tur_frame_fire_lifo(&%s);\n", f);
+        }
+        indent_buf(&t, ctx->indent);
+        buf_puts(&t, "tur_panicking = 1;\n");
+        indent_buf(&t, ctx->indent);
+        buf_printf(&t, "%s\n", ret_stmt);
+        ctx->indent = saved_indent;
+        if (g_pexits_n == g_pexits_cap) {
+            g_pexits_cap = g_pexits_cap ? g_pexits_cap * 2 : 16;
+            g_pexits = (PanicExit *)realloc(g_pexits, g_pexits_cap * sizeof(*g_pexits));
+            if (!g_pexits) { fprintf(stderr, "tur: oom\n"); abort(); }
+        }
+        char lb[32];
+        snprintf(lb, sizeof(lb), "__pexit_%d", ctx->tmp_n++);
+        g_pexits[g_pexits_n].frame = tur_strdup(ctx->frame_var);
+        g_pexits[g_pexits_n].sig = sig;
+        g_pexits[g_pexits_n].label = tur_strdup(lb);
+        g_pexits[g_pexits_n].text = t.data ? t.data : tur_strdup("");
+        label = g_pexits[g_pexits_n].label;
+        g_pexits_n++;
+        sig = NULL;
+    }
+    free(sig);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (tur_panicking) goto %s;\n", label);
+}
+
+void emit_frame_flush_panic_exits(EmitCtx *ctx, Buf *body, const char *frame) {
+    if (!frame) return;
+    uint32_t w = 0;
+    for (uint32_t i = 0; i < g_pexits_n; i++) {
+        PanicExit *p = &g_pexits[i];
+        if (strcmp(p->frame, frame) != 0) { g_pexits[w++] = *p; continue; }
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "if (0) {\n");
+        buf_printf(body, "%s:\n", p->label);
+        for (const char *s = p->text; *s; ) {
+            const char *nl = strchr(s, '\n');
+            size_t len = nl ? (size_t)(nl - s + 1) : strlen(s);
+            indent_buf(body, ctx->indent);
+            buf_write(body, s, len);
+            s += len;
+        }
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "}\n");
+        free(p->frame); free(p->sig); free(p->label); free(p->text);
+    }
+    g_pexits_n = w;
 }
 
 void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const Expr *ret) {

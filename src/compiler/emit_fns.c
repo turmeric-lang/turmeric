@@ -1890,6 +1890,7 @@ static void emit_tail_drop_hoist_do(EmitCtx *ctx, Buf *body, const Expr *fn_e,
     for (uint32_t i = (uint32_t)last + 1; i < e->as.do_.n; i++)
         emit_frame_push_defer(ctx, body, frame_var, e->as.do_.items[i]);
     emit_tail(ctx, body, fn_e, fd, e->as.do_.items[last], result_kind, is_main);
+    emit_frame_flush_panic_exits(ctx, body, frame_var);
     ctx->frame_var = saved_frame;
     free(frame_var);
 }

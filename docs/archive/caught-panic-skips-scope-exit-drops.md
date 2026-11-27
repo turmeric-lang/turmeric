@@ -21,6 +21,16 @@ covers a panic raised directly in the body (`(panic ...)` ends in the same
 check) and one propagated from a callee, and the CPS-hook variant of the
 check.
 
+The drops are written once per scope, not at every call: a call site jumps
+to a shared exit (`if (tur_panicking) goto __pexit_N;`), which the do-emitter
+writes as `if (0) { __pexit_N: ... }` when the frame's scope closes
+(`emit_panic_exit_goto` / `emit_frame_flush_panic_exits`). The first version
+wrote them out at each site, and the growth was enough to change GCC 15's
+inlining in `tests/vectorize/numvec-probe.tur`, so `probe-float-partials`
+stopped vectorizing (`tur_numvec_vectorized`, the Ubuntu 26.04 CI leg). No
+panic check follows a call inside those drops: they run while a panic is in
+progress, so a second one is the double panic `tur_panic_at` aborts on.
+
 The moved-binding question is settled when the drops are noted, once per
 `do`: elab_let appends a drop only when the body as a whole did not hand the
 binding on, and an `if` / `match` join ignores an arm that leaves -- so the
