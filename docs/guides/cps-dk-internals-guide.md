@@ -490,6 +490,10 @@ sequence inline in `int main(int argc, char **argv)`.
 
 - **Uncolored code calling `f`** calls the entry wrapper. Each such call starts
   a fresh chain, so effects never cross it.
+- **A `__cps` body calling another module's effectful function** (separate
+  compilation only) is a cps->cps call too: the callee's module exports its
+  `__cps` twin, and the caller threads `__kont` into it. See
+  [Across separately compiled modules](#across-separately-compiled-modules).
 - **A `__cps` body calling an uncolored (or evicted) function** makes an
   ordinary C call (`CT_LETCALL`, or a `CT_LETRAW`), checks `tur_panicking`, and
   continues.
@@ -499,6 +503,35 @@ sequence inline in `int main(int argc, char **argv)`.
   to the driver (`__dk_tail_deep`/`__dk_bounce`). That keeps unoptimized
   builds, where the C compiler does not emit sibling calls, from overflowing
   the stack.
+
+### Across separately compiled modules
+
+Everything above describes one program in one C unit. `tur build <dir>`
+without a single-`main` manifest, and `--shared`, emit one unit per module,
+and `ensure_S` then classifies one module at a time. An effect still crosses
+the units
+([sepcomp-cross-module-effect-unhandled](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sepcomp-cross-module-effect-unhandled.md)):
+
+- A module gives the `__cps` twin of each *exported* function in its `S`
+  external (hidden) linkage.
+- An importer's `ensure_S` builds the set of other-module callees it threads
+  into (`xmod_callees_build`): exported, non-generic, `fn_sig_ok`, and able to
+  perform a user effect according to the effect checker's row for it. For
+  those, `callee_colored` (translator) and `binding_in_s` (emitter) answer
+  true, and a call's effects are credited to the caller's `perf` set, so
+  Rules B and C see the call as a `perform`.
+- The emitted tag is `effect_emit_tag`: derived from the effect's name, where
+  a whole-program build uses `effect_tag`'s counter. `effect_tag` still
+  numbers the bits of the classification's `EffSet`s in every build.
+- The machine's state is one instance per linked output
+  (`emit_dk_shared_state`), not one per unit.
+
+A call the backend cannot thread -- the caller was evicted, or the callee's
+module did not export a twin -- is an error at the call site, not a fresh
+root. The
+[separate compilation guide](separate-compilation-internals-guide.md#cps-functions-across-tus)
+has the details, the ledger that catches a twin the owner never emitted, and
+what is still per-unit.
 
 ### Lifted helpers
 
@@ -654,7 +687,9 @@ Read the `struct DK` comments in that text, or in its committed copy
 - `1`: every `reset`/`shift`. There is one prompt tag for all base delimited
   control.
 - `2` and up: one per effect, assigned by `emit_cps_ir.c:effect_tag` and
-  memoized per interned effect symbol. The table holds `CPS_MAX_EFFECTS` (128)
+  memoized per interned effect symbol. A separately compiled unit emits
+  `effect_emit_tag` instead, a hash of the effect's name that every unit
+  computes alike (a number such as `2096980404`, not `2`). The table holds `CPS_MAX_EFFECTS` (128)
   entries. Past that, `effect_tag` returns 2 for every further effect, which
   collides with the first one; nothing diagnoses it
   ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/effect-tags-collide-past-128-effects.md)).
@@ -683,7 +718,7 @@ Read the `struct DK` comments in that text, or in its committed copy
      search is by tag only; `hgroup` does not affect it. Reaching `DONE`
      prints `unhandled effect: Name (tag N)` and aborts. `name` is the
      effect's name, a literal at the perform site; it is used only there,
-     since a tag is numbered per unit.
+     since a tag is a per-program number or a hash, not a name.
   2. It hands the case a continuation in one of four ways, cheapest first:
      1. **Tail, in place.** The case is `tail_inplace`, the handler is deep,
         and a driver is installed: the case gets the **original** `k`.
@@ -929,6 +964,11 @@ The DK variables are `TUR_THREAD_LOCAL`:
 Under the JIT and the split runtime they are routed through
 `src/runtime/tur_tls.c`.
 
+A program built as separate module units has **one** copy of all of the above
+and of the process-wide state below, defined in the runtime's owner unit
+(`emit_dk_shared_state`). The E2 registry and `__sk_registry` are the
+exceptions: each unit still has its own.
+
 These are process-wide:
 
 - the atomic `g_dk_hgroup_ctr`;
@@ -1062,6 +1102,8 @@ the field comments in `struct DK` often name the report that introduced them.
 Update this guide in the same PR when you:
 
 - add or remove a CT-IR term kind, a DK node kind or a DK field family;
+- add, rename or remove a piece of the machine's file-scope state (it also has
+  a row in `emit_module.c:emit_dk_shared_state`);
 - change the `__cps` ABI or the entry wrapper;
 - add an eviction category, a trace variable or a dump flag;
 - move a feature onto or off the chain.

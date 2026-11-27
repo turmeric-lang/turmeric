@@ -7,10 +7,9 @@ nothing and reports no error. Every `Packed*Array` a script builds stays empty.
 `godot-array-push` and `godot-dict-set` are unaffected -- Godot's `Array` and
 `Dictionary` are reference types, so mutating a copy mutates the shared body.
 
-> Status: **fixed on the `claude/godot-packed-array-push-fy8kv9` branch of
-> `turmeric-godot` (2026-11-24), not yet merged.** Held open until the fix
-> ships, as `godot-baked-in-prelude-fails-to-eval` was; archive it then. See
-> "Fix" at the end.
+> Status: **resolved 2026-11-24** by
+> [turmeric-godot#6](https://github.com/turmeric-lang/turmeric-godot/pull/6)
+> (merged as `aa903b4`). See "Fix" at the end.
 
 **Severity:** Medium. It is silent -- no diagnostic, no crash, just an array
 that is always size 0 -- and it defeats the whole T3.D `PackedXxxArray` surface
@@ -93,11 +92,11 @@ expose. The write-back is the straightforward route.
 ## Note
 
 Found while building the AOT C entry points for these natives
-([godot-aot-staged-build-lacks-godot-natives.md](godot-aot-staged-build-lacks-godot-natives.md)).
+([godot-aot-staged-build-lacks-godot-natives.md](../reported/godot-aot-staged-build-lacks-godot-natives.md)).
 The AOT path forwards to the same implementations, so it inherits the bug
 exactly -- fixing it once fixes both routes.
 
-## Fix (2026-11-24, on the branch above)
+## Fix (2026-11-24, turmeric-godot#6)
 
 The write-back route. `variant_arena_replace(handle, Variant)` in
 `src/bridge/variant_marshal.{h,cpp}` overwrites the arena slot a handle names,

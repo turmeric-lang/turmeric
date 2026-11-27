@@ -1071,10 +1071,11 @@ EOF
 done
 
 # sepcomp-cross-module-effect-unhandled: `tur build <dir>` compiles each module
-# as its own C unit, and an effect cannot reach a handler across that
-# boundary.  A call into another module that can perform a user effect is
-# refused at the call site (it used to build and abort "unhandled effect" at
-# run time); a module that handles its own effect still builds and runs.
+# as its own C unit, and an effect performed in one reaches a handler in
+# another.  The performer's module exports its `__cps` twin, the importer
+# threads its chain into it, the effect's tag is derived from its name, and
+# the units share one DK machine.  (It used to build and abort "unhandled
+# effect" at run time, then -- from 2026-10-18 -- was refused at the call.)
 SEPDIR="$WORK/sepcomp-effect"
 mkdir -p "$SEPDIR/effects"
 cat > "$SEPDIR/effects/ask.tur" <<'EOF'
@@ -1095,14 +1096,14 @@ cat > "$SEPDIR/myapp.tur" <<'EOF'
     (println (run))
     0))
 EOF
-sep_out=$(cd "$SEPDIR" && "$TUR" build . 2>&1)
+sep_out=$(cd "$SEPDIR" && "$TUR" build . -o "$WORK/sepbin0" 2>&1 && "$WORK/sepbin0" 2>&1)
 sep_rc=$?
-if [ $sep_rc -eq 1 ] &&
-   grep -q 'can perform the effect `Ask`, and this call crosses' <<< "$sep_out" &&
-   grep -q 'myapp.tur:4:' <<< "$sep_out"; then
-    pass "build-project-sepcomp-cross-module-effect-refused"
+if [ $sep_rc -eq 0 ] && [ "$sep_out" = "99" ] &&
+   grep -q '^TUR_RT_LOCAL int64_t effects__ask__ask_hyeffect__cps(' "$SEPDIR/build/obj/effects__ask.c" &&
+   grep -q 'return effects__ask__ask_hyeffect__cps(' "$SEPDIR/build/obj/myapp.c"; then
+    pass "build-project-sepcomp-cross-module-effect-threaded"
 else
-    fail "build-project-sepcomp-cross-module-effect-refused" "rc=$sep_rc out=$sep_out"
+    fail "build-project-sepcomp-cross-module-effect-threaded" "rc=$sep_rc out=$sep_out"
 fi
 cat > "$SEPDIR/myapp.tur" <<'EOF'
 (defmodule myapp
@@ -1118,6 +1119,169 @@ if [ $sep_rc -eq 0 ] && [ "$(tail -1 <<< "$sep_out")" = "42" ]; then
     pass "build-project-sepcomp-module-handles-own-effect"
 else
     fail "build-project-sepcomp-module-handles-own-effect" "rc=$sep_rc out=$sep_out"
+fi
+
+# The shapes that go through the machine's shared state.  Two effects from two
+# modules, a third module between them and the handlers, nested handlers (the
+# shape that delivered the answer past the code after the `handle` while each
+# unit still had its own driver landing: exit status 52 and no output), a
+# non-tail resume, a float and a cstr across the boundary, a by-value struct
+# argument, a `:refer` import, mutual recursion and a loop that perform 150000
+# times.  The separate build must print what the one-unit build prints.
+SEPX="$WORK/sepcomp-effect-shapes"
+mkdir -p "$SEPX"
+cat > "$SEPX/ea.tur" <<'EOF'
+(defmodule ea
+  (export ask-plus scale sum-p greet note even-ask odd-ask P make-p)
+  (defeffect Ask [] : int)
+  (defeffect Scale [x : float] : float)
+  (defstruct P [x : int y : int])
+  (defn make-p [x : int y : int] : P (P x y))
+  (defn ask-plus [n : int] : int
+    (+ n (perform (Ask))))
+  (defn scale [x : float] : float
+    (+ 0.5 (perform (Scale x))))
+  (defn sum-p [p : P] : int
+    (+ (+ (.x p) (.y p)) (perform (Ask))))
+  (defn greet [name : cstr] : cstr
+    (if (> (perform (Ask)) 5) name "nobody"))
+  (defn note [n : int] : void
+    (println (+ n (perform (Ask)))))
+  (defn even-ask [n : int acc : int] : int
+    (if (= n 0) acc (odd-ask (- n 1) (+ acc (perform (Ask))))))
+  (defn odd-ask [n : int acc : int] : int
+    (if (= n 0) acc (even-ask (- n 1) (+ acc 1)))))
+EOF
+cat > "$SEPX/eb.tur" <<'EOF'
+(defmodule eb
+  (export tell-twice)
+  (defeffect Tell [x : int] : int)
+  (defn tell-twice [x : int] : int
+    (+ (perform (Tell x)) (perform (Tell (+ x 1))))))
+EOF
+cat > "$SEPX/mid.tur" <<'EOF'
+(defmodule mid
+  (export both loop-ask scaled)
+  (import ea :refer [ask-plus scale])
+  (import eb :as b)
+  (defn both [n : int] : int
+    (+ (ask-plus n) (b/tell-twice n)))
+  (defn scaled [x : float] : float
+    (* 2.0 (scale x)))
+  (defn loop-ask [n : int] : int
+    (let [^mut i 0 ^mut acc 0]
+      (while (< i n)
+        (set! acc (+ acc (ask-plus i)))
+        (set! i (+ i 1)))
+      acc)))
+EOF
+cat > "$SEPX/app.tur" <<'EOF'
+(defmodule app
+  (import ea :as a)
+  (import mid :as m)
+  (defn inner [n : int] : int
+    (handle (m/both n)
+      (Tell [x] k) (resume k (* x 100))))
+  (defn main [] : int
+    (println (handle (inner 1) (Ask [] k) (resume k 7)))
+    (println (handle (a/ask-plus 1) (Ask [] k) (+ 100 (resume k 1))))
+    (println (handle (m/scaled 7.1) (Scale [x] k) (resume k (* x 10.0))))
+    (println (handle (a/sum-p (a/make-p 3 4)) (Ask [] k) (resume k 10)))
+    (println (handle (a/greet "roger") (Ask [] k) (resume k 6)))
+    (handle (a/note 1) (Ask [] k) (resume k 6))
+    (println (handle (a/even-ask 100001 0) (Ask [] k) (resume k 2)))
+    (println (handle (m/loop-ask 1000) (Ask [] k) (resume k 1)))
+    0))
+EOF
+sepx_want=$(printf '308\n102\n143\n17\nroger\n7\n150002\n500500')
+sepx_out=$(cd "$SEPX" && "$TUR" build . -o "$WORK/sepxbin" 2>&1 && "$WORK/sepxbin" 2>&1)
+sepx_rc=$?
+sepx_one=$(cd "$SEPX" && "$TUR" run app.tur 2>&1)
+if [ $sepx_rc -eq 0 ] && [ "$sepx_out" = "$sepx_want" ] && [ "$sepx_one" = "$sepx_want" ]; then
+    pass "build-project-sepcomp-effect-shapes"
+else
+    fail "build-project-sepcomp-effect-shapes" "rc=$sepx_rc separate='$sepx_out' one-unit='$sepx_one'"
+fi
+# One DK machine: the state is defined in the runtime's owner unit and only
+# declared in every module's.  A row that stopped matching the machine's text
+# would be an #error here (emit_dk_shared_state).
+if grep -q '^extern TUR_RT_LOCAL TUR_THREAD_LOCAL tur_jmp_buf \*g_dk_driver;' "$SEPX/build/obj/tur_runtime.h" &&
+   grep -q '^extern TUR_RT_LOCAL const DK \*g_dk_case_reopen_hnode;' "$SEPX/build/obj/tur_runtime.h" &&
+   ! grep -q '^#error' "$SEPX/build/obj/tur_runtime.h"; then
+    pass "build-project-sepcomp-dk-state-shared"
+else
+    fail "build-project-sepcomp-dk-state-shared" "tur_runtime.h does not share the DK machine's state"
+fi
+
+# What still cannot thread is refused at the call, naming which side failed.
+# (a) The CALLER left the CPS backend's subset: a `(Vec int)` parameter has no
+#     CPS ABI, so `helper` would enter `ask-plus` through its plain entry.
+SEPR="$WORK/sepcomp-effect-refused"
+mkdir -p "$SEPR/lib"
+cat > "$SEPR/lib/eff.tur" <<'EOF'
+(defmodule lib/eff
+  (export ask-plus nested)
+  (defeffect Ask [] : int)
+  (defn ask-plus [n : int] : int
+    (+ n (perform (Ask))))
+  (defn nested [n : int] : int
+    (let [^mut i 0 ^mut acc 0]
+      (while (< i n)
+        (let [^mut j 0]
+          (while (< j n)
+            (set! acc (+ acc (ask-plus 1)))
+            (set! j (+ j 1))))
+        (set! i (+ i 1)))
+      acc)))
+EOF
+cat > "$SEPR/app.tur" <<'EOF'
+(defmodule app
+  (import lib/eff :as e)
+  (defn helper [v : (Vec int)] : int
+    (+ (vec-len v) (e/ask-plus 1)))
+  (defn run-b [] : int
+    (handle (helper (vec-of 1 2))
+      (Ask [] k) (resume k 10)))
+  (defn main [] : int
+    (println (run-b))
+    0))
+EOF
+sepr_out=$(cd "$SEPR" && "$TUR" build . 2>&1)
+sepr_rc=$?
+if [ $sepr_rc -eq 1 ] &&
+   grep -q '`ask-plus` (module lib/eff) can perform the effect `Ask`, and this call crosses' <<< "$sepr_out" &&
+   grep -q 'The call is not threaded here' <<< "$sepr_out" &&
+   grep -q 'app.tur:4:20:' <<< "$sepr_out"; then
+    pass "build-project-sepcomp-effect-caller-evicted-refused"
+else
+    fail "build-project-sepcomp-effect-caller-evicted-refused" "rc=$sepr_rc out=$sepr_out"
+fi
+# (b) The CALLEE left the subset in its own module (a performing call inside
+#     nested loops), so that module exports no `__cps` twin for it.  The
+#     importer cannot know while it compiles: the build's ledger finds the
+#     missing twin afterwards and the importer is recompiled with it denied --
+#     a located error, not "undefined reference" from the linker.
+cat > "$SEPR/app.tur" <<'EOF'
+(defmodule app
+  (import lib/eff :as e)
+  (defn run-c [] : int
+    (handle (e/nested 2)
+      (Ask [] k) (resume k 10)))
+  (defn main [] : int
+    (println (run-c))
+    0))
+EOF
+rm -rf "$SEPR/build"
+sepr_out=$(cd "$SEPR" && "$TUR" build . 2>&1)
+sepr_rc=$?
+if [ $sepr_rc -eq 1 ] &&
+   grep -q '`nested` (module lib/eff) can perform the effect `Ask`, and this call crosses' <<< "$sepr_out" &&
+   grep -q 'Its module exports no threaded entry for it' <<< "$sepr_out" &&
+   grep -q 'app.tur:4:13:' <<< "$sepr_out" &&
+   ! grep -q 'undefined reference' <<< "$sepr_out"; then
+    pass "build-project-sepcomp-effect-callee-evicted-refused"
+else
+    fail "build-project-sepcomp-effect-callee-evicted-refused" "rc=$sepr_rc out=$sepr_out"
 fi
 
 # spec-clone-names-not-module-qualified: two modules export a same-named

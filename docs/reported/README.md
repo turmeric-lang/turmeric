@@ -40,8 +40,71 @@ directory is worse for triage than no index.
 | --- | --- | --- |
 | [fnfield-struct-binder-frees-borrowed-closure](fnfield-struct-binder-frees-borrowed-closure.md) | high (double free / use-after-free) | A `let` local of a by-value struct with a closure field frees the closure at scope end whatever its init was. Three shapes free one they do not own: a rebinding of a `^copy` struct (`(let [g h] ...)`), the result of a function that returns the `^copy` struct it was given, and a struct built from a closure parameter (no `^copy` needed). `drops_fn_fields` is decided from the type and the body, never the init. Fix: flag only a fresh init, or apply the `:copy` line the recursive-spine free already has. On `main` before this session too |
 | [cps-match-sum-payload-box-not-freed](cps-match-sum-payload-box-not-freed.md) | low-medium (leak, 16 B per match) | A `match` on a fresh `(Result P E)` whose arm performs is lowered by the CPS backend's `emit_match`, which has no counterpart of the direct emitter's `match_scrut_owns_vsp_box` free, so the struct payload's box leaks. Nothing to do with closure fields. A parser constructor returning `(Result P E)` matched inside a `handle` body is this shape |
-| [cps-while-then-uncarried-var-result-evicts](cps-while-then-uncarried-var-result-evicts.md) | medium (compile failure) | A performing `while` followed by a bare variable the loop does not set (returning a parameter after the loop) is "no lowering here": `build_loop` commits to the result-variable shape on the form alone, then rejects because the variable is not loop-carried (`cps_ir.c:4975`), where join mode would have handled it. `(+ base 0)` compiles. Fix: choose the shape after the carried set is known |
+| [cps-while-then-uncarried-var-result-evicts](cps-while-then-uncarried-var-result-evicts.md) | medium (compile failure) | A performing `while` followed by a bare variable the loop does not set (returning a parameter after the loop) is "no lowering here": `build_loop` commits to the result-variable shape on the form alone, then rejects because the variable is not loop-carried (`cps_ir.c:5186`), where join mode would have handled it. `(+ base 0)` compiles. Fix: choose the shape after the carried set is known |
 | ~~[fnfield-struct-local-freed-while-returned](../archive/fnfield-struct-local-freed-while-returned.md)~~ | high (use-after-free) | **RESOLVED 2026-11-27** (archived), in the same change: `(let [h (H n (fn ...))] h)` freed the closure at scope end and the caller called it afterwards -- every constructor function written with a `let`. A local the scope hands out is no longer flagged (`fnfield_local_leaves_scope`). Pinned by `fnfield-struct-local-returned` |
+
+## Follow-ups to #1486 (filed 2026-11-27)
+
+#1486 fixed four of the five reports from `spices/manifold` and listed what it
+left. These are those leftovers, each measured on `main` at `853f866`, plus
+what was found while measuring and fixing them.
+
+Eight more were fixed the same day and are in `docs/archive/`:
+
+- `cps-pass-drops-return-drop-lists`, a regression #1486 introduced: one
+  `perform` or `handle` anywhere in a program made every function's `return`
+  lose its per-path drop records.
+- `ref-moved-in-if-without-else-double-frees`: a `ref<T>` handed on in an
+  `if` with no else was freed twice. Now TUR-E0104.
+- `linear-consumption-not-reconciled-at-loops-and-literal-match`: the same
+  gap at a loop body, a `match` on literal patterns and `and` / `or`. Now
+  TUR-E0101 / TUR-E0104.
+- `return-in-match-arm-does-not-return`: a `return` in a `match` arm was
+  compiled as the arm's value unless the match ended the function.
+- `if-branch-with-inner-return-loses-its-value`: an `if` used for its value
+  never assigned it when a branch could return early and did not.
+- `colored-fn-early-return-skips-scope-exits`: in a function that performs
+  an effect, an early `return` skipped every `defer` and scope-exit drop.
+- `defer-reads-local-after-its-scope-exit-drop`: a `let`'s scope-exit drop
+  ran before the body's own defers, so a defer that read the local read a
+  freed cell.
+- `owned-drop-parameter-is-never-dropped`: an `^affine` Drop value passed
+  by value was released by nobody unless the callee consumed it. It left the
+  `early-return-before-...` row below.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [early-return-before-later-consume-leaks](early-return-before-later-consume-leaks.md) | medium (leak) | `(let [h (mk)] (if c (return 9) nil) (take h))` never releases `h` when `c` is true: the let appends no scope-exit drop because the body hands `h` on later, and the early `return` was left nothing to run. A `ref<T>` local leaks its cell the same way, and so does an owned parameter. Predates #1486. |
+| [caught-panic-skips-scope-exit-drops](caught-panic-skips-scope-exit-drops.md) | medium (leak per caught panic) | Under `catch-unwind`, explicit `defer`s run and compiler-injected drops (Drop opaques, `ref<T>`) do not: they are appended after the `let` body, so they are not registered while it runs. |
+| [cmake-dep-directory-scoped-imported-target-not-followed](cmake-dep-directory-scoped-imported-target-not-followed.md) | medium (link failure, no warning) | A library a dependency links through its own non-`GLOBAL` imported target is invisible to the link walk, which runs one directory up; the `Ns::name` goes into the manifest as a library name. #1486 covered only `find_package` targets on CMake 3.24+. |
+| [turi-early-return-skips-injected-drops](turi-early-return-skips-injected-drops.md) | low (interpreter only) | Under `tur --interpret`, an early `return` skips the scope-exit drop of an enclosing `let`: a Drop instance does not run on that path. The compiled program runs it. No effect involved. |
+| [do-ending-in-return-is-not-seen-as-leaving](do-ending-in-return-is-not-seen-as-leaving.md) | low (false rejection) | `(if c (do (rel h) (return 0)) 0)` followed by a use of `h` is TUR-E0201: only a bare `return` arm counts as leaving. |
+| [cmake-dep-undecidable-link-genex-is-not-linked](cmake-dep-undecidable-link-genex-is-not-linked.md) | low (warns) | A link entry behind an expression the configure-time reducer does not know (version comparisons, `TARGET_PROPERTY`, ...) is left out, with a warning whose `:link-flags` remedy cannot name a library in the build tree. |
+| [tur-fetch-builds-cmake-deps-serially](tur-fetch-builds-cmake-deps-serially.md) | low (time) | `cmake --build` with no `--parallel`: a cold `spices/manifold` fetch is 3 min 44 s, and 1 min 5 s with `CMAKE_BUILD_PARALLEL_LEVEL=4`. |
+
+## Found building `spices/manifold` (filed 2026-11-26)
+
+Manifold is the first spice to weigh `^linear` against `^affine` + `Drop` for
+a handle that expressions pass around as a temporary. The row has an offline
+repro that was run on `main` at `d4ad1b0` under `TUR_SANITIZE_PROGRAMS=1`.
+
+Four reports filed with this one were resolved the same day and are in
+`docs/archive/`: `cmake-dep-cxx-runtime-not-linked`,
+`cmake-dep-genex-link-entry-dropped`,
+`cmake-dep-interface-target-fails-generate` and
+`affine-drop-handle-consumed-in-one-branch-double-frees`.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [linear-values-without-a-binding-are-not-checked](linear-values-without-a-binding-are-not-checked.md) | medium (silent leaks) | A fresh `^linear` value passed straight to a `^borrow` parameter, or stored in a field of a non-linear struct, is dropped with no TUR-E0100. The borrowed-temporary check was tried and taken out: it cannot tell an allocation from a handle re-wrap, and turmeric-spices has three files of the latter. The discarded-result, `^linear` + `Drop` and `set!` findings filed with it are fixed |
+
+## Found executing sepcomp-cross-module-effect-unhandled (filed 2026-11-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [effect-through-evicted-fn-aborts-at-run-time](effect-through-evicted-fn-aborts-at-run-time.md) | medium-high (run-time abort from a program that compiled) | Inside a `defmodule`, a `handle` whose performer is reached through an evicted function (a performing call in nested loops) builds and aborts with `unhandled effect`; at top level the same code is a build error. Whole-program. Suspect: the call-path taint's `edges` match callee bindings by pointer, and a module member's forward declaration is a second `Binding`. |
+| [module-effectful-fn-value-has-no-lowering](module-effectful-fn-value-has-no-lowering.md) | medium (correct program refused) | Inside a `defmodule`, an effectful lambda passed to a higher-order function, or one that calls a performer, is "no lowering here"; the same file without the `defmodule` runs. `fv_multi_tally` walks the unflattened program, so uses inside module members are not counted (`[E2-COLOR] uses=0`). The separate build accepts one of the two shapes since 2026-11-24. |
+| ~~[sepcomp-cross-module-effect-unhandled](../archive/sepcomp-cross-module-effect-unhandled.md)~~ | high, then medium | **RESOLVED 2026-11-24** (archived): a separately compiled build threads an effect across modules. A module exports the `__cps` twin of each exported function it CPS-emits, an importer threads its chain into it, effect tags are derived from the effect's name, and the units share one DK machine (its state was one copy per unit). A call that cannot thread is refused at its site, naming the side that failed. Was: refused outright (2026-10-18), and before that built and aborted with "unhandled effect". |
 
 ## Found executing five more reports (2026-11-07, second pass)
 
@@ -209,8 +272,8 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [wasm-mir-interp-tail-call-keeps-allocas](wasm-mir-interp-tail-call-keeps-allocas.md) | medium (planned wasm JIT) | On wasm the MIR interpreter's `bend` is a no-op, so a tail call from a function that allocated keeps its allocas and a frame: about 350 B per call, and the module traps after about 24k calls at 16 MiB. A C-level stack restore does not help, because LLVM caches `eval`'s SP. An interpreter-owned frame arena would |
-| [c2mir-wasm-vararg-buffer-allocas-per-call](c2mir-wasm-vararg-buffer-allocas-per-call.md) | high (planned wasm JIT) | On wasm32, c2mir allocas a variadic call's argument buffer at the call site, so `printf` in a loop (`println` on an int) grows the stack 16 B per iteration until the function returns. About 1M prints overflow 16 MiB, with signs of memory corruption |
+| ~~[wasm-mir-interp-tail-call-keeps-allocas](../archive/wasm-mir-interp-tail-call-keeps-allocas.md)~~ | medium (planned wasm JIT) | **RESOLVED 2026-11-24** (archived): on wasm the MIR interpreter takes its frames and `MIR_ALLOCA` blocks from a stack it owns, so a tail call drops the caller's allocas and `BSTART`/`BEND` work (mir#22). Pinned by the fork's `wasm-tests/run.sh` |
+| ~~[c2mir-wasm-vararg-buffer-allocas-per-call](../archive/c2mir-wasm-vararg-buffer-allocas-per-call.md)~~ | high (planned wasm JIT) | **RESOLVED 2026-11-24** (archived): c2mir makes one prologue va buffer per function, sized to its largest variadic tail, so `printf` in a loop no longer grows the stack (mir#21). Pinned by the fork's `wasm-tests/ffi-test.c` |
 
 ## Found by the quote-data corpus sweep (filed 2026-10-24)
 
@@ -485,7 +548,6 @@ repro is in each report.
 | ~~[e0254-emitted-once-per-fixpoint-sweep](../archive/e0254-emitted-once-per-fixpoint-sweep.md)~~ | low | **RESOLVED 2026-10-17** (archived): a call site prints TUR-E0254 once (`e0254_first_report`), and a reported site fails `effect_check_pass`, so `--interpret` stops on it |
 | ~~[dict-clone-nested-lambda-cites-wrong-code](../archive/dict-clone-nested-lambda-cites-wrong-code.md)~~ | low (diagnostic) | **RESOLVED 2026-10-17** (archived): a registered TUR-E0313 with `tur explain` text. Pinned by `errors/forall-dict-directly-applied-lambda` |
 | ~~[float-conversion-checker-passes-on-relative-path](../archive/float-conversion-checker-passes-on-relative-path.md)~~ | low (tooling) | **RESOLVED 2026-10-17** (archived): inputs are made absolute first; a missing file, or a list that compiled to no program, exits 2 |
-| [sepcomp-cross-module-effect-unhandled](sepcomp-cross-module-effect-unhandled.md) | medium (was high; refused at build time since 2026-10-18) | Separately compiled, a `perform` in one module cannot reach a handler in another: coloring is per TU and `__cps` bodies are `static`. The effect checker now infers the other modules' callees' rows and refuses such a call at its site, naming the remedy (handle it there, or build as one unit). It used to build and abort with "unhandled effect" at run time. Left: actually threading it (exported `__cps`, program-wide tags). |
 | ~~[add-cmake-manifest-rewrite-loses-keys](../archive/add-cmake-manifest-rewrite-loses-keys.md)~~ | high (manifest corruption) | **RESOLVED 2026-10-17** (archived): `add-cmake` edits the text in place through `pkg_build_tur_edit`, as `tur add` does; `pkg_manifest_write` is off the path. Pinned by `add-cmake-keeps-unmodelled-keys` |
 | ~~[tur-build-intermediate-c-path-collides](../archive/tur-build-intermediate-c-path-collides.md)~~ | medium-high (wrong binary) | **RESOLVED 2026-10-17** (archived): the intermediate is `<base>-<hash of the real path>.c`. Fixing it exposed [hamt-xxh64-ignores-bytes-past-the-last-stripe](../archive/hamt-xxh64-ignores-bytes-past-the-last-stripe.md), fixed with it |
 | ~~[spec-clone-names-not-module-qualified](../archive/spec-clone-names-not-module-qualified.md)~~ | medium (link failure) | **RESOLVED 2026-10-21** (archived): `emit_abi_clone_name` prefixes a named module's generic with the module prefix its own C name carries (`ma__ident__spec__...`; `binding_module_prefix`, shared with `raw_name_for_binding`), so same-named generics of two modules no longer collide at link. Pinned by `run-build-project.sh` `build-project-spec-same-name-two-modules` |
@@ -2711,11 +2773,23 @@ Filed 2026-08 while bringing the `turmeric-godot` GDExtension up on Windows.
 been fixed since 2026-08-04 but sat on an unmerged branch, so it was
 deliberately held open rather than archived against a fix nobody had.
 
+`godot-packed-array-push-is-a-no-op` was resolved and moved to
+[docs/archive](../archive/godot-packed-array-push-is-a-no-op.md) on
+2026-11-24, when
+[turmeric-godot#6](https://github.com/turmeric-lang/turmeric-godot/pull/6)
+merged.
+
+`godot-shim-does-not-build-against-turmeric-main` and
+`godot-spike-scripts-stale-against-typed-handles` were resolved and moved to
+[docs/archive](../archive/godot-shim-does-not-build-against-turmeric-main.md)
+on 2026-11-27, after
+[turmeric-godot#7](https://github.com/turmeric-lang/turmeric-godot/pull/7)
+merged on 2026-11-24.
+
 | Report | Severity | One line |
 | --- | --- | --- |
 | [godot-aot-staged-build-lacks-godot-natives](godot-aot-staged-build-lacks-godot-natives.md) | medium (AOT gaps) | **Downgraded from high 2026-10-08.** The original defect -- the staged project has no `godot-*` natives, so no real script AOT-compiles -- was fixed in `turmeric-godot` on 2026-09-09: the stager wraps the script in a `defmodule` importing `tg-godot` and the natives bind at `dlopen` (`paddle-pong-tur` passes under AOT). Left, all build-time refusals: the variadic `godot-call*` natives, the unstaged per-class facade, `godot-connect-typed`, `godot-export` in a hand-written `defmodule`, and Windows (a PE DLL cannot link with the natives undefined; not re-measured). Interpreter path unaffected |
-| [godot-packed-array-push-is-a-no-op](godot-packed-array-push-is-a-no-op.md) | medium (fixed on a `turmeric-godot` branch 2026-11-24, unmerged) | All nine `godot-packed-*-push` natives in `turmeric-godot` `push_back` onto a COPY of the arena `Variant` and drop it, so every `Packed*Array` a script builds stays size 0 -- silently, with no diagnostic. `godot-array-push` / `godot-dict-set` are unaffected: Godot's `Array` and `Dictionary` are reference types, so mutating a copy mutates the shared body. Defeats the whole T3.D `Packed*Array` surface (vertex buffers, tilemap cells, byte blobs) |
-| [godot-shim-does-not-build-against-turmeric-main](godot-shim-does-not-build-against-turmeric-main.md) | low | `turmeric-godot`'s `aot_dispatch.cpp` includes `runtime/ffi_dispatch_thunk.h`, which exists in the CI-pinned `v0.44.2` and is gone from `main`, so the shim does not compile against a sibling `main` checkout. CI is green only because of the pin |
+| [linux-glibc-baseline-untested-in-ci](linux-glibc-baseline-untested-in-ci.md) | low | Every Linux CI job builds on `ubuntu-latest`, so a source needing a newer glibc builds green and fails downstream. `v0.73.0` shipped one: the JIT sources use `RTLD_DEFAULT` without `_GNU_SOURCE` and do not compile on Ubuntu 22.04 (glibc 2.35). That instance is fixed; no job guards the next |
 | [jit-godot-embedding-spike](jit-godot-embedding-spike.md) | research | Whether the JIT can replace the AOT stage-and-subprocess cache in the GDExtension |
 | [godot-shim-threading-under-workerthreadpool](godot-shim-threading-under-workerthreadpool.md) | medium (latent) | `cb_call` runs every interpreted method through `turi_call` on the script's single, unlocked `TuriEnv`, which is not thread-safe, so a node on a `WorkerThreadPool` sub-thread process group or the physics thread can corrupt it. The MIR half of J7 is already solved in-tree. Split out of the archived godot-binding-refresh plan's J7 |
 

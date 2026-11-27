@@ -29,3 +29,5 @@ echo "== mini (assertions build): small calls"
 node mini.js build/spike-dbg.js 2>&1 | grep -v "no end of line"
 echo "== drive (-O2): depth and per-iteration cost"
 node drive.js 2>&1 | grep -v "no end of line"
+echo "== stack (-O2): shapes that must run in constant linear stack"
+node stack.js

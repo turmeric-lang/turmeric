@@ -4330,6 +4330,18 @@ Expr *elab_match(Elab *e, const Form *call) {
         if (_is_prim) {
             MatchArm *lit_arms = (MatchArm *)arena_alloc(e->arena, n_arms * sizeof(MatchArm));
             Type lit_result = TYPE_UNKNOWN;
+            /* Arms are alternatives here as in the ADT path below: without
+             * this a value consumed in one literal arm read as moved in the
+             * next, and as moved after the match on every path. */
+            ArmMoves lm;
+            arm_moves_begin(e, &lm, n_arms);
+            /* ...and linear consumption with it.  This path used to leave it
+             * running straight through the arms as if they were a sequence:
+             * a value every arm consumed was "used after being consumed" in
+             * the second, and one a single arm consumed read as consumed on
+             * every path. */
+            ArmLinear ll;
+            arm_linear_begin(e, &ll, n_arms);
             for (uint32_t ai = 0; ai < n_arms; ai++) {
                 uint32_t base     = arm_start[ai];
                 Form *pat_form    = call->as.list.items[base];
@@ -4364,6 +4376,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                     diag_emit(DIAG_ERROR, pat_form->span,
                               "match: pattern must be a literal value, _ wildcard, "
                               "or variable capture when matching a primitive type");
+                    arm_moves_free(&lm); arm_linear_free(&ll);
                     return NULL;
                 }
 
@@ -4379,6 +4392,8 @@ Expr *elab_match(Elab *e, const Form *call) {
                 Expr *guard = NULL;
                 bool arm_ok = true;
                 bool _s_lit = e->in_match_arm; e->in_match_arm = true;
+                arm_moves_enter(&lm);
+                arm_linear_enter(&ll);
                 if (pat->is_var && pat->var_sym) {
                     Binding *vb = binding_new(e, pat->var_sym, scrutinee->type,
                                               false, false, pat_form->span);
@@ -4403,12 +4418,15 @@ Expr *elab_match(Elab *e, const Form *call) {
                     body = arm_ok ? elab_form(e, body_form) : NULL;
                 }
                 e->in_match_arm = _s_lit;
-                if (!arm_ok || !body) return NULL;
+                if (!arm_ok || !body) { arm_moves_free(&lm); arm_linear_free(&ll); return NULL; }
+                arm_moves_leave(&lm, ai, body);
+                arm_linear_leave(&ll, ai, body);
                 /* Parity with the ADT path: a when-guard must be a bool. */
                 if (guard && guard->type.kind != TY_BOOL) {
                     diag_emit(DIAG_ERROR, guard_raw->span,
                               "match: when-guard must have type bool, got %s",
                               typekind_to_string(guard->type.kind));
+                    arm_moves_free(&lm); arm_linear_free(&ll);
                     return NULL;
                 }
                 lit_arms[ai].guard = guard;
@@ -4469,10 +4487,20 @@ Expr *elab_match(Elab *e, const Form *call) {
                               "match: non-exhaustive patterns -- a match on literal values "
                               "needs a wildcard arm (`_ ...`) for every other value%s",
                               any_bool && !any_lit ? " (or both `true` and `false`)" : "");
+                    arm_moves_free(&lm); arm_linear_free(&ll);
                     return NULL;
                 }
             }
 
+            arm_moves_merge(&lm);
+            if (!arm_linear_merge(&ll, call->span)) {
+                arm_moves_free(&lm);
+                arm_linear_free(&ll);
+                return NULL;
+            }
+            arm_moves_apply(e, &lm, lit_arms, call->span);
+            arm_moves_free(&lm);
+            arm_linear_free(&ll);
             Expr *out = expr_new(e->arena, EX_MATCH, lit_result, call->span);
             out->as.match_.scrutinee = scrutinee;
             out->as.match_.arms      = lit_arms;
@@ -4586,13 +4614,8 @@ Expr *elab_match(Elab *e, const Form *call) {
      * TUR-E0005 while the identical if/else was accepted.  Snapshot here,
      * rewind before each arm, and merge with the same rule below -- a
      * diverging arm cannot reach the merge, so it does not vote. */
-    Binding **match_move_bindings = NULL;
-    bool     *match_move_before   = NULL;
-    bool    **arm_move_states     = NULL;
-    uint32_t  n_match_move = move_state_snapshot_bindings(e->scope,
-                                 &match_move_bindings, &match_move_before);
-    if (n_match_move > 0)
-        arm_move_states = (bool **)calloc(n_arms, sizeof(bool *));
+    ArmMoves mm;
+    arm_moves_begin(e, &mm, n_arms);
 
     for (uint32_t ai = 0; ai < n_arms; ai++) {
         uint32_t base = arm_start[ai];
@@ -4634,9 +4657,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             if (n_match_lin > 0) {
                 linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
             }
-            if (n_match_move > 0) {
-                move_state_restore(match_move_bindings, match_move_before, n_match_move);
-            }
+            arm_moves_enter(&mm);
             bool _s_wc = e->in_match_arm; e->in_match_arm = true;
             Expr *body = NULL;
             if (pat->is_var && pat->var_binding) {
@@ -4665,11 +4686,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                                (body->kind == EX_RETURN) ||
                                (body->kind == EX_PANIC)  ||
                                (body->kind == EX_PANIC_WITH);
-            if (n_match_move > 0) {
-                arm_move_states[ai] = move_state_capture_current(match_move_bindings,
-                                                                 n_match_move);
-                move_state_restore(match_move_bindings, match_move_before, n_match_move);
-            }
+            arm_moves_leave(&mm, ai, body);
             /* Phase G0: Arm body type consistency check for wildcard/variable arms. */
             Type _wc_unified;
             if (result_type.kind != TY_UNKNOWN
@@ -5035,9 +5052,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             if (n_match_lin > 0) {
                 linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
             }
-            if (n_match_move > 0) {
-                move_state_restore(match_move_bindings, match_move_before, n_match_move);
-            }
+            arm_moves_enter(&mm);
             bool _s_ctor = e->in_match_arm; e->in_match_arm = true;
             /* SR2b: sibling-arm bidirectional inference, the match twin of the
              * if-form's have_sibling_ty push (elab_forms.c).  Once an earlier
@@ -5226,11 +5241,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                                (body->kind == EX_RETURN) ||
                                (body->kind == EX_PANIC)  ||
                                (body->kind == EX_PANIC_WITH);
-            if (n_match_move > 0) {
-                arm_move_states[ai] = move_state_capture_current(match_move_bindings,
-                                                                 n_match_move);
-                move_state_restore(match_move_bindings, match_move_before, n_match_move);
-            }
+            arm_moves_leave(&mm, ai, body);
         } else {
             diag_emit(DIAG_ERROR, pat_form->span,
                       "match: pattern must be a constructor list or _ wildcard");
@@ -5241,26 +5252,10 @@ Expr *elab_match(Elab *e, const Form *call) {
     /* Merge the per-arm move state, with `if`'s rule: a binding is moved after
      * the match only if it was moved before it, or every arm that can reach the
      * merge point moved it.  Arms are alternatives, so consuming a value in two
-     * different arms is one move at run time, not two. */
-    if (n_match_move > 0 && arm_move_states) {
-        for (uint32_t mi = 0; mi < n_match_move; mi++) {
-            if (match_move_before[mi]) {
-                match_move_bindings[mi]->is_moved = true;
-                continue;
-            }
-            bool all = true, any_voter = false;
-            for (uint32_t ai = 0; ai < n_arms; ai++) {
-                if (!arm_move_states[ai] || arm_diverges[ai]) continue;
-                any_voter = true;
-                if (!arm_move_states[ai][mi]) { all = false; break; }
-            }
-            match_move_bindings[mi]->is_moved = any_voter && all;
-        }
-        for (uint32_t ai = 0; ai < n_arms; ai++) free(arm_move_states[ai]);
-        free(arm_move_states); arm_move_states = NULL;
-    }
-    free(match_move_before);   match_move_before   = NULL;
-    free(match_move_bindings); match_move_bindings = NULL;
+     * different arms is one move at run time, not two.  A Drop-owning local
+     * handed on by only some arms is released by the others (arm_moves_apply,
+     * below, once the arm bodies are final). */
+    arm_moves_merge(&mm);
 
     /* LT1: Verify consistent outer-scope linear consumption across match arms */
     if (n_match_lin > 0 && arm_lin_states) {
@@ -5366,6 +5361,8 @@ Expr *elab_match(Elab *e, const Form *call) {
 
     /* fn-param-at-type-variable-slot-boxed-per-call: the sum-wrapped shape. */
     mark_sum_wrapped_boxes_stack(scrutinee, arms, n_arms);
+    arm_moves_apply(e, &mm, arms, call->span);
+    arm_moves_free(&mm);
     Expr *out = expr_new(e->arena, EX_MATCH, result_type, call->span);
     out->as.match_.scrutinee = scrutinee;
     out->as.match_.arms = arms;
@@ -5391,12 +5388,7 @@ match_fail:
      * leaked it, and a Debug `tur check` on such a program ended in a
      * LeakSanitizer report on top of the diagnostic.  All three are NULLed
      * after their normal free, so this is safe on either path. */
-    if (arm_move_states) {
-        for (uint32_t ai = 0; ai < n_arms; ai++) free(arm_move_states[ai]);
-        free(arm_move_states);
-    }
-    free(match_move_before);
-    free(match_move_bindings);
+    arm_moves_free(&mm);
     free(arm_diverges);
     free(match_lin_before);
     free(match_lin_bindings);

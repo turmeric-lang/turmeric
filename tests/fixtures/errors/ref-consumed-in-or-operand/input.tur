@@ -1,0 +1,15 @@
+;; As ref-consumed-in-and-operand, for `or`: the right operand is skipped when
+;; the left one is true.
+(defn sink [r : ref<int>] : int
+  (let [v @r]
+    (drop! r)
+    v))
+
+(defn f [c : bool] : int
+  (let [r (ref 41)]
+    (or c (= 41 (sink r)))
+    1))
+
+(defn main [] : int
+  (println (f true))
+  0)

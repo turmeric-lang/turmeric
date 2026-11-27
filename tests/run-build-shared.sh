@@ -252,6 +252,42 @@ else
 fi
 rm -rf "$DEFI/build"
 
+# sepcomp-cross-module-effect-unhandled: a handler in one module of the
+# library, the performer in another -- two C units.  The call threads through
+# the performer's `__cps` twin, on one DK machine: the twin and the machine's
+# state are hidden, so the library exports neither.
+FXM="tests/fixtures/build-shared-cross-module-effect"
+FXM_LIB="$WORK/libfxm.$LIB_EXT"
+fxm_out=$("$TUR" build --shared "$FXM" -o "$FXM_LIB" 2>&1)
+fxm_rc=$?
+if [ $fxm_rc -ne 0 ]; then
+    fail "build-shared-cross-module-effect" "tur build --shared exit=$fxm_rc: $fxm_out"
+elif ! $CC_BIN -O0 -std=c99 -Wall -Isrc -o "$WORK/fxm-harness" "$FXM/harness.c" $DL_LIBS 2>"$WORK/fxm-cc.err"; then
+    fail "build-shared-cross-module-effect" "cc failed: $(cat "$WORK/fxm-cc.err")"
+else
+    fxm_run=$("$WORK/fxm-harness" "$FXM_LIB" 2>&1)
+    fxm_expect=$(printf 'run-ask = 16\nrun-scale(7.1) = 71.5\nrun-loop(50000) = 50000')
+    if [ "$fxm_run" != "$fxm_expect" ]; then
+        fail "build-shared-cross-module-effect" "expected '$fxm_expect', got '$fxm_run'"
+    elif ! grep -q 'fx__ask__ask_hyplus__cps(' "$FXM/build/obj/api.c"; then
+        fail "build-shared-cross-module-effect" "api.c does not thread into fx/ask's __cps entry"
+    else
+        pass "build-shared-cross-module-effect"
+    fi
+    # The twins and the machine's state stay inside the library (ELF: hidden
+    # visibility; nothing to check where nm cannot list dynamic symbols).
+    if [ "$LIB_EXT" = "so" ] && command -v nm >/dev/null 2>&1; then
+        fxm_nm=$(nm -D "$FXM_LIB" 2>/dev/null)
+        if grep -qE '__cps$|g_dk_driver|__dk_reap_v' <<< "$fxm_nm"; then
+            fail "build-shared-cross-module-effect-hidden" \
+                 "the library exports: $(grep -E '__cps$|g_dk_driver|__dk_reap_v' <<< "$fxm_nm" | head -5)"
+        else
+            pass "build-shared-cross-module-effect-hidden"
+        fi
+    fi
+fi
+rm -rf "$FXM/build"
+
 echo
 echo "build-shared: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

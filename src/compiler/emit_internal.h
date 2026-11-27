@@ -1373,7 +1373,7 @@ uint32_t emit_do_trailing_drop_glue(const struct Expr *e);
 void emit_frame_note_pending_drops(const char *frame, const struct Expr *e);
 void emit_frame_clear_pending_drops(const char *frame);
 bool emit_frame_has_pending_drops(const EmitCtx *ctx);
-void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const struct Expr *ret_value);
+void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const struct Expr *ret);
 char *fresh_defer_thunk(EmitCtx *ctx);
 char *fresh_defer_env(EmitCtx *ctx);
 void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,
@@ -2100,6 +2100,16 @@ void emit_handle_no_lowering(const struct Expr *e);
  * (dk_perform / dk_handler tags).  Defined in emit_cps_ir.c; called from
  * emit_effects.c to stamp a first-class handler entry's DK case tag. */
 int effect_tag(const struct Symbol *eff);
+/* The tag emitted C carries for `eff`: effect_tag's in a whole-program build,
+ * one derived from the effect's name in a separately compiled unit, where
+ * every unit must agree (emit_cps_ir.c, "cross-module threading"). */
+int effect_emit_tag(const struct Symbol *eff);
+/* sepcomp-cross-module-effect-unhandled: `b` is the callee of a call the
+ * direct path is about to make.  When it is another module's function that
+ * can perform a user effect, reports the located error (once per site) and
+ * returns true: entered through its plain entry, its `perform` would find no
+ * handler. */
+bool emit_cps_ir_xmod_refuse_direct_call(const struct Binding *b, Span span);
 /* B7b: is this `^mut` binding promoted to a shared heap cell for the function
  * the CPS backend is currently emitting?  Owned by emit_cps_ir.c (g_byref_muts);
  * exposed so the value-position chokepoint (atom_var) can deref a read no matter

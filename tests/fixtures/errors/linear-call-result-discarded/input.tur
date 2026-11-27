@@ -1,0 +1,13 @@
+;; linear-call-result-discarded: a call that returns a ^linear value, written
+;; as a statement, throws the value away with nothing to consume it.  Binding
+;; the result first was already TUR-E0100 ("dropped without being consumed");
+;; leaving it unbound compiled and leaked.
+(defopaque ^linear Lin :int)
+(defn lin-mk [n : int] : Lin (:: n Lin))
+(defn lin-rel [w : Lin] : void (:: w int) nil)
+(defn lin-bump [w : Lin] : Lin w)
+
+(defn main [] : int
+  (let [h (lin-mk 7)]
+    (lin-bump h)
+    0))

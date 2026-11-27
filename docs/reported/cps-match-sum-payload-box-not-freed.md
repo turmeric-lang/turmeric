@@ -37,7 +37,7 @@ Remove the `handle` and the `perform` and the same `match` leaks nothing.
 ## Root cause
 
 The direct emitter frees the box in the arm, after the binder copies out
-(`match_scrut_owns_vsp_box`, `src/compiler/emit_expr.c:7339`, from
+(`match_scrut_owns_vsp_box`, `src/compiler/emit_expr.c:7361`, from
 [sum-payload-box-leaks-at-match](../archive/sum-payload-box-leaks-at-match.md)
 fix 1):
 
@@ -47,7 +47,7 @@ tur_adt_P p_8 = *(tur_adt_P *)(intptr_t)(__scrut->as.Ok._0);
 if (__scrut->as.Ok._0) free((void *)(intptr_t)__scrut->as.Ok._0);
 ```
 
-The CPS emitter's `emit_match` (`src/compiler/emit_cps_ir.c:10867`) emits the
+The CPS emitter's `emit_match` (`src/compiler/emit_cps_ir.c:11264`) emits the
 binder copy and no free. A match with a control op in an arm cannot be
 delegated whole to the direct emitter, so it never reaches the code above.
 

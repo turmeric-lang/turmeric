@@ -287,6 +287,18 @@ typedef struct Elab {
      * branches and elab_session_free). */
     struct TuriEnv *macro_env;
 
+    /* owned-drop-parameter-is-never-dropped: the scope-exit drop a `defn`
+     * appended for an owned parameter, keyed by the function's name and the
+     * parameter's position -- so the type's own Drop method can take it back
+     * for a helper it hands the value to (elab_drop_method_disarm_helpers).
+     * Arena-allocated. */
+    struct OwnedParamGlue {
+        const Symbol *fn;
+        uint32_t idx;
+        Expr *glue;
+        struct OwnedParamGlue *next;
+    } *owned_param_glue;
+
     /* Phase 3: Collect file-scope definitions (FN_DEF) from nested contexts */
     Expr       **file_scope_defs;
     uint32_t    n_file_scope_defs;
@@ -1962,6 +1974,78 @@ uint32_t move_state_snapshot_bindings(const Scope *scope,
     bool **out_states);
 bool *move_state_capture_current(Binding **bindings, uint32_t n);
 void move_state_restore(Binding **bindings, const bool *states, uint32_t n);
+UsageState *usage_state_capture_current(Binding **bindings, uint32_t n);
+void usage_state_restore(Binding **bindings, const UsageState *states, uint32_t n);
+bool usage_state_is_per_path(const Binding *b);
+bool elab_path_consumed(const Binding *b, bool moved_before, bool moved,
+                        UsageState usage_before, UsageState usage);
+Expr *elab_branch_with_scope_drop(Elab *e, Expr *branch, Binding *b, Span span);
+
+/* The move and usage state of every visible binding across the arms of a
+ * `match`.  Arms are alternatives: each is elaborated from the state before
+ * the match (arm_moves_enter), its outcome is recorded (arm_moves_leave), and
+ * the outcomes are merged once (arm_moves_merge) -- moved after the match
+ * only if every arm that reaches the merge moved it.  A Drop-owning local
+ * that only some arms hand on is released by the others, which
+ * arm_moves_apply wraps once the arm bodies are final.  arm_moves_free is
+ * safe to call more than once. */
+typedef struct ArmMoves {
+    Binding    **b;
+    uint32_t     n, n_arms;
+    bool        *moved_before;
+    UsageState  *usage_before;
+    bool       **arm_moved;     /* [n_arms] rows of n; NULL = arm not reached */
+    UsageState **arm_usage;
+    bool        *arm_leaves;    /* the arm is a `return` / panic / `!` */
+    Binding    **drop_binding;  /* pending (arm, binding) drops, n_drops long */
+    uint32_t    *drop_arm;
+    uint32_t     n_drops, cap_drops;
+} ArmMoves;
+void arm_moves_begin(Elab *e, ArmMoves *am, uint32_t n_arms);
+void arm_moves_enter(ArmMoves *am);
+void arm_moves_leave(ArmMoves *am, uint32_t ai, const Expr *body);
+void arm_moves_merge(ArmMoves *am);
+void arm_moves_apply(Elab *e, ArmMoves *am, MatchArm *arms, Span span);
+void arm_moves_free(ArmMoves *am);
+
+/* The linear-consumption half of the same join, for a `match` whose arms the
+ * LT1 block in elab_match does not reach (the literal-pattern path): rewind
+ * is_linear_consumed before each arm, capture it after, and at the merge hold
+ * the arms that carry on to one answer (TUR-E0104).  arm_linear_merge returns
+ * false after reporting a disagreement.  arm_linear_free is safe to call more
+ * than once. */
+typedef struct ArmLinear {
+    Binding **b;
+    uint32_t  n, n_arms;
+    bool     *before;
+    bool    **arm;          /* [n_arms] rows of n; NULL = arm not reached */
+    bool     *arm_leaves;
+} ArmLinear;
+void arm_linear_begin(Elab *e, ArmLinear *al, uint32_t n_arms);
+void arm_linear_enter(ArmLinear *al);
+void arm_linear_leave(ArmLinear *al, uint32_t ai, const Expr *body);
+bool arm_linear_merge(ArmLinear *al, Span span);
+void arm_linear_free(ArmLinear *al);
+
+/* Does control never fall out of the end of `x`?  (elab_forms.c) */
+bool elab_tail_leaves(const Expr *x);
+
+/* linear-values-without-a-binding-are-not-checked (1): a fresh ^linear value
+ * that never gets a name has no consumer the checker can hold to "exactly
+ * once".  elab_fresh_linear_unowned answers whether `x` is one -- a call whose
+ * result type is linear and has no Drop instance to release it through.
+ * elab_note_discarded_linear reports the statement-position shape for the
+ * first `n` items of a sequence (TUR-E0100); the diagnostic fails the build
+ * without unwinding the caller.
+ *
+ * The same value handed straight to a `^borrow` parameter is NOT reported,
+ * though it has no consumer either: a call cannot be told from a re-wrap.
+ * `(rows-count (__int->rows h))` casts a handle it does not own to the linear
+ * type the borrower wants, and `(set-Pos! (make-write-cap id) ...)` mints a
+ * capability token; both are in turmeric-spices, and neither has a consumer
+ * to name.  The open report has the measurements. */
+bool elab_fresh_linear_unowned(Elab *e, const Expr *x);
+void elab_note_discarded_linear(Elab *e, Expr *const *items, uint32_t n);
 uint32_t linear_state_snapshot_bindings(const Scope *scope,
     Binding ***out_bindings,
     bool **out_states);
@@ -2341,6 +2425,16 @@ Expr *elab_tailcall(Elab *e, const Form *call);
 /* The Drop instance of a move-only (Drop, no Clone) opaque `t` when `init`
  * yields a fresh value of it, else NULL; and the `(defer (<Drop.drop> b))`
  * drop glue that releases such a local at scope exit. */
+struct TypeClassInstance *elab_sole_owner_drop_inst(Elab *e, const Type *t);
+Expr *elab_body_under_scope_drops(Elab *e, Expr *body, Span span);
+/* owned-drop-parameter-is-never-dropped (elab_fns.c). */
+void elab_owned_params_mark(Elab *e, const Form *call, uint32_t body_start,
+                            const Symbol *fn_name,
+                            Binding **params, uint32_t n_params);
+Expr *elab_owned_params_append_drops(Elab *e, const Symbol *fn_name, Expr *body,
+                                     Binding **params, uint32_t n_params, Span span);
+void elab_drop_method_disarm_helpers(Elab *e, const Expr *method_body,
+                                     const Binding *self_param);
 struct TypeClassInstance *elab_fresh_sole_owner_drop_inst(Elab *e, const Type *t,
                                                           const Expr *init);
 Expr *elab_drop_glue_defer(Elab *e, Binding *b, struct TypeClassInstance *di,

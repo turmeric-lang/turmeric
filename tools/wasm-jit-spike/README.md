@@ -9,7 +9,28 @@ it produced on 2026-10-23 (emcc 6.0.13, node 22) are in the plan's section
 Files: `spike.c` (compile-link-interpret driver), `hdr/` (the two headers
 the test programs include; on wasm the embedder serves libc headers),
 `drive.js` (depth and cost measurements), `mini.js` (small calls against the
-assertions build), `sjlj.c` (the host-owned setjmp landing, no MIR).
+assertions build), `sjlj.c` (the host-owned setjmp landing, no MIR),
+`stack.js` (shapes that must run in constant linear stack; exits 1 if one
+grows).
+
+`stack.js` reads the linear stack pointer through `sp_now`, a native the
+driver registers. It pins two fixed reports: a tail-call chain through a
+function with a local aggregate
+([wasm-mir-interp-tail-call-keeps-allocas](../../docs/archive/wasm-mir-interp-tail-call-keeps-allocas.md))
+and a variadic call in a loop
+([c2mir-wasm-vararg-buffer-allocas-per-call](../../docs/archive/c2mir-wasm-vararg-buffer-allocas-per-call.md)).
+Measured 2026-11-24 (emcc 6.0.10, node 22), bytes of growth:
+
+| n | `noalloc` | `withalloc` before / after | `printf_loop` before / after |
+| --- | --- | --- | --- |
+| 10 | 1344 / 1072 | 8688 / 1072 | 160 / 0 |
+| 1000 | 1344 / 1072 | 705648 / 1072 | 16000 / 0 |
+| 100000 | 1344 / 1072 | `memory access out of bounds` / 1072 | not measurable (the module had already trapped) / 0 |
+| 2000000 | not measurable / 1072 | not measurable / 1072 | not measurable / 0 |
+
+"Before" is the vendored MIR at d00e8c1 (mir#20) and "after" is dc4be67
+(mir#21 and mir#22). The recursion depth `drive.js` measures went from 936 to
+924.
 
 ## `engine/` -- P1, superseded
 

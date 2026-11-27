@@ -1,5 +1,20 @@
 # On wasm32, every variadic call c2mir compiles allocates stack that lasts until the function returns
 
+**RESOLVED 2026-11-24** in the fork as turmeric-lang/mir#21 (52e52a7, merged
+as 9d86c04), vendored the same day. This is the first fix direction below. The
+buffer is now one alloca in the function's prologue, sized to the function's
+largest variadic tail, and every call fills it from offset 0. Sharing the buffer
+is safe: a call fills it only after all its arguments, nested calls included,
+have been evaluated, and the buffer is dead once the call returns. The alloca
+comes right after the frame's, so simplification merges the two. Native targets
+compile none of this (`VA_BUF_TARGET_P` is 0 there).
+
+The fork's `wasm-tests/ffi-test.c` pins it. 1000 variadic calls in a loop now
+grow the stack by 0 bytes, against 16,000 before. 2e6 calls in one function on
+an 8 MiB stack also grow it by 0, where before they segfaulted under
+`-sSAFE_HEAP`. Calls with different tail sizes, one nested in another's
+arguments, format correctly.
+
 **Severity:** high for the planned wasm JIT (wasm-jit-plan), none today --
 nothing ships it yet. `(println i)` on an int is `printf("%lld\n", ...)`
 (`src/compiler/builtins.c:410`), and the emitter turns self tail calls into

@@ -1543,7 +1543,8 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             const Expr *ret_e = e->as.return_.value;
             bool pending_drops = emit_frame_has_pending_drops(ctx);
             bool exits_run = ctx->frame_var || pending_drops ||
-                             ctx->n_any_scope_drops > 0;
+                             ctx->n_any_scope_drops > 0 ||
+                             e->as.return_.n_owed > 0;
             char *val = ret_e ? emit_value(ctx, body, ret_e) : NULL;
             if (val && exits_run && ret_e->type.kind != TY_NIL &&
                 ret_e->type.kind != TY_NEVER &&
@@ -1568,7 +1569,10 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "tur_frame_fire_chain(&%s);\n", ctx->frame_var);
             }
-            if (pending_drops) emit_frame_run_pending_drops(ctx, body, ret_e);
+            if (pending_drops) emit_frame_run_pending_drops(ctx, body, e);
+            /* Locals a branch join left for this `return` to release. */
+            for (uint32_t od = 0; od < e->as.return_.n_owed; od++)
+                emit_stmt(ctx, body, e->as.return_.owed_drops[od]);
             if (ctx->n_any_scope_drops > 0) emit_any_scope_drops(ctx, body);
             indent_buf(body, ctx->indent);
             if (val) {

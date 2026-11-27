@@ -1,0 +1,3 @@
+Owned by tests/run-build-shared.sh (sepcomp-cross-module-effect-unhandled).
+The fixture has no input.tur; the library + harness pair is built and
+dlopen-tested by the dedicated ctest target tur_build_shared.

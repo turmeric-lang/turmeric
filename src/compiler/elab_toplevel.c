@@ -949,6 +949,10 @@ static Expr *elab_form_impl(Elab *e, Form *f) {
                 /* Continuation relevant checks are handled by the LC2 drop check. */
                 b->usage_state = (b->usage_state == USAGE_UNUSED) ? USAGE_USED_ONCE
                                                                    : USAGE_USED_MANY;
+            } else if (b->owned_drop_param) {
+                /* Counted, never diagnosed (Binding.owned_drop_param). */
+                b->usage_state = (b->usage_state == USAGE_UNUSED) ? USAGE_USED_ONCE
+                                                                   : USAGE_USED_MANY;
             }
             /* DV1: If the binding is a dynamic var, emit a dynvar-read node.
              * The result type is the var's value type, not TY_DYNVAR. */

@@ -13337,6 +13337,89 @@ static void emit_split_once_fns(Buf *out, const Buf *text) {
     else emit_split_export_static_fns(text->data, text->len, out);
 }
 
+/* sepcomp-cross-module-effect-unhandled: the DK machine's STATE, in the
+ * shared posture.
+ *
+ * emit_cps_runtime_prelude spells every piece of the machine `static`, state
+ * included, which is right for a single-file program.  Pasted into each
+ * module's TU through tur_runtime.h it gave every module its own driver
+ * landing, resume chain, reap list, entry depth, pending-perform list, handler
+ * group counter and re-opening slot.  That was invisible while no chain ever
+ * left its unit.  A chain that does -- a handler in one module, the performer
+ * in another, the callee entered through its exported `__cps` twin -- has its
+ * `dk_perform` run in the performer's unit and its `dk_tail_resume` in the
+ * handler's: the resume landed on the wrong unit's driver, and the value went
+ * to the root with the code after the `handle` skipped (an exit status of
+ * 308 & 255 and nothing printed, from a program that built).
+ *
+ * So the machine's functions stay per-unit `static` copies, like the rest of
+ * the non-rc runtime, and they operate on ONE set of state: defined in the
+ * TUR_RT_OWNER unit, `extern` everywhere else, the emit_rt_global rule.  The
+ * definitions are TUR_RT_LOCAL (hidden): the state belongs to one linked
+ * output, like the collector's, and two libraries built apart keep a machine
+ * each -- which is why a call is never threaded into a module outside the
+ * link (emit_cps_xmod_set_unlinked_modules).
+ *
+ * Each row is a line of the machine's text, exactly as emit_dk_runtime.c
+ * writes it.  A row that no longer matches would silently leave that piece
+ * per-unit, so it becomes an `#error` in the header instead: every separate
+ * build fails until the row is brought back in step. */
+static void emit_dk_shared_state(Buf *out, const Buf *text) {
+    static const char *const rows[] = {
+        "static TUR_THREAD_LOCAL DKPendPerform *g_dk_pend_perform;\n",
+        "static TUR_THREAD_LOCAL void **__dk_reap_v;\n",
+        "static TUR_THREAD_LOCAL unsigned char *__dk_reap_kind;  /* 1 = DK chain (dk_free), 0 = plain (free) */\n",
+        "static TUR_THREAD_LOCAL size_t __dk_reap_n;\n",
+        "static TUR_THREAD_LOCAL size_t __dk_reap_cap;\n",
+        "static TUR_THREAD_LOCAL int __dk_entry_depth;\n",
+        "static TUR_THREAD_LOCAL tur_jmp_buf *g_dk_driver;\n",
+        "static TUR_THREAD_LOCAL DK *g_dk_resume_chain;\n",
+        "static TUR_THREAD_LOCAL tur_dkw g_dk_resume_val;\n",
+        "static volatile uint64_t g_dk_hgroup_ctr = 0;\n",
+        "static int tur_dk_pinned = 0;\n",
+        "static const DK *g_dk_case_reopen_hnode = NULL;\n",
+    };
+    enum { N_ROWS = sizeof rows / sizeof rows[0] };
+    bool seen[N_ROWS] = { false };
+    const char *s = text->data;
+    size_t n = text->len, i = 0;
+    while (i < n) {
+        size_t e = i;
+        while (e < n && s[e] != '\n') e++;
+        if (e < n) e++;                       /* the line, newline included */
+        int hit = -1;
+        for (int r = 0; r < N_ROWS && hit < 0; r++) {
+            size_t rl = strlen(rows[r]);
+            if (rl == e - i && memcmp(s + i, rows[r], rl) == 0) hit = r;
+        }
+        if (hit < 0) { buf_write(out, s + i, e - i); i = e; continue; }
+        seen[hit] = true;
+        /* `static <decl>[ = init];[ comment]\n`: the owner's definition is
+         * the line without `static`; the declaration stops at the
+         * initializer or the `;`. */
+        const char *decl = s + i + strlen("static ");
+        size_t dl = (e - i) - strlen("static ");
+        size_t stop = 0;
+        while (stop < dl && decl[stop] != ';' &&
+               !(stop + 2 < dl && decl[stop] == ' ' && decl[stop + 1] == '=' && decl[stop + 2] == ' '))
+            stop++;
+        buf_puts(out, "#ifdef TUR_RT_OWNER\nTUR_RT_LOCAL ");
+        buf_write(out, decl, dl);
+        buf_puts(out, "#else\nextern TUR_RT_LOCAL ");
+        buf_write(out, decl, stop);
+        buf_puts(out, ";\n#endif\n");
+        i = e;
+    }
+    for (int r = 0; r < N_ROWS; r++) {
+        if (seen[r]) continue;
+        buf_puts(out, "#error \"tur: the DK runtime's state changed its spelling; "
+                      "update emit_dk_shared_state (emit_module.c):\"\n#error \"  ");
+        for (const char *c = rows[r]; *c && *c != '\n'; c++)
+            if (*c != '"' && *c != '\\') buf_putc(out, *c);
+        buf_puts(out, "\"\n");
+    }
+}
+
 /* ---------------------------------------------------------------------------
  * The r7rs-gc collector (docs/archive/r7rs-gc-plan.md; graduated 2026-09-25,
  * on by default for a single-unit `#lang r7rs` program; TUR_R7RS_GC=0 or
@@ -17541,7 +17624,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
          * continuation frames run on the library unit's trampoline. */
         Buf dk; buf_init(&dk);
         emit_cps_runtime_prelude(&dk);
-        emit_split_once_fns(out, &dk);
+        /* One set of machine state per linked output in the shared posture
+         * (never under an r7rs split, which is a whole-program build). */
+        if (shared && g_emit_split == EMIT_SPLIT_NONE) emit_dk_shared_state(out, &dk);
+        else emit_split_once_fns(out, &dk);
         buf_free(&dk);
         /* The DK runtime's per-thread state (dk-reap-list-shared-across-
          * threads): realloc'd (collected) arrays and a chain in flight. */

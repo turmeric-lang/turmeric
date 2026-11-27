@@ -1,0 +1,54 @@
+;; A `return` in a match arm leaves the function, wherever the match sits.
+;;
+;; A returning arm is typed as the value it returns, and the match emitter
+;; read that type to decide the arm yields a value: it assigned the value to
+;; the match's result and carried on, so `(mid 0)` was 7.  An arm that did
+;; something first -- `(do (println ...) (return x))` -- did not compile.
+(defdata Tag (TA) (TB))
+
+;; The match is a statement in the middle of the body.
+(defn mid [c : int] : int
+  (match c
+    0 (return 100)
+    _ 1)
+  7)
+
+(defn mid-adt [t : Tag] : int
+  (match t
+    (TA) (return 200)
+    (TB) 1)
+  7)
+
+;; The arm does something first.
+(defn mid-do [c : int] : int
+  (match c
+    0 (do (println "zero")
+          (return 300))
+    _ 1)
+  7)
+
+;; The match is a let initialiser.
+(defn in-let [c : int] : int
+  (let [v (match c
+            0 (return 400)
+            _ 1)]
+    (+ v 7)))
+
+;; The match is the last expression.
+(defn last [c : int] : int
+  (match c
+    0 (return 500)
+    _ 1))
+
+(defn main [] : int
+  (println (mid 0))
+  (println (mid 1))
+  (println (mid-adt (TA)))
+  (println (mid-adt (TB)))
+  (println (mid-do 0))
+  (println (mid-do 1))
+  (println (in-let 0))
+  (println (in-let 1))
+  (println (last 0))
+  (println (last 1))
+  0)

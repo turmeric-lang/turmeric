@@ -1,0 +1,79 @@
+;; A by-value parameter of an ^affine Drop type is the function's to release.
+;; The caller gave the value up when it passed it, so a function that ignores
+;; the parameter, only lends it on, or hands it on along one path drops it on
+;; the paths that still own it -- as a let local of the same type is dropped.
+;;
+;; Before, nothing released it: every `mk` below without a `rel` after it was
+;; the old output for ignore, reads, maybe (false), keeps (0 and 2), early
+;; (false) and looped.
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (println "  mk") (:: 1 Widget))
+(defn rel [w : Widget] : void (println "  rel") (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn peek [^borrow w : Widget] : int 1)
+(defn take [w : Widget] : int (rel w) 5)
+(defeffect Ask [] : int)
+
+;; Never used.
+(defn ignore [w : Widget] : int 7)
+
+;; Only lent on, twice.
+(defn reads [w : Widget] : int
+  (+ (peek w) (peek w)))
+
+;; Handed on: returned, passed by value.  No drop here.
+(defn id [w : Widget] : Widget w)
+(defn pass [w : Widget] : int (take w))
+
+;; Handed on along one path.
+(defn maybe [w : Widget c : bool] : int
+  (if c (take w) 0))
+
+(defn keeps [w : Widget c : int] : int
+  (match c
+    1 (take w)
+    _ c))
+
+;; An early return that hands it on, and a fall-through that still owns it.
+(defn early [w : Widget c : bool] : int
+  (if c (return (take w)) nil)
+  (peek w))
+
+;; Lent on inside a loop.
+(defn looped [w : Widget n : int] : int
+  (let [^mut i 0]
+    (while (< i n)
+      (peek w)
+      (set! i (+ i 1)))
+    i))
+
+;; A ^borrow parameter stays the caller's.
+(defn lent [^borrow w : Widget] : int 3)
+
+;; In a function that performs an effect.  (Its early return, which still
+;; owns the parameter, is in owned-drop-param-early-return.)
+(defn asks [w : Widget c : bool] : int
+  (let [a (perform (Ask))]
+    (if c (return a) nil)
+    (+ a (peek w))))
+
+(defn run-asks [c : bool] : int
+  (handle (asks (mk) c)
+    (Ask [] k) (resume k 100)))
+
+(defn main [] : int
+  (println "ignore") (println (ignore (mk)))
+  (println "ignore, a local") (println (let [h (mk)] (ignore h)))
+  (println "reads") (println (reads (mk)))
+  (println "id") (println (let [h (id (mk))] (peek h)))
+  (println "pass") (println (pass (mk)))
+  (println "maybe true") (println (maybe (mk) true))
+  (println "maybe false") (println (maybe (mk) false))
+  (println "keeps 1") (println (keeps (mk) 1))
+  (println "keeps 0") (println (keeps (mk) 0))
+  (println "early true") (println (early (mk) true))
+  (println "early false") (println (early (mk) false))
+  (println "looped") (println (looped (mk) 2))
+  (println "lent") (println (let [h (mk)] (lent h)))
+  (println "asks false") (println (run-asks false))
+  0)

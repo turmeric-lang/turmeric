@@ -1860,6 +1860,46 @@ void move_state_restore(Binding **bindings, const bool *states, uint32_t n) {
     }
 }
 
+/* ST1 usage counts of the same bindings, for the same reason: the arms of an
+ * `if` / `match` are alternatives, so a use in each is one use at run time.
+ * Unsnapshotted, an ^affine value consumed in both arms was "used more than
+ * once" (TUR-E0150). */
+UsageState *usage_state_capture_current(Binding **bindings, uint32_t n) {
+    UsageState *states = (UsageState *)malloc((n == 0 ? 1 : n) * sizeof(UsageState));
+    if (!states) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+    for (uint32_t i = 0; i < n; i++) states[i] = bindings[i]->usage_state;
+    return states;
+}
+
+void usage_state_restore(Binding **bindings, const UsageState *states, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++)
+        if (usage_state_is_per_path(bindings[i])) bindings[i]->usage_state = states[i];
+}
+
+/* Only an ^affine count is a per-path fact.  A ^relevant binding is satisfied
+ * by a use on ANY path, including one that then leaves, so its count stays
+ * sticky across arms as it always was; a continuation's is kept by the LC2
+ * checks, which have their own rules. */
+bool usage_state_is_per_path(const Binding *b) {
+    return (b->is_affine || b->owned_drop_param) && !b->is_continuation;
+}
+
+/* Did the path that ran from (moved_before, usage_before) to (moved, usage)
+ * hand `b` on?  A move says so for every move-tracked type.  For an ^affine
+ * binding a surviving use says so too: a use at a `^borrow` parameter is
+ * un-counted by the call, so a count that went up is a use that was not a
+ * borrow -- including the ones that do not mark a move, such as the value
+ * being the branch's own result. */
+bool elab_path_consumed(const Binding *b, bool moved_before, bool moved,
+                        UsageState usage_before, UsageState usage) {
+    if (!moved_before && moved) return true;
+    return usage_state_is_per_path(b) &&
+           usage_before == USAGE_UNUSED && usage != USAGE_UNUSED;
+}
+
 /* LT1: Parallel helpers for is_linear_consumed state across branches.
  * Only linear bindings (is_linear == true) are included in the snapshot. */
 

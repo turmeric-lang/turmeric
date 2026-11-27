@@ -87,6 +87,29 @@ cheaper:
 If none of those apply, you have genuine shared ownership -- use `rc<T>`, and
 read on.
 
+## Passing an `^affine` Drop value to a function
+
+A value of an `^affine` type with a `Drop` instance has one owner at a time,
+and passing it by value hands it over: the caller cannot use it again and
+will not drop it. The function that received it releases it. If the body
+passes it on by value or returns it, that is the next hand-off; on any path
+where the body only lends it out (`^borrow` arguments) or never touches it,
+the compiler drops it when the function returns, as it would a `let` local.
+
+Three things follow from how that is decided:
+
+- Declare the parameter `^borrow` when the function only reads the value and
+  the caller should keep it.
+- Any other use of the parameter -- a cast, storing it in a struct, capturing
+  it in a closure -- counts as handing it on, and the function does not drop
+  it on that path.
+- Write the type's `(definstance Drop ...)` before the functions that take
+  the type by value; one defined earlier is elaborated before the type has a
+  release, and does not drop.
+
+A plain `Drop` opaque without `^affine` works the other way round: passing a
+local by value does not hand it over, and the caller still drops it.
+
 ## Reassigning an `rc<T>` binding with `set!`
 
 `set!` on an `^mut` binding that holds an `rc<T>` **releases the value it
@@ -210,6 +233,17 @@ What each is for:
 `@r` and `(deref r)` are the same read, on every kind above (and on borrows and
 `ptr<T>`). Reading a `ref` or `rc` does not consume it; reading an `lref` does --
 that is how an `lref` is used up.
+
+A `ref` or `lref` handed on along one path through an `if` -- moved into
+another binding, or passed by value to a call -- must be handed on along
+every path that carries on, or the compiler reports TUR-E0104. An `if` with no
+else, and `when`, count the path that skips the branch, so
+`(when c (sink r))` is refused: one path would have given the cell away and
+the other would still free it. A branch that `return`s is exempt, because it
+meets no other path. The same holds wherever paths meet: the arms of a
+`match` must agree, the second operand of `and` / `or` may not hand a cell on
+(it may not run), and neither may a loop body (it may run twice, or never --
+TUR-E0101).
 
 ```turmeric
 (defn main [] : int

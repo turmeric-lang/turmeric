@@ -10088,6 +10088,201 @@ bool elab_form_is_ret_tail_call(const Elab *e, const Form *f) {
     return false;
 }
 
+/* ---- owned-drop-parameter-is-never-dropped ------------------------------ *
+ * A let-bound ^affine Drop opaque is released at scope exit.  Passed by value
+ * to a function it is the callee's -- the caller counts the call as the hand-
+ * off and drops nothing -- and the callee had no scope exit for parameters,
+ * so a function that ignored such a parameter, only lent it on, or consumed
+ * it on one path leaked it.
+ *
+ * Such a parameter now gets what the let local has: scope_drop_inst while the
+ * body is elaborated (so an `if` / `match` join, a loop and a `return` do
+ * their per-path bookkeeping for it) and a trailing scope-exit drop on the
+ * paths that still own it.  Kept narrow on purpose:
+ *   - ^affine opaques only.  A plain Drop opaque passed by value stays the
+ *     caller's, which drops it; a ^linear one must be consumed (TUR-E0100).
+ *   - not a ^borrow parameter, whose owner is the caller.
+ *   - not a body with inline C anywhere in it: C code is trusted to consume
+ *     an owned handle, and cannot be read.
+ *   - "still owns it" means no use at all outside a ^borrow argument slot
+ *     (Binding.owned_drop_param).  A cast, a field store, a capture, the
+ *     value as a result: each counts as handing it on, and suppresses the
+ *     drop.  That only ever trades this fix for the old leak.
+ * ------------------------------------------------------------------------- */
+static bool form_has_cblock(const Form *f, uint32_t depth) {
+    if (!f) return false;
+    if (f->tag == F_CBLOCK) return true;
+    if (depth > 256) return true;   /* too deep to tell: assume so */
+    if (f->tag == F_LIST || f->tag == F_VEC || f->tag == F_MAP) {
+        for (uint32_t i = 0; i < f->as.list.len; i++)
+            if (form_has_cblock(f->as.list.items[i], depth + 1)) return true;
+    }
+    return false;
+}
+
+/* Does `x` (a Drop method's body) hand the method's own parameter `self` to
+ * function `fn` at argument position `idx`? */
+static bool drop_method_hands_self_to(const Expr *x, const Binding *self,
+                                      const Symbol *fn, uint32_t idx,
+                                      uint32_t depth) {
+    if (!x || depth > 64) return false;
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x) return false;
+    switch (x->kind) {
+    case EX_CALL: {
+        const Binding *fb = x->as.call_.fn_binding;
+        for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
+            const Expr *a = x->as.call_.args[i];
+            while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+            if (a && a->kind == EX_VAR && a->as.var.binding == self) {
+                if (fb && fb->name == fn && i == idx) return true;
+            } else if (drop_method_hands_self_to(a, self, fn, idx, depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    case EX_DO:
+        for (uint32_t i = 0; i < x->as.do_.n; i++)
+            if (drop_method_hands_self_to(x->as.do_.items[i], self, fn, idx, depth + 1))
+                return true;
+        return false;
+    case EX_LET:
+        for (uint32_t i = 0; i < x->as.let_.n; i++)
+            if (drop_method_hands_self_to(x->as.let_.bindings[i].init, self, fn, idx,
+                                          depth + 1))
+                return true;
+        return drop_method_hands_self_to(x->as.let_.body, self, fn, idx, depth + 1);
+    case EX_IF:
+        return drop_method_hands_self_to(x->as.if_.cond, self, fn, idx, depth + 1) ||
+               drop_method_hands_self_to(x->as.if_.then_, self, fn, idx, depth + 1) ||
+               drop_method_hands_self_to(x->as.if_.else_or_null, self, fn, idx, depth + 1);
+    default:
+        return false;
+    }
+}
+
+void elab_owned_params_mark(Elab *e, const Form *call, uint32_t body_start,
+                            const Symbol *fn_name,
+                            Binding **params, uint32_t n_params) {
+    if (body_start >= call->as.list.len) return;       /* no body */
+    bool scanned = false;
+    for (uint32_t i = 0; i < n_params; i++) {
+        Binding *p = params[i];
+        if (!p || p->is_borrow || p->is_linear || p->is_unique) continue;
+        const Type *t = &p->type;
+        if (t->kind != TY_ADT || !t->as.adt_.def || !t->as.adt_.def->is_opaque ||
+            !t->as.adt_.def->is_affine)
+            continue;
+        struct TypeClassInstance *di = elab_sole_owner_drop_inst(e, t);
+        if (!di) continue;
+        /* The type's Drop method hands its value to THIS function: it is the
+         * release, and must not drop the value again (unbounded recursion).
+         * See elab_drop_method_disarm_helpers for the other definition order. */
+        const FnDef *dm = di->method_impls[0];
+        if (dm && dm->body && dm->n_params > 0 &&
+            drop_method_hands_self_to(dm->body, dm->params[0], fn_name, i, 0))
+            continue;
+        if (!scanned) {
+            for (uint32_t k = body_start; k < call->as.list.len; k++)
+                if (form_has_cblock(call->as.list.items[k], 0)) return;
+            scanned = true;
+        }
+        p->scope_drop_inst = di;
+        p->owned_drop_param = true;
+        p->usage_state = USAGE_UNUSED;
+    }
+}
+
+Expr *elab_owned_params_append_drops(Elab *e, const Symbol *fn_name, Expr *body,
+                                     Binding **params, uint32_t n_params, Span span) {
+    if (!body) return body;
+    for (uint32_t i = 0; i < n_params; i++) {
+        Binding *p = params[i];
+        if (!p || !p->owned_drop_param || !p->scope_drop_inst) continue;
+        if (elab_path_consumed(p, false, p->is_moved, USAGE_UNUSED, p->usage_state))
+            continue;
+        body = elab_body_under_scope_drops(e, body, span);
+        Expr *glue = elab_drop_glue_defer(e, p, p->scope_drop_inst, span);
+        uint32_t n = body->kind == EX_DO ? body->as.do_.n : 1;
+        Expr **items = (Expr **)arena_alloc(e->arena, (n + 1) * sizeof(Expr *));
+        if (body->kind == EX_DO) memcpy(items, body->as.do_.items, n * sizeof(Expr *));
+        else items[0] = body;
+        items[n] = glue;
+        Expr *d = expr_new(e->arena, EX_DO, body->type, span);
+        d->as.do_.items = items;
+        d->as.do_.n = n + 1;
+        body = d;
+        struct OwnedParamGlue *g =
+            (struct OwnedParamGlue *)arena_alloc(e->arena, sizeof *g);
+        g->fn = fn_name;
+        g->idx = i;
+        g->glue = glue;
+        g->next = e->owned_param_glue;
+        e->owned_param_glue = g;
+        if (getenv("TUR_TRACE_PARAM_DROP"))
+            fprintf(stderr, "[PARAM-DROP] %s: parameter '%s'\n",
+                    fn_name ? fn_name->name : "?", p->name ? p->name->name : "?");
+    }
+    return body;
+}
+
+/* A type's Drop method that hands its value to a helper -- `(drop [x] (rel
+ * x))` -- IS the release.  If `rel` neither consumes nor passes on its
+ * parameter it carries a scope-exit drop of its own, and that drop calls this
+ * method again: unbounded recursion.  The helper is being told to release the
+ * value, so the drop is taken back.  This is the order "helper defined
+ * first, instance second, and the instance already existed when the helper
+ * was elaborated" (a re-elaboration); elab_owned_params_mark covers a helper
+ * defined after the instance.  One level only: a helper that passes the value
+ * to a second by-value helper that ignores it still recurses. */
+static void drop_method_disarm_walk(Elab *e, const Expr *x, const Binding *self,
+                                    uint32_t depth) {
+    if (!x || depth > 64) return;
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x) return;
+    switch (x->kind) {
+    case EX_CALL: {
+        const Binding *fb = x->as.call_.fn_binding;
+        for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
+            const Expr *a = x->as.call_.args[i];
+            while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+            if (fb && a && a->kind == EX_VAR && a->as.var.binding == self) {
+                for (struct OwnedParamGlue *g = e->owned_param_glue; g; g = g->next)
+                    if (g->fn == fb->name && g->idx == i && g->glue)
+                        g->glue->as.defer_.body =
+                            e_nil(e, g->glue->as.defer_.body->span);
+            } else {
+                drop_method_disarm_walk(e, a, self, depth + 1);
+            }
+        }
+        return;
+    }
+    case EX_DO:
+        for (uint32_t i = 0; i < x->as.do_.n; i++)
+            drop_method_disarm_walk(e, x->as.do_.items[i], self, depth + 1);
+        return;
+    case EX_LET:
+        for (uint32_t i = 0; i < x->as.let_.n; i++)
+            drop_method_disarm_walk(e, x->as.let_.bindings[i].init, self, depth + 1);
+        drop_method_disarm_walk(e, x->as.let_.body, self, depth + 1);
+        return;
+    case EX_IF:
+        drop_method_disarm_walk(e, x->as.if_.cond, self, depth + 1);
+        drop_method_disarm_walk(e, x->as.if_.then_, self, depth + 1);
+        drop_method_disarm_walk(e, x->as.if_.else_or_null, self, depth + 1);
+        return;
+    default:
+        return;
+    }
+}
+
+void elab_drop_method_disarm_helpers(Elab *e, const Expr *method_body,
+                                     const Binding *self_param) {
+    if (!method_body || !self_param || !e->owned_param_glue) return;
+    drop_method_disarm_walk(e, method_body, self_param, 0);
+}
+
 Expr *elab_defn(Elab *e, const Form *call) {
     /* forward-call-to-aggregate-result-types-as-carrier: a module type
      * elaborated since the last defn may be what a pending forward decl's
@@ -12699,6 +12894,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase R6: Track current function name for linting */
     e->current_fn_name = name_f->as.sym;
     if (fn_declared_unsafe) e->unsafe_depth++;
+    elab_owned_params_mark(e, call, body_start, name_f->as.sym, params, n_params);
     /* van-laarhoven-lens-composition: expose this fn's single higher-kinded
      * constraint (`^Functor f`, tyvar `f : * -> *`) to its body so a nested call
      * to another constrained rank-2 fn at the same abstract functor can forward
@@ -12976,12 +13172,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     }
                 }
             }
+            elab_note_discarded_linear(e, items, n_body - 1);
             body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
             body->as.do_.items = items;
             body->as.do_.n = n_body;
             }
         }
     }
+    if (!lazy_defer)
+        body = elab_owned_params_append_drops(e, name_f->as.sym, body, params,
+                                              n_params, call->span);
     e->n_ret_tail_calls = saved_n_tail_calls;
     e->ret_tail_scalar = saved_tail_scalar;
     memcpy(e->ret_tail_calls, saved_tail_calls, sizeof saved_tail_calls);
@@ -15535,6 +15735,7 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
                     return NULL;
                 }
             }
+            elab_note_discarded_linear(e, items, n_body - 1);
             body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
             body->as.do_.items = items;
             body->as.do_.n = n_body;

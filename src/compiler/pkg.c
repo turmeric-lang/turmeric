@@ -3659,26 +3659,24 @@ static void emit_include_dirs_line(FILE *f, const PkgCmakeDep *d,
  *     missing flag. This is the sibling property of the
  *     INTERFACE_INCLUDE_DIRECTORIES that emit_include_dirs_line already reads.
  *
- * $<TARGET_FILE:...> is an error on an INTERFACE library (a header-only dep
- * has no artifact), so it is wrapped in a TYPE guard. CMake does not evaluate
- * the false arm of a $<cond:...>, so the guard is safe and yields an empty
- * element, which the consumer skips.
+ * $<TARGET_FILE:...> and $<TARGET_FILE_DIR:...> are errors on an INTERFACE
+ * library (a header-only dep, or a bundle of other targets, has no artifact),
+ * so both are only written for a target whose TYPE is linkable. That is
+ * decided at configure time, by _tur_append_artifact / _tur_append_artifact_dir.
  *
  * A dep's own `:link-libs` overrides all of that -- including `:link-libs []`,
  * which links nothing (raygui is header-only; glad is a code generator that
  * builds no library), the one thing no genexpr can express. */
 static void emit_link_lines(FILE *f, const PkgCmakeDep *d,
                             const char *link_lib, bool use_full_targets) {
-    /* link_dirs */
+    /* link_dirs -- for :targets, computed by the prelude into
+     * ${_tur_ld_json}: $<TARGET_FILE_DIR:t> for each target that has an
+     * artifact.  It cannot be written here unguarded, because the expression
+     * is a generate-time error on an INTERFACE library
+     * (docs/archive/cmake-dep-interface-target-fails-generate.md). */
+    (void)use_full_targets;
     if (d->n_targets > 0) {
-        fprintf(f, "  \"    \\\"link_dirs\\\":    [");
-        for (int j = 0; j < d->n_targets; j++) {
-            const char *t = use_full_targets
-                                ? d->targets[j]
-                                : cmake_target_basename(d->targets[j]);
-            fprintf(f, "%s\\\"$<TARGET_FILE_DIR:%s>\\\"", j ? ", " : "", t);
-        }
-        fprintf(f, "],\\n\"\n");
+        fprintf(f, "  \"    \\\"link_dirs\\\":    [${_tur_ld_json}],\\n\"\n");
     } else {
         fprintf(f, "  \"    \\\"link_dirs\\\":    [\\\"${_spice_%s_bld}\\\"],\\n\"\n",
                 d->name);
@@ -3716,12 +3714,198 @@ static void emit_link_lines(FILE *f, const PkgCmakeDep *d,
  *     correct action is to drop it -- and $<TARGET_FILE:...> on it is a hard
  *     generate-time error ("Target glfw is not an executable or library").
  *   - $<LINK_ONLY:...> survives one level of $<TARGET_PROPERTY:...> expansion
- *     as literal text, so it has to be unwrapped here rather than downstream. */
+ *     as literal text, so it has to be unwrapped here rather than downstream.
+ *   - a dependency is often linked through a generator expression, the usual
+ *     spelling of an optional one: $<$<BOOL:${WITH_TBB}>:TBB::tbb>. Nothing
+ *     evaluates one at configure time, and by generate time the entry can no
+ *     longer be classified or walked. _tur_reduce_genex decides the ones that
+ *     depend only on things already known here (literals, the platform, the
+ *     compiler, whether a target exists); the walk names any it cannot, since
+ *     the link error that follows would only name a symbol
+ *     (docs/archive/cmake-dep-genex-link-entry-dropped.md).
+ *
+ * It also notes static C++ libraries (_tur_note_cxx), so that the C++ runtime
+ * can be appended: tur links with the C driver, and the runtime is something
+ * the C++ driver adds on its own, so no target lists it
+ * (docs/archive/cmake-dep-cxx-runtime-not-linked.md). */
 static void emit_link_iface_helper(FILE *f) {
     fputs(
     "# Resolve one target's INTERFACE_LINK_LIBRARIES into link-line tokens.\n"
     "set(_TUR_LINKABLE STATIC_LIBRARY SHARED_LIBRARY MODULE_LIBRARY\n"
     "                  UNKNOWN_LIBRARY EXECUTABLE)\n"
+    "\n", f);
+    fputs(
+    "# Reduce the generator expressions in one link entry that can be decided at\n"
+    "# configure time, innermost first: $<$<BOOL:ON>:core> -> $<1:core> -> core.\n"
+    "# An expression this does not know is left in place, and the caller reports\n"
+    "# the entry instead of linking it.\n"
+    "function(_tur_reduce_genex in out_var)\n"
+    "  set(_s \"${in}\")\n"
+    "  set(_n 0)\n"
+    "  while(_n LESS 64 AND _s MATCHES \"\\\\$<([^$<>]*)>\")\n"
+    "    math(EXPR _n \"${_n} + 1\")\n"
+    "    set(_whole \"${CMAKE_MATCH_0}\")\n"
+    "    set(_body \"${CMAKE_MATCH_1}\")\n"
+    "    string(FIND \"${_body}\" \":\" _colon)\n"
+    "    if(_colon EQUAL -1)\n"
+    "      set(_name \"${_body}\")\n"
+    "      set(_arg \"\")\n"
+    "      set(_has_arg 0)\n"
+    "    else()\n"
+    "      string(SUBSTRING \"${_body}\" 0 ${_colon} _name)\n"
+    "      math(EXPR _colon \"${_colon} + 1\")\n"
+    "      string(SUBSTRING \"${_body}\" ${_colon} -1 _arg)\n"
+    "      set(_has_arg 1)\n"
+    "    endif()\n"
+    "    string(REPLACE \",\" \";\" _parts \"${_arg}\")\n"
+    "    list(LENGTH _parts _np)\n"
+    "    set(_ok 1)\n"
+    "    set(_val \"\")\n"
+    "    if(_name STREQUAL \"1\" AND _has_arg)\n"
+    "      set(_val \"${_arg}\")\n"
+    "    elseif(_name STREQUAL \"0\" AND _has_arg)\n"
+    "      set(_val \"\")\n"
+    "    elseif(_name STREQUAL \"BOOL\" AND _has_arg)\n"
+    "      string(TOUPPER \"${_arg}\" _u)\n"
+    "      if(_u MATCHES \"^(|0|FALSE|OFF|N|NO|IGNORE|NOTFOUND|.*-NOTFOUND)$\")\n"
+    "        set(_val 0)\n"
+    "      else()\n"
+    "        set(_val 1)\n"
+    "      endif()\n"
+    "    elseif(_name STREQUAL \"NOT\" AND _arg MATCHES \"^[01]$\")\n"
+    "      if(_arg STREQUAL \"1\")\n"
+    "        set(_val 0)\n"
+    "      else()\n"
+    "        set(_val 1)\n"
+    "      endif()\n"
+    "    elseif((_name STREQUAL \"AND\" OR _name STREQUAL \"OR\")\n"
+    "           AND _arg MATCHES \"^[01](,[01])*$\")\n"
+    "      if(_name STREQUAL \"AND\")\n"
+    "        set(_val 1)\n"
+    "        if(\"0\" IN_LIST _parts)\n"
+    "          set(_val 0)\n"
+    "        endif()\n"
+    "      else()\n"
+    "        set(_val 0)\n"
+    "        if(\"1\" IN_LIST _parts)\n"
+    "          set(_val 1)\n"
+    "        endif()\n"
+    "      endif()\n"
+    "    elseif(_name STREQUAL \"IF\" AND _arg MATCHES \"^([01]),([^,]*),([^,]*)$\")\n"
+    "      if(CMAKE_MATCH_1 STREQUAL \"1\")\n"
+    "        set(_val \"${CMAKE_MATCH_2}\")\n"
+    "      else()\n"
+    "        set(_val \"${CMAKE_MATCH_3}\")\n"
+    "      endif()\n"
+    "    elseif(_name STREQUAL \"STREQUAL\" AND _arg MATCHES \"^([^,]*),([^,]*)$\")\n"
+    "      if(CMAKE_MATCH_1 STREQUAL CMAKE_MATCH_2)\n"
+    "        set(_val 1)\n"
+    "      else()\n"
+    "        set(_val 0)\n"
+    "      endif()\n"
+    "    elseif((_name STREQUAL \"LINK_ONLY\" OR _name STREQUAL \"BUILD_INTERFACE\"\n"
+    "            OR _name STREQUAL \"BUILD_LOCAL_INTERFACE\") AND _has_arg)\n"
+    "      set(_val \"${_arg}\")\n"
+    "    elseif((_name STREQUAL \"INSTALL_INTERFACE\" OR _name STREQUAL \"COMPILE_ONLY\")\n"
+    "           AND _has_arg)\n"
+    "      set(_val \"\")\n"
+    "    elseif(_name STREQUAL \"TARGET_EXISTS\" AND _has_arg)\n"
+    "      if(TARGET \"${_arg}\")\n"
+    "        set(_val 1)\n"
+    "      else()\n"
+    "        set(_val 0)\n"
+    "      endif()\n"
+    "    elseif(_name STREQUAL \"TARGET_NAME_IF_EXISTS\" AND _has_arg)\n"
+    "      if(TARGET \"${_arg}\")\n"
+    "        set(_val \"${_arg}\")\n"
+    "      endif()\n"
+    "    elseif(_name STREQUAL \"PLATFORM_ID\" OR _name STREQUAL \"CONFIG\"\n"
+    "           OR _name STREQUAL \"C_COMPILER_ID\" OR _name STREQUAL \"CXX_COMPILER_ID\")\n"
+    "      if(_name STREQUAL \"PLATFORM_ID\")\n"
+    "        set(_have \"${CMAKE_SYSTEM_NAME}\")\n"
+    "      elseif(_name STREQUAL \"CONFIG\")\n"
+    "        set(_have \"${CMAKE_BUILD_TYPE}\")\n"
+    "      elseif(_name STREQUAL \"C_COMPILER_ID\")\n"
+    "        set(_have \"${CMAKE_C_COMPILER_ID}\")\n"
+    "      else()\n"
+    "        set(_have \"${CMAKE_CXX_COMPILER_ID}\")\n"
+    "      endif()\n"
+    "      if(NOT _has_arg)\n"
+    "        set(_val \"${_have}\")\n"
+    "      else()\n"
+    "        if(_name STREQUAL \"CONFIG\")\n"
+    "          string(TOUPPER \"${_have}\" _have)\n"
+    "          string(TOUPPER \"${_parts}\" _parts)\n"
+    "        endif()\n"
+    "        set(_val 0)\n"
+    "        if(NOT _have STREQUAL \"\" AND _have IN_LIST _parts)\n"
+    "          set(_val 1)\n"
+    "        endif()\n"
+    "      endif()\n"
+    "    else()\n"
+    "      set(_ok 0)\n"
+    "    endif()\n"
+    "    if(NOT _ok)\n"
+    "      break()\n"
+    "    endif()\n"
+    "    string(REPLACE \"${_whole}\" \"${_val}\" _s \"${_s}\")\n"
+    "  endwhile()\n"
+    "  set(${out_var} \"${_s}\" PARENT_SCOPE)\n"
+    "endfunction()\n"
+    "\n", f);
+    fputs(
+    "# Note a static C++ library.  A C++ archive needs the C++ runtime (libstdc++,\n"
+    "# libc++) on the link line; the C++ compiler driver adds it implicitly, so no\n"
+    "# target lists it, and tur links with the C driver.  A shared library records\n"
+    "# the dependency itself and needs nothing here.\n"
+    "function(_tur_note_cxx tgt)\n"
+    "  if(NOT TARGET \"${tgt}\")\n"
+    "    return()\n"
+    "  endif()\n"
+    "  get_target_property(_ty \"${tgt}\" TYPE)\n"
+    "  if(NOT _ty STREQUAL STATIC_LIBRARY AND NOT _ty STREQUAL OBJECT_LIBRARY)\n"
+    "    return()\n"
+    "  endif()\n"
+    "  set(_cxx 0)\n"
+    "  get_target_property(_ll \"${tgt}\" LINKER_LANGUAGE)\n"
+    "  if(_ll STREQUAL CXX)\n"
+    "    set(_cxx 1)\n"
+    "  endif()\n"
+    "  get_target_property(_imp \"${tgt}\" IMPORTED)\n"
+    "  if(_imp)\n"
+    "    set(_props IMPORTED_LINK_INTERFACE_LANGUAGES)\n"
+    "    get_target_property(_cfgs \"${tgt}\" IMPORTED_CONFIGURATIONS)\n"
+    "    if(_cfgs)\n"
+    "      foreach(_c IN LISTS _cfgs)\n"
+    "        list(APPEND _props \"IMPORTED_LINK_INTERFACE_LANGUAGES_${_c}\")\n"
+    "      endforeach()\n"
+    "    endif()\n"
+    "    foreach(_p IN LISTS _props)\n"
+    "      get_target_property(_langs \"${tgt}\" \"${_p}\")\n"
+    "      if(_langs AND \"CXX\" IN_LIST _langs)\n"
+    "        set(_cxx 1)\n"
+    "      endif()\n"
+    "    endforeach()\n"
+    "  else()\n"
+    "    get_target_property(_srcs \"${tgt}\" SOURCES)\n"
+    "    if(_srcs)\n"
+    "      foreach(_src IN LISTS _srcs)\n"
+    "        if(_src MATCHES \"^\\\\$<TARGET_OBJECTS:(.+)>$\")\n"
+    "          _tur_note_cxx(\"${CMAKE_MATCH_1}\")\n"
+    "        elseif(_src MATCHES \"\\\\.([^./>]+)>?$\")\n"
+    "          if(CMAKE_MATCH_1 IN_LIST CMAKE_CXX_SOURCE_FILE_EXTENSIONS)\n"
+    "            set(_cxx 1)\n"
+    "          endif()\n"
+    "        endif()\n"
+    "      endforeach()\n"
+    "    endif()\n"
+    "  endif()\n"
+    "  if(_cxx)\n"
+    "    set_property(GLOBAL PROPERTY _TUR_NEEDS_CXX 1)\n"
+    "  endif()\n"
+    "endfunction()\n"
+    "\n", f);
+    fputs(
     "# Recursive: a target with no artifact of its own still carries\n"
     "# requirements. raylib vendors glfw as an OBJECT_LIBRARY -- its objects\n"
     "# are already inside libraylib.a, so it contributes no -l, but the Cocoa\n"
@@ -3738,30 +3922,55 @@ static void emit_link_iface_helper(FILE *f) {
     "  if(NOT \"${tgt}\" IN_LIST _seen)\n"
     "    list(APPEND _seen \"${tgt}\")\n"
     "    if(TARGET \"${tgt}\")\n"
+    "      _tur_note_cxx(\"${tgt}\")\n"
     "      get_target_property(_ill \"${tgt}\" INTERFACE_LINK_LIBRARIES)\n"
     "      if(_ill)\n"
-    "        foreach(_e IN LISTS _ill)\n"
-    "          string(REGEX REPLACE \"^\\\\$<LINK_ONLY:(.*)>$\" \"\\\\1\" _e \"${_e}\")\n"
-    "          # ::@(<dir id>) ... ::@ bracket entries a target_link_libraries\n"
-    "          # from another directory added; markers, not link inputs.\n"
-    "          if(NOT _e MATCHES \"^\\\\$<\" AND NOT _e MATCHES \"^::@\")\n"
-    "            if(TARGET \"${_e}\")\n"
-    "              get_target_property(_ty \"${_e}\" TYPE)\n"
-    "              if(_ty IN_LIST _TUR_LINKABLE)\n"
-    "                list(APPEND _acc \"$<TARGET_FILE:${_e}>\")\n"
-    "                if(_ty STREQUAL SHARED_LIBRARY)\n"
-    "                  list(APPEND _acc \"-Wl,-rpath,$<TARGET_FILE_DIR:${_e}>\")\n"
-    "                endif()\n"
-    "              endif()\n"
-    "              set(_a \"${_acc}\")\n"
-    "              set(_s \"${_seen}\")\n"
-    "              _tur_walk_iface(\"${_e}\" _a _s)\n"
-    "              set(_acc \"${_a}\")\n"
-    "              set(_seen \"${_s}\")\n"
-    "            else()\n"
-    "              list(APPEND _acc \"${_e}\")\n"
-    "            endif()\n"
+    "        set(_pend \"\")\n"
+    "        foreach(_piece IN LISTS _ill)\n"
+    "          # A generator expression may hold a list ($<1:dl;pthread>), which\n"
+    "          # the property's own `;` separators cut in two.  Rejoin the pieces\n"
+    "          # until every $< has its >.\n"
+    "          if(_pend STREQUAL \"\")\n"
+    "            set(_pend \"${_piece}\")\n"
+    "          else()\n"
+    "            string(APPEND _pend \";${_piece}\")\n"
     "          endif()\n"
+    "          string(REGEX MATCHALL \"\\\\$<\" _opens \"${_pend}\")\n"
+    "          string(REGEX MATCHALL \">\" _closes \"${_pend}\")\n"
+    "          list(LENGTH _opens _no)\n"
+    "          list(LENGTH _closes _nc)\n"
+    "          if(_no GREATER _nc)\n"
+    "            continue()\n"
+    "          endif()\n"
+    "          _tur_reduce_genex(\"${_pend}\" _red)\n"
+    "          if(_red MATCHES \"\\\\$<\")\n"
+    "            message(NOTICE \"spice: warning: link dependency '${_pend}' of target '${tgt}' is a generator expression tur cannot evaluate; it is NOT linked. Add what it names with :link-flags.\")\n"
+    "            set(_pend \"\")\n"
+    "            continue()\n"
+    "          endif()\n"
+    "          set(_pend \"\")\n"
+    "          foreach(_e IN LISTS _red)\n"
+    "            # ::@(<dir id>) ... ::@ bracket entries a target_link_libraries\n"
+    "            # from another directory added; markers, not link inputs.\n"
+    "            if(NOT _e MATCHES \"^::@\")\n"
+    "              if(TARGET \"${_e}\")\n"
+    "                get_target_property(_ty \"${_e}\" TYPE)\n"
+    "                if(_ty IN_LIST _TUR_LINKABLE)\n"
+    "                  list(APPEND _acc \"$<TARGET_FILE:${_e}>\")\n"
+    "                  if(_ty STREQUAL SHARED_LIBRARY)\n"
+    "                    list(APPEND _acc \"-Wl,-rpath,$<TARGET_FILE_DIR:${_e}>\")\n"
+    "                  endif()\n"
+    "                endif()\n"
+    "                set(_a \"${_acc}\")\n"
+    "                set(_s \"${_seen}\")\n"
+    "                _tur_walk_iface(\"${_e}\" _a _s)\n"
+    "                set(_acc \"${_a}\")\n"
+    "                set(_seen \"${_s}\")\n"
+    "              else()\n"
+    "                list(APPEND _acc \"${_e}\")\n"
+    "              endif()\n"
+    "            endif()\n"
+    "          endforeach()\n"
     "        endforeach()\n"
     "      endif()\n"
     "    endif()\n"
@@ -3769,7 +3978,8 @@ static void emit_link_iface_helper(FILE *f) {
     "  set(${acc_var} \"${_acc}\" PARENT_SCOPE)\n"
     "  set(${seen_var} \"${_seen}\" PARENT_SCOPE)\n"
     "endfunction()\n"
-    "\n"
+    "\n", f);
+    fputs(
     "function(_tur_resolve_link_iface tgt out_var)\n"
     "  set(_acc \"\")\n"
     "  set(_seen \"\")\n"
@@ -3790,16 +4000,68 @@ static void emit_link_iface_helper(FILE *f) {
     "    endif()\n"
     "  endif()\n"
     "  set(${out_var} \"${_out}\" PARENT_SCOPE)\n"
-    "endfunction()\n\n", f);
+    "endfunction()\n"
+    "\n"
+    "# Append the directory of one target's artifact.  A target with none (an\n"
+    "# INTERFACE library: header-only, or a bundle of other targets) has no such\n"
+    "# directory, and $<TARGET_FILE_DIR:...> on it is a generate-time error.\n"
+    "function(_tur_append_artifact_dir tgt out_var)\n"
+    "  set(_out ${${out_var}})\n"
+    "  if(TARGET \"${tgt}\")\n"
+    "    get_target_property(_ty \"${tgt}\" TYPE)\n"
+    "    if(_ty IN_LIST _TUR_LINKABLE)\n"
+    "      list(APPEND _out \"$<TARGET_FILE_DIR:${tgt}>\")\n"
+    "    endif()\n"
+    "  endif()\n"
+    "  set(${out_var} \"${_out}\" PARENT_SCOPE)\n"
+    "endfunction()\n"
+    "\n"
+    "# The C++ runtime libraries the C++ compiler driver links implicitly, when a\n"
+    "# static C++ library was noted since the last reset.\n"
+    "function(_tur_append_cxx_runtime out_var)\n"
+    "  set(_out ${${out_var}})\n"
+    "  get_property(_need GLOBAL PROPERTY _TUR_NEEDS_CXX)\n"
+    "  if(_need)\n"
+    "    foreach(_lib IN LISTS CMAKE_CXX_IMPLICIT_LINK_LIBRARIES)\n"
+    "      if(_lib MATCHES \"^(stdc\\\\+\\\\+|c\\\\+\\\\+|c\\\\+\\\\+abi)$\"\n"
+    "         AND NOT _lib IN_LIST _out)\n"
+    "        list(APPEND _out \"${_lib}\")\n"
+    "      endif()\n"
+    "    endforeach()\n"
+    "  endif()\n"
+    "  set_property(GLOBAL PROPERTY _TUR_NEEDS_CXX 0)\n"
+    "  set(${out_var} \"${_out}\" PARENT_SCOPE)\n"
+    "endfunction()\n"
+    "\n"
+    "# JSON-ify a list as the body of an array: \"a\", \"b\".\n"
+    "function(_tur_json_list in_var out_var)\n"
+    "  set(_json \"\")\n"
+    "  foreach(_e IN LISTS ${in_var})\n"
+    "    if(NOT _json STREQUAL \"\")\n"
+    "      string(APPEND _json \", \")\n"
+    "    endif()\n"
+    "    string(APPEND _json \"\\\"${_e}\\\"\")\n"
+    "  endforeach()\n"
+    "  set(${out_var} \"${_json}\" PARENT_SCOPE)\n"
+    "endfunction()\n"
+    "\n", f);
 }
 
-/* Emit the CMake that computes ${_tur_lf_json} for one dep: the JSON body of
- * its "link_flags" array. Must precede the string(APPEND _spice_manifest ...)
- * block that references it, and must sit inside the same CMake `if` branch,
- * because a :prefer-system dep's targets differ per branch. */
+/* Emit the CMake that computes ${_tur_lf_json} and ${_tur_ld_json} for one
+ * dep: the JSON bodies of its "link_flags" and "link_dirs" arrays. Must
+ * precede the string(APPEND _spice_manifest ...) block that references them,
+ * and must sit inside the same CMake `if` branch, because a :prefer-system
+ * dep's targets differ per branch.
+ *
+ * `link_lib` is the -l name a dep without :targets links by. It is tried as
+ * a target name too, only to learn whether the library is static C++ (rtaudio
+ * and rtmidi are declared that way). */
 static void emit_link_flags_prelude(FILE *f, const PkgCmakeDep *d,
+                                    const char *link_lib,
                                     bool use_full_targets) {
     fprintf(f, "set(_tur_lf \"\")\n");
+    fprintf(f, "set(_tur_ld \"\")\n");
+    fprintf(f, "set_property(GLOBAL PROPERTY _TUR_NEEDS_CXX 0)\n");
     /* The dep's own artifacts, unless :link-libs took over the link. */
     if (!d->has_link_libs) {
         for (int j = 0; j < d->n_targets; j++) {
@@ -3809,6 +4071,12 @@ static void emit_link_flags_prelude(FILE *f, const PkgCmakeDep *d,
             fprintf(f, "_tur_append_artifact(\"%s\" _tur_lf)\n", t);
         }
     }
+    for (int j = 0; j < d->n_targets; j++) {
+        const char *t = use_full_targets
+                            ? d->targets[j]
+                            : cmake_target_basename(d->targets[j]);
+        fprintf(f, "_tur_append_artifact_dir(\"%s\" _tur_ld)\n", t);
+    }
     /* Transitive requirements -- where -framework Cocoa lives. */
     for (int j = 0; j < d->n_targets; j++) {
         const char *t = use_full_targets
@@ -3817,19 +4085,27 @@ static void emit_link_flags_prelude(FILE *f, const PkgCmakeDep *d,
         fprintf(f, "_tur_resolve_link_iface(\"%s\" _tur_ill)\n", t);
         fprintf(f, "list(APPEND _tur_lf ${_tur_ill})\n");
     }
+    /* The C++ runtime, when a static C++ library is being linked: after the
+     * archives that need it, since GNU ld resolves left to right
+     * (docs/archive/cmake-dep-cxx-runtime-not-linked.md). The walk above
+     * noted every target it reached; a dep with no :targets is noted by the
+     * names it links. */
+    if (d->n_targets == 0) {
+        if (d->has_link_libs) {
+            for (int j = 0; j < d->n_link_libs; j++)
+                fprintf(f, "_tur_note_cxx(\"%s\")\n", d->link_libs[j]);
+        } else if (link_lib) {
+            fprintf(f, "_tur_note_cxx(\"%s\")\n", link_lib);
+        }
+    }
+    fprintf(f, "_tur_append_cxx_runtime(_tur_lf)\n");
     /* The dep's verbatim escape hatch, last. */
     for (int j = 0; j < d->n_link_flags; j++)
         fprintf(f, "list(APPEND _tur_lf \"%s\")\n", d->link_flags[j]);
-    /* JSON-ify: "a", "b". Quotes are written into the manifest text, so they
-     * are escaped once here and land literal. */
+    /* JSON-ify: "a", "b". */
     fprintf(f,
-        "set(_tur_lf_json \"\")\n"
-        "foreach(_e IN LISTS _tur_lf)\n"
-        "  if(NOT _tur_lf_json STREQUAL \"\")\n"
-        "    string(APPEND _tur_lf_json \", \")\n"
-        "  endif()\n"
-        "  string(APPEND _tur_lf_json \"\\\"${_e}\\\"\")\n"
-        "endforeach()\n");
+        "_tur_json_list(_tur_lf _tur_lf_json)\n"
+        "_tur_json_list(_tur_ld _tur_ld_json)\n");
 }
 
 /* ================================================================== */
@@ -5045,6 +5321,14 @@ bool pkg_gen_cmake_deps(const char *project_dir,
      * still turn it off. */
     fprintf(f, "set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "
                "\"Static deps link into tur build --shared images too\")\n\n");
+    /* A dep's own find_package (manifold's find_package(TBB)) makes imported
+     * targets that are visible only in that dep's directory. The link walk
+     * and the manifest's $<TARGET_FILE:...> run in this one, where such a
+     * target does not exist: `if(TARGET TBB::tbb)` is false, the name passes
+     * through as a bare library, and the consumer drops anything with `::`.
+     * CMake 3.24+ reads this variable and makes those targets global; an
+     * older CMake ignores it and behaves as before. */
+    fprintf(f, "set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)\n\n");
     /* SF3: when set, :prefer-system deps skip find_package and always fetch
      * from source. `tur fetch --refetch` passes -DTUR_FETCH_FORCE_FETCH=ON. */
     fprintf(f, "option(TUR_FETCH_FORCE_FETCH "
@@ -5242,13 +5526,15 @@ bool pkg_gen_cmake_deps(const char *project_dir,
          * emitted under a runtime CMake `if`. */
         if (d->prefer_system) {
             fprintf(f, "if(_%s_resolved_via STREQUAL \"system\")\n", d->name);
-            emit_link_flags_prelude(f, d, /*use_full_targets=*/true);
+            emit_link_flags_prelude(f, d, link_lib,
+                                    /*use_full_targets=*/true);
             fprintf(f, "string(APPEND _spice_manifest\n");
             emit_include_dirs_line(f, d, /*from_targets=*/true);
             emit_link_lines(f, d, link_lib, /*use_full_targets=*/true);
             fprintf(f, ")\n");
             fprintf(f, "else()\n");
-            emit_link_flags_prelude(f, d, /*use_full_targets=*/false);
+            emit_link_flags_prelude(f, d, link_lib,
+                                    /*use_full_targets=*/false);
             fprintf(f, "string(APPEND _spice_manifest\n");
             emit_include_dirs_line(f, d, /*from_targets=*/false);
             emit_link_lines(f, d, link_lib, /*use_full_targets=*/false);
@@ -5270,7 +5556,8 @@ bool pkg_gen_cmake_deps(const char *project_dir,
              * the heuristic misses libraries (e.g. yyjson) that publish their
              * public header from a non-standard subdir like ${SOURCE_DIR}/src.
              * Falls back to the heuristic when no :targets are declared. */
-            emit_link_flags_prelude(f, d, /*use_full_targets=*/false);
+            emit_link_flags_prelude(f, d, link_lib,
+                                    /*use_full_targets=*/false);
             fprintf(f, "string(APPEND _spice_manifest\n");
             emit_include_dirs_line(f, d, /*from_targets=*/d->n_targets > 0);
             emit_link_lines(f, d, link_lib, /*use_full_targets=*/false);
@@ -5747,6 +6034,8 @@ void pkg_cmake_manifest_free(PkgCmakeManifest *m) {
  *                             $<TARGET_PROPERTY:...> one level and does not
  *                             re-evaluate what comes back, so nested genexes
  *                             survive into the JSON as literal text. Skipped.
+ *                             (Only a manifest from an older fetch holds one:
+ *                             the link walk reduces or reports them now.)
  *   "Foo::Bar"                a namespaced CMake target name. Only CMake can
  *                             say what artifact that is, and by this point
  *                             CMake is no longer in the loop. Skipped.

@@ -5876,26 +5876,48 @@ void emit_panic_with_call(Buf *body, Span span, int type_tag, const char *payloa
     buf_printf(body, "\", %u);\n", span.line);
 }
 
+/* Does a match arm's body hand a value to the match's result temp?  Not when
+ * it is `!`-typed (a panic arm), and not when it leaves: `(return x)` is typed
+ * as `x`, so the type alone sent a returning arm through emit_value, which
+ * emits a `return` in value position as its value.  The arm then assigned
+ * `x` to the temp and carried on past the match -- the `return` never ran
+ * (docs/archive/return-in-match-arm-does-not-return.md); an arm that did
+ * something first, `(do (log) (return x))`, assigned `((void)0)` and did not
+ * compile.  Such an arm is a statement, as it is in an `if`. */
+static bool emit_match_arm_yields_value(const Expr *arm_body) {
+    return arm_body->type.kind != TY_NEVER && !expr_tail_diverges(arm_body);
+}
+
 static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
-    /* Phase 3/4: Check if branches contain return or throw */
-    bool then_has_return_or_throw = expr_contains_return_or_throw(e->as.if_.then_);
-    bool else_has_return_or_throw = e->as.if_.else_or_null ? 
-        expr_contains_return_or_throw(e->as.if_.else_or_null) : false;
-    bool any_has_return_or_throw = then_has_return_or_throw || else_has_return_or_throw;
+    /* Does each branch always leave (return / throw / panic)?  Such a branch
+     * yields nothing and is emitted as a statement.
+     *
+     * This used to ask expr_contains_return_or_throw -- "is there a `return`
+     * anywhere in it" -- so a branch that returns early on one path and
+     * yields a value on another, `(do (if d (return 1)) 5)`, was emitted as a
+     * statement too and its value never reached the merge temp: an
+     * uninitialized read, or no temp at all when both branches had the shape
+     * (docs/archive/if-branch-with-inner-return-loses-its-value.md).
+     * expr_is_divergent is the question emit_let_value and emit_do_value ask
+     * for the same decision. */
+    bool then_leaves = expr_is_divergent(e->as.if_.then_);
+    bool else_leaves = e->as.if_.else_or_null ?
+        expr_is_divergent(e->as.if_.else_or_null) : false;
+    bool any_leaves = then_leaves || else_leaves;
     
     char *tmp = NULL;
     bool nil_result = (e->type.kind == TY_NIL);
     /* Phase R1: Also create temp if only then-branch has return/throw and else doesn't */
-    bool else_no_return = e->as.if_.else_or_null ? !else_has_return_or_throw : false;
+    bool else_no_return = e->as.if_.else_or_null ? !else_leaves : false;
     /* panic-in-value-if-branch: mirror of the Phase R1 case -- only the
      * else-branch diverges (return/throw/panic) and the then-branch yields the
      * value, e.g. `(if cond value (panic ...))`.  Without this the temp is not
      * created, the value-producing then-branch is emitted as a discarded
      * statement, and the diverging else-branch is (wrongly) emitted as a value
      * assigned into the null temp -> `(null) = ((void)0);`. */
-    bool then_no_return = !then_has_return_or_throw;
-    bool only_then_diverges = then_has_return_or_throw && else_no_return;
-    bool only_else_diverges = else_has_return_or_throw && then_no_return;
+    bool then_no_return = !then_leaves;
+    bool only_then_diverges = then_leaves && else_no_return;
+    bool only_else_diverges = else_leaves && then_no_return;
     /* Phase 5 carrier-bridge deletion: if either arm is a by-value Option/Result
      * producer (a monomorphized ^construct spec), the merge temp must be that
      * by-value struct -- the if's own `e->type` is collapsed to the int64
@@ -5904,7 +5926,7 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * carrier-producing arm (carrier->concrete; a deref, never a dangling
      * stack spill). */
     Type if_bv = type_simple(TY_UNKNOWN, CK_COPY);
-    if (!nil_result && ( !any_has_return_or_throw || only_then_diverges || only_else_diverges)) {
+    if (!nil_result && ( !any_leaves || only_then_diverges || only_else_diverges)) {
         tmp = fresh_tmp(ctx);
         if_bv = fn_body_tail_byvalue_carrier_type(ctx, e);
         if (if_bv.kind != TY_UNKNOWN) {
@@ -5934,7 +5956,7 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * diverges (return/throw/panic) or the whole `if` is nil-typed.  When only
      * the *else*-branch diverges the then-branch still yields the merged value
      * and must be assigned into the temp -- see panic-in-value-if-branch. */
-    if (nil_result || then_has_return_or_throw) {
+    if (nil_result || then_leaves) {
         emit_stmt(ctx, body, e->as.if_.then_);
         emit_if_dead_branch_zero(body, ctx->indent, tmp, e->as.if_.then_);
     } else {
@@ -5999,7 +6021,7 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
          * If only the then-branch has return/throw, emit the else-branch as a value.
          * This allows the ? operator to work: (if (err? x) (return ...) (ok-val x))
          */
-        if (nil_result || else_has_return_or_throw) {
+        if (nil_result || else_leaves) {
             emit_stmt(ctx, body, e->as.if_.else_or_null);
             emit_if_dead_branch_zero(body, ctx->indent, tmp, e->as.if_.else_or_null);
         } else {
@@ -11008,6 +11030,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (fwd != e) return emit_value_dispatch(ctx, body, fwd);
             }
             Binding *fn_binding = e->as.call_.fn_binding;
+
+            /* sepcomp-cross-module-effect-unhandled: a call into another
+             * module's function that can perform a user effect, made here on
+             * the direct path, enters it through its plain entry -- a fresh
+             * root, where the `perform` finds no handler.  The CPS backend
+             * threads such a call; one that reaches this emitter is refused. */
+            (void)emit_cps_ir_xmod_refuse_direct_call(fn_binding, e->span);
 
             /* jit-ffi-c2mir-plan F3: `(call-ptr p [sig] args...)` -- an
              * indirect call through a raw address with an explicit C
@@ -21681,7 +21710,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * same everywhere else. */
                         ctx->match_tail->emit_arm(ctx, body, arm->body,
                                                   ctx->match_tail->env);
-                    } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                    } else if (!nil_result && emit_match_arm_yields_value(arm->body)) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
@@ -21806,7 +21835,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * same everywhere else. */
                         ctx->match_tail->emit_arm(ctx, body, arm->body,
                                                   ctx->match_tail->env);
-                    } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                    } else if (!nil_result && emit_match_arm_yields_value(arm->body)) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
@@ -21976,7 +22005,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * same everywhere else. */
                             ctx->match_tail->emit_arm(ctx, body, arm->body,
                                                       ctx->match_tail->env);
-                        } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                        } else if (!nil_result && emit_match_arm_yields_value(arm->body)) {
                             char *bv = emit_value(ctx, body, arm->body);
                             bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                             indent_buf(body, ctx->indent);
@@ -22671,7 +22700,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * same everywhere else. */
                         ctx->match_tail->emit_arm(ctx, body, arm->body,
                                                   ctx->match_tail->env);
-                    } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                    } else if (!nil_result && emit_match_arm_yields_value(arm->body)) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
@@ -23153,7 +23182,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * same everywhere else. */
                         ctx->match_tail->emit_arm(ctx, body, arm->body,
                                                   ctx->match_tail->env);
-                    } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                    } else if (!nil_result && emit_match_arm_yields_value(arm->body)) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);

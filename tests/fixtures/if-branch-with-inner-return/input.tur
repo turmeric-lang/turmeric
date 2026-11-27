@@ -1,0 +1,80 @@
+;; An `if` used for its value, with a branch that returns early on one path
+;; and yields a value on another.
+;;
+;; The emitter asked "is there a `return` anywhere in this branch" and took
+;; yes to mean the branch always leaves: it emitted the branch as a statement
+;; and never assigned the `if`'s result.  `(one true false)` read an
+;; uninitialized variable; `both` did not compile.
+(defn one [c : bool d : bool] : int
+  (let [v (if c
+            (do (if d (return 1))
+                5)
+            7)]
+    (+ v 100)))
+
+;; Both branches can return early.
+(defn both [c : bool d : bool] : int
+  (+ 100 (if c
+           (do (if d (return 1))
+               5)
+           (do (if d (return 2))
+               6))))
+
+;; The inner form is itself an `if` / a `when`.
+(defn nested [c : bool d : bool] : int
+  (+ 100 (if c (if d (return 1) 5) 7)))
+
+(defn in-set [c : bool d : bool] : int
+  (let [^mut acc 0]
+    (set! acc (+ acc (if c
+                       (do (when d (return 1))
+                           5)
+                       7)))
+    acc))
+
+;; The same shape as a match arm, and a match with a returning arm as an `if`
+;; branch.
+(defn arm [c : int d : bool] : int
+  (+ 100 (match c
+           0 (do (if d (return 1))
+                 5)
+           _ 7)))
+
+(defn in-match [c : bool d : int] : int
+  (+ 100 (if c
+           (match d
+             0 (return 1)
+             _ 5)
+           7)))
+
+;; The `if` is the function's last expression.
+(defn last [c : bool d : bool] : int
+  (if c
+    (do (if d (return 1))
+        5)
+    7))
+
+(defn main [] : int
+  (println (one true false))
+  (println (one true true))
+  (println (one false false))
+  (println (both true false))
+  (println (both true true))
+  (println (both false false))
+  (println (both false true))
+  (println (nested true false))
+  (println (nested true true))
+  (println (nested false true))
+  (println (in-set true false))
+  (println (in-set true true))
+  (println (in-set false true))
+  (println (arm 0 false))
+  (println (arm 0 true))
+  (println (arm 1 true))
+  (println (in-match true 1))
+  (println (in-match true 0))
+  (println (in-match false 0))
+  (println (last true false))
+  (println (last true true))
+  (println (last false false))
+  0)

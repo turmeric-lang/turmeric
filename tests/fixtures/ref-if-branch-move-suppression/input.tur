@@ -1,7 +1,60 @@
+;; A ref<T> handed on inside a branch only poisons the paths that branch
+;; reaches.  A branch that returns reaches nothing after the `if`, so the code
+;; there still owns the ref and may read it -- and each path frees it once.
+;;
+;; This fixture used to pin `(if false (let [tmp r] 0))` followed by `@r`: a
+;; move in a branch that carries on, accepted because the condition was never
+;; true.  Taken, that branch freed the ref twice; it is TUR-E0104 now
+;; (errors/ref-if-no-else-consumed).
+(defn sink [r : ref<int>] : int
+  (let [v @r]
+    (drop! r)
+    v))
+
+;; Handed on in a branch that returns.
+(defn f [c : bool] : int
+  (let [r (ref 41)]
+    (if c (return (sink r)))
+    (+ @r 1)))
+
+;; The branch does something first, then returns: a `do` and a `let` whose
+;; last item leaves.
+(defn k1 [c : bool] : int
+  (let [r (ref 9)]
+    (if c
+      (do (println "leaving")
+          (return (sink r))))
+    (+ @r 1)))
+
+(defn k2 [c : bool] : int
+  (let [r (ref 19)]
+    (when c
+      (let [v (sink r)]
+        (return v)))
+    (+ @r 1)))
+
+;; Read, not handed on, in a branch that carries on.
+(defn g [c : bool] : int
+  (let [r (ref 7)]
+    (if c (println @r))
+    (when c (println (+ @r 1)))
+    @r))
+
+;; Returned itself from the branch.
+(defn h [c : bool] : ref<int>
+  (let [r (ref 5)]
+    (if c (return r))
+    (ref (+ @r 1))))
+
 (defn main [] : int
-  (let [r (ref 1)]
-    (if false
-      (let [tmp r]
-        0))
-    (println @r)
-    0))
+  (println (f true))
+  (println (f false))
+  (println (k1 true))
+  (println (k1 false))
+  (println (k2 true))
+  (println (k2 false))
+  (println (g true))
+  (println (g false))
+  (println (sink (h true)))
+  (println (sink (h false)))
+  0)

@@ -38,14 +38,14 @@ repro.tur:3:3: error: this effect operation has no lowering here: ...
 EX_WHILE`, and `TUR_TRACE_CORE=1` names the rule:
 
 ```
-[LOOP-REJECT] cps_ir.c:4975
+[LOOP-REJECT] cps_ir.c:5186
 ```
 
 Writing the result as `(+ base 0)` compiles and prints `100 101 102 100`.
 
 ## Root cause
 
-`build_loop` (`src/passes/cps_ir.c:4871`) has two ways to continue after a
+`build_loop` (`src/passes/cps_ir.c:5082`) has two ways to continue after a
 loop:
 
 - **A result variable.** When the continuation is a trivial delivery of one
@@ -56,7 +56,7 @@ loop:
 
 A bare variable after the loop matches the first shape on its form alone, so
 the builder commits to it. It then finds the variable is not carried and
-rejects (`cps_ir.c:4975`, "a non-carried result is not this shape"), where the
+rejects (`cps_ir.c:5186`, "a non-carried result is not this shape"), where the
 join would have handled it. `(+ base 0)` is not a bare variable, takes the
 join, and works.
 

@@ -1,0 +1,1 @@
+under --interpret an early return skips a let's injected drop in any function: docs/reported/turi-early-return-skips-injected-drops.md

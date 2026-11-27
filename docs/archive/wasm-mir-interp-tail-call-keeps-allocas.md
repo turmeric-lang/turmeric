@@ -1,5 +1,23 @@
 # On wasm, a MIR-interpreted tail call from a function that allocated keeps its allocas and a frame
 
+**RESOLVED 2026-11-24** in the fork as turmeric-lang/mir#22 (f4f9098, merged
+as dc4be67), vendored the same day. This is the first fix direction below. On
+wasm, `eval`'s frames and the `MIR_ALLOCA` blocks now come from a per-context
+stack that the interpreter owns: 256 KiB chunks from the context's allocator,
+with an explicit top. `MIR_INTERP_OWN_STACK` selects it, and it can be set to 1
+on any target. The entry mark, the tail call's drop, `BSTART` and `BEND` read
+or reset that top. A return resets it, and so does a return from `setjmp`,
+which saves the top in a third reserved frame slot. Running out raises
+`MIR_alloc_error` instead of corrupting memory, and a `BEND` of an address that
+is not on that stack raises `MIR_invalid_insn_error`. Native targets compile the
+same code as before.
+
+The repro is pinned in the fork's `wasm-tests/run.sh`, the `wasm` job of its CI.
+The tail-call chain test checks that the aggregate stays at one address and that
+the linear stack pointer does not move. Against the unfixed interpreter it traps
+at 100,000 calls on an 8 MiB stack. There are also tests for `bstart`/`bend` in
+MIR text, `longjmp`, and frames across chunks.
+
 **Severity:** medium for the planned wasm JIT (wasm-jit-plan; its engine is
 the MIR interpreter), none today -- nothing ships the interpreter on wasm yet.
 A tail-call chain through a function with any address-taken or aggregate

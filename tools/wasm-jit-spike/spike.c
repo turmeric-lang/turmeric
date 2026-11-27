@@ -1,4 +1,5 @@
 #include <emscripten.h>
+#include <emscripten/stack.h>
 #include <stdio.h>
 #include <string.h>
 #include "mir.h"
@@ -7,6 +8,8 @@ typedef struct { const char *s; size_t i; } rd_t;
 static int rd_getc (void *d) { rd_t *r = d; return r->s[r->i] ? r->s[r->i++] : EOF; }
 static MIR_context_t ctx;
 long long native_add (long long a, long long b) { return a + b; }
+/* The linear stack pointer, so a test can see what interpreted code leaves on it. */
+long long sp_now (void) { return (long long) emscripten_stack_get_current (); }
 EMSCRIPTEN_KEEPALIVE int spike_compile (const char *src) {
   if (ctx) MIR_finish (ctx);
   ctx = MIR_init ();
@@ -20,6 +23,7 @@ EMSCRIPTEN_KEEPALIVE int spike_compile (const char *src) {
     MIR_load_module (ctx, m);
   MIR_load_external (ctx, "printf", (void *) printf);
   MIR_load_external (ctx, "native_add", (void *) native_add);
+  MIR_load_external (ctx, "sp_now", (void *) sp_now);
   MIR_link (ctx, MIR_set_interp_interface, NULL);
   return 0;
 }
