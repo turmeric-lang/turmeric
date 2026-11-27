@@ -646,6 +646,9 @@ Check [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/doc
   since 2026-11-07: its dict clone is pinned to the call site's instances.)
 - [sum-closure-payload-never-dropped](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sum-closure-payload-never-dropped.md) --
   a closure in an Option/Result local beyond the simplest shapes.
+- [cps-match-sum-payload-box-not-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-match-sum-payload-box-not-freed.md) --
+  a struct payload's box when the `match` that reads it has an arm that
+  performs, so the CPS backend lowers it.
 
 **Closure envs and fn boxes**
 
@@ -653,14 +656,6 @@ Check [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/doc
   a capturing `async` body's env in the shapes the spawn cannot own.
 - [fn-param-at-type-variable-slot-boxed-per-call](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fn-param-at-type-variable-slot-boxed-per-call.md) --
   a fn parameter boxed into a type-variable slot per call.
-
-**Structs on the carrier ABI**
-
-- [cps-byvalue-struct-with-closure-field](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-byvalue-struct-with-closure-field.md) --
-  a `defstruct` with a `defopaque` field beside a closure field stays on the
-  carrier ABI, and boxes per construction, until the CPS backend can take such
-  a struct by value. (Without a closure field it is by value and leaks nothing:
-  `opaque-field-struct-box-never-freed`, archived.)
 
 **Continuations (DK)**
 
