@@ -1,0 +1,17 @@
+;; affine-drop-moved-in-loop-body: a move-only Drop opaque of an enclosing
+;; scope may not be handed on inside a `while` body.  A second iteration would
+;; hand it on again (a double free), and a loop that never runs would not hand
+;; it on at all (a leak), so no single scope-exit drop is right.  It used to
+;; compile.
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (:: 1 Widget))
+(defn rel [w : Widget] : void (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+
+(defn main [] : int
+  (let [h      (mk)
+        ^mut i 0]
+    (while (< i 2)
+      (rel h)
+      (set! i (+ i 1)))
+    0))

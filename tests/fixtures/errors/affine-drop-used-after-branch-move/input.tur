@@ -1,0 +1,18 @@
+;; affine-drop-used-after-branch-move: a move-only Drop opaque handed on by
+;; one side of an `if` is gone after the `if` -- the other side released it --
+;; so a later use is refused.  Before, the local read as not moved there and
+;; `(peek h)` read freed memory on the consuming path.
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (:: 1 Widget))
+(defn rel [w : Widget] : void (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn peek [^borrow w : Widget] : int 1)
+
+(defn work [c : bool] : int
+  (let [h (mk)]
+    (if c (rel h) nil)
+    (peek h)))
+
+(defn main [] : int
+  (println (work true))
+  0)

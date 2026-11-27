@@ -10063,6 +10063,13 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
             return try_retag_carrier_struct(env, frame, &e->type, v);
         }
     case EX_RETURN:
+        /* Locals a branch join left for this `return` to release
+         * (return_.owed_drops): run before the flag is raised, so the drop
+         * calls evaluate normally. */
+        for (uint32_t od = 0; od < e->as.return_.n_owed; od++) {
+            TuriValue dv = eval_expr(env, frame, e->as.return_.owed_drops[od]);
+            if (turi_is_error(dv)) return dv;
+        }
         env->returning    = true;
         env->return_value = v;
         return v;

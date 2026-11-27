@@ -3519,7 +3519,8 @@ bool emit_frame_has_pending_drops(const EmitCtx *ctx) {
     return false;
 }
 
-void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const Expr *ret_value) {
+void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const Expr *ret) {
+    const Expr *ret_value = ret->as.return_.value;
     for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f)) {
         for (uint32_t i = g_frame_drops_n; i-- > 0; ) {
             if (g_frame_drops[i].n == 0 || strcmp(g_frame_drops[i].frame, f) != 0)
@@ -3531,6 +3532,11 @@ void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const Expr *ret_value
                 const Binding *root = emit_drop_glue_root(d);
                 if (root && ret_value && emit_value_moves_binding(ret_value, root))
                     continue;
+                /* Handed on earlier on this path (return_.moved). */
+                bool gone = false;
+                for (uint32_t m = 0; root && !gone && m < ret->as.return_.n_moved; m++)
+                    gone = ret->as.return_.moved[m] == root;
+                if (gone) continue;
                 emit_stmt(ctx, body, d);
             }
         }

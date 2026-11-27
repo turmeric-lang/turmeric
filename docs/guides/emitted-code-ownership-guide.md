@@ -192,6 +192,22 @@ value (`init_yields_fresh_owner`): a call, or a `let` / `do` block whose value
 is a local of its own scope that was itself initialised fresh. A local bound to
 an outer variable is not fresh; its owner stays where it was.
 
+The decision is made once per `let`, from whether the local reads as moved
+when the body ends, so a local that only *some* paths hand on needs more than
+that. At the join of an `if` or a `match`, a Drop-owning local that some arms
+consumed and others did not is released by the arms that kept it: each gets
+the same `(defer (<Drop.drop> b))` appended (`elab_branch_with_scope_drop`),
+an `if` with no else is given one that does nothing else, and the local reads
+as moved from the join on -- so the `let` appends nothing, and a later use is
+a use-after-move. An arm that is a `return` cannot reach a trailing defer; the
+`return` runs the drop itself, after its value is computed
+(`return_.owed_drops`). A `return` reached after the local was handed on
+records that too (`return_.moved`), so a drop still pending in an enclosing
+`let` is not run for it. An arm that panics releases nothing. A `while` body
+may not hand such a local on at all (TUR-E0005): no single answer covers zero
+iterations and two. `init_yields_fresh_owner` also follows an `if` whose arms
+all yield fresh values, so `(let [g (if c (mk) (bump (mk)))] ...)` owns `g`.
+
 A fresh move-only Drop opaque passed straight to a `^borrow` parameter has no
 binding to hang that defer on, so `hoist_borrowed_closure_args`
 (`elab_call.c`) binds it to a `__borrowd_N` temp and appends the same drop glue

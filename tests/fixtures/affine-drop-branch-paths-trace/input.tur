@@ -1,0 +1,38 @@
+;; affine-drop-branch-paths-trace: the same rule as affine-drop-branch-paths,
+;; written without inline C so the interpreter runs it too.  Each path prints
+;; one `mk` and exactly one `rel`: an arm that kept the value releases it, a
+;; `return` arm releases it on its way out, and a `return` whose value consumed
+;; it does not release it again.
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (println "mk") (:: 1 Widget))
+(defn rel [w : Widget] : void (println "rel") (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn peek [^borrow w : Widget] : int 1)
+(defn take [w : Widget] : int (rel w) 5)
+(defdata Shape (Dot) (Line) (Box))
+
+(defn s1 [c : bool] : int
+  (let [h (mk)]
+    (if c (rel h) nil)
+    1))
+(defn s5 [c : bool] : int
+  (let [h (mk)]
+    (if c (return 0) (rel h))
+    1))
+(defn s6 [c : bool] : int
+  (let [h (mk)]
+    (if c (return (take h)) nil)
+    (peek h)))
+(defn s8 [s : Shape] : int
+  (let [h (mk)]
+    (match s
+      (Dot)  (take h)
+      (Line) (return 2)
+      (Box)  0)))
+
+(defn main [] : int
+  (println "s1t") (s1 true) (println "s1f") (s1 false)
+  (println "s5t") (s5 true) (println "s5f") (s5 false)
+  (println "s6t") (s6 true) (println "s6f") (s6 false)
+  (println "s8d") (s8 (Dot)) (println "s8l") (s8 (Line)) (println "s8b") (s8 (Box))
+  0)

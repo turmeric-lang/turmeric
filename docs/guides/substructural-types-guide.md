@@ -53,6 +53,48 @@ defn copy-file [src dst : cstr] : unit
 annotation is present. You must explicitly `(drop! r)` or consume the ref --
 it will not be silently freed.
 
+**A linear call result written as a statement is `TUR-E0100`.** Nothing can
+consume a value that was never bound:
+
+```turmeric
+(let [fh (open-file src)]
+  (reopen fh)        ;; ERROR TUR-E0100: the FileHandle it returns is discarded
+  0)
+```
+
+```sweet-exp
+let [fh open-file(src)]
+  reopen(fh)         ;; ERROR TUR-E0100: the FileHandle it returns is discarded
+  0
+```
+
+**`set!` gives a `^mut` linear binding a fresh value.** The old value has to
+be consumed by then -- before the `set!`, or by the new value's own
+expression -- so a loop can thread a linear value through each iteration:
+
+```turmeric
+(let [^mut acc (start)]
+  (while (more?)
+    (set! acc (step acc)))   ; `step` consumes the old acc, acc holds the new one
+  (finish acc))
+```
+
+```sweet-exp
+let [^mut acc start()]
+  while more?()
+    set!(acc step(acc))      ; `step` consumes the old acc, acc holds the new one
+  finish(acc)
+```
+
+Overwriting a value nobody consumed -- `(set! acc (start))` on a live `acc` --
+is `TUR-E0100`.
+
+Two shapes are still not followed, and leak without a diagnostic: a fresh
+linear value passed straight to a `^borrow` parameter, and a linear value
+stored in a field of a struct that is not itself `^linear`. Bind the first.
+The open report is
+`docs/reported/linear-values-without-a-binding-are-not-checked.md`.
+
 **A linear value may be bound at module level.** Linearity constrains how many
 times a value is *used*, not where it may live, so a top-level `def` holding
 one is fine:
@@ -110,6 +152,45 @@ let [^affine k generate-key()]
   initialize(k)
   initialize(k)
 ```
+
+Uses are counted per path. The arms of an `if` or a `match` are alternatives,
+so a use in each arm is one use, and a value consumed in only some arms is
+still fine:
+
+```turmeric
+;; OK: one use on either path
+(let [^affine k (generate-key)]
+  (if fast?
+    (initialize k)
+    (initialize-slowly k)))
+
+;; OK: used on one path, discarded on the other
+(let [^affine k (generate-key)]
+  (when fast? (initialize k))
+  0)
+```
+
+```sweet-exp
+;; OK: one use on either path
+let [^affine k generate-key()]
+  if fast?
+    initialize(k)
+    initialize-slowly(k)
+
+;; OK: used on one path, discarded on the other
+let [^affine k generate-key()]
+  when fast? initialize(k)
+  0
+```
+
+When the type has a `Drop` instance (the owning-handle shape
+`stdlib/numvec.tur` uses), "discarded" means dropped, and that holds per path
+too: the arm that did not hand the value on drops it, and the value is gone
+after the `if` on every path. Using it there is a use-after-move, and handing
+it on inside a `while` body is refused, since a second iteration would hand it
+on again. See
+[emitted-code-ownership-guide](emitted-code-ownership-guide.md) for the
+mechanism.
 
 ### `^relevant` -- use at least once
 

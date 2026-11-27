@@ -627,8 +627,10 @@ both are evaluated when `cmake/spice-deps-manifest.json` is generated:
   full path. This resolves `OUTPUT_NAME` (glfw's target is `glfw`, its archive
   is `libglfw3.a`), namespace aliasing (`PostgreSQL::PostgreSQL` is `libpq`),
   and static-vs-shared preference (zlib builds `libz.a` and `libz.1.dylib`
-  into one directory, where a `-lz` would pick the dylib) in one move. A
-  header-only `INTERFACE` target has no artifact and contributes nothing here.
+  into one directory, where a `-lz` would pick the dylib) in one move. An
+  `INTERFACE` target -- a header-only library, or a target that only bundles
+  others -- has no artifact and contributes nothing here; it can still be
+  listed in `:targets` for its include directories and its requirements.
 - **`$<TARGET_PROPERTY:tgt,INTERFACE_LINK_LIBRARIES>`** -- the target's
   transitive requirements, recorded in the manifest's `link_flags` array.
   This is where `-framework Cocoa` and `-framework IOKit` come from, which is
@@ -641,9 +643,28 @@ library name (`m`) or a target name (raylib's property lists `glfw`) -- the
 same shape, opposite handling -- and only `if(TARGET ...)` can tell them apart.
 The walk:
 
-- unwraps `$<LINK_ONLY:...>` and skips any other generator expression;
+- reduces the generator expressions it can decide at configure time, so a
+  dependency linked conditionally -- `$<$<BOOL:${WITH_TBB}>:TBB::tbb>`, the
+  usual spelling of an optional one -- is linked when its condition holds. It
+  knows `$<LINK_ONLY:...>`, `$<BUILD_INTERFACE:...>`, `$<BOOL:...>`,
+  `$<NOT:...>`, `$<AND:...>`, `$<OR:...>`, `$<IF:...>`, `$<STREQUAL:...>`,
+  `$<TARGET_EXISTS:...>`, `$<TARGET_NAME_IF_EXISTS:...>`, `$<PLATFORM_ID:...>`,
+  `$<CONFIG:...>` and `$<C_COMPILER_ID:...>` / `$<CXX_COMPILER_ID:...>`. An
+  entry that still holds an expression after that is **not linked**, and
+  `tur fetch` says so:
+
+  ```
+  spice: warning: link dependency '$<LINK_ONLY:$<$<LINK_LANGUAGE:C>:rt>>' of
+  target 'top' is a generator expression tur cannot evaluate; it is NOT
+  linked. Add what it names with :link-flags.
+  ```
 - for an entry that is a target with a linkable artifact, takes
   `$<TARGET_FILE:...>` (plus an rpath if it is shared);
+  This includes an imported target the dep found itself with `find_package`
+  (Manifold's `TBB::tbb`): the generated file sets
+  `CMAKE_FIND_PACKAGE_TARGETS_GLOBAL`, so on CMake 3.24 or newer such a target
+  is visible to the walk. On an older CMake it is not, and the entry is
+  dropped;
 - for an entry that is a target *without* one -- an `OBJECT_LIBRARY` or
   `INTERFACE_LIBRARY` -- **recurses into its requirements** rather than
   dropping it. raylib vendors glfw as an `OBJECT_LIBRARY`: its objects are
@@ -662,6 +683,31 @@ A shared-library dependency also gets `-Wl,-rpath` pointing at its build
 directory, which makes the binary runnable where it was built. That rpath is
 not relocatable: a binary copied elsewhere still needs its shared dependency
 installed or bundled.
+
+### C++ dependencies
+
+`tur` links with the C compiler driver, which does not add the C++ runtime
+(libstdc++, libc++) the way `c++` does. So when a dep's link line reaches a
+**static** library with C++ sources, the generated CMake appends the runtime
+the C++ compiler links implicitly (`CMAKE_CXX_IMPLICIT_LINK_LIBRARIES`:
+`stdc++` with GNU, `c++` with Apple clang) after that dep's archives. Nothing
+is needed in `build.tur`, and nothing platform-specific:
+
+```turmeric
+:cmake-deps #map{
+  "manifold" #map{:url     "https://github.com/elalish/manifold"
+                  :ref     "v3.5.5"
+                  :targets ["manifoldc"]
+                  :options #map{:BUILD_SHARED_LIBS "OFF"}}
+}
+```
+
+A library counts as C++ when its target sets `LINKER_LANGUAGE CXX`, lists a
+source with a C++ extension, or -- for an imported target -- names `CXX` in
+`IMPORTED_LINK_INTERFACE_LANGUAGES`. A dep without `:targets` is checked by the
+name it links (`rtaudio` is the target behind `-lrtaudio`). A shared C++
+library records the runtime itself and gets nothing added. The library's API
+still has to be C: inline C blocks are compiled as C.
 
 ### `:link-libs` and `:link-flags` overrides
 

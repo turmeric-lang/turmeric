@@ -458,9 +458,9 @@ expand to real paths. The filename is chosen by CMake, not by `tur`:
 | Field | With `:targets` | Without `:targets` |
 |---|---|---|
 | `include_dirs` | each target's `INTERFACE_INCLUDE_DIRECTORIES` | `${<name>_SOURCE_DIR}/include` if it exists, else `${<name>_SOURCE_DIR}`; for `:path`, `<abs>/include` else `<abs>` |
-| `link_dirs` | `$<TARGET_FILE_DIR:t>` per target | `${<name>_BINARY_DIR}` (`_local/<name>-build` for `:path`) |
+| `link_dirs` | `$<TARGET_FILE_DIR:t>` per target that has an artifact (none for an `INTERFACE` library) | `${<name>_BINARY_DIR}` (`_local/<name>-build` for `:path`) |
 | `link_libs` | empty (the artifact is in `link_flags`) | `:cmake-name`, else the dep name |
-| `link_flags` | `$<TARGET_FILE:t>` (plus an rpath for a shared lib), then each target's `INTERFACE_LINK_LIBRARIES` resolved by `_tur_walk_iface`, then `:link-flags` | `:link-flags` only |
+| `link_flags` | `$<TARGET_FILE:t>` (plus an rpath for a shared lib), then each target's `INTERFACE_LINK_LIBRARIES` resolved by `_tur_walk_iface`, then the C++ runtime if the walk reached a static C++ library, then `:link-flags` | the C++ runtime if the linked name is a static C++ target, then `:link-flags` |
 
 A `:link-libs` key overrides both columns' library choice: its entries become
 `link_libs`, target artifacts are dropped, and `:link-libs []` links nothing

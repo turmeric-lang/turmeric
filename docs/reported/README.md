@@ -34,6 +34,22 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found building `spices/manifold` (filed 2026-11-26)
+
+Manifold is the first spice to weigh `^linear` against `^affine` + `Drop` for
+a handle that expressions pass around as a temporary. The row has an offline
+repro that was run on `main` at `d4ad1b0` under `TUR_SANITIZE_PROGRAMS=1`.
+
+Four reports filed with this one were resolved the same day and are in
+`docs/archive/`: `cmake-dep-cxx-runtime-not-linked`,
+`cmake-dep-genex-link-entry-dropped`,
+`cmake-dep-interface-target-fails-generate` and
+`affine-drop-handle-consumed-in-one-branch-double-frees`.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [linear-values-without-a-binding-are-not-checked](linear-values-without-a-binding-are-not-checked.md) | medium (silent leaks) | A fresh `^linear` value passed straight to a `^borrow` parameter, or stored in a field of a non-linear struct, is dropped with no TUR-E0100. The borrowed-temporary check was tried and taken out: it cannot tell an allocation from a handle re-wrap, and turmeric-spices has three files of the latter. The discarded-result, `^linear` + `Drop` and `set!` findings filed with it are fixed |
+
 ## Found executing sepcomp-cross-module-effect-unhandled (filed 2026-11-24)
 
 | Report | Severity | One line |

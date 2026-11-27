@@ -576,6 +576,25 @@ static bool init_yields_fresh_owner(const Expr *init, const LetBinding *locals,
             if (locals[i].binding && locals[i].binding == init->as.var.binding)
                 return init_yields_fresh_owner(locals[i].init, NULL, 0, depth + 1);
         return false;
+    case EX_IF: {
+        /* Fresh when every arm that yields a value yields a fresh one:
+         * `(if c (mk 1) (bump (mk 2)))`.  An arm that leaves instead
+         * (`return`, a panic) yields nothing and does not vote.  With no
+         * else the missing arm yields nil, which is not an owner. */
+        const Expr *arms[2] = { init->as.if_.then_, init->as.if_.else_or_null };
+        bool any = false;
+        if (!arms[1]) return false;
+        for (int a = 0; a < 2; a++) {
+            const Expr *x = arms[a];
+            if (x->type.kind == TY_NEVER || x->kind == EX_RETURN ||
+                x->kind == EX_PANIC || x->kind == EX_PANIC_WITH)
+                continue;
+            if (!init_yields_fresh_owner(x, locals, n_locals, depth + 1))
+                return false;
+            any = true;
+        }
+        return any;
+    }
     default:
         return false;
     }
@@ -786,6 +805,172 @@ Expr *elab_drop_glue_defer(Elab *e, Binding *b, struct TypeClassInstance *di,
     defer_expr->as.defer_.n_captures = n_captures;
     defer_expr->as.defer_.is_drop_glue = true;
     return defer_expr;
+}
+
+/* affine-drop-handle-consumed-in-one-branch-double-frees: `branch` is an arm
+ * of an `if` / `match` that did not hand the Drop-owning local `b` on, while
+ * a sibling arm did.  After the join nothing can tell the two paths apart, so
+ * the let cannot decide `b`'s scope-exit drop: dropping it frees it twice on
+ * the path that moved it, and not dropping it leaks it on this one.  So this
+ * arm releases it, and the join then reads `b` as moved.  The arm keeps its
+ * value and type; the drop is the same `(defer (<Drop.drop> b))` glue the let
+ * would have appended, in the same trailing position. */
+Expr *elab_branch_with_scope_drop(Elab *e, Expr *branch, Binding *b, Span span) {
+    /* An arm that is a `return` never reaches a trailing defer, so the
+     * `return` runs the drop itself (return_.owed_drops). */
+    if (branch->kind == EX_RETURN) {
+        Expr *glue = elab_drop_glue_defer(e, b, b->scope_drop_inst, span);
+        uint32_t n = branch->as.return_.n_owed;
+        Expr **owed = (Expr **)arena_alloc(e->arena, (n + 1) * sizeof(Expr *));
+        if (n) memcpy(owed, branch->as.return_.owed_drops, n * sizeof(Expr *));
+        owed[n] = glue->as.defer_.body;
+        branch->as.return_.owed_drops = owed;
+        branch->as.return_.n_owed = n + 1;
+        return branch;
+    }
+    /* An arm that panics (or is otherwise `!`) ends the computation; the
+     * value it still owns is not released on that path. */
+    if (branch->type.kind == TY_NEVER || branch->kind == EX_PANIC ||
+        branch->kind == EX_PANIC_WITH)
+        return branch;
+    Expr **items = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+    items[0] = branch;
+    items[1] = elab_drop_glue_defer(e, b, b->scope_drop_inst, span);
+    Expr *d = expr_new(e->arena, EX_DO, branch->type, span);
+    d->as.do_.items = items;
+    d->as.do_.n = 2;
+    return d;
+}
+
+bool elab_fresh_linear_unowned(Elab *e, const Expr *x) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || x->kind != EX_CALL || x->type.copy_kind != CK_LINEAR) return false;
+    return elab_fresh_sole_owner_drop_inst(e, &x->type, x) == NULL;
+}
+
+void elab_note_discarded_linear(Elab *e, Expr *const *items, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        if (!items[i] || !elab_fresh_linear_unowned(e, items[i])) continue;
+        diag_emit_with_code(DIAG_ERROR, items[i]->span, TUR_E0100_LINEAR_DROPPED,
+                            "linear value of type %s is discarded here without "
+                            "being consumed -- bind it and consume it",
+                            type_name(items[i]->type));
+    }
+}
+
+void arm_moves_begin(Elab *e, ArmMoves *am, uint32_t n_arms) {
+    memset(am, 0, sizeof(*am));
+    am->n_arms = n_arms;
+    am->n = move_state_snapshot_bindings(e->scope, &am->b, &am->moved_before);
+    am->usage_before = usage_state_capture_current(am->b, am->n);
+    uint32_t na = n_arms ? n_arms : 1;
+    am->arm_moved  = (bool **)calloc(na, sizeof(bool *));
+    am->arm_usage  = (UsageState **)calloc(na, sizeof(UsageState *));
+    am->arm_leaves = (bool *)calloc(na, sizeof(bool));
+    if (!am->arm_moved || !am->arm_usage || !am->arm_leaves) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+}
+
+void arm_moves_enter(ArmMoves *am) {
+    if (!am->b) return;
+    move_state_restore(am->b, am->moved_before, am->n);
+    usage_state_restore(am->b, am->usage_before, am->n);
+}
+
+void arm_moves_leave(ArmMoves *am, uint32_t ai, const Expr *body) {
+    if (!am->b || ai >= am->n_arms) return;
+    free(am->arm_moved[ai]);
+    free(am->arm_usage[ai]);
+    am->arm_moved[ai] = move_state_capture_current(am->b, am->n);
+    am->arm_usage[ai] = usage_state_capture_current(am->b, am->n);
+    am->arm_leaves[ai] = body && (body->type.kind == TY_NEVER ||
+                                  body->kind == EX_RETURN ||
+                                  body->kind == EX_PANIC ||
+                                  body->kind == EX_PANIC_WITH);
+    arm_moves_enter(am);
+}
+
+static void arm_moves_note_drop(ArmMoves *am, uint32_t ai, Binding *b) {
+    if (am->n_drops == am->cap_drops) {
+        am->cap_drops = am->cap_drops ? am->cap_drops * 2 : 8;
+        am->drop_binding = (Binding **)realloc(am->drop_binding,
+                                               am->cap_drops * sizeof(Binding *));
+        am->drop_arm = (uint32_t *)realloc(am->drop_arm,
+                                           am->cap_drops * sizeof(uint32_t));
+        if (!am->drop_binding || !am->drop_arm) {
+            fprintf(stderr, "tur: oom\n");
+            abort();
+        }
+    }
+    am->drop_binding[am->n_drops] = b;
+    am->drop_arm[am->n_drops] = ai;
+    am->n_drops++;
+}
+
+void arm_moves_merge(ArmMoves *am) {
+    if (!am->b) return;
+    for (uint32_t i = 0; i < am->n; i++) {
+        Binding *mb = am->b[i];
+        bool before = am->moved_before[i];
+        /* Voters are the arms that reach the code after the match. */
+        bool any_voter = false, all_moved = true;
+        bool any_consumed = false, all_consumed = true;
+        UsageState usage = am->usage_before[i];
+        for (uint32_t ai = 0; ai < am->n_arms; ai++) {
+            if (!am->arm_moved[ai]) continue;
+            if (am->arm_usage[ai][i] > usage && !am->arm_leaves[ai])
+                usage = am->arm_usage[ai][i];
+            if (am->arm_leaves[ai]) continue;
+            any_voter = true;
+            if (!am->arm_moved[ai][i]) all_moved = false;
+            if (elab_path_consumed(mb, before, am->arm_moved[ai][i],
+                                   am->usage_before[i], am->arm_usage[ai][i]))
+                any_consumed = true;
+            else
+                all_consumed = false;
+        }
+        mb->is_moved = before || (any_voter && all_moved);
+        if (usage_state_is_per_path(mb)) mb->usage_state = usage;
+        if (before || !mb->scope_drop_inst || !any_consumed) continue;
+        /* Some arm that continues handed it on.  Every arm that did not --
+         * continuing or leaving -- still owns it and releases it. */
+        (void)all_consumed;
+        for (uint32_t ai = 0; ai < am->n_arms; ai++) {
+            if (!am->arm_moved[ai]) continue;
+            if (elab_path_consumed(mb, before, am->arm_moved[ai][i],
+                                   am->usage_before[i], am->arm_usage[ai][i]))
+                continue;
+            arm_moves_note_drop(am, ai, mb);
+        }
+        mb->is_moved = true;
+    }
+}
+
+void arm_moves_apply(Elab *e, ArmMoves *am, MatchArm *arms, Span span) {
+    for (uint32_t k = 0; k < am->n_drops; k++) {
+        MatchArm *arm = &arms[am->drop_arm[k]];
+        if (arm->body)
+            arm->body = elab_branch_with_scope_drop(e, arm->body,
+                                                    am->drop_binding[k], span);
+    }
+}
+
+void arm_moves_free(ArmMoves *am) {
+    if (am->arm_moved)
+        for (uint32_t ai = 0; ai < am->n_arms; ai++) free(am->arm_moved[ai]);
+    if (am->arm_usage)
+        for (uint32_t ai = 0; ai < am->n_arms; ai++) free(am->arm_usage[ai]);
+    free(am->arm_moved);
+    free(am->arm_usage);
+    free(am->arm_leaves);
+    free(am->moved_before);
+    free(am->usage_before);
+    free(am->b);
+    free(am->drop_binding);
+    free(am->drop_arm);
+    memset(am, 0, sizeof(*am));
 }
 
 /* ---- special forms ---- */
@@ -2291,6 +2476,9 @@ Expr *elab_let(Elab *e, const Form *call) {
         binds[n_binds].binding = b;
         binds[n_binds].init = init;
         binding_moved_during_init[n_binds] = false; /* new binding, not yet moved during init */
+        /* What the scope-exit pass below will ask of this binding, recorded
+         * now so a branch join inside the body can ask it too. */
+        b->scope_drop_inst = binding_closure_drop_inst(e, b, init);
         n_binds++;
 
         /* compiled-closure-copies-a-captured-mut: a `^mut` a lambda in the
@@ -2372,6 +2560,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                     if (!items[k]) { rc = -1; break; }
                 }
                 if (rc == 0) {
+                    elab_note_discarded_linear(e, items, body_count - 1);
                     body = expr_new(e->arena, EX_DO, items[body_count - 1]->type, call->span);
                     body->as.do_.items = items;
                     body->as.do_.n = body_count;
@@ -2534,6 +2723,11 @@ Expr *elab_let(Elab *e, const Form *call) {
                 else if (binding_closure_drop_inst(e, binds[k].binding, binds[k].init) &&
                          !binding_moved_during_init[k] &&
                          !binds[k].binding->is_moved &&
+                         /* A ^linear type with a Drop instance: its explicit
+                          * consumption is the release, as a move is for an
+                          * affine one.  Without this every consumed linear
+                          * handle was dropped again at scope exit. */
+                         !binds[k].binding->is_linear_consumed &&
                          !is_binding_consumed(body, binds[k].binding)) {
                     n_refs++;
                 }
@@ -2623,6 +2817,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                             binding_closure_drop_inst(e, binds[k].binding, binds[k].init);
                         if (di && !binding_moved_during_init[k] &&
                             !binds[k].binding->is_moved &&
+                            !binds[k].binding->is_linear_consumed &&
                             !is_binding_consumed(body, binds[k].binding)) {
                             new_items[defer_idx++] =
                                 elab_drop_glue_defer(e, binds[k].binding, di, call->span);
@@ -3194,6 +3389,7 @@ Expr *elab_do(Elab *e, const Form *call) {
         }
     }
     
+    elab_note_discarded_linear(e, items, n - 1);
     Expr *out = expr_new(e->arena, EX_DO, items[n - 1]->type, call->span);
     out->as.do_.items = items;
     out->as.do_.n = n;
@@ -4296,6 +4492,13 @@ Expr *elab_if(Elab *e, const Form *call) {
     Binding **move_bindings = NULL;
     bool *before_states = NULL;
     uint32_t n_move_bindings = move_state_snapshot_bindings(e->scope, &move_bindings, &before_states);
+    /* The ST1 usage counts of the same bindings, rewound and merged with the
+     * move state, plus the scope-exit drops the join hands to an arm
+     * (affine-drop-handle-consumed-in-one-branch-double-frees). */
+    UsageState *usage_before = usage_state_capture_current(move_bindings, n_move_bindings);
+    UsageState *usage_then = NULL;
+    Binding **drop_in_then = NULL, **drop_in_else = NULL;
+    uint32_t n_drop_in_then = 0, n_drop_in_else = 0;
 
     /* LT1: Snapshot linear consumption state before branches. */
     Binding **lin_bindings = NULL;
@@ -4309,11 +4512,17 @@ Expr *elab_if(Elab *e, const Form *call) {
     if (!then_) {
         free(move_bindings);
         free(before_states);
+        free(usage_before);
         free(lin_bindings);
         free(lin_before);
         return NULL;
     }
     bool *then_states = move_state_capture_current(move_bindings, n_move_bindings);
+    usage_then = usage_state_capture_current(move_bindings, n_move_bindings);
+    bool then_diverges = (then_->type.kind == TY_NEVER) ||
+                         (then_->kind == EX_RETURN) ||
+                         (then_->kind == EX_PANIC)  ||
+                         (then_->kind == EX_PANIC_WITH);
 
     /* LT1: Capture linear consumption state after then-branch. */
     bool *lin_then = NULL;
@@ -4323,6 +4532,7 @@ Expr *elab_if(Elab *e, const Form *call) {
 
     /* Rewind to pre-branch move-state before elaborating else branch. */
     move_state_restore(move_bindings, before_states, n_move_bindings);
+    usage_state_restore(move_bindings, usage_before, n_move_bindings);
 
     /* LT1: Rewind linear consumption state before elaborating else branch. */
     if (n_lin > 0) {
@@ -4338,6 +4548,8 @@ Expr *elab_if(Elab *e, const Form *call) {
         if (!else_) {
             move_state_restore(move_bindings, before_states, n_move_bindings);
             free(then_states);
+            free(usage_then);
+            free(usage_before);
             free(move_bindings);
             free(before_states);
             free(lin_then);
@@ -4346,13 +4558,60 @@ Expr *elab_if(Elab *e, const Form *call) {
             return NULL;
         }
         bool *else_states = move_state_capture_current(move_bindings, n_move_bindings);
+        UsageState *usage_else = usage_state_capture_current(move_bindings, n_move_bindings);
+        bool else_diverges = (else_->type.kind == TY_NEVER) ||
+                             (else_->kind == EX_RETURN) ||
+                             (else_->kind == EX_PANIC)  ||
+                             (else_->kind == EX_PANIC_WITH);
+        drop_in_then = (Binding **)calloc(n_move_bindings ? n_move_bindings : 1, sizeof(Binding *));
+        drop_in_else = (Binding **)calloc(n_move_bindings ? n_move_bindings : 1, sizeof(Binding *));
+        if (!drop_in_then || !drop_in_else) { fprintf(stderr, "tur: oom\n"); abort(); }
 
         /* A move is guaranteed after if/else only if it was present before,
-         * or both branches moved the binding. */
+         * or both branches moved the binding.  A diverging branch cannot
+         * reach the code after the `if`, so it does not vote: the state there
+         * is the other branch's.  (It used to vote, so a value moved on the
+         * only path that continues read as unmoved and was dropped again.)
+         *
+         * A local that owes a scope-exit drop and was handed on by exactly
+         * one branch is released by the other, and reads as moved from here
+         * on -- see elab_branch_with_scope_drop. */
         for (uint32_t i = 0; i < n_move_bindings; i++) {
-            move_bindings[i]->is_moved = before_states[i] || (then_states[i] && else_states[i]);
+            Binding *mb = move_bindings[i];
+            bool tm = then_states[i], em = else_states[i];
+            UsageState tu = usage_then[i], eu = usage_else[i];
+            bool tc = elab_path_consumed(mb, before_states[i], tm, usage_before[i], tu);
+            bool ec = elab_path_consumed(mb, before_states[i], em, usage_before[i], eu);
+            bool owes = mb->scope_drop_inst && !before_states[i];
+            bool pp = usage_state_is_per_path(mb);
+            if (then_diverges && !else_diverges) {
+                mb->is_moved = em;
+                if (pp) mb->usage_state = eu;
+                /* The leaving branch still owns what the other handed on. */
+                if (owes && ec && !tc) {
+                    drop_in_then[n_drop_in_then++] = mb;
+                    mb->is_moved = true;
+                }
+                continue;
+            }
+            if (else_diverges && !then_diverges) {
+                mb->is_moved = tm;
+                if (pp) mb->usage_state = tu;
+                if (owes && tc && !ec) {
+                    drop_in_else[n_drop_in_else++] = mb;
+                    mb->is_moved = true;
+                }
+                continue;
+            }
+            mb->is_moved = before_states[i] || (tm && em);
+            if (pp) mb->usage_state = tu > eu ? tu : eu;
+            if (then_diverges || !owes || tc == ec) continue;
+            if (tc) drop_in_else[n_drop_in_else++] = mb;
+            else    drop_in_then[n_drop_in_then++] = mb;
+            mb->is_moved = true;
         }
         free(else_states);
+        free(usage_else);
 
         /* A branch that diverges — its top-level expression is a return,
          * throw, panic, panic-with, or has `!` (TYPE_NEVER) type — is
@@ -4399,6 +4658,10 @@ Expr *elab_if(Elab *e, const Form *call) {
             }
             free(lin_else);
             if (!lin_ok) {
+                free(drop_in_then);
+                free(drop_in_else);
+                free(usage_then);
+                free(usage_before);
                 free(then_states);
                 free(move_bindings);
                 free(before_states);
@@ -4542,6 +4805,10 @@ Expr *elab_if(Elab *e, const Form *call) {
                        rigid_tyvar_conflict(e->sig_tyvars, e->n_sig_tyvars,
                                             then_->type, else_->type,
                                             e->unsafe_depth > 0))) {
+            free(drop_in_then);
+            free(drop_in_else);
+            free(usage_then);
+            free(usage_before);
             free(then_states);
             free(move_bindings);
             free(before_states);
@@ -4587,6 +4854,21 @@ Expr *elab_if(Elab *e, const Form *call) {
     } else {
         /* Without else, then-branch moves are not guaranteed after the if. */
         move_state_restore(move_bindings, before_states, n_move_bindings);
+        /* ...which leaves a local the then-branch handed on with no single
+         * answer at scope exit either.  The missing else is the path that
+         * still owns it, so it is given one that releases it. */
+        if (!then_diverges) {
+            for (uint32_t i = 0; i < n_move_bindings; i++) {
+                Binding *mb = move_bindings[i];
+                if (before_states[i] || !mb->scope_drop_inst) continue;
+                if (!elab_path_consumed(mb, before_states[i], then_states[i],
+                                        usage_before[i], usage_then[i]))
+                    continue;
+                if (!else_) else_ = e_nil(e, call->span);
+                else_ = elab_branch_with_scope_drop(e, else_, mb, call->span);
+                mb->is_moved = true;
+            }
+        }
         /* LT1: Without else, then-branch linear consumption is not guaranteed;
          * restore to the pre-if state so scope-exit checking fires if needed. */
         if (n_lin > 0) {
@@ -4594,7 +4876,15 @@ Expr *elab_if(Elab *e, const Form *call) {
         }
     }
 
+    for (uint32_t i = 0; i < n_drop_in_then; i++)
+        then_ = elab_branch_with_scope_drop(e, then_, drop_in_then[i], call->span);
+    for (uint32_t i = 0; i < n_drop_in_else; i++)
+        else_ = elab_branch_with_scope_drop(e, else_, drop_in_else[i], call->span);
+    free(drop_in_then);
+    free(drop_in_else);
     free(then_states);
+    free(usage_then);
+    free(usage_before);
     free(move_bindings);
     free(before_states);
     free(lin_then);
@@ -5078,6 +5368,10 @@ Expr *elab_set(Elab *e, const Form *call) {
                           symtab_intern(e->st, strslice("any", 3)));
         value_form = form_list(e->arena, value_form->span, asc, 3);
     }
+    /* The target's ownership state before the value is elaborated: the value
+     * may consume the target itself, as `(set! acc (step acc))` does. */
+    bool lin_consumed_before = b->is_linear_consumed;
+    UsageState usage_before_set = b->usage_state;
     Expr *value = elab_form(e, value_form);
     if (!value) return NULL;
     /* let-bound-generic-call-result-in-generic-truncates: a `^mut` cell whose
@@ -5129,6 +5423,41 @@ Expr *elab_set(Elab *e, const Form *call) {
     /* Phase 11: Move tracking - if value is a CK_MOVE binding reference, poison it */
     if (value->kind == EX_VAR && type_is_move(value->as.var.binding->type)) {
         binding_mark_moved(value->as.var.binding, value->span);
+    }
+
+    /* linear-values-without-a-binding-are-not-checked (3): an assignment
+     * gives the cell a value nobody has consumed yet.  The checker used to
+     * keep the old value's "consumed" mark on it, so `(set! h (bump h))` left
+     * `h` unusable and a loop could not accumulate into an owned value.
+     *
+     * ^linear: the old value must be consumed by now -- before the `set!`,
+     * or by the value expression itself -- or it is being overwritten with
+     * no consumer, which is the TUR-E0100 a scope exit would report. */
+    if (b->is_linear && !b->is_global && b->type.kind != TY_REF) {
+        /* (A `ref<T>` is only INFERRED linear and is auto-dropped at scope
+         * exit, so it keeps its old rule: `(set! a b)` is a plain store.) */
+        if (!b->is_linear_consumed) {
+            diag_emit_with_code(DIAG_ERROR, target->span, TUR_E0100_LINEAR_DROPPED,
+                                "set!: linear value '%s' is overwritten without "
+                                "being consumed -- consume the old value first, or "
+                                "in the new value's own expression",
+                                b->name->name);
+            return NULL;
+        }
+        (void)lin_consumed_before;
+        b->is_linear_consumed = false;
+        b->is_moved = false;
+        b->usage_state = USAGE_UNUSED;
+    } else if (b->scope_drop_inst &&
+               elab_path_consumed(b, false, b->is_moved, usage_before_set,
+                                  b->usage_state) &&
+               init_yields_fresh_owner(value, NULL, 0, 0)) {
+        /* A Drop-owning local whose value expression handed the old value on
+         * and yields a fresh one: the cell owns that, and the scope exit
+         * drops it.  (An old value that was NOT handed on is still
+         * overwritten without a drop.) */
+        b->is_moved = false;
+        b->usage_state = USAGE_UNUSED;
     }
 
     Expr *out = expr_new(e->arena, EX_SET, TYPE_NIL, call->span);
@@ -5226,22 +5555,66 @@ static Expr *elab_while_inner(Elab *e, const Form *call) {
     }
     bool li_on = inv_form != NULL;
 
+    /* affine-drop-handle-consumed-in-one-branch-double-frees, the loop
+     * shape: a Drop-owning local of an enclosing scope that the body hands on
+     * is handed on again by the next iteration, and not at all by a loop that
+     * never runs -- a double free and a leak from one program.  No single
+     * scope-exit answer covers both, so the move is refused here. */
+    Binding **loop_bindings = NULL;
+    bool *loop_moved_before = NULL;
+    uint32_t n_loop_bindings =
+        move_state_snapshot_bindings(e->scope, &loop_bindings, &loop_moved_before);
+    UsageState *loop_usage_before =
+        usage_state_capture_current(loop_bindings, n_loop_bindings);
+
     uint32_t n = call->as.list.len - body_start;
-    Expr *body;
+    Expr *body = NULL;
+    bool body_ok = true;
     if (n == 0) body = e_nil(e, call->span);
     else if (n == 1) {
         body = elab_form(e, call->as.list.items[body_start]);
-        if (!body) return NULL;
+        if (!body) body_ok = false;
     } else {
         Expr **items = (Expr **)arena_alloc(e->arena, n * sizeof(Expr *));
-        for (uint32_t i = 0; i < n; i++) {
+        for (uint32_t i = 0; body_ok && i < n; i++) {
             items[i] = elab_form(e, call->as.list.items[body_start + i]);
-            if (!items[i]) return NULL;
+            if (!items[i]) body_ok = false;
         }
-        body = expr_new(e->arena, EX_DO, TYPE_NIL, call->span);
-        body->as.do_.items = items;
-        body->as.do_.n = n;
+        if (body_ok) {
+            elab_note_discarded_linear(e, items, n);
+            body = expr_new(e->arena, EX_DO, TYPE_NIL, call->span);
+            body->as.do_.items = items;
+            body->as.do_.n = n;
+        }
     }
+    if (body_ok && n == 1) elab_note_discarded_linear(e, &body, 1);
+    if (body_ok) {
+        /* A body that always leaves the function runs at most once. */
+        const Expr *tail = body;
+        while (tail && tail->kind == EX_DO && tail->as.do_.n > 0)
+            tail = tail->as.do_.items[tail->as.do_.n - 1];
+        bool leaves = tail && (tail->type.kind == TY_NEVER || tail->kind == EX_RETURN ||
+                               tail->kind == EX_PANIC || tail->kind == EX_PANIC_WITH);
+        for (uint32_t i = 0; !leaves && i < n_loop_bindings; i++) {
+            Binding *lb = loop_bindings[i];
+            if (!lb->scope_drop_inst || loop_moved_before[i]) continue;
+            if (!elab_path_consumed(lb, loop_moved_before[i], lb->is_moved,
+                                    loop_usage_before[i], lb->usage_state))
+                continue;
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0005_USE_AFTER_MOVE,
+                                "use-after-move: '%s' is moved inside this loop's body, "
+                                "so a second iteration would use it after the move -- "
+                                "move it before or after the loop",
+                                lb->name->name);
+            if (!span_is_unknown(lb->moved_at))
+                diag_emit(DIAG_NOTE, lb->moved_at, "moved here");
+            body_ok = false;
+        }
+    }
+    free(loop_bindings);
+    free(loop_moved_before);
+    free(loop_usage_before);
+    if (!body_ok) return NULL;
 
     /* LI1: the invariant is a contract first.  Checked on entry and as the
      * last statement of every iteration (re-establishment), injected as
@@ -5557,6 +5930,30 @@ Expr *elab_return(Elab *e, const Form *call) {
     Type return_type = value ? value->type : TYPE_NIL;
     Expr *out = expr_new(e->arena, EX_RETURN, return_type, call->span);
     out->as.return_.value = value;
+    out->as.return_.moved = NULL;
+    out->as.return_.n_moved = 0;
+    /* Which Drop-owning locals this path has already handed on -- see
+     * return_.moved.  Two passes: count, then fill. */
+    for (int pass = 0; pass < 2; pass++) {
+        uint32_t n = 0;
+        for (const Scope *cur = e->scope; cur && cur != &e->global; cur = cur->parent) {
+            for (uint32_t i = 0; i < cur->n; i++) {
+                Binding *b = cur->bindings[i];
+                if (!b->scope_drop_inst) continue;
+                if (!elab_path_consumed(b, false, b->is_moved, USAGE_UNUSED,
+                                        b->usage_state))
+                    continue;
+                if (pass == 1) out->as.return_.moved[n] = b;
+                n++;
+            }
+        }
+        if (n == 0) break;
+        if (pass == 0)
+            out->as.return_.moved =
+                (Binding **)arena_alloc(e->arena, n * sizeof(Binding *));
+        else
+            out->as.return_.n_moved = n;
+    }
     return out;
 }
 

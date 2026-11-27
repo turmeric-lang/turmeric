@@ -193,6 +193,14 @@ struct Binding {
      * TUR-E0201; only the drop decision reads these. */
     bool          moved_owning;
     bool          lent_to_nonretaining;
+    /* affine-drop-handle-consumed-in-one-branch-double-frees: the Drop
+     * instance this let-bound local is released through at scope exit, when
+     * it is a fresh sole owner of a move-only Drop opaque (what
+     * elab_fresh_sole_owner_drop_inst answers for its initialiser) -- else
+     * NULL.  The let decides the scope-exit drop only after its body is
+     * elaborated; an `if` / `match` inside that body needs the answer at its
+     * join, to release the value on the paths that did not hand it on. */
+    struct TypeClassInstance *scope_drop_inst;
     /* local-struct-drop (fn-field): set by the elaborator's byvalue-struct-field
      * drop pass when this let-bound by-value struct local (a) passes the same
      * moved/consumed/escape guards that admit an rc/ref field auto-drop and (b)
@@ -1883,7 +1891,22 @@ struct Expr {
             struct Binding *spec_drop_of;
         } defer_;
         /* Phase 3/4: (return) or (return expr) - early return with defer firing */
-        struct { Expr *value; } return_;
+        struct {
+            Expr *value;
+            /* affine-drop-handle-consumed-in-one-branch-double-frees: the
+             * Drop-owning locals already handed on when control reaches this
+             * `return`.  An enclosing let's scope-exit drop that is still
+             * pending here must not run for them: the let appended it because
+             * some OTHER path reaches its end still owning the value. */
+            struct Binding **moved;
+            uint32_t n_moved;
+            /* The other direction: `(<Drop.drop> b)` calls this `return`
+             * runs itself, after its value is computed.  A branch join hands
+             * a local to the arm that still owns it; when that arm is a
+             * `return` no trailing defer would ever be reached. */
+            Expr **owed_drops;
+            uint32_t n_owed;
+        } return_;
         /* Phase 5 */
         struct { Expr *expr; }        ref_;    /* (ref expr) - inner expression */
         struct { Expr *expr; }        deref_;  /* (@ expr) - expression to dereference */

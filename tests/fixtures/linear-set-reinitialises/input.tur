@@ -1,0 +1,112 @@
+;; linear-set-reinitialises: assigning to a `^mut` owned local gives it a value
+;; nobody has consumed yet.
+;;
+;; The checker kept the old value's "consumed" mark on the cell, so
+;; `(set! h (bump h))` left `h` unusable (TUR-E0101 at the next use) and a loop
+;; could not accumulate into a ^linear value.  The ^affine + Drop twin read as
+;; moved, so its final value was never dropped.  And a ^linear type that also
+;; has a Drop instance was dropped at scope exit after its explicit
+;; consumption -- a double free on the textbook bind / borrow / consume shape.
+;;
+;; The counters prove every shape balances (live 0 afterwards); a double drop
+;; shows as a negative count.
+;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
+(defn ctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+
+;; A ^linear handle: every value is consumed by hand.
+(defopaque ^linear Lin :int)
+(defn lin-mk [n : int] : Lin (ctr 0) (:: n Lin))
+(defn lin-rel [w : Lin] : void (ctr 1) (:: w int) nil)
+(defn lin-val [^borrow w : Lin] : int
+  ```c
+  return (int64_t)w;
+  ```)
+(defn lin-bump [w : Lin] : Lin
+  (let [n (lin-val w)]
+    (lin-rel w)
+    (lin-mk (+ n 1))))
+
+;; An ^affine handle with Drop: the scope exit releases what is left.
+(defopaque ^affine Aff :int)
+(defn aff-mk [n : int] : Aff (ctr 0) (:: n Aff))
+(defn aff-rel [w : Aff] : void (ctr 1) (:: w int) nil)
+(definstance Drop [Aff] (drop [x] : void (aff-rel x)))
+(defn aff-val [^borrow w : Aff] : int
+  ```c
+  return (int64_t)w;
+  ```)
+(defn aff-bump [w : Aff] : Aff
+  (let [n (aff-val w)]
+    (aff-rel w)
+    (aff-mk (+ n 1))))
+
+;; A ^linear handle that also has a Drop instance.
+(defopaque ^linear Both :int)
+(defn both-mk [n : int] : Both (ctr 0) (:: n Both))
+(defn both-rel [w : Both] : void (ctr 1) (:: w int) nil)
+(definstance Drop [Both] (drop [x] : void (both-rel x)))
+(defn both-val [^borrow w : Both] : int
+  ```c
+  return (int64_t)w;
+  ```)
+
+;; the value expression consumes the old value
+(defn s1 [] : int
+  (let [^mut h (lin-mk 7)]
+    (set! h (lin-bump h))
+    (let [v (lin-val h)]
+      (lin-rel h)
+      v)))
+;; a loop accumulates
+(defn s2 [] : int
+  (let [^mut h (lin-mk 7)
+        ^mut i 0]
+    (while (< i 3)
+      (set! h (lin-bump h))
+      (set! i (+ i 1)))
+    (let [v (lin-val h)]
+      (lin-rel h)
+      v)))
+;; consumed first, then given a new value
+(defn s3 [] : int
+  (let [^mut h (lin-mk 7)]
+    (lin-rel h)
+    (set! h (lin-mk 20))
+    (let [v (lin-val h)]
+      (lin-rel h)
+      v)))
+;; the affine + Drop twin of s2: the scope exit drops the last value
+(defn s4 [] : int
+  (let [^mut h (aff-mk 7)
+        ^mut i 0]
+    (while (< i 3)
+      (set! h (aff-bump h))
+      (set! i (+ i 1)))
+    (aff-val h)))
+;; linear + Drop: bind, borrow, consume once
+(defn s5 [] : int
+  (let [h (both-mk 30)
+        v (both-val h)]
+    (both-rel h)
+    v))
+
+(defn show [v : int] : nil
+  (println v)
+  (println (- (ctr 2) (ctr 3))))
+
+(defn main [] : int
+  (show (s1))
+  (show (s2))
+  (show (s3))
+  (show (s4))
+  (show (s5))
+  (println (ctr 2))
+  (println (ctr 3))
+  0)

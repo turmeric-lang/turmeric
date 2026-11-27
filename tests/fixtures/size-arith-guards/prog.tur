@@ -45,7 +45,7 @@
               (println (string/to-cstr s))
               (println (string/len s))
               0)
-    (= c 1) (do (bytes-alloc -1) 0)
+    (= c 1) (let [b (bytes-alloc -1)] (bytes-free b) 0)
     (= c 2) (do (sized-buf-new-zeroed (huge)) 0)
     ;; past the stack bound the scoped buffer is heap-allocated, same answer
     (= c 3) (do (println (unsafe (sized-buf-with-stack 1000 fill-and-sum))) 0)

@@ -1,0 +1,13 @@
+;; linear-set-overwrites-unconsumed: `set!` on a ^linear local whose current
+;; value nobody consumed overwrites it with no consumer -- the TUR-E0100 a
+;; scope exit would report.  Consuming the old value first, or in the new
+;; value's own expression, is accepted (fixture linear-set-reinitialises).
+(defopaque ^linear Lin :int)
+(defn lin-mk [n : int] : Lin (:: n Lin))
+(defn lin-rel [w : Lin] : void (:: w int) nil)
+
+(defn main [] : int
+  (let [^mut h (lin-mk 7)]
+    (set! h (lin-mk 9))
+    (lin-rel h)
+    0))
