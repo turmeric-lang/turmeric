@@ -1,0 +1,78 @@
+;; A `defer` may read the locals of the `let` it sits in: the let's own
+;; scope-exit drops run after every defer its body declared, however the
+;; scope is left.
+;;
+;; The drops are appended after the body and a block fires its defers
+;; last-registered-first, so they used to run FIRST on an ordinary exit and
+;; on a panic: `(ref-local false)` printed a freed cell, `rc-local` was a
+;; null dereference, and `drop-local` released the widget before the defer
+;; used it.  Only the early `return` had the right order.
+;;
+;; A Drop local left by an early return or a panic is in
+;; defer-reads-let-local-drop-exits, which is compiled only.
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (println "  mk") (:: 1 Widget))
+(defn rel [w : Widget] : void (println "  rel") (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn peek [^borrow w : Widget] : int 1)
+(defeffect Ask [] : int)
+
+(defn boom [c : bool] : int
+  (if c (panic "boom") 0))
+
+(defn ref-local [c : bool] : int
+  (let [r (ref 5)]
+    (defer (println @r))
+    (if c (return 1) nil)
+    2))
+
+(defn rc-local [c : bool] : int
+  (let [a (rc/of 7)]
+    (defer (println @a))
+    (if c (return 1) nil)
+    2))
+
+(defn drop-local [c : bool] : int
+  (let [h (mk)]
+    (defer (do (println "  defer")
+               (println (peek h))))
+    (if c (return 1) nil)
+    2))
+
+;; Two defers and two locals: the defers fire newest first, then the drops.
+(defn two [] : int
+  (let [r (ref 3)
+        h (mk)]
+    (defer (println @r))
+    (defer (println (+ @r (peek h))))
+    9))
+
+;; Left by a panic.
+(defn ref-panics [c : bool] : int
+  (let [r (ref 5)]
+    (defer (println @r))
+    (boom c)
+    2))
+
+;; In a function that performs an effect.  The backend used to refuse this
+;; shape outright.
+(defn ref-effect [c : bool] : int
+  (let [r (ref 5)]
+    (defer (println @r))
+    (let [a (perform (Ask))]
+      (if c (return a) nil)
+      (+ a @r))))
+
+(defn run-effect [c : bool] : int
+  (handle (ref-effect c)
+    (Ask [] k) (resume k 100)))
+
+(defn main [] : int
+  (println "ref") (println (ref-local false)) (println (ref-local true))
+  (println "rc") (println (rc-local false)) (println (rc-local true))
+  (println "drop") (println (drop-local false))
+  (println "two") (println (two))
+  (println "ref panics") (catch-unwind (fn [] : int (ref-panics true)))
+  (println (ref-panics false))
+  (println "effect") (println (run-effect false)) (println (run-effect true))
+  0)

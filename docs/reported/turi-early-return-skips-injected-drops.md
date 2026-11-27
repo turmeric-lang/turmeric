@@ -55,6 +55,16 @@ The shapes #1486 added do work in the interpreter: when the other arm of the
 interpreter runs it (`tests/fixtures/affine-drop-branch-paths-trace`). The gap
 is only the drop still pending at the end of an enclosing `let`.
 
+A panic that leaves the `let` does the same (measured 2026-11-27). With a
+`defer` in the body, `(let [h (mk)] (defer ...) (boom) (peek h))` under
+`catch-unwind` prints `rel` compiled and not interpreted. Without the defer
+neither engine releases the local; the compiled half of that is
+[caught-panic-skips-scope-exit-drops](caught-panic-skips-scope-exit-drops.md).
+
+`tests/fixtures/defer-reads-let-local-drop-exits` and
+`effect-fn-early-return-drops-owned-local` are compiled-only because of this
+report; drop their `requires.compiled` when it is fixed.
+
 ## Root cause
 
 `src/turi/eval.c:10065`, the `EX_RETURN` case: it runs `return_.owed_drops`,

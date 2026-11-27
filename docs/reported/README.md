@@ -40,7 +40,7 @@ directory is worse for triage than no index.
 left. These are those leftovers, each measured on `main` at `853f866`, plus
 what was found while measuring and fixing them.
 
-Six more were fixed the same day and are in `docs/archive/`:
+Seven more were fixed the same day and are in `docs/archive/`:
 
 - `cps-pass-drops-return-drop-lists`, a regression #1486 introduced: one
   `perform` or `handle` anywhere in a program made every function's `return`
@@ -56,15 +56,15 @@ Six more were fixed the same day and are in `docs/archive/`:
   never assigned it when a branch could return early and did not.
 - `colored-fn-early-return-skips-scope-exits`: in a function that performs
   an effect, an early `return` skipped every `defer` and scope-exit drop.
-
-The last of those left the `defer-reads-local-...` row below.
+- `defer-reads-local-after-its-scope-exit-drop`: a `let`'s scope-exit drop
+  ran before the body's own defers, so a defer that read the local read a
+  freed cell.
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | [owned-drop-parameter-is-never-dropped](owned-drop-parameter-is-never-dropped.md) | medium (silent leak) | A move-only Drop opaque passed by value is dropped by nobody unless the callee consumes it by hand: only `let` bindings get a scope-exit drop. The reason `spices/manifold` stays `^linear`. |
 | [caught-panic-skips-scope-exit-drops](caught-panic-skips-scope-exit-drops.md) | medium (leak per caught panic) | Under `catch-unwind`, explicit `defer`s run and compiler-injected drops (Drop opaques, `ref<T>`) do not: they are appended after the `let` body, so they are not registered while it runs. |
 | [cmake-dep-directory-scoped-imported-target-not-followed](cmake-dep-directory-scoped-imported-target-not-followed.md) | medium (link failure, no warning) | A library a dependency links through its own non-`GLOBAL` imported target is invisible to the link walk, which runs one directory up; the `Ns::name` goes into the manifest as a library name. #1486 covered only `find_package` targets on CMake 3.24+. |
-| [defer-reads-local-after-its-scope-exit-drop](defer-reads-local-after-its-scope-exit-drop.md) | **high** (use after free) | `(let [r (ref 5)] (defer (println @r)) 2)` reads the freed cell: the let appends its scope-exit drop after the body, and scope exits fire last-registered-first, so the drop runs before every `defer` the body declared. An `rc<T>` is a null dereference; a Drop opaque is released before the defer uses it, on both engines. An early `return` has the right order. Predates #1486. |
 | [turi-early-return-skips-injected-drops](turi-early-return-skips-injected-drops.md) | low (interpreter only) | Under `tur --interpret`, an early `return` skips the scope-exit drop of an enclosing `let`: a Drop instance does not run on that path. The compiled program runs it. No effect involved. |
 | [do-ending-in-return-is-not-seen-as-leaving](do-ending-in-return-is-not-seen-as-leaving.md) | low (false rejection) | `(if c (do (rel h) (return 0)) 0)` followed by a use of `h` is TUR-E0201: only a bare `return` arm counts as leaving. |
 | [cmake-dep-undecidable-link-genex-is-not-linked](cmake-dep-undecidable-link-genex-is-not-linked.md) | low (warns) | A link entry behind an expression the configure-time reducer does not know (version comparisons, `TARGET_PROPERTY`, ...) is left out, with a warning whose `:link-flags` remedy cannot name a library in the build tree. |

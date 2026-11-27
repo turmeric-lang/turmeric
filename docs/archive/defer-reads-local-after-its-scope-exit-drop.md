@@ -1,5 +1,9 @@
 # A `defer` that reads a local of its own `let` runs after that local is dropped
 
+> **Status: fixed 2026-11-27.** A `let` whose body declares a defer puts its
+> scope-exit drops on an outer block, so they run after the body's defers.
+> See [Resolution](#resolution).
+
 **Severity:** high (a use after free in a program the compiler accepts).
 
 A `let` releases its owned locals at scope exit by appending a drop to the
@@ -7,7 +11,7 @@ end of its body. Scope exits fire last-registered-first, so that drop runs
 before every `defer` the body declared -- including one that reads the local.
 
 Found 2026-11-27 while fixing
-[colored-fn-early-return-skips-scope-exits](../archive/colored-fn-early-return-skips-scope-exits.md).
+[colored-fn-early-return-skips-scope-exits](colored-fn-early-return-skips-scope-exits.md).
 The pre-#1486 `main` (`d4ad1b0`) behaves the same.
 
 ## Repro
@@ -68,3 +72,44 @@ why the two exits of one function disagree.
   in `cps_ir.c`, `elab_tail_leaves`.
 - Fixture: the table's three rows on both exits, under
   `requires.leak-check`.
+
+## Resolution
+
+Fixed 2026-11-27, in the elaborator, by neither direction as written.
+
+Moving the drops to the front of the body (the second direction) was ruled
+out: a drop registered when the body starts is on the frame at every early
+`return`, which then cannot skip the drop of a local it is handing on
+(`(return r)` would free `r` and return it). Reordering the fire in each
+emitter (the first) meant three direct do-emitters, the CPS IR and the
+interpreter, and would still have left the panic path, which fires a frame
+as one LIFO.
+
+Instead the nesting does it. `elab_body_under_scope_drops`
+(`src/compiler/elab_forms.c`): when a `let` body declares a `(defer ...)` of
+its own, the body becomes the single item of an outer `do`, and the three
+passes that append scope-exit drops (`ref<T>` / Drop / per-spec, `rc<T>`,
+owning struct fields) append to that one. The inner block has its own frame,
+so its defers fire as it ends; the drops fire after them. That holds for an
+ordinary exit, a panic and an early `return`, in the direct emitter, the CPS
+IR and the interpreter, with no change to any of them. A body with no defer
+of its own is left alone, so no other `let` compiles differently.
+
+A side effect: a block that mixed an explicit `defer` with a `ref<T>`
+local's drop was one the CPS backend refused ("no lowering here: unsupported
+form: EX_DEFER"). Nested, both blocks are shapes it lowers, so
+`(let [r (ref 5)] (defer (println @r)) (let [a (perform (Ask))] ...))` now
+compiles, and prints what its plain twin prints.
+
+Fixtures, both leak-checked:
+
+- `defer-reads-let-local`: the table's three rows on the ordinary exit, the
+  `ref<T>` and `rc<T>` rows on an early `return`, two defers over two
+  locals, a `ref<T>` left by a panic, and the effect-function shape above.
+  Compiled and interpreted agree.
+- `defer-reads-let-local-drop-exits`: a Drop local left by an early `return`
+  and by a panic. Compiled only: the interpreter runs no injected drop on
+  either exit
+  ([turi-early-return-skips-injected-drops](../reported/turi-early-return-skips-injected-drops.md)).
+
+`bash tests/run.sh`: 4351 passed, 0 failed.

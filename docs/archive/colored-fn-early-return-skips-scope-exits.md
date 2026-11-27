@@ -182,12 +182,12 @@ constant prints.
 
 Not changed:
 
-- What the backend refuses to lower is still refused. A block that mixes an
-  explicit `defer` with a `ref<T>` local's injected drop
-  (`(let [r (ref 5)] (defer ...) (let [a (perform (Ask))] ...))`) is "no
-  lowering here: unsupported form: EX_DEFER", a compile error, as before.
-- The order at a block's ordinary exit. There the injected drop runs before
+- What the backend refuses to lower is still refused; nothing here widens
+  it. (The one shape this report named -- an explicit `defer` beside a
+  `ref<T>` local's injected drop -- stopped being refused later the same
+  day, by the fix below.)
+- The order at a block's ordinary exit. There the injected drop ran before
   the block's explicit defers, in this backend and in the direct emitter
-  alike, which is its own defect:
-  [defer-reads-local-after-its-scope-exit-drop](../reported/defer-reads-local-after-its-scope-exit-drop.md).
-  `cps_return` uses the early-return order, which is the right one.
+  alike. That was its own defect, fixed the same day:
+  [defer-reads-local-after-its-scope-exit-drop](defer-reads-local-after-its-scope-exit-drop.md).
+  `cps_return` uses the early-return order, which was already the right one.
