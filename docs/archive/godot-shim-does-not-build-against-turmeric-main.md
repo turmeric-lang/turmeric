@@ -6,10 +6,9 @@ in turmeric `v0.44.2`, the tag the shim's CI pins, and is gone from `main`, so
 a build against a sibling `main` checkout -- the layout `SConstruct` defaults
 to (`../turmeric`) and the README describes -- stops at the first AOT file.
 
-> Status: **fixed in
+> Status: **resolved 2026-11-24** by
 > [turmeric-godot#7](https://github.com/turmeric-lang/turmeric-godot/pull/7)
-> (2026-11-24), open.** Held here until it merges. The drift went further
-> than the header: see "What it took" at the end.
+> (merged as `9708d81`). The drift went further than the header: see "What it took" at the end.
 
 **Severity:** Low today (CI is pinned and green), but it is what will break
 the day the pin is bumped, and it already breaks the documented local build.
@@ -34,8 +33,8 @@ With `TURMERIC_ROOT` pointed at a `v0.44.2` checkout the same command builds.
 
 `src/runtime/ffi_dispatch_thunk.{c,h}` -- the generated fixed-shape thunk
 table -- was deleted when the interpreter's FFI went arbitrary-arity
-([interpreter-arbitrary-arity-ffi-plan](../archive/interpreter-arbitrary-arity-ffi-plan.md),
-[ffi-spices-integration-plan](../archive/ffi-spices-integration-plan.md)).
+([interpreter-arbitrary-arity-ffi-plan](interpreter-arbitrary-arity-ffi-plan.md),
+[ffi-spices-integration-plan](ffi-spices-integration-plan.md)).
 The shim reaches into turmeric's `src/` for a private header
 (`SConstruct` adds `<turmeric>/src` to `CPPPATH`), so nothing on the turmeric
 side knew it had a consumer.

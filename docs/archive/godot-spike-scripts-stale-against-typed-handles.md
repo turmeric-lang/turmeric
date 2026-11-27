@@ -6,9 +6,9 @@ driver prints a failure and then "all assertions passed". The drivers are run
 by hand only -- CI builds the extension and never launches Godot -- so all of
 this went unnoticed.
 
-> Status: **fixed in
+> Status: **resolved 2026-11-24** by
 > [turmeric-godot#7](https://github.com/turmeric-lang/turmeric-godot/pull/7)
-> (2026-11-24), open.** Held here until it merges. See "Fix" at the end.
+> (merged as `9708d81`). See "Fix" at the end.
 
 **Severity:** Low. Test-suite rot, not a product fault, with one possible
 exception (the `bool` export default below).

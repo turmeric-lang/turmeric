@@ -121,4 +121,4 @@ Two things turned up on the way:
   TUR-E0001 (`expected Vec2Handle, got int`). It now uses `node/vec2`. It has
   no driver and prints rather than asserts, so nothing noticed.
 - `turmeric-godot` does not compile against turmeric `main`:
-  [godot-shim-does-not-build-against-turmeric-main](../reported/godot-shim-does-not-build-against-turmeric-main.md).
+  [godot-shim-does-not-build-against-turmeric-main](godot-shim-does-not-build-against-turmeric-main.md).
