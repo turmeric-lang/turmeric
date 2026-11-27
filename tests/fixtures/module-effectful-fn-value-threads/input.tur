@@ -1,0 +1,49 @@
+;; An effectful fn-value threads to its caller's handler inside a `defmodule`
+;; exactly as it does at top level.  The classifier's fn-value walks (the use
+;; tally, the thread-parameter check, the thin-alias collection) read the raw
+;; program items, where a module is one opaque node -- so a module's lambda
+;; had no counted use, was never threadable, and each of these was refused
+;; with "this effect operation has no lowering here"
+;; (effect-through-evicted-fn-aborts-at-run-time).
+(defmodule m
+  (defeffect Ask [] : int)
+  (defn apply-f [f : (fn [] int)] : int
+    (+ 1 (f)))
+  (defn pure-one [] : int
+    1)
+  ;; A lambda passed straight to a higher-order function.
+  (defn run-arg [] : int
+    (handle (apply-f (fn [] (perform (Ask))))
+      (Ask [] k) (resume k 10)))
+  ;; The same parameter also receives a pure named function.
+  (defn run-mixed [] : int
+    (handle (+ (apply-f (fn [] (perform (Ask)))) (apply-f pure-one))
+      (Ask [] k) (resume k 10)))
+  ;; A let-bound lambda, only ever called.
+  (defn run-local [] : int
+    (let [f (fn [] (perform (Ask)))]
+      (handle (+ (f) (f))
+        (Ask [] k) (resume k 10))))
+  ;; The two repros of module-effectful-fn-value-has-no-lowering: a lambda
+  ;; that reaches the effect through a performer it calls, passed to a
+  ;; higher-order function and held in a local.
+  (defn ask [] : int
+    (perform (Ask)))
+  (defn ask-plus [n : int] : int
+    (+ n (perform (Ask))))
+  (defn app0 [h : (fn [] int)] : int
+    (h))
+  (defn run-via-performer [] : int
+    (handle (app0 (fn [] : int (* 2 (ask))))
+      (Ask [] k) (resume k 10)))
+  (defn run-local-via-performer [] : int
+    (handle (let [f (fn [x : int] : int (ask-plus x))]
+              (+ (f 1) (f 2)))
+      (Ask [] k) (resume k 5)))
+  (defn main [] : int
+    (println (run-arg))                   ; 11
+    (println (run-mixed))                 ; 13
+    (println (run-local))                 ; 20
+    (println (run-via-performer))         ; 20
+    (println (run-local-via-performer))   ; 13
+    0))

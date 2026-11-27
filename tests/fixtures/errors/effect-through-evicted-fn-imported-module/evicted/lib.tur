@@ -1,0 +1,16 @@
+(defmodule evicted/lib
+  (export ask-plus nested)
+  (defeffect Ask [] : int)
+  (defn ask-plus [n : int] : int
+    (+ n (perform (Ask))))
+  ;; Evicted: a performing call inside nested loops has no CPS lowering.
+  (defn nested [n : int] : int
+    (let [^mut i   0
+          ^mut acc 0]
+      (while (< i n)
+        (let [^mut j 0]
+          (while (< j n)
+            (set! acc (+ acc (ask-plus 1)))
+            (set! j (+ j 1))))
+        (set! i (+ i 1)))
+      acc)))
