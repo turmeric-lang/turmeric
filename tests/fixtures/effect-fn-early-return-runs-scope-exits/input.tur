@@ -1,0 +1,99 @@
+;; An early `return` in a function that performs an effect runs the scope
+;; exits it leaves, as it does in any other function: the value first, then
+;; the `defer`s control has reached (innermost scope first), then the drops
+;; the enclosing lets owe.
+;;
+;; Such a function is lowered through the CPS IR, where `return` handed its
+;; value straight to the function's return continuation and nothing else
+;; ran: `(e8 true)` never printed `deferred`, and `e9` leaked its cell
+;; (this fixture is leak-checked).
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (println "  mk") (:: 1 Widget))
+(defn rel [w : Widget] : void (println "  rel") (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defeffect Ask [] : int)
+
+(defn sink [r : ref<int>] : int
+  (let [v @r]
+    (drop! r)
+    v))
+
+;; An explicit defer.
+(defn e8 [c : bool] : int
+  (let [a (perform (Ask))]
+    (defer (println "  deferred"))
+    (if c (return 0) nil)
+    (+ a 1)))
+
+;; Two scopes: the inner defer fires first, and a return from the outer scope
+;; fires only the outer one.
+(defn nested [c : int] : int
+  (let [a (perform (Ask))]
+    (defer (println "  outer defer"))
+    (let [b (+ a 1)]
+      (defer (println "  inner defer"))
+      (if (= c 0) (return b) nil)
+      (println "  inner end"))
+    (if (= c 1) (return 30) nil)
+    (+ a 2)))
+
+;; A defer control has not reached yet does not fire.
+(defn late [c : int] : int
+  (let [a (perform (Ask))]
+    (if (= c 0) (return 1) nil)
+    (defer (println "  late defer"))
+    (if (= c 1) (return 2) nil)
+    (+ a 3)))
+
+;; A return from a block that is a let initialiser, with a perform after it.
+(defn in-block [c : int] : int
+  (let [a (perform (Ask))
+        v (do (defer (println "  block defer"))
+              (if (= c 0) (return 1) nil)
+              (+ a 1))]
+    (defer (println "  fn defer"))
+    (if (= c 1) (return v) nil)
+    (+ v (perform (Ask)))))
+
+;; A ref<T> local: freed on the early path, and not freed again when the
+;; return's own value hands it on.
+(defn e9 [c : int] : int
+  (let [r (ref 41)
+        a (perform (Ask))]
+    (if (= c 0) (return 0) nil)
+    (if (= c 1) (return (sink r)) nil)
+    (+ a @r)))
+
+;; A Drop local the other arm consumed: the return releases it
+;; (return_.owed_drops).
+(defn e5 [c : bool] : int
+  (let [h (mk)
+        a (perform (Ask))]
+    (if c (return 0) (rel h))
+    a))
+
+(defn run8 [c : bool] : int (handle (e8 c) (Ask [] k) (resume k 100)))
+(defn run-nested [c : int] : int (handle (nested c) (Ask [] k) (resume k 100)))
+(defn run-late [c : int] : int (handle (late c) (Ask [] k) (resume k 100)))
+(defn run-block [c : int] : int (handle (in-block c) (Ask [] k) (resume k 100)))
+(defn run9 [c : int] : int (handle (e9 c) (Ask [] k) (resume k 100)))
+(defn run5 [c : bool] : int (handle (e5 c) (Ask [] k) (resume k 100)))
+
+(defn main [] : int
+  (println "e8 true") (println (run8 true))
+  (println "e8 false") (println (run8 false))
+  (println "nested 0") (println (run-nested 0))
+  (println "nested 1") (println (run-nested 1))
+  (println "nested 2") (println (run-nested 2))
+  (println "late 0") (println (run-late 0))
+  (println "late 1") (println (run-late 1))
+  (println "late 2") (println (run-late 2))
+  (println "in-block 0") (println (run-block 0))
+  (println "in-block 1") (println (run-block 1))
+  (println "in-block 2") (println (run-block 2))
+  (println "e9 0") (println (run9 0))
+  (println "e9 1") (println (run9 1))
+  (println "e9 2") (println (run9 2))
+  (println "e5 true") (println (run5 true))
+  (println "e5 false") (println (run5 false))
+  0)

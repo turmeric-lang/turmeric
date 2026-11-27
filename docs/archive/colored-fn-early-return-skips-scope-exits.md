@@ -1,5 +1,9 @@
 # In a function that performs an effect, an early `return` runs no scope exit
 
+> **Status: fixed 2026-11-27.** The CPS IR builder lowers `return` as "bind
+> the value, run the scope exits this path leaves, deliver the value". See
+> [Resolution](#resolution).
+
 **Severity:** medium (an explicit `defer` is skipped; a `ref<T>` cell or a
 Drop local leaks, one per call on that path). The compiled program and
 `tur --interpret` disagree.
@@ -105,7 +109,7 @@ allocation, from the `true` call.
 `tur --interpret r/main.tur` prints `deferred` under `e8 true` and `rel` under
 `e5 true`. It prints no `rel` under `e7 true` either, but for a reason of its
 own that has nothing to do with effects:
-[turi-early-return-skips-injected-drops](turi-early-return-skips-injected-drops.md).
+[turi-early-return-skips-injected-drops](../reported/turi-early-return-skips-injected-drops.md).
 
 A `return` whose own value hands the local on, `(return (take h))`, is right
 in the compiled program too: there is nothing left to release on that path.
@@ -142,3 +146,48 @@ chain, runs the pending injected drops (`emit_frame_run_pending_drops`), then
 - A fixture: the program above. It has no inline C, so `tests/run-turi.sh`
   runs it too; `e7` will hold the two engines to one answer only once the
   interpreter report linked above is fixed as well.
+
+## Resolution
+
+Fixed 2026-11-27, by the first direction, in `src/passes/cps_ir.c`.
+
+- **The builder knows which exits are open.** `CpsB.open_exits` is a stack
+  of the `(defer D)` bodies an early `return` at the point being translated
+  would leave behind. A block pushes its own around each item it lowers:
+  `cps_do_thread_defers` pushes the defers declared before the item and the
+  block's trailing injected drops (owed from the block's first item on, the
+  direct emitter's "pending drops"); the O1-b auto-drop plan pushes its drops
+  for the items lowered ahead of the point it emits them. A handler-case
+  body starts with an empty stack.
+- **`cps_return`** replaces both `EX_RETURN` cases. It binds the value, then
+  threads, in the direct emitter's order (`emit_stmt.c`, `EX_RETURN`): the
+  open `defer`s, innermost scope first; the open injected drops; the node's
+  `owed_drops`; and delivers the value to `retk`. An injected drop is skipped
+  when the path has already handed its local on -- in the returned value, or
+  earlier (`return_.moved`). With nothing to run it is the plain delivery it
+  was, so a function with no open exit lowers as before.
+
+Fixtures, both leak-checked:
+
+- `effect-fn-early-return-runs-scope-exits`: explicit defers (one scope,
+  nested scopes, a defer not yet reached, a block that is a let initialiser),
+  a `ref<T>` local, and the `owed_drops` shape. Compiled and interpreted
+  agree.
+- `effect-fn-early-return-drops-owned-local`: a Drop local the returning path
+  still owns, and one its value hands on. Compiled only, because the
+  interpreter has the gap linked above in every function.
+
+Each function in them prints what its twin with the `perform` replaced by a
+constant prints.
+
+Not changed:
+
+- What the backend refuses to lower is still refused. A block that mixes an
+  explicit `defer` with a `ref<T>` local's injected drop
+  (`(let [r (ref 5)] (defer ...) (let [a (perform (Ask))] ...))`) is "no
+  lowering here: unsupported form: EX_DEFER", a compile error, as before.
+- The order at a block's ordinary exit. There the injected drop runs before
+  the block's explicit defers, in this backend and in the direct emitter
+  alike, which is its own defect:
+  [defer-reads-local-after-its-scope-exit-drop](../reported/defer-reads-local-after-its-scope-exit-drop.md).
+  `cps_return` uses the early-return order, which is the right one.

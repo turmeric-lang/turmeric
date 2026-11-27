@@ -131,5 +131,5 @@ interpreted. The interpreter was never affected: it does not run this pass.
 
 Not covered: a function that itself performs an effect. Its `return` is
 lowered by a different route that runs no scope exit at all, which is older
-than #1486 and is the open report
-`docs/reported/colored-fn-early-return-skips-scope-exits.md`.
+than #1486 and was its own report, fixed later the same day:
+`docs/archive/colored-fn-early-return-skips-scope-exits.md`.
