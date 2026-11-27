@@ -316,6 +316,95 @@ bool elab_type_owns_boxed_fnfield(Type t) {
     return false;
 }
 
+/* fnfield-struct-local-freed-while-returned: does the value of `e` carry `b`
+ * out -- the struct itself, one of its fields, or something built from either?
+ *
+ * local-struct-drop frees a by-value struct local's closures when its `let`
+ * ends.  That is only right for a local that dies there.  `(let [h (H n (fn
+ * ...))] h)` -- every constructor function written with a `let` -- hands the
+ * struct to the caller, whose own binder owns it from then on; freeing here
+ * left the caller calling a freed closure.  Returning the value does not set
+ * `is_moved`, and is_binding_consumed looks for an explicit `drop!`, so
+ * neither guard saw it.
+ *
+ * Tail positions only, plus any `return`: a use that reads a field and calls
+ * it, or lends the struct to a function whose result is a plain scalar, keeps
+ * the local confined.  A call or constructor in a carrying position counts
+ * when it takes the struct (or a field) as a direct argument and its result
+ * can hold it -- `(Ok h)`, `(pick h g)`.  A `let` that rebinds it is followed
+ * through the alias.  Conservative the safe way: answering yes costs a leak,
+ * answering no where the value does leave is the use-after-free. */
+static bool fnfield_result_can_carry(Type t) {
+    switch (t.kind) {
+        case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_SYM:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64: case TY_CSTR: case TY_NEVER:
+            return false;
+        default:
+            return true;
+    }
+}
+static bool fnfield_value_carries(const Expr *e, const Binding *b, int depth) {
+    if (!e || depth > 64) return false;
+    switch (e->kind) {
+        case EX_ASCRIBE:
+            return fnfield_value_carries(e->as.ascribe_.inner, b, depth + 1);
+        case EX_VAR:
+            return e->as.var.binding == b;
+        case EX_GET_FIELD:
+            return fnfield_result_can_carry(e->type) &&
+                   fnfield_value_carries(e->as.get_field_.struct_expr, b, depth + 1);
+        case EX_DO:
+            return e->as.do_.n > 0 &&
+                   fnfield_value_carries(e->as.do_.items[e->as.do_.n - 1], b, depth + 1);
+        case EX_LET:
+        case EX_LETREC:
+            if (fnfield_value_carries(e->as.let_.body, b, depth + 1)) return true;
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (e->as.let_.bindings[i].binding &&
+                    fnfield_value_carries(e->as.let_.bindings[i].init, b, depth + 1) &&
+                    fnfield_value_carries(e->as.let_.body,
+                                          e->as.let_.bindings[i].binding, depth + 1))
+                    return true;
+            return false;
+        case EX_IF:
+            return fnfield_value_carries(e->as.if_.then_, b, depth + 1) ||
+                   fnfield_value_carries(e->as.if_.else_or_null, b, depth + 1);
+        case EX_MATCH:
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (fnfield_value_carries(e->as.match_.arms[i].body, b, depth + 1))
+                    return true;
+            return false;
+        case EX_CALL:
+            if (!fnfield_result_can_carry(e->type)) return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (fnfield_value_carries(e->as.call_.args[i], b, depth + 1)) return true;
+            return false;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (fnfield_value_carries(e->as.make_struct_.field_values[i], b, depth + 1))
+                    return true;
+            return false;
+        default:
+            return false;
+    }
+}
+static bool fnfield_return_carries(const Expr *e, const Binding *b);
+static bool fnfield_return_carries_visit(const Expr *c, void *ud) {
+    return fnfield_return_carries(c, (const Binding *)ud);
+}
+/* A `return` anywhere in the scope whose value carries `b`. */
+static bool fnfield_return_carries(const Expr *e, const Binding *b) {
+    if (!e) return false;
+    if (e->kind == EX_RETURN && fnfield_value_carries(e->as.return_.value, b, 0))
+        return true;
+    return cps_visit_children(e, fnfield_return_carries_visit, (void *)b);
+}
+static bool fnfield_local_leaves_scope(const Expr *body, const Binding *b) {
+    return fnfield_value_carries(body, b, 0) || fnfield_return_carries(body, b);
+}
+
 /* ---- internal define splicing ---- */
 
 /* splice_body_def_head -- is `f` a body-position binding form, and under which
@@ -2886,6 +2975,7 @@ Expr *elab_let(Elab *e, const Form *call) {
         if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
             is_binding_consumed(body, binds[k].binding))
             continue;
+        if (fnfield_local_leaves_scope(body, binds[k].binding)) continue;
         const CtorDef *ctor = ad->ctors[0];
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (!elab_field_is_boxed_fnfield(ctor, fi)) continue;

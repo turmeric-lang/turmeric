@@ -4224,25 +4224,15 @@ static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
          * struct with a `String` field on the carrier ABI, whose heap box has
          * no owner and leaked on every construction.
          *
-         * Except beside a closure field.  A by-value struct with a closure
-         * field is what the CPS backend cannot yet carry through a `handle`
-         * body or a CPS-converted loop (`cps-byvalue-struct-with-closure-field`:
-         * "this effect operation has no lowering here", or emitted C naming an
-         * undeclared `__kont`); an `int` field beside the closure already hits
-         * it on main.  The SAX parsers in turmeric-spices are exactly that
-         * shape, so such a struct stays on the carrier until the CPS gap
-         * closes -- it still leaks its box, once per parser rather than per
-         * node. */
+         * Beside a closure field too.  Such a struct stayed on the carrier
+         * while the CPS backend could not carry a by-value struct with a
+         * closure field (`cps-byvalue-struct-with-closure-field`), which left
+         * the SAX parsers in turmeric-spices leaking one box per parser; the
+         * backend now boxes one across a slot like any owning-free product
+         * (slot_box_ty, emit_cps_ir.c). */
         if (f->full_type && f->full_type->kind == TY_ADT &&
-            f->full_type->as.adt_.def && f->full_type->as.adt_.def->is_opaque) {
-            bool has_fn = false;
-            for (uint32_t j = 0; j < c->n_fields; j++) {
-                const CtorField *g = &c->fields[j];
-                if ((g->full_type && g->full_type->kind == TY_FN) || g->kind == TY_FN)
-                    has_fn = true;
-            }
-            if (!has_fn) continue;
-        }
+            f->full_type->as.adt_.def && f->full_type->as.adt_.def->is_opaque)
+            continue;
         if (f->full_type) {
             TypeKind fk = f->full_type->kind;
             if (fk == TY_ADT || fk == TY_APP || fk == TY_STRUCT ||
