@@ -20,8 +20,8 @@
     "prismjs": "^1.30.0"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.69.1",
-    "@playwright/test": "^1.65.0",
+    "@cloudflare/vite-plugin": "^1.70.1",
+    "@playwright/test": "^1.65.1",
     "vite": "^8.3.8",
     "wrangler": "^4.152.0"
   },
