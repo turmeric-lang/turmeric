@@ -1,5 +1,8 @@
 # A `perform` or `handle` anywhere in a program undoes the per-path `return` drops in every function
 
+> **Status: fixed 2026-11-27.** `cps_mark_expr` carries the drop records
+> across when it rebuilds a `return`. See [Resolution](#resolution).
+
 **Severity:** high (a double free, and a leak, in programs the compiler
 accepts). **A regression from #1486 (2026-11-26):** one of the two shapes below
 was a compile error before it.
@@ -112,5 +115,21 @@ different address, with both at zero.
   a field added later. `cps_mark_expr` is the only one that builds an
   `EX_RETURN` outside `elab_return`.
 
-What is left for functions that themselves perform is
-[colored-fn-return-does-not-run-owed-drops](colored-fn-return-does-not-run-owed-drops.md).
+## Resolution
+
+Fixed 2026-11-27 by the first direction. The `EX_RETURN` case of
+`cps_mark_expr` (`src/passes/cps.c`) now copies `moved` / `n_moved` and
+rebuilds each entry of `owed_drops` the way it rebuilds the value.
+
+`tests/fixtures/affine-drop-branch-paths-effect` is
+`affine-drop-branch-paths-trace` with an effect in the program. Without the
+fix its compiled output is missing the `rel` on `s5 true` and has a second one
+on `s6 true`; with it, every path prints one `mk` and one `rel`, compiled and
+interpreted. The interpreter was never affected: it does not run this pass.
+
+`bash tests/run.sh` on the fixed tree: 4336 passed, 0 failed.
+
+Not covered: a function that itself performs an effect. Its `return` is
+lowered by a different route that runs no scope exit at all, which is older
+than #1486 and is the open report
+`docs/reported/colored-fn-early-return-skips-scope-exits.md`.

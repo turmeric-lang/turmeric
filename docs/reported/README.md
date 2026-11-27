@@ -38,17 +38,21 @@ directory is worse for triage than no index.
 
 #1486 fixed four of the five reports from `spices/manifold` and listed what it
 left. These are those leftovers, each measured on `main` at `853f866`, plus
-two things found while measuring them: the first row is a regression #1486
-introduced, and the `ref<T>` row predates it.
+the `ref<T>` row, which was found while measuring them and predates #1486.
+
+A tenth, a regression #1486 introduced, was fixed the same day and is in
+`docs/archive/`: `cps-pass-drops-return-drop-lists` (one `perform` or `handle`
+anywhere in a program made every function's `return` lose its per-path drop
+records).
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [cps-pass-drops-return-drop-lists](cps-pass-drops-return-drop-lists.md) | **high** (double free; regression from #1486) | One `perform` / `handle` anywhere in a program, called or not, and every function's `return` loses the per-path drop records #1486 added: a `return` arm that owns a Drop local leaks it, and one that handed it on frees it twice. `cps_mark_expr` rebuilds `EX_RETURN` copying only the value (`src/passes/cps.c:2313`). The four-field copy was tried locally and fixes both. |
 | [ref-moved-in-if-without-else-double-frees](ref-moved-in-if-without-else-double-frees.md) | **high** (double free / use after free) | `(if c (let [tmp r] 0))` on a `ref<T>` is accepted and frees the cell twice; the two-armed form is TUR-E0104. The no-else path restores the move state and only Drop opaques get a synthesized else. `rc<T>` is clean. A fixture pins the accepted form with `(if false ...)`. |
 | [owned-drop-parameter-is-never-dropped](owned-drop-parameter-is-never-dropped.md) | medium (silent leak) | A move-only Drop opaque passed by value is dropped by nobody unless the callee consumes it by hand: only `let` bindings get a scope-exit drop. The reason `spices/manifold` stays `^linear`. |
 | [caught-panic-skips-scope-exit-drops](caught-panic-skips-scope-exit-drops.md) | medium (leak per caught panic) | Under `catch-unwind`, explicit `defer`s run and compiler-injected drops (Drop opaques, `ref<T>`) do not: they are appended after the `let` body, so they are not registered while it runs. |
 | [cmake-dep-directory-scoped-imported-target-not-followed](cmake-dep-directory-scoped-imported-target-not-followed.md) | medium (link failure, no warning) | A library a dependency links through its own non-`GLOBAL` imported target is invisible to the link walk, which runs one directory up; the `Ns::name` goes into the manifest as a library name. #1486 covered only `find_package` targets on CMake 3.24+. |
-| [colored-fn-return-does-not-run-owed-drops](colored-fn-return-does-not-run-owed-drops.md) | low (leak) | In a function that performs, a `return` arm that still owns a Drop local does not release it, with the first row's fix applied. The interpreter does. |
+| [colored-fn-early-return-skips-scope-exits](colored-fn-early-return-skips-scope-exits.md) | medium (skipped `defer`, leak) | In a function that performs an effect, an early `return` runs no scope exit: an explicit `defer` is skipped, a `ref<T>` cell and a Drop local leak. `cps_tail` sends the value straight to the return continuation (`src/passes/cps_ir.c:6048`). The interpreter runs them all. Older than #1486. |
+| [turi-early-return-skips-injected-drops](turi-early-return-skips-injected-drops.md) | low (interpreter only) | Under `tur --interpret`, an early `return` skips the scope-exit drop of an enclosing `let`: a Drop instance does not run on that path. The compiled program runs it. No effect involved. |
 | [do-ending-in-return-is-not-seen-as-leaving](do-ending-in-return-is-not-seen-as-leaving.md) | low (false rejection) | `(if c (do (rel h) (return 0)) 0)` followed by a use of `h` is TUR-E0201: only a bare `return` arm counts as leaving. |
 | [cmake-dep-undecidable-link-genex-is-not-linked](cmake-dep-undecidable-link-genex-is-not-linked.md) | low (warns) | A link entry behind an expression the configure-time reducer does not know (version comparisons, `TARGET_PROPERTY`, ...) is left out, with a warning whose `:link-flags` remedy cannot name a library in the build tree. |
 | [tur-fetch-builds-cmake-deps-serially](tur-fetch-builds-cmake-deps-serially.md) | low (time) | `cmake --build` with no `--parallel`: a cold `spices/manifold` fetch is 3 min 44 s, and 1 min 5 s with `CMAKE_BUILD_PARALLEL_LEVEL=4`. |

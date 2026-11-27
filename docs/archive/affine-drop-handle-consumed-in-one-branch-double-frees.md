@@ -215,5 +215,6 @@ Each of these was measured and filed on 2026-11-27, under "Follow-ups to
 #1486" in `docs/reported/README.md`. Two findings came out of that pass that
 are not in the list above: the per-path `return` records are lost in any
 program that contains an effect (`cps-pass-drops-return-drop-lists`, a
-regression from this fix), and the `ref<T>` half of the fourth item is a
-double free (`ref-moved-in-if-without-else-double-frees`).
+regression from this fix, itself fixed on 2026-11-27 and archived beside this
+file), and the `ref<T>` half of the fourth item is a double free
+(`ref-moved-in-if-without-else-double-frees`).

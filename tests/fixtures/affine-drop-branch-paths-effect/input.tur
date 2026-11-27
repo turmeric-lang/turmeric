@@ -1,0 +1,49 @@
+;; affine-drop-branch-paths-effect: affine-drop-branch-paths-trace in a program
+;; that also uses an effect.  One `perform` or `handle` anywhere -- here in
+;; `ask-twice` and `run`, which the functions under test never call -- makes
+;; the CPS marking pass rebuild every function body, and a rebuilt `return`
+;; has to keep the drop bookkeeping the elaborator put on it.  When it did
+;; not, s5's `return` arm leaked the handle and s6's released it twice
+;; (docs/archive/cps-pass-drops-return-drop-lists.md).  No inline C, so the
+;; interpreter runs it too.  Each path prints one `mk` and exactly one `rel`.
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (println "mk") (:: 1 Widget))
+(defn rel [w : Widget] : void (println "rel") (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn peek [^borrow w : Widget] : int 1)
+(defn take [w : Widget] : int (rel w) 5)
+(defdata Shape (Dot) (Line) (Box))
+(defeffect Ask [] : int)
+
+(defn ask-twice [] : int
+  (+ (perform (Ask)) (perform (Ask))))
+(defn run [] : int
+  (handle (ask-twice)
+    (Ask [] k) (resume k 21)))
+
+(defn s1 [c : bool] : int
+  (let [h (mk)]
+    (if c (rel h) nil)
+    1))
+(defn s5 [c : bool] : int
+  (let [h (mk)]
+    (if c (return 0) (rel h))
+    1))
+(defn s6 [c : bool] : int
+  (let [h (mk)]
+    (if c (return (take h)) nil)
+    (peek h)))
+(defn s8 [s : Shape] : int
+  (let [h (mk)]
+    (match s
+      (Dot)  (take h)
+      (Line) (return 2)
+      (Box)  0)))
+
+(defn main [] : int
+  (println (run))
+  (println "s1t") (s1 true) (println "s1f") (s1 false)
+  (println "s5t") (s5 true) (println "s5f") (s5 false)
+  (println "s6t") (s6 true) (println "s6f") (s6 false)
+  (println "s8d") (s8 (Dot)) (println "s8l") (s8 (Line)) (println "s8b") (s8 (Box))
+  0)
