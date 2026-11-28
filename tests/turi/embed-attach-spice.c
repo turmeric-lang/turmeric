@@ -30,6 +30,14 @@
  *                 result, a record argument, a record result, and a callback
  *                 the compiled side stores and calls on a later export call
  *                 (plot's renderers)
+ *   papply-sum / pcount3 / ppf-apply / ppf-sample / pb3 / fb3 -- PLAIN
+ *                 `(fn ...)` parameters.  A scalar signature is a
+ *                 `tur_poly_fn_t { env, fn }` in C, which the shim builds
+ *                 from the same box (env the box, fn the trampoline); one
+ *                 with a record is fat-normalized, the same word as `^fat`.
+ *                 pb3 / fb3 pass a wide record, which crosses as a box
+ *                 pointer.  Each also calls a private inline-C helper, so
+ *                 only the compiled path can answer
  *
  * Needs a `tur` to build the image: TUR_BIN (ctest sets it), else ./build/tur.
  * Linked with ENABLE_EXPORTS (-rdynamic): the image resolves the runtime it
@@ -95,7 +103,8 @@ static const char *FIXTURE =
     "  (import afdep/util :refer [twice])\n"
     "  (export add-loop wrapped box-new box-get box-free tagged-id Pt pt-sum answer\n"
     "          greet even-word? dep-twice B3 pt-make b3-sum b3-make\n"
-    "          apply-sum count-if Pf pf-apply pf-sample Crv crv-new crv-at crv-free)\n"
+    "          apply-sum count-if Pf pf-apply pf-sample Crv crv-new crv-at crv-free\n"
+    "          papply-sum pcount3 ppf-apply ppf-sample pb3 fb3)\n"
     "  (defn apply-sum [^fat f : (fn [float] float) n : int] : float\n"
     "    ```c\n"
     "    double s = 0;\n"
@@ -135,6 +144,14 @@ static const char *FIXTURE =
     "  (defn crv-new [^fat f : (fn [float] float)] : Crv (:: (__crv-new-raw f) Crv))\n"
     "  (defn crv-at [c : Crv x : float] : float (__crv-at-raw (:: c ptr<void>) x))\n"
     "  (defn crv-free [c : Crv] : nil (__box-free-raw (:: c ptr<void>)))\n"
+    "  (defn papply-sum [f : (fn [float] float)] : float\n"
+    "    (+ (__triple-f 0.0) (+ (f 0.5) (+ (f 1.5) (f 2.5)))))\n"
+    "  (defn pcount3 [p : (fn [int] bool)] : int\n"
+    "    (+ (__triple-raw 0) (+ (if (p 1) 1 0) (+ (if (p 2) 1 0) (if (p 3) 1 0)))))\n"
+    "  (defn ppf-apply [f : (fn [Pf] float) x : float] : float\n"
+    "    (+ (__triple-f 0.0) (f (Pf x (* x 2.0)))))\n"
+    "  (defn ppf-sample [f : (fn [float] Pf) t : float] : float\n"
+    "    (let [p (f t)] (+ (__triple-f (. p x)) (. p y))))\n"
     "  (defn dep-twice [x : int] : int (+ 1 (twice x)))\n"
     "  (defn add-loop [a : int b : int] : int\n"
     "    ```c\n"
@@ -176,6 +193,8 @@ static const char *FIXTURE =
     "  (defn pt-sum [p : Pt] : int (+ (__triple-raw (. p x)) (. p y)))\n"
     "  (defn pt-make [x : int y : int] : Pt (Pt (__triple-raw x) y))\n"
     "  (defstruct B3 [a : int b : int c : int])\n"
+    "  (defn pb3 [f : (fn [B3] int)] : int (+ (__triple-raw 0) (f (B3 1 20 300))))\n"
+    "  (defn fb3 [^fat f : (fn [B3] int)] : int (+ (__triple-raw 0) (f (B3 4 50 600))))\n"
     "  (defn b3-sum [r : B3] : int (+ (__triple-raw (. r a)) (+ (. r b) (. r c))))\n"
     "  (defn b3-make [a : int b : int c : int] : B3 (B3 (__triple-raw a) b c))\n"
     "  (defn answer [] : int 42)\n"
@@ -239,7 +258,8 @@ int main(void) {
     const char *imp =
         "(import afx/core :refer [add-loop wrapped box-new box-get box-free Pt pt-sum answer\n"
     "                         pt-make B3 b3-sum b3-make apply-sum count-if\n"
-    "                         Pf pf-apply pf-sample crv-new crv-at crv-free])";
+    "                         Pf pf-apply pf-sample crv-new crv-at crv-free\n"
+    "                         papply-sum pcount3 ppf-apply ppf-sample pb3 fb3])";
 
     /* Control: without the image, the first inline-C call is the refusal. */
     TuriEnv *ctl = turi_env_new();
@@ -257,9 +277,10 @@ int main(void) {
     int n = turi_env_attach_spice_for_module(env, "afx/core", tur);
     /* add-loop wrapped box-new box-get box-free answer greet even-word?
      * dep-twice pt-sum pt-make b3-sum b3-make apply-sum count-if pf-apply
-     * pf-sample crv-new crv-at crv-free -- not tagged-id (no definition), not the
+     * pf-sample crv-new crv-at crv-free papply-sum pcount3 ppf-apply
+     * ppf-sample pb3 fb3 -- not tagged-id (no definition), not the
      * dep's `twice` (not this spice's export). */
-    CHECK(n == 20, "attach: binds the twenty exports the FFI can marshal");
+    CHECK(n == 26, "attach: binds the twenty-six exports the FFI can marshal");
     CHECK(turi_env_attach_spice_for_module(env, "afx/core", tur) == 0,
           "attach: a module an attached image provides is not loaded twice");
     CHECK(turi_env_attach_spice_for_module(env, "no/such-module", tur) == 0,
@@ -314,6 +335,23 @@ int main(void) {
           "callback: compiled code keeps the handle and calls it on a later call");
     CHECK(turi_is_error(turi_eval(env, "(apply-sum 3 3)")),
           "callback: a non-function in a callback slot is refused");
+    /* Plain fn parameters: the same values through the poly carrier. */
+    CHECK(is_float(turi_eval(env, "(papply-sum times-1-5)"), 6.75),
+          "plain callback: a cell's defn is called through {env, fn}");
+    CHECK(is_float(turi_eval(env,
+              "(let [k 2.5] (papply-sum (fn [x : float] : float (* x k))))"), 11.25),
+          "plain callback: a capturing fn literal crosses too");
+    CHECK(is_int(turi_eval(env, "(pcount3 odd-int?)"), 2),
+          "plain callback: a :bool result reaches the compiled caller");
+    CHECK(is_float(turi_eval(env, "(ppf-apply pf-sum 1.25)"), 3.75),
+          "plain callback: a record argument is rebuilt for the cell");
+    CHECK(is_float(turi_eval(env, "(ppf-sample pf-at 0.75)"), 4.5),
+          "plain callback: a record result is packed for the compiled caller");
+    turi_eval(env, "(defn b3-total [r : B3] : int (+ (. r a) (+ (. r b) (. r c))))");
+    CHECK(is_int(turi_eval(env, "(pb3 b3-total)"), 321),
+          "plain callback: a wide record argument arrives through its box");
+    CHECK(is_int(turi_eval(env, "(fb3 b3-total)"), 654),
+          "callback: a wide record argument arrives through its box");
 
     turi_eval(env, "(defn wrapped [x : int] : int 0)");
     CHECK(is_int(turi_eval(env, "(wrapped 5)"), 0),
@@ -328,7 +366,7 @@ int main(void) {
           "attach: a directory with no build.tur above it is an error");
     char spice[1100];
     snprintf(spice, sizeof(spice), "%s/afx", root);
-    CHECK(turi_env_attach_spice(sh, spice, tur) == 20, "attach by root: same twenty bindings");
+    CHECK(turi_env_attach_spice(sh, spice, tur) == 26, "attach by root: same twenty-six bindings");
     CHECK(is_int(turi_eval(sh, "(answer)"), 7),
           "attach: a host-bound bare name is not clobbered");
     CHECK(is_int(turi_eval(sh, "(afx/core/answer)"), 42),

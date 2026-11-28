@@ -667,13 +667,14 @@ Three more slot kinds ride on those registers:
   bytes, packed from the session's record and rebuilt from a record result.
   The layout comes from the module's own defn, so import the module before
   calling the export.
-- **`:fn`** -- a `^fat` callback parameter (plot's
-  `^fat f : (fn [float] float)`) takes a session function, a `defn` or a
-  `fn` literal. The library carries a trampoline for each such slot, and
-  the session wraps the function in a closure box that calls back into
-  it. Supported when the callback's arguments and result are scalars,
-  opaque handles or by-value records. As with records, import the module
-  first: its defn gives the callback's signature.
+- **`:fn`** -- a callback parameter, `^fat` (plot's
+  `^fat f : (fn [float] float)`) or plain (`f : (fn [float] float)`), takes
+  a session function, a `defn` or a `fn` literal. The library carries a
+  trampoline for each such slot, and the session wraps the function in a
+  closure box that calls back into it. Supported when the callback's
+  arguments and result are scalars, opaque handles or by-value records. As
+  with records, import the module first: its defn gives the callback's
+  signature.
 
 The marshaler accepts compatible Turmeric values:
 
@@ -703,8 +704,9 @@ error: ffi: 'sh/add42' expects 1 arg, got 0
   instead, and the spice's inline-C bodies refuse when it runs. plot's
   typed API is the case in point:
   [plot-typed-api-has-no-ffi-shim](../reported/plot-typed-api-has-no-ffi-shim.md).
-- **A callback that is not `^fat`**, or whose signature is not scalars,
-  opaque handles and records, gets no shim the same way.
+- **A callback whose signature is not scalars, opaque handles and
+  records** (an ADT, a `(Vec T)`, another function), or a C function
+  pointer (`extern-c`'s typed kind), gets no shim the same way.
 - **Spice exports are pre-bound**, so you don't need to import them --
   call them directly. A top-level `(import M :refer [...])` (or `:as`)
   does work at the prompt since 2026-10-10, for a module the REPL can

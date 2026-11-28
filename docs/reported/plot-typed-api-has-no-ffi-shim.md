@@ -57,6 +57,13 @@ of those, so the export gets class `'?'` and no shim:
   `(Vec AnyRenderer)` for `plot-write-png`. In C a vec pointer (or the
   int64 word).
 
+Callbacks are not part of it: `function`'s callback is a supported `:fn`
+slot, which a cell's `defn` crosses.
+Installing the JIT FFI provider in the notebook would not help either: an
+export without a `__ffi` shim is never bound in an embedder
+(`tur_ffi_install_spice_bindings_owned`, `src/turi/ffi_thunk.c`), whatever
+call path it would then take.
+
 Both are pointer-sized words in C, so the shim itself would be trivial. What
 is not trivial is the interpreter side:
 

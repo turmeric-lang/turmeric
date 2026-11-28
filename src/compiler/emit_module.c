@@ -23812,20 +23812,23 @@ static char ffi_shim_class_for_type(const Type *t, bool is_return) {
     return ffi_shim_class_for_kind(t->kind, is_return);
 }
 
-/* notebook-cells-cannot-call-inline-c-spices: a `^fat` callback parameter --
- * plot's `(function f ...)` with `^fat f : (fn [float] float)`.  In C the slot
- * is the int64 closure handle, so the shim passes it as one; what the host
- * needs is a way to MAKE such a handle from a function it cannot compile (a
+/* notebook-cells-cannot-call-inline-c-spices: a callback parameter -- plot's
+ * `(function f ...)` with `^fat f : (fn [float] float)`, or a plain
+ * `f : (fn [float] float)`.  In C a fat slot is the int64 closure handle and a
+ * plain scalar one the `tur_poly_fn_t { env, fn }` carrier; either way what the
+ * host needs is a way to MAKE one from a function it cannot compile (a
  * notebook cell's `defn` is an interpreter closure).  For each callback slot
  * the module emits a trampoline, `<export>__ffi_cb<j>`, with exactly the
- * slot-0 signature the fat protocol calls -- `R (*)(void *env, A...)` -- that
- * packs its arguments into the dispatch buffers and calls the dispatcher the
- * host stored in the box (see emit_ffi_callback_trampoline).  The class is
- * 'c', spelled :fn in the manifest.
+ * signature both protocols call -- `R (*)(void *env, A...)` -- that packs its
+ * arguments into the dispatch buffers and calls the dispatcher the host
+ * stored in the box (see emit_ffi_callback_trampoline).  The host always
+ * passes the box; the shim hands it on as the word, or wraps it in the poly
+ * carrier.  The class is 'c', spelled :fn in the manifest.
  *
- * Only what the trampoline can carry: a fat (boxed) function type, not a C
- * function pointer, not variadic, on the typed thunk ABI (whose slot
- * spellings the trampoline mirrors), and every argument and the result a
+ * Only what the trampoline can carry: a fat (boxed) function type or a plain
+ * one (the poly carrier, see ffi_cb_param_is_poly), not a C function
+ * pointer, not variadic, on the typed thunk ABI, and every argument and the
+ * result a
  * scalar, an opaque handle or a by-value record -- the classes an export slot
  * itself admits.  Anything else keeps class '?', and the export its
  * interpreted defn, as before. */
@@ -23840,22 +23843,41 @@ static Type ffi_cb_result_type(const Type *fnty) {
     return emit_type_from_kind(fnty->as.fn.result_kind);
 }
 
+/* A plain `(fn ...)` parameter (no `^fat`) is a `tur_poly_fn_t { env, fn,
+ * fn_cps }` by value, which a concretely typed call site invokes as
+ * `((R (*)(void *, A...))f.fn)(f.env, ...)` -- env first, like the fat
+ * protocol.  The same trampoline serves it: the shim builds the struct from
+ * the host's box, env = the box and fn = its slot 0. */
+static bool ffi_cb_param_is_poly(const Expr *e, const FnDef *fd, uint32_t j) {
+    return (fd->params && fd->params[j] && fd->params[j]->is_poly_fn)
+        || (e->type.as.fn.arg_flags && j < e->type.as.fn.arity &&
+            FN_ARG_FLAG(e->type.as.fn, j, FA_POLY_FN));
+}
+
 static bool ffi_cb_param_supported(const Expr *e, const FnDef *fd, uint32_t j) {
     const Type *pty = ffi_shim_param_type(e, fd, j);
     if (!pty || pty->kind != TY_FN) return false;
     if (pty->as.fn.cfnptr || pty->as.fn.is_variadic) return false;
+    /* Fat as the callee's own invoke dispatch decides it (emit_expr.c): a
+     * `^fat` parameter, a boxed fn type, or a nominal fn parameter the
+     * fat-normalization rule puts on the fat protocol -- which is every plain
+     * one whose signature is not scalar (a scalar one became the poly
+     * carrier instead). */
+    const Binding *pb = fd->params ? fd->params[j] : NULL;
     bool fat = pty->as.fn.boxed
-            || (fd->params && fd->params[j] && fd->params[j]->is_fat)
+            || (pb && (pb->is_fat || pb->type.as.fn.boxed ||
+                       (pb->type.kind == TY_FN &&
+                        fn_param_type_is_fat_normalized(&pb->type))))
             || (e->type.as.fn.arg_flags && j < e->type.as.fn.arity &&
                 FN_ARG_FLAG(e->type.as.fn, j, FA_FAT));
-    if (!fat) return false;
+    if (!fat && !ffi_cb_param_is_poly(e, fd, j)) return false;
     uint32_t n = pty->as.fn.arity;
     if (n > 255) return false;
     Type ps[256];
     for (uint32_t i = 0; i < n; i++) {
         ps[i] = ffi_cb_arg_type(pty, i);
         char c = ffi_shim_class_for_type(&ps[i], /*is_return=*/false);
-        if (c != 'i' && c != 'f' && c != 's') return false;
+            if (c != 'i' && c != 'f' && c != 's') return false;
     }
     Type rt = ffi_cb_result_type(pty);
     char rc = ffi_shim_class_for_type(&rt, /*is_return=*/true);
@@ -23899,12 +23921,22 @@ static void emit_ffi_callback_trampoline(Buf *out, const char *mangled,
     uint32_t n = pty->as.fn.arity;
     Type rt = ffi_cb_result_type(pty);
     char rc = ffi_shim_class_for_type(&rt, /*is_return=*/true);
-    const char *rcty = rc == 'v' ? "void" : thunk_result_slot_c_name(rt);
+    /* The spelling the caller casts slot 0 / `.fn` to.  The fat protocol's
+     * typed thunk widens a narrow-int result to int64_t; a poly carrier's
+     * concrete call site spells every slot with its own C type, a wide record
+     * argument aside (an int64 box pointer in both). */
+    bool poly = ffi_cb_param_is_poly(e, fd, j);
+    const char *rcty = rc == 'v' ? "void"
+                     : poly      ? type_c_name(rt)
+                                 : thunk_result_slot_c_name(rt);
     uint32_t nb = n ? n : 1;
     buf_printf(out, "%s %s__ffi_cb%u(void *__env", rcty, mangled, (unsigned)j);
     for (uint32_t i = 0; i < n; i++) {
         Type at = ffi_cb_arg_type(pty, i);
-        buf_printf(out, ", %s a%u", thunk_param_slot_c_name(at), (unsigned)i);
+        const char *acty = !poly                          ? thunk_param_slot_c_name(at)
+                         : type_is_b4box_closure_slot(at) ? "int64_t"
+                                                          : type_c_name(at);
+        buf_printf(out, ", %s a%u", acty, (unsigned)i);
     }
     buf_puts(out, ") {\n");
     buf_puts(out, "    int64_t *__box = (int64_t *)__env;\n");
@@ -24039,7 +24071,16 @@ static void emit_ffi_export_shims(const EmitCtx *ctx, Buf *out,
             const Type *pty = ffi_shim_param_type(e, fd, j);
             char cls = ffi_shim_param_class(e, fd, j);
             const char *cty = type_c_name(*pty);
-            if (cls == 'c') {
+            if (cls == 'c' && ffi_cb_param_is_poly(e, fd, j)) {
+                /* A plain fn parameter: the poly carrier, built from the
+                 * host's box -- env the box, fn its slot 0 (the trampoline),
+                 * no fn_cps. */
+                buf_printf(out,
+                           "(tur_poly_fn_t){ .env = (void *)(intptr_t)iv[%u], "
+                           ".fn = (int64_t (*)(void *, int64_t))(intptr_t)"
+                           "((const int64_t *)(intptr_t)iv[%u])[0] }",
+                           (unsigned)j, (unsigned)j);
+            } else if (cls == 'c') {
                 /* The closure handle the host built: the int64 word every
                  * fat function parameter is in C. */
                 buf_printf(out, "(int64_t)iv[%u]", (unsigned)j);

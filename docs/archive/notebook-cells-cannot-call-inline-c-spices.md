@@ -13,7 +13,7 @@ end): stats, frame, plot and linalg cells now run their spices compiled;
 what is left is a cell's `defn` handed to compiled code as a callback.
 
 > Status: **resolved 2026-11-28** -- a cell's `defn` (or `fn` literal)
-> crosses a `^fat` callback parameter of a spice export: see "Resolved
+> crosses a callback parameter of a spice export, `^fat` or plain: see "Resolved
 > 2026-11-28" at the end. plot's cells fail again for a different reason --
 > its typed API's `AnyRenderer` results and `(Vec ...)` parameters have no
 > FFI class -- now tracked on its own:
@@ -244,12 +244,23 @@ notebook installs no c2mir provider, so `callback-ptr`'s route is not there).
   `src/compiler/emit_module.c`): exactly the slot-0 signature the fat
   protocol calls, `R (*)(void *box, A...)`, packing its arguments into
   position-indexed `iv`/`fv`/`sv` buffers and calling the dispatcher the box
-  names. The slot's FFI class is `'c'`, spelled `:fn` in the manifest; the
-  shim passes it as the int64 word. Admitted only where the trampoline can
-  carry it (`ffi_cb_param_supported`): a fat function type on the typed thunk
-  ABI whose arguments and result are scalars, opaque handles or by-value
-  records. Anything else keeps class `'?'` and the export its interpreted
-  defn, as before.
+  names. The slot's FFI class is `'c'`, spelled `:fn` in the manifest.
+  Admitted only where the trampoline can carry it (`ffi_cb_param_supported`):
+  a function type on the typed thunk ABI whose arguments and result are
+  scalars, opaque handles or by-value records. Anything else keeps class
+  `'?'` and the export its interpreted defn, as before.
+- **Plain `(fn ...)` parameters ride the same trampoline.** A plain
+  parameter with a scalar signature is the poly carrier
+  `tur_poly_fn_t { env, fn, fn_cps }`, which its concretely typed call site
+  invokes as `((R (*)(void *, A...))f.fn)(f.env, ...)` -- env first, like
+  the fat protocol. Its shim builds the struct from the same box (`env` the
+  box, `fn` its slot 0, no `fn_cps`), and its trampoline spells a narrow-int
+  result as itself rather than the fat thunk's `int64_t`
+  (`ffi_cb_param_is_poly`). A plain parameter whose signature has a record
+  is fat-normalized (`fn_param_type_is_fat_normalized`, the rule the
+  callee's own invoke dispatch uses) and is the int64 word, as `^fat` is. No
+  JIT is needed for either: the JIT would only add `callback-ptr` in a
+  cell.
 - **The session builds the box.** The loader resolves each `:fn` slot's
   trampoline (`resolve_cb_tramps`, `src/turi/spice_loader.c`). When a module
   is imported, the interpreter notes each callback slot's signature from the
@@ -262,11 +273,15 @@ notebook installs no c2mir provider, so `callback-ptr`'s route is not there).
   the image references no host symbol and still loads outside an
   interpreter.
 
-Pinned by ctest `tur_embed_attach_spice` (a float callback, a `:bool`
-result, a record argument, a record result, a capturing `fn` literal, and a
-handle the compiled side stores and calls on a later call). From a real
-notebook cell, signal's `buffer-render` sampling a cell's `defn ramp`
-returns 1.875 at sample 3 (0.75 x 2.5).
+Pinned by ctest `tur_embed_attach_spice`: a float callback, a `:bool`
+result, a record argument, a record result, a wide record argument (a box
+pointer on both protocols), a capturing `fn` literal, and a handle the
+compiled side stores and calls on a later call -- each for `^fat` and plain
+parameters, through exports that also call a private inline-C helper so only
+the compiled path can answer. From a real notebook cell, signal's
+`buffer-render` (`^fat`) sampling a cell's `defn ramp` returns 1.875 at
+sample 3 (0.75 x 2.5), and a scratch spice's midpoint `integrate` (plain)
+gives 8.99999 for the integral of x^2 over [0, 3] in 600 steps.
 
 Two `--shared` codegen bugs blocked plot's image from building at all on the
 way (ordinary project builds compile one unit and never saw either); both are

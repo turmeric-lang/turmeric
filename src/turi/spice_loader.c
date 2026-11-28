@@ -412,7 +412,7 @@ static char class_for_tag(const char *tag, bool is_return) {
     }
     /* A by-value record: its bytes cross through a pointer (ffi_thunk.c). */
     if (strcmp(tag, ":record") == 0) return 's';
-    /* A `^fat` callback: the slot is a closure handle the host builds around
+    /* A callback (fn) parameter: the slot is a closure box the host builds around
      * the image's `<mangled>__ffi_cb<k>` trampoline (ffi_thunk.c). */
     if (!is_return && strcmp(tag, ":fn") == 0) return 'c';
     if (strcmp(tag, ":float")   == 0

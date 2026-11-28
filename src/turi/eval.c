@@ -13971,7 +13971,7 @@ static Type ffi_kind_type(TypeKind k) {
 }
 
 /* notebook-cells-cannot-call-inline-c-spices: a spice export's callback
- * parameter (a `^fat (fn [float] float)`, manifest :fn) is called back
+ * parameter (a `(fn [float] float)`, `^fat` or plain; manifest :fn) is called back
  * through a dispatch context that needs the callback's own signature -- the
  * classes of its arguments and result, and the record layouts among them.
  * The manifest says only :fn; the parameter's declared function type says
