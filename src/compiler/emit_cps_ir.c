@@ -4963,6 +4963,11 @@ static bool jbody_has_delim(const CTerm *t) {
  * "lifted" is safe: the frame lowering is valid from the parent frame too. */
 static bool letcont_is_heap_join(const CTerm *t);
 static bool letcont_is_escaping_join(const CTerm *t);
+/* A tail call through a threaded fn-value (E2a registry / E2 fn_cps slot). */
+static bool tailcall_threads_fnvalue(const CTerm *t) {
+    return t && t->kind == CT_TAILCALL
+        && (t->as.tailcall.via_registry || t->as.tailcall.via_fncps);
+}
 static bool join_escapes_lifted_rec(const CTerm *t, uint32_t jid, bool lifted) {
     if (!t) return false;
     switch (t->kind) {
@@ -4970,7 +4975,14 @@ static bool join_escapes_lifted_rec(const CTerm *t, uint32_t jid, bool lifted) {
             return lifted && t->as.appcont.kont.kind == KK_VAR
                 && t->as.appcont.kont.id == jid;
         case CT_TAILCALL:
-            return lifted && t->as.tailcall.kont.kind == KK_VAR
+            /* cps-threaded-fn-value-in-if-arm-skips-the-join: a threaded
+             * fn-value call needs its continuation as a DK node to thread.
+             * Directly under its CT_LETCONT that is a heap join
+             * (letcont_is_heap_join, which letcont_is_escaping_join defers
+             * to); anywhere deeper -- an `if` arm -- the join is reified as a
+             * resume-frame for it. */
+            return (lifted || tailcall_threads_fnvalue(t))
+                && t->as.tailcall.kont.kind == KK_VAR
                 && t->as.tailcall.kont.id == jid;
         case CT_LETVAL:  return join_escapes_lifted_rec(t->as.letval.body, jid, lifted);
         case CT_LETPRIM: return join_escapes_lifted_rec(t->as.letprim.body, jid, lifted);
@@ -5031,9 +5043,28 @@ static bool needs_heap_join(const CTerm *t) {
         case CT_LETPRIM: return needs_heap_join(t->as.letprim.body);
         case CT_LETCALL: return needs_heap_join(t->as.letcall.body);
         case CT_LETRAW:  return needs_heap_join(t->as.letraw.body);
+        /* A threaded fn-value call (E2a via the registry, E2 via a fat
+         * closure's fn_cps slot) threads the continuation exactly as a
+         * cps->cps call does.  One whose continuation is a local join it does
+         * not sit directly under -- `(let [nv (if has (f cur v) v)] ...)`
+         * with `f` a threaded `^fat` param -- makes that join ESCAPING
+         * (join_escapes_lifted_rec), and the call threads the join's
+         * resume-frame.  Without that, it was emitted as
+         * `return <f>(..., __kont)`: f's answer went to the function's own
+         * continuation and the rest of the let never ran
+         * (cps-threaded-fn-value-in-if-arm-skips-the-join).  Only a join that
+         * is not reified that way is unemittable here.  Evicting is no
+         * substitute for an fn-value: the direct path cannot thread an
+         * effectful one to its handler. */
         case CT_TAILCALL:
-            return t->as.tailcall.kont.kind == KK_VAR
-                && tailcall_routes_cps_to_cps(t);
+            if (t->as.tailcall.kont.kind != KK_VAR) return false;
+            if (tailcall_routes_cps_to_cps(t)) return true;
+            if (tailcall_threads_fnvalue(t)) {
+                for (int i = 0; i < g_esc_join_n; i++)
+                    if (g_esc_joins[i] == t->as.tailcall.kont.id) return false;
+                return true;
+            }
+            return false;
         case CT_LETCONT:
             if (letcont_is_heap_join(t)) {
                 /* The join is lifted into a DK frame; the handled tailcall (body)
@@ -10616,6 +10647,21 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
             break;
         }
         case CT_TAILCALL: {
+            /* cps-threaded-fn-value-in-if-arm-skips-the-join: the continuation
+             * an fn-value tail call threads.  A local join here is an escaping
+             * one (join_escapes_lifted_rec): its resume-frame from the frame
+             * that made it, the downstream chain `__kont` from a lifted
+             * sub-frame -- as emit_deliver_ty delivers to it. */
+            const char *fv_thread = "__kont";
+            if (t->as.tailcall.kont.kind == KK_PROMPT) {
+                fv_thread = ce->cur_k ? ce->cur_k : "__kont";
+            } else if (t->as.tailcall.kont.kind == KK_VAR) {
+                for (int hi = ce->n_hjoins - 1; hi >= 0; hi--) {
+                    if (ce->hjoins[hi].id != t->as.tailcall.kont.id) continue;
+                    if (ce->hjoins[hi].out == ce->out) fv_thread = ce->hjoins[hi].frame;
+                    break;
+                }
+            }
             if (t->as.tailcall.via_fncps) {
                 /* E2 (fat-closure fn-value threading): the callee is a poly-fn
                  * PARAM whose value is a `tur_poly_fn_t` fat closure.  When the
@@ -10628,8 +10674,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 char *pf = name_for_binding(ce->ctx, t->as.tailcall.fn);
                 uint32_t na = t->as.tailcall.n;
                 char **av = fncps_args_str(ce, t->as.tailcall.args, na);
-                const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
-                    ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
+                const char *thread = fv_thread;
                 Buf sc; buf_init(&sc);
                 fncps_slot_call(ce, &sc, pf, av, na, thread, t->as.tailcall.call_expr);
                 buf_putc(&sc, '\0');
@@ -10660,8 +10705,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 /* E2a carrier ABI: every arg slot is int64_t, so pointer-like args
                  * must be carrier-cast (gcc14-int-conversion). */
                 char *argv = atoms_csv_call_cps(ce, t->as.tailcall.args, t->as.tailcall.n);
-                const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
-                    ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
+                const char *thread = fv_thread;
                 const Type *e2sig = e2a_callee_sig(t->as.tailcall.fn,
                                                    &t->as.tailcall.fn_atom,
                                                    t->as.tailcall.n);

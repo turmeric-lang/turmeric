@@ -1,0 +1,45 @@
+;; cps-threaded-fn-value-in-if-arm: a threaded fn-value parameter called in
+;; one arm of an `if` that is a `let` init.  The call's continuation is the
+;; local join that runs the rest of the let, not the function's own.
+;;
+;; The classifier evicts a function whose cps->cps tail call targets a local
+;; join it cannot lift, but its fn-value cases (via the registry, via a fat
+;; closure's fn_cps slot) were missing, so this loop was emitted with
+;; `return <f>(..., __kont)`: f's answer went to the caller as the loop's
+;; result and the rest of the let never ran.  Reached once #1490 made a
+;; module's members visible to the thread-parameter walk -- turmeric-spices
+;; crdt's `__mmw-loop` returned max(cur, v) in place of the merged map and
+;; segfaulted (cps-threaded-fn-value-in-if-arm-skips-the-join).
+(defmodule m
+  (defeffect Ask [] : int)
+  ;; Sum f(acc, i) over the odd i in n..1, threading acc; the even i are
+  ;; skipped by the `if`, so the join after it runs on both paths.
+  (defn fold-odd [acc : int i : int ^fat f : (fn [int int] int)] : int
+    (if (> i 0)
+      (let [nv (if (= (mod i 2) 1) (f acc i) acc)]
+        (fold-odd nv (- i 1) f))
+      acc))
+  ;; The same through a `match` arm: fold f over the odd i, as an Option.
+  (defn odd-opt [i : int] : (Option int)
+    (if (= (mod i 2) 1) (some i) (none)))
+  (defn fold-some [acc : int i : int ^fat f : (fn [int int] int)] : int
+    (if (> i 0)
+      (let [nv (match (odd-opt i)
+                 (Some x) (f acc x)
+                 (None) acc)]
+        (fold-some nv (- i 1) f))
+      acc))
+  (defn plus [a : int b : int] : int
+    (+ a b))
+  (defn main [] : int
+    ;; A pure named function: 5 + 3 + 1.
+    (println (fold-odd 0 5 plus))                                   ; 9
+    ;; An effectful lambda reaching the handler: each call adds Ask's 100.
+    (println (handle (fold-odd 0 5 (fn [a : int b : int] : int
+                                     (+ a (+ b (perform (Ask))))))
+               (Ask [] k) (resume k 100)))                          ; 309
+    (println (fold-some 0 5 plus))                                  ; 9
+    (println (handle (fold-some 0 5 (fn [a : int b : int] : int
+                                      (+ a (+ b (perform (Ask))))))
+               (Ask [] k) (resume k 100)))                          ; 309
+    0))
