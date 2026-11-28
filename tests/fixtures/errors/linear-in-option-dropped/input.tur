@@ -1,0 +1,9 @@
+;; An Option holding a linear value is linear itself: dropping it drops the
+;; value inside unconsumed.  TUR-E0100.
+;; (linear-value-in-a-generic-container-is-not-checked)
+(defopaque ^linear H :int)
+(defn h-new [n : int] : H ```c return (int64_t)n; ```)
+
+(defn main [] : int
+  (let [o (some (h-new 7))]
+    0))

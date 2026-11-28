@@ -996,7 +996,7 @@ bool elab_expr_is_borrowed_view(const Expr *x) {
 
 bool elab_fresh_linear_unowned(Elab *e, const Expr *x) {
     while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
-    if (!x || x->kind != EX_CALL || x->type.copy_kind != CK_LINEAR) return false;
+    if (!x || x->kind != EX_CALL || !ty_carries_linear(x->type)) return false;
     if (elab_expr_is_borrowed_view(x)) return false;
     return elab_fresh_sole_owner_drop_inst(e, &x->type, x) == NULL;
 }
@@ -1731,7 +1731,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                     elem_type = (vi == 0) ? init_v->type : type_from_kind(TY_INT);
                 }
                 Binding *vb = binding_new(e, vname_f->as.sym, elem_type, false, false, vname_f->span);
-                if (elem_type.copy_kind == CK_LINEAR) {
+                if (ty_carries_linear(elem_type)) {
                     vb->is_linear = true;
                 }
                 scope_add(&inner, vb);
@@ -2352,6 +2352,15 @@ Expr *elab_let(Elab *e, const Form *call) {
             b->is_linear = true;
             /* Upgrade copy_kind to CK_LINEAR on the binding's type */
             b->type.copy_kind = CK_LINEAR;
+        } else if (ty_carries_linear(init->type)) {
+            /* A container holding a linear value: `(Option H)`, `(Duo H)`. */
+            b->is_linear = true;
+        }
+        {
+            char what[160];
+            snprintf(what, sizeof what, "'%s'", name->name);
+            if (!elab_check_linear_phantom_slot(&init->type, init->span, what))
+                rc = -1;
         }
         /* UT0: Mark binding as unique if annotated with ^unique.
          *

@@ -265,12 +265,10 @@ protocol step, so skipping a step or reordering is a compile-time error.
 ```turmeric
 ;; A protocol: send an int, then receive an int, then close
 (let [c  (:: (schan-new 4) (SChan (SSend int (SRecv int SClose))))
-      c2 (schan-send c 42)
-      p  (schan-recv c2)
-      v  (pair-fst p)
-      c3 (pair-snd p)]
-  (println v)
-  (schan-close c3))
+      c2 (schan-send c 42)]
+  (match (schan-recv c2)
+    (Pair v c3) (do (println v)
+                    (schan-close c3))))
 ```
 
 ```sweet-exp
@@ -278,13 +276,16 @@ protocol step, so skipping a step or reordering is a compile-time error.
 
 ;; A protocol: send an int, then receive an int, then close
 let [c  (:: (schan-new 4) (SChan (SSend int (SRecv int SClose))))
-     c2 schan-send(c 42)
-     p  schan-recv(c2)
-     v  pair-fst(p)
-     c3 pair-snd(p)]
-  println(v)
-  schan-close(c3)
+     c2 schan-send(c 42)]
+  (match schan-recv(c2)
+    (Pair v c3) (do (println v)
+                    (schan-close c3)))
 ```
+
+`schan-recv` returns a `(Pair T (SChan R))`. A pair holding a linear channel
+is linear itself, so it is taken apart with a `match` that binds both halves;
+reading it with `pair-fst` and then `pair-snd` would consume it twice
+(`TUR-E0101`).
 
 See [session-types-guide.md](session-types-guide.md) for the full protocol
 language.

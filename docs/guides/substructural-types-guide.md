@@ -117,10 +117,37 @@ defn box-take [b : Box] : int
     (Box h n) (do (h-free h) n))
 ```
 
-A linear value inside a *generic* container -- `(some h)`, a vector literal,
-a struct whose field is a type variable -- is not followed yet and leaks
-without a diagnostic:
-`docs/reported/linear-value-in-a-generic-container-is-not-checked.md`.
+Reading one field of such a struct consumes the whole value, so a read that
+leaves another linear field behind -- `(.n b)` here -- is `TUR-E0100`; the
+`match` above is the way to take it apart.
+
+**A generic container holding a linear value is linear too.** `(Option H)`,
+`(Result H E)` and a generic struct instantiated at a linear type, `(Duo H)`,
+must each be consumed, and a `match` hands the value inside back:
+
+```turmeric
+(defn try-open [path : cstr] : (Result FileHandle cstr) ...)
+
+(match (try-open "data.txt")
+  (Ok fh) (close-file fh)
+  (Err msg) (println msg))
+```
+
+```sweet-exp
+(match try-open("data.txt")
+  (Ok fh) (close-file fh)
+  (Err msg) (println msg))
+```
+
+`ok?`, `err?`, `some?` and `none?` borrow their argument, so `(? r)` and
+`(if (ok? r) (use (ok-val r)) (report (err-val r)))` consume `r` once on each
+path. An `if` that reads the payload in one branch and drops `r` in the other
+is `TUR-E0104`; write the `match`.
+
+A container whose type parameter reaches no field -- `Vec`, which keeps its
+elements behind a `ptr<void>` -- cannot follow a linear element: `vec-get`
+copies one out and `vec-free` drops them all. A linear type in that slot,
+`[(h-new 1) (h-new 2)]` or a `(Vec H)` parameter, is `TUR-E0110`.
 
 **A linear value may be bound at module level.** Linearity constrains how many
 times a value is *used*, not where it may live, so a top-level `def` holding
@@ -445,6 +472,9 @@ with-resource [r ref(42)]
 | `TUR-E0101` | Linear value used after being consumed       |
 | `TUR-E0102` | Cannot copy a linear value                    |
 | `TUR-E0103` | Cannot wrap a linear value in `rc<T>`         |
+| `TUR-E0104` | Linear value consumed on one path only        |
+| `TUR-E0109` | A borrowed value (or view) is consumed        |
+| `TUR-E0110` | Linear type in a slot that reaches no field   |
 | `TUR-E0150` | Affine value used more than once             |
 | `TUR-E0151` | Relevant value dropped without being used    |
 

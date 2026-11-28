@@ -83,22 +83,6 @@ Nine more were fixed the same day and are in `docs/archive/`:
 | [cmake-dep-undecidable-link-genex-is-not-linked](cmake-dep-undecidable-link-genex-is-not-linked.md) | low (warns) | A link entry behind an expression the configure-time reducer does not know (version comparisons, `TARGET_PROPERTY`, ...) is left out, with a warning whose `:link-flags` remedy cannot name a library in the build tree. |
 | [tur-fetch-builds-cmake-deps-serially](tur-fetch-builds-cmake-deps-serially.md) | low (time) | `cmake --build` with no `--parallel`: a cold `spices/manifold` fetch is 3 min 44 s, and 1 min 5 s with `CMAKE_BUILD_PARALLEL_LEVEL=4`. |
 
-## Found building `spices/manifold` (filed 2026-11-26)
-
-Manifold is the first spice to weigh `^linear` against `^affine` + `Drop` for
-a handle that expressions pass around as a temporary. The row has an offline
-repro that was run on `main` at `d4ad1b0` under `TUR_SANITIZE_PROGRAMS=1`.
-
-Four reports filed with this one were resolved the same day and are in
-`docs/archive/`: `cmake-dep-cxx-runtime-not-linked`,
-`cmake-dep-genex-link-entry-dropped`,
-`cmake-dep-interface-target-fails-generate` and
-`affine-drop-handle-consumed-in-one-branch-double-frees`.
-
-| Report | Severity | One line |
-| --- | --- | --- |
-| [linear-value-in-a-generic-container-is-not-checked](linear-value-in-a-generic-container-is-not-checked.md) | medium (silent leaks) | A `^linear` value in a vector literal, `(some h)`, or a generic struct instantiated at a linear type is dropped with no TUR-E0100: the container's type is not linear. The concrete-field and borrowed-temporary shapes filed with it are fixed (`defn ^borrow` views, archived as linear-values-without-a-binding-are-not-checked) |
-
 ## Found executing sepcomp-cross-module-effect-unhandled (filed 2026-11-24)
 
 | Report | Severity | One line |

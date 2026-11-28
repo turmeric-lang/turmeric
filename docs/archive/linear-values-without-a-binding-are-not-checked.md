@@ -4,7 +4,7 @@
 > has a spelling, `(defn ^borrow f ...)`. A linear value inside a *generic*
 > container -- `(some h)`, a vector literal, a struct whose field is a type
 > variable -- is the part left open, filed as
-> [linear-value-in-a-generic-container-is-not-checked](../reported/linear-value-in-a-generic-container-is-not-checked.md).
+> [linear-value-in-a-generic-container-is-not-checked](linear-value-in-a-generic-container-is-not-checked.md).
 
 **Severity:** medium (silent leaks from programs the linearity check accepted).
 `^linear` promises "used exactly once". That holds for a value bound with

@@ -11,17 +11,17 @@
 ;; schan-recv returns a (Pair T (SChan R)) -- the value and the advanced channel
 ;; together. It used to write the value through a caller-allocated cell and
 ;; return only the channel, a workaround for a monomorphizer defect fixed
-;; 2026-06-05. See docs/archive/schan-recv-pair-signature-migration.md.
+;; 2026-06-05. See docs/archive/schan-recv-pair-signature-migration.md.  The
+;; pair holds a linear channel, so it is taken apart with a match: reading it
+;; with pair-fst then pair-snd would consume it twice.
 
 (defmodule app
   (import schan :refer [SChan SSend SRecv SClose
                         schan-new schan-send schan-recv schan-close])
   (defn main [] : int
     (let [c0 (:: (schan-new 2) (SChan (SSend int (SRecv int SClose))))
-          c1 (schan-send c0 7)
-          p  (schan-recv c1)
-          v  (pair-fst p)
-          c2 (pair-snd p)]
-      (println v)
-      (schan-close c2)
+          c1 (schan-send c0 7)]
+      (match (schan-recv c1)
+        (Pair v c2) (do (println v)
+                        (schan-close c2)))
       0)))

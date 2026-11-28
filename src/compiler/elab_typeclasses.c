@@ -8151,6 +8151,50 @@ static Expr *elab_method_call_impl(Elab *e, const Form *call) {
                             if (ftype.kind == TY_TYVAR &&
                                 field_owner_type->kind != TY_APP)
                                 ftype = type_from_kind(ctor->fields[i].kind);
+                            /* linear-value-in-a-generic-container-is-not-checked:
+                             * reading one field of an owned linear aggregate
+                             * consumes the aggregate, so every OTHER field that
+                             * holds a linear value is dropped with it.  `(.n p)`
+                             * on a `(Duo H)` lost the H.  A match takes the
+                             * value apart and binds each field instead. */
+                            {
+                                const Expr *ov = obj;
+                                while (ov && ov->kind == EX_ASCRIBE)
+                                    ov = ov->as.ascribe_.inner;
+                                bool borrowed = ov && ov->kind == EX_VAR &&
+                                    ov->as.var.binding && ov->as.var.binding->is_borrow;
+                                bool owned_linear = !borrowed &&
+                                    (ty_carries_linear(obj->type) ||
+                                     (ov && ov->kind == EX_VAR && ov->as.var.binding &&
+                                      ov->as.var.binding->is_linear));
+                                Type *targs = NULL;
+                                bool have_args = false;
+                                if (owned_linear && adt->n_type_params > 0 &&
+                                    field_owner_type->kind == TY_APP) {
+                                    targs = (Type *)arena_alloc(e->arena,
+                                        adt->n_type_params * sizeof(Type));
+                                    have_args = elab_adt_type_extract_args(
+                                        field_owner_type, adt, targs);
+                                }
+                                for (uint32_t j = 0; owned_linear && j < ctor->n_fields; j++) {
+                                    if (j == i || !ctor->fields[j].full_type) continue;
+                                    Type oj = *ctor->fields[j].full_type;
+                                    if (have_args)
+                                        oj = adt_field_instantiate_type(e, adt,
+                                            ctor->fields[j].full_type, targs);
+                                    if (!ty_carries_linear(oj)) continue;
+                                    diag_emit_with_code(DIAG_ERROR, call->span,
+                                        TUR_E0100_LINEAR_DROPPED,
+                                        "reading field '%s' consumes this %s value and "
+                                        "drops its field '%s' of linear type %s without "
+                                        "consuming it -- take the value apart with a "
+                                        "match and consume each linear field",
+                                        method_name, type_name(obj->type),
+                                        ctor->fields[j].name ? ctor->fields[j].name : "?",
+                                        type_name(oj));
+                                    break;
+                                }
+                            }
                             Expr *out = expr_new(e->arena, EX_GET_FIELD, ftype,
                                                  call->span);
                             out->as.get_field_.struct_expr = obj;

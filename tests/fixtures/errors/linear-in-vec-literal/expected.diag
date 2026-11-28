@@ -1,0 +1,2 @@
+TUR-E0110
+has type (Vec H), but Vec keeps its H argument where the checker cannot follow it

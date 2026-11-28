@@ -40,19 +40,21 @@
 
   ;; ---- worker: recv one request, square it, send the response -------------
   (defn worker [arg : ptr<void>] : ptr<void>
-    (let [rq   (:: (wp-arg-rq arg) (SChan (SRecv int SClose)))
-          rs   (:: (wp-arg-rs arg) (SChan (SSend int SClose)))
-          p    (schan-recv rq)
-          req  (pair-fst p)
-          rq2  (pair-snd p)
-          rs2  (schan-send rs (* req req))]
-      (schan-close rq2)            ;; this side owns + frees the request channel
-      ;; The worker's terminal SClose handle on the response channel is
-      ;; non-owning -- the client side frees rs.  Discard the linear handle via
-      ;; a reinterpret: this consumes the must-use obligation (satisfying
-      ;; always-on linearity) without emitting a second free.
-      (:: rs2 :int)
-      (wp-null)))
+    (let [rq (:: (wp-arg-rq arg) (SChan (SRecv int SClose)))
+          rs (:: (wp-arg-rs arg) (SChan (SSend int SClose)))]
+      ;; schan-recv's (Pair int (SChan R)) holds a linear channel, so it is
+      ;; taken apart with a match rather than read twice with pair-fst /
+      ;; pair-snd (each read would consume the pair).
+      (match (schan-recv rq)
+        (Pair req rq2)
+          (let [rs2 (schan-send rs (* req req))]
+            (schan-close rq2)      ;; this side owns + frees the request channel
+            ;; The worker's terminal SClose handle on the response channel is
+            ;; non-owning -- the client side frees rs.  Discard the linear
+            ;; handle via a reinterpret: this consumes the must-use obligation
+            ;; (satisfying always-on linearity) without emitting a second free.
+            (:: rs2 :int)
+            (wp-null)))))
 
   ;; ---- client side: submit a request to a worker, collect the response ----
   ;; Returns the response value.  Creates the channel pair, spawns the worker,
@@ -70,16 +72,15 @@
           rs     (:: rs-raw (SChan (SRecv int SClose)))
           arg    (wp-arg-new rq-raw rs-raw)
           t      (wp-spawn worker arg)
-          rq2    (schan-send rq req)         ;; rq2 (SClose) non-owning; worker frees rq
-          rp     (schan-recv rs)
-          resp   (pair-fst rp)
-          rs2    (pair-snd rp)]
-      (wp-join t)
-      (schan-close rs2)            ;; this side owns + frees the response channel
-      ;; Discard the non-owning request-side SClose handle without freeing.
-      (:: rq2 :int)
-      (wp-arg-free arg)
-      resp))
+          rq2    (schan-send rq req)]        ;; rq2 (SClose) non-owning; worker frees rq
+      (match (schan-recv rs)
+        (Pair resp rs2)
+          (do (wp-join t)
+              (schan-close rs2)    ;; this side owns + frees the response channel
+              ;; Discard the non-owning request-side SClose handle without freeing.
+              (:: rq2 :int)
+              (wp-arg-free arg)
+              resp))))
 
   (defn main [] : int
     ;; Three request/response exchanges, each served by its own worker thread

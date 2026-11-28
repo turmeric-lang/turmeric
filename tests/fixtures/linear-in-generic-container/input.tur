@@ -1,0 +1,84 @@
+;; linear-in-generic-container: a struct or data type holding a linear value
+;; is linear itself (linear-value-in-a-generic-container-is-not-checked).
+;; `(Option H)`, `(Result H E)` and a generic `(Duo H)` must be consumed, and
+;; a match hands the value inside back to be consumed in turn.  ok? / err? /
+;; some? / none? only borrow, so the `?` operator and the
+;; `(if (ok? r) (ok-val r) (err-val r))` idiom stay balanced.
+;;
+;; The counters prove every allocation is freed exactly once (live 0).
+(defn ctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+
+(defopaque ^linear H :int)
+
+(defn h-alloc [n : int] : H
+  ```c
+  #include <stdlib.h>
+  int64_t *p = malloc(sizeof *p);
+  *p = n;
+  return (intptr_t)p;
+  ```)
+
+(defn h-release [h : H] : void
+  ```c
+  #include <stdlib.h>
+  free((void *)(intptr_t)h);
+  ```)
+
+(defn h-peek [^borrow h : H] : int
+  ```c
+  return *(int64_t *)(intptr_t)h;
+  ```)
+
+(defn h-new [n : int] : H (ctr 0) (h-alloc n))
+(defn h-free [h : H] : void (ctr 1) (h-release h))
+
+(defstruct Duo [A] [a : A n : int])
+
+;; A fallible constructor: the Ok side owns a handle.
+(defn try-new [n : int] : (Result H cstr)
+  (if (> n 0) (ok (h-new n)) (err "non-positive")))
+
+(defn use-opt [o : (Option H)] : int
+  (match o
+    (Some h) (let [v (h-peek h)] (h-free h) v)
+    (None) 0))
+
+;; `?` on a Result holding a linear value.
+(defn bumped [n : int] : (Result H cstr)
+  (let [h (? (try-new n))
+        v (h-peek h)]
+    (h-free h)
+    (ok (h-new (+ v 1)))))
+
+;; The predicate idiom: each branch consumes r once.
+(defn peek-or [r : (Result H cstr) d : int] : int
+  (if (ok? r)
+    (let [h (ok-val r)
+          v (h-peek h)]
+      (h-free h)
+      v)
+    (do (err-val r) d)))
+
+(defn main [] : int
+  (println (use-opt (some (h-new 5))))      ;; 5
+  (println (use-opt (none)))                ;; 0
+  (match (try-new 6)
+    (Ok h) (do (println (h-peek h)) (h-free h))
+    (Err msg) (println msg))                ;; 6
+  (match (try-new 0)
+    (Ok h) (h-free h)
+    (Err msg) (println msg))                ;; non-positive
+  (match (Duo (h-new 9) 1)
+    (Duo a n) (do (println (+ (h-peek a) n)) (h-free a)))   ;; 10
+  (println (peek-or (bumped 7) -1))         ;; 8
+  (println (peek-or (bumped 0) -1))         ;; -1
+  (println (ctr 2))                         ;; 5 allocated
+  (println (- (ctr 2) (ctr 3)))             ;; 0 live
+  0)

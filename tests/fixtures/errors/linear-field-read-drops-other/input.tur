@@ -1,0 +1,13 @@
+;; Reading one field of a linear aggregate consumes it, so any other field
+;; holding a linear value is dropped with it.  `(.n p)` on a (Duo H) lost the
+;; H.  Take the value apart with a match instead.  TUR-E0100.
+;; (linear-value-in-a-generic-container-is-not-checked)
+(defopaque ^linear H :int)
+(defn h-new [n : int] : H ```c return (int64_t)n; ```)
+
+(defstruct Duo [A] [a : A n : int])
+
+(defn main [] : int
+  (let [p (Duo (h-new 7) 3)]
+    (println (.n p)))
+  0)

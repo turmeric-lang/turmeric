@@ -11493,8 +11493,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 }
             }
             /* LT3: Propagate linearity from the type annotation (e.g., [p : (lref int)]) */
-            if (params[n_params - 1]->type.copy_kind == CK_LINEAR) {
+            if (ty_carries_linear(params[n_params - 1]->type)) {
                 params[n_params - 1]->is_linear = true;
+            }
+            {
+                char what[160];
+                snprintf(what, sizeof what, "parameter '%s'",
+                         params[n_params - 1]->name->name);
+                (void)elab_check_linear_phantom_slot(&params[n_params - 1]->type,
+                                                     params[n_params - 1]->span, what);
             }
             /* ST2: ref<T> params without an explicit discipline annotation are
              * inferred as SK_LINEAR. */

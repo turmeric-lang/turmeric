@@ -2058,6 +2058,16 @@ bool elab_tail_leaves(const Expr *x);
  * answers whether `x` is a call of such a function, a view that is neither
  * fresh nor consumable. */
 bool elab_expr_is_borrowed_view(const Expr *x);
+/* linear-value-in-a-generic-container-is-not-checked (elab_structs.c): does
+ * a value of `t` hold a linear value?  `t` is linear, or applies a struct or
+ * data type to a linear argument whose parameter reaches a field --
+ * `(Option H)`, `(Result H E)`, `(Duo H)`.  A binding of such a type is
+ * linear (Binding.is_linear); the type's copy_kind, which codegen reads, is
+ * left alone.  elab_check_linear_phantom_slot reports TUR-E0110 for a linear
+ * argument to a parameter that reaches no field (`(Vec H)`), naming the
+ * value as `what`; false when it did. */
+bool ty_carries_linear(Type t);
+bool elab_check_linear_phantom_slot(const Type *t, Span span, const char *what);
 bool elab_fresh_linear_unowned(Elab *e, const Expr *x);
 void elab_note_discarded_linear(Elab *e, Expr *const *items, uint32_t n);
 uint32_t linear_state_snapshot_bindings(const Scope *scope,
