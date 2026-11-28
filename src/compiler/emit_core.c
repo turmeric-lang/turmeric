@@ -1210,6 +1210,17 @@ static bool g_esc_perform_ok = false;
  * any_box_binding_escapes_self_apply.  File-scope for the same reason as the
  * flag above: one caller sets it, and the walk is not reentrant. */
 static uint32_t g_esc_self_apply_mask = 0;
+/* fnfield-owner-struct-copy-outlives-scope: set while fnfield_struct_escapes
+ * runs -- the binding asked about is a by-value struct that OWNS its closures,
+ * and the walk follows it as a struct alias (EscAlias) from the start: a call
+ * through its closure field or a read of its other fields keeps it in; a bare
+ * mention, a capture, a closure field read anywhere else lets a copy out.
+ * File-scope like the flags above. */
+static bool g_esc_struct_root = false;
+/* ...and, while fnfield_struct_param_uses asks "only kept in the result?",
+ * the result positions of the body. */
+static const Expr *const *g_esc_tails = NULL;
+static uint32_t g_esc_n_tails = 0;
 bool sum_box_reader_name(const char *nm) {
     /* Concrete stdlib defns only, each body audited for "reads, never
      * retains": the accessors copy a payload word or return a bool; the two
@@ -1265,6 +1276,11 @@ typedef struct {
     uint32_t       n_cl;
     const Binding *st[ESC_MAX_ALIAS];   /* by-value structs holding it */
     uint32_t       n_st;
+    /* fnfield-owner-struct-copy-outlives-scope: the expressions whose value
+     * is the function's result, when the walk asks whether a parameter is
+     * kept ONLY there (fnfield_struct_param_uses); none otherwise. */
+    const Expr   **tails;
+    uint32_t       n_tails;
 } EscAlias;
 
 static bool esc_alias_is_cl(const EscAlias *a, const Binding *x) {
@@ -1314,6 +1330,61 @@ static bool esc_alias_field_read(const EscAlias *a, const Expr *gf, bool *is_fn)
     *is_fn = !f || f->kind == TY_FN;   /* unknown: assume it may hold `b` */
     return true;
 }
+static void esc_push_raw(const Expr ***stackp, int *spp, size_t *capp, const Expr *x) {
+    if (!x) return;
+    if ((size_t)*spp >= *capp) {
+        *capp *= 2;
+        *stackp = (const Expr **)realloc((void *)*stackp, *capp * sizeof(Expr *));
+        if (!*stackp) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    (*stackp)[(*spp)++] = x;
+}
+/* A call that hands back a struct alias it was given: a static call whose
+ * callee keeps closure-struct parameter i nowhere but its result
+ * (Binding.resalias_fnfield_param_mask) -- `(pick h g n)`, `(ident h)`. */
+static bool esc_alias_struct_value(const EscAlias *a, const Expr *x, int depth);
+static bool esc_inline_c_visit(const Expr *x, void *ud);
+static bool esc_alias_passthrough_call(const EscAlias *a, const Expr *c, int depth) {
+    if (!c || c->kind != EX_CALL || c->as.call_.ctor || c->as.call_.fn_expr ||
+        c->as.call_.dict_arg || !call_dispatch_is_static(c))
+        return false;
+    const Binding *fb = c->as.call_.fn_binding;
+    uint32_t m = fb ? fb->resalias_fnfield_param_mask : 0;
+    for (uint32_t i = 0; m && i < c->as.call_.n_args && i < 32; i++)
+        if ((m & (1u << i)) && esc_alias_struct_value(a, c->as.call_.args[i], depth + 1))
+            return true;
+    return false;
+}
+/* Does `x` evaluate to a struct alias: one by name, or handed back by a
+ * pass-through call? */
+static bool esc_alias_struct_value(const EscAlias *a, const Expr *x, int depth) {
+    if (depth > 16 || a->n_st == 0) return false;
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x) return false;
+    if (x->kind == EX_VAR) return esc_alias_is_st(a, x->as.var.binding);
+    return esc_alias_passthrough_call(a, x, depth);
+}
+/* `x` is a struct alias value being used where that is safe: walk what ELSE
+ * it evaluates -- a pass-through call's other arguments. */
+static void esc_push_value_rest(const EscAlias *a, const Expr *x, const Expr ***stackp,
+                                int *spp, size_t *capp, int depth) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || x->kind != EX_CALL || depth > 16) return;
+    const Binding *fb = x->as.call_.fn_binding;
+    uint32_t m = fb ? fb->resalias_fnfield_param_mask : 0;
+    for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
+        const Expr *arg = x->as.call_.args[i];
+        if (i < 32 && (m & (1u << i)) && esc_alias_struct_value(a, arg, depth + 1))
+            esc_push_value_rest(a, arg, stackp, spp, capp, depth + 1);
+        else
+            esc_push_raw(stackp, spp, capp, arg);
+    }
+}
+static bool esc_is_tail(const EscAlias *a, const Expr *x) {
+    for (uint32_t i = 0; i < a->n_tails; i++) if (a->tails[i] == x) return true;
+    return false;
+}
+
 /* Does `x` evaluate to `b`'s closure word: `b`, a closure alias, or a
  * closure field of a struct alias (wraps peeled)? */
 static bool esc_alias_names_b(const EscAlias *a, const Expr *x) {
@@ -1418,6 +1489,12 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
     memset(&al, 0, sizeof al);
     al.b = b;
     const bool aliasing = !allow_box_accessors && !allow_any_cast;
+    if (g_esc_struct_root && aliasing) {
+        al.b = NULL;
+        al.st[al.n_st++] = b;
+        al.tails = (const Expr **)g_esc_tails;
+        al.n_tails = g_esc_n_tails;
+    }
 
 #define ESC_PUSH(x) do {                                                       \
         const Expr *_x = (x);                                                  \
@@ -1437,6 +1514,12 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
         /* Part B: the caller's return-tail use of `b` -- already accounted for
          * (its value is copied out before the free) -- is not an escape. */
         if (cur == ignore) continue;
+        /* fnfield-owner-struct-copy-outlives-scope: a struct alias as the
+         * function's result, when that is what is being asked. */
+        if (al.n_tails && esc_is_tail(&al, cur) && esc_alias_struct_value(&al, cur, 0)) {
+            esc_push_value_rest(&al, cur, &stack, &sp, &cap, 0);
+            continue;
+        }
         switch (cur->kind) {
             case EX_VAR:
                 if (cur->as.var.binding == b ||
@@ -1535,6 +1618,25 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                                         esc_alias_names_b(&al, arg);
                     if (box_accessor && arg_is_b)
                         continue;
+                    /* fnfield-owner-struct-copy-outlives-scope: a struct alias
+                     * (the root of a struct walk, or a struct built around
+                     * `b`) handed to a parameter the callee only reads
+                     * (nonretain_fnfield_param_mask) or declares `^borrow`
+                     * stays in. */
+                    if (al.n_st > 0 && !fe && call_dispatch_is_static(cur) &&
+                        !g_esc_call_head_only && esc_alias_struct_value(&al, arg, 0)) {
+                        const Binding *sfb = cur->as.call_.fn_binding;
+                        bool reads = sfb && i < 32 &&
+                            (sfb->nonretain_fnfield_param_mask & (1u << i));
+                        if (!reads && sfb && sfb->type.kind == TY_FN &&
+                            i < sfb->type.as.fn.arity && sfb->type.as.fn.arg_flags &&
+                            FN_ARG_FLAG(sfb->type.as.fn, i, FA_BORROW))
+                            reads = true;
+                        if (reads) {
+                            esc_push_value_rest(&al, arg, &stack, &sp, &cap, 0);
+                            continue;
+                        }
+                    }
                     /* closure-env-capturing-closures-not-released: `b` is a
                      * hoisted fresh closure handed to the combinator whose
                      * result env holds it, and that result dies at the same
@@ -1695,6 +1797,57 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                     if (aliasing && cur->kind == EX_LET && lb) {
                         if (esc_alias_struct_init(&al, lb, init, &stack, &sp, &cap))
                             continue;
+                        /* `(let [g h] ...)` / `(let [x b] ...)`: another
+                         * name for the same words, followed the same way. */
+                        const Expr *pv = init;
+                        while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+                        /* `(let [r (pick h g n)] ...)`: the result is `h`. */
+                        if (pv && pv->kind == EX_CALL && al.n_st < ESC_MAX_ALIAS &&
+                            lb->type.kind == TY_ADT &&
+                            esc_alias_passthrough_call(&al, pv, 0)) {
+                            al.st[al.n_st++] = lb;
+                            esc_push_value_rest(&al, pv, &stack, &sp, &cap, 0);
+                            continue;
+                        }
+                        /* `(let [f (fn [x] ((.run h) x))] ...)`: a lambda that
+                         * captures an alias holds a copy of it; calling the
+                         * lambda is the only use that keeps it in.  Its env
+                         * glue frees only the env box, never what it
+                         * captured, so its own free cannot release `b`. */
+                        if (pv && pv->kind == EX_CLOSURE && pv->as.closure_.closure &&
+                            al.n_cl < ESC_MAX_ALIAS && lb->type.kind == TY_FN &&
+                            !esc_inline_c_visit(pv, NULL)) {
+                            const struct Closure *cc = pv->as.closure_.closure;
+                            bool holds = false;
+                            for (uint32_t ci = 0; ci < cc->n_captures; ci++)
+                                if (cc->captures[ci] == b ||
+                                    esc_alias_any(&al, cc->captures[ci]))
+                                    holds = true;
+                            /* ...and what the lambda does with its copy is a
+                             * use too: its body is walked under the same rules
+                             * (it runs only while the lambda is called, and the
+                             * lambda stays in this scope), so `(fn [] b)`
+                             * handing `b` back, or `(async b)` in it, escapes. */
+                            if (holds && cc->fn && cc->fn->body) {
+                                al.cl[al.n_cl++] = lb;
+                                esc_push_raw(&stack, &sp, &cap, cc->fn->body);
+                                continue;
+                            }
+                        }
+                        if (pv && pv->kind == EX_VAR && pv->as.var.binding) {
+                            const Binding *vb = pv->as.var.binding;
+                            if (esc_alias_is_st(&al, vb) && al.n_st < ESC_MAX_ALIAS &&
+                                lb->type.kind == TY_ADT && vb->type.kind == TY_ADT &&
+                                lb->type.as.adt_.def == vb->type.as.adt_.def) {
+                                al.st[al.n_st++] = lb;
+                                continue;
+                            }
+                            if (esc_alias_is_cl(&al, vb) && al.n_cl < ESC_MAX_ALIAS &&
+                                lb->type.kind == TY_FN) {
+                                al.cl[al.n_cl++] = lb;
+                                continue;
+                            }
+                        }
                         if (al.n_st > 0 && al.n_cl < ESC_MAX_ALIAS) {
                             bool is_fn = false;
                             const Expr *pi = init;
@@ -1795,6 +1948,15 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 bool is_fn = false;
                 if (esc_alias_field_read(&al, cur, &is_fn)) {
                     if (is_fn) { escapes = true; goto esc_done; }
+                    break;
+                }
+                /* ...and of one a pass-through call hands back,
+                 * `(.raw (ident h))`. */
+                if (esc_alias_struct_value(&al, cur->as.get_field_.struct_expr, 0)) {
+                    const CtorField *gfld = esc_field_of(cur);
+                    if (!gfld || gfld->kind == TY_FN) { escapes = true; goto esc_done; }
+                    esc_push_value_rest(&al, cur->as.get_field_.struct_expr,
+                                        &stack, &sp, &cap, 0);
                     break;
                 }
                 ESC_PUSH(cur->as.get_field_.struct_expr);
@@ -2007,6 +2169,97 @@ bool closure_let_binding_escapes(const Expr *let, uint32_t idx) {
                                 /*allow_box_accessors=*/false,
                                 let->as.let_.bindings[idx].init);
 }
+/* fnfield-owner-struct-copy-outlives-scope: may a copy of the by-value struct
+ * `h` -- which owns the closures in its fields, so frees them when its `let`
+ * ends (Binding.drops_fn_fields) -- outlive `scope`?  The closure escape walk
+ * with `h` as the root struct alias: calling through its closure field,
+ * reading its other fields, and handing it (or that field) to a parameter
+ * that only reads it keep it in; returning it, storing it, capturing it,
+ * matching on it, or reading the closure out anywhere else let a copy out,
+ * and freeing then would leave that copy calling a freed closure.  `ignore`
+ * is the binding's own init. */
+bool fnfield_struct_escapes(const Expr *scope, const Binding *h, const Expr *ignore) {
+    g_esc_struct_root = true;
+    bool esc = binding_escapes_impl(scope, h, /*allow_box_accessors=*/false, ignore);
+    g_esc_struct_root = false;
+    return esc;
+}
+
+/* Is there an inline-C block anywhere in `e`, nested lambdas included?  The
+ * precise question, for the closure-struct parameter masks: unlike
+ * expr_subtree_has_inline_c, a node kind it does not list (a `handle`, a
+ * `perform`) is walked rather than assumed to hide C. */
+static bool esc_inline_c_visit(const Expr *x, void *ud) {
+    (void)ud;
+    if (!x) return false;
+    if (x->kind == EX_INLINE_C) return true;
+    if (x->kind == EX_CLOSURE && x->as.closure_.closure && x->as.closure_.closure->fn)
+        return esc_inline_c_visit(x->as.closure_.closure->fn->body, NULL);
+    if (x->kind == EX_FN_DEF && x->as.fn_def_.fn)
+        return esc_inline_c_visit(x->as.fn_def_.fn->body, NULL);
+    return cps_visit_children(x, esc_inline_c_visit, NULL);
+}
+bool expr_contains_inline_c_block(const Expr *e) {
+    return esc_inline_c_visit(e, NULL);
+}
+
+/* The expressions whose value is `e`'s value -- its tail positions -- and
+ * every `return`'s value in it (a nested lambda's own `return` excluded). */
+#define ESC_MAX_TAILS 64
+typedef struct { const Expr *v[ESC_MAX_TAILS]; uint32_t n; bool full; } EscTails;
+static void esc_tail_add(EscTails *t, const Expr *x) {
+    if (!x) return;
+    if (t->n < ESC_MAX_TAILS) t->v[t->n++] = x; else t->full = true;
+}
+static void esc_collect_tails(EscTails *t, const Expr *e, int depth) {
+    if (!e || depth > 64) return;
+    esc_tail_add(t, e);
+    switch (e->kind) {
+        case EX_ASCRIBE: esc_collect_tails(t, e->as.ascribe_.inner, depth + 1); break;
+        case EX_DO:
+            if (e->as.do_.n) esc_collect_tails(t, e->as.do_.items[e->as.do_.n - 1], depth + 1);
+            break;
+        case EX_LET: case EX_LETREC:
+            esc_collect_tails(t, e->as.let_.body, depth + 1);
+            break;
+        case EX_IF:
+            esc_collect_tails(t, e->as.if_.then_, depth + 1);
+            esc_collect_tails(t, e->as.if_.else_or_null, depth + 1);
+            break;
+        case EX_MATCH:
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                esc_collect_tails(t, e->as.match_.arms[i].body, depth + 1);
+            break;
+        default: break;
+    }
+}
+static bool esc_return_visit(const Expr *x, void *ud) {
+    EscTails *t = (EscTails *)ud;
+    if (x->kind == EX_RETURN) esc_collect_tails(t, x->as.return_.value, 0);
+    return cps_visit_children(x, esc_return_visit, ud);
+}
+
+/* fnfield-owner-struct-copy-outlives-scope: how does a function body use its
+ * closure-struct parameter `p`?  `*reads`: only reads it (calls through it,
+ * reads its fields, hands it to a parameter that does the same).  `*result_only`:
+ * that, except that it may also be the body's result.  A caller can then treat
+ * the call as a read of its struct, or its result as another name for it. */
+void fnfield_struct_param_uses(const Expr *body, const Binding *p,
+                               bool *reads, bool *result_only) {
+    *reads = !fnfield_struct_escapes(body, p, NULL);
+    if (*reads) { *result_only = true; return; }
+    EscTails t;
+    memset(&t, 0, sizeof t);
+    esc_collect_tails(&t, body, 0);
+    esc_return_visit(body, &t);
+    if (t.full) { *result_only = false; return; }
+    g_esc_tails = t.v;
+    g_esc_n_tails = t.n;
+    *result_only = !fnfield_struct_escapes(body, p, NULL);
+    g_esc_tails = NULL;
+    g_esc_n_tails = 0;
+}
+
 bool closure_let_binding_escapes_reaped(const Expr *let, uint32_t idx) {
     g_esc_perform_ok = true;
     bool esc = closure_let_binding_escapes(let, idx);

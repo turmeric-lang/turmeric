@@ -1,0 +1,37 @@
+;; fnfield-owner-struct-copy-outlives-scope: a struct that minted its closure
+;; frees it when its `let` ends -- but only when no copy of the struct is still
+;; around.  Each copy below outlives the `let`: captured by a lambda that is
+;; returned (a ^copy struct and a move-only one), kept in a global, handed to a
+;; function that keeps it.  Freeing there left the copy calling a freed
+;; closure.  They are not freed at all now (see known-leak); a use-after-free
+;; still fails the leak-check gate.
+(defstruct ^copy C [run : (fn [int] int)  tag : int])
+(defstruct M [run : (fn [int] int)  tag : int])
+(defn zero [x : int] : int 0)
+(def ^mut kept : C (C zero 0))
+(def ^mut kept2 : C (C zero 0))
+
+(defn cap-copy [k : int] : (fn [int] int)
+  (let [h (C (fn [x : int] : int (- x k)) 3)]
+    (fn [x : int] : int ((.run h) x))))
+(defn cap-move [k : int] : (fn [int] int)
+  (let [h (M (fn [x : int] : int (+ x k)) 3)]
+    (fn [x : int] : int ((.run h) x))))
+(defn stash [k : int] : int
+  (let [h (C (fn [x : int] : int (* x k)) 4)]
+    (set! kept h)
+    (.tag h)))
+(defn keep! [c : C] : nil (set! kept2 c))
+(defn hand-off [k : int] : int
+  (let [h (C (fn [x : int] : int (+ x k k)) 5)]
+    (keep! h)
+    (.tag h)))
+
+(defn main [] : int
+  (let [f (cap-copy 5)] (println (f 10)))
+  (let [g (cap-move 5)] (println (g 10)))
+  (println (stash 3))
+  (println ((.run kept) 10))
+  (println (hand-off 2))
+  (println ((.run kept2) 10))
+  0)

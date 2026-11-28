@@ -1261,6 +1261,13 @@ bool closure_binding_escapes(const Expr *e, const Binding *b);
  * (fnfield-ctor-param-closure-leaks-in-caller). */
 bool closure_let_binding_escapes(const Expr *let, uint32_t idx);
 bool closure_let_binding_escapes_reaped(const Expr *let, uint32_t idx);
+/* fnfield-owner-struct-copy-outlives-scope: may a copy of the closure-owning
+ * by-value struct `h` outlive `scope`? */
+bool fnfield_struct_escapes(const Expr *scope, const Binding *h, const Expr *ignore);
+void fnfield_struct_param_uses(const Expr *body, const Binding *p,
+                               bool *reads, bool *result_only);
+/* Any inline-C block anywhere in `e`, nested lambdas included (precise). */
+bool expr_contains_inline_c_block(const Expr *e);
 /* Does any inline-C block occur under `e`?  (emit_core.c) */
 bool expr_subtree_has_inline_c(const Expr *e);
 /* catch-unwind-thunk-closure-leak scoped-free escape analysis: like

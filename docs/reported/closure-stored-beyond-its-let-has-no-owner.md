@@ -50,6 +50,14 @@ A constructor function whose body contains inline C (which can keep its
 closure parameter by its C name) is not trusted either. A closure passed to
 one is not freed by the caller.
 
+**An owner struct's copy that outlives its `let`.** The struct minted its
+closure, so it is the owner. A copy outlives the `let`: captured by a returned
+lambda, kept in a global, or handed to a function that keeps it. On `main`
+that freed the closure under the copy, a use-after-free:
+[fnfield-owner-struct-copy-outlives-scope](../archive/fnfield-owner-struct-copy-outlives-scope.md).
+It leaks now. `tests/fixtures/fnfield-owner-struct-copy-kept` carries it, with
+a `known-leak` marker pointing here.
+
 ## Root cause
 
 Ownership of a closure env is a property of the binder that minted it: a `let`
@@ -59,6 +67,10 @@ frees only closures its own init minted. There is no move of a closure from
 its `let` into whatever it escapes to.
 
 ## Fix directions
+
+Owner structs only free when no copy outlives them (2026-11-28), so making
+a struct the owner is safe now. Before that, direction 1 would have spread
+the use-after-free above to every moved closure.
 
 1. **Move a closure into the struct that takes it.** When a `let`-bound
    closure's only escape is into one constructor's closure field, and the

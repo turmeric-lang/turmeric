@@ -3274,6 +3274,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         e.fwd_pending_results = NULL;
         e.fnfield_pending_lets = NULL;
         e.fnfield_pending_fns  = NULL;
+        e.fnfield_pending_params = NULL;
         /* PS4: everything defined so far belongs to earlier turns. */
         e.turn_continues_session = true;
         e.turn_start_n_globals   = e.global.n;

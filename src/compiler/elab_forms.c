@@ -8,6 +8,11 @@
 bool closure_binding_escapes(const Expr *e, const Binding *b);
 /* emit_core.c: does `e` contain an inline-C block anywhere? */
 bool expr_subtree_has_inline_c(const Expr *e);
+/* emit_core.c: may a copy of the closure-owning struct `h` outlive `scope`? */
+bool fnfield_struct_escapes(const Expr *scope, const Binding *h, const Expr *ignore);
+void fnfield_struct_param_uses(const Expr *body, const Binding *p,
+                               bool *reads, bool *result_only);
+bool expr_contains_inline_c_block(const Expr *e);
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -629,9 +634,20 @@ typedef struct FnfieldPendingLet {
     struct FnfieldPendingLet *next;
     Binding    *b;
     const Expr *init;
-    bool        guards_ok;
+    const Expr *scope;      /* the `let` to walk for copies, or NULL */
+    bool        guards_ok;  /* every other condition for the free */
     bool        eager_owner;
 } FnfieldPendingLet;
+typedef struct FnfieldPendingParams {
+    struct FnfieldPendingParams *next;
+    Binding    *b;
+    Binding   **params;
+    uint32_t    n_params;
+    const Expr *body;
+    uint32_t    candidates;
+    uint32_t    eager_mask;
+    uint32_t    eager_resalias;
+} FnfieldPendingParams;
 typedef struct FnfieldPendingFn {
     struct FnfieldPendingFn *next;
     Binding    *b;
@@ -642,12 +658,14 @@ typedef struct FnfieldPendingFn {
     uint32_t    eager_mask;
 } FnfieldPendingFn;
 
-void elab_fnfield_note_let(Elab *e, Binding *b, const Expr *init, bool guards_ok) {
+void elab_fnfield_note_let(Elab *e, Binding *b, const Expr *init,
+                           const Expr *scope, bool guards_ok) {
     if (!e || !e->arena || !b || !init) return;
     FnfieldPendingLet *n =
         (FnfieldPendingLet *)arena_alloc(e->arena, sizeof(FnfieldPendingLet));
     n->b = b;
     n->init = init;
+    n->scope = scope;
     n->guards_ok = guards_ok;
     n->eager_owner = b->fnfield_owner;
     n->next = e->fnfield_pending_lets;
@@ -688,6 +706,69 @@ void elab_stamp_fnfield_freshness(Elab *e, Binding *b, Binding **params,
     }
 }
 
+/* fnfield-owner-struct-copy-outlives-scope: which parameters of `b` are
+ * closure-owning by-value structs its body only reads
+ * (Binding.nonretain_fnfield_param_mask), or keeps nowhere but its result
+ * (resalias_fnfield_param_mask)?  A type-variable parameter is a candidate
+ * too -- `(defn ident [x] x)` hands back whatever struct it is given.  A
+ * greatest fixed point, so a self-call that passes the parameter on does not
+ * count against it: start with every candidate set and clear the bits the
+ * walk contradicts.  A body with inline C keeps no bits -- C can store the
+ * struct where no walk sees. */
+static uint32_t fnfield_param_candidates(Binding **params, uint32_t n_params) {
+    uint32_t m = 0;
+    for (uint32_t i = 0; i < n_params && i < 32; i++)
+        if (params[i] && (elab_type_owns_boxed_fnfield(params[i]->type) ||
+                          params[i]->type.kind == TY_TYVAR))
+            m |= 1u << i;
+    return m;
+}
+static bool fnfield_param_refine(Binding *b, Binding **params, uint32_t n_params,
+                                 const Expr *body) {
+    bool changed = false;
+    for (uint32_t i = 0; i < n_params && i < 32; i++) {
+        uint32_t bit = 1u << i;
+        if (!(b->resalias_fnfield_param_mask & bit) || !params[i]) continue;
+        bool reads = false, result_only = false;
+        fnfield_struct_param_uses(body, params[i], &reads, &result_only);
+        if (!reads && (b->nonretain_fnfield_param_mask & bit)) {
+            b->nonretain_fnfield_param_mask &= ~bit;
+            changed = true;
+        }
+        if (!result_only) {
+            b->resalias_fnfield_param_mask &= ~bit;
+            b->nonretain_fnfield_param_mask &= ~bit;
+            changed = true;
+        }
+    }
+    return changed;
+}
+void elab_stamp_fnfield_param_mask(Elab *e, Binding *b, Binding **params,
+                                   uint32_t n_params, const Expr *body) {
+    if (!b) return;
+    b->nonretain_fnfield_param_mask = 0;
+    b->resalias_fnfield_param_mask = 0;
+    uint32_t cand = fnfield_param_candidates(params, n_params);
+    if (!cand || !body || expr_contains_inline_c_block(body)) return;
+    b->nonretain_fnfield_param_mask = cand;
+    b->resalias_fnfield_param_mask = cand;
+    for (int r = 0; r < 64 && fnfield_param_refine(b, params, n_params, body); r++)
+        ;
+    if (e && e->arena) {
+        FnfieldPendingParams *n =
+            (FnfieldPendingParams *)arena_alloc(e->arena, sizeof(FnfieldPendingParams));
+        n->b = b;
+        n->params = params;
+        n->n_params = n_params;
+        n->body = body;
+        n->candidates = cand;
+        n->eager_mask = b->nonretain_fnfield_param_mask;
+        n->eager_resalias = b->resalias_fnfield_param_mask;
+        n->next = e->fnfield_pending_params;
+        e->fnfield_pending_params = n;
+    }
+}
+
 /* fnfield-struct-binder-frees-borrowed-closure (forward references): the
  * answers above are read as each let and each defn is elaborated, so a caller
  * written before its callee saw "not fresh" -- the callee had no stamp yet --
@@ -708,10 +789,38 @@ void elab_stamp_fnfield_freshness(Elab *e, Binding *b, Binding **params,
  * let that turns owner here gets the scope-end free its other guards already
  * allowed.  The emitters read the flags after this. */
 void elab_fnfield_resolve_pending(Elab *e) {
-    FnfieldPendingLet *lets = e->fnfield_pending_lets;
-    FnfieldPendingFn  *fns  = e->fnfield_pending_fns;
+    FnfieldPendingLet    *lets = e->fnfield_pending_lets;
+    FnfieldPendingFn     *fns  = e->fnfield_pending_fns;
+    FnfieldPendingParams *pfs  = e->fnfield_pending_params;
     e->fnfield_pending_lets = NULL;
     e->fnfield_pending_fns = NULL;
+    e->fnfield_pending_params = NULL;
+    /* fnfield-owner-struct-copy-outlives-scope: the read-only struct
+     * parameters, for the whole program at once (a callee defined further
+     * down had no mask yet).  Start every candidate set, clear what a walk
+     * contradicts, repeat.  A bit that was set on the way in stays set. */
+    if (pfs) {
+        for (FnfieldPendingParams *p = pfs; p; p = p->next) {
+            p->b->nonretain_fnfield_param_mask = p->candidates;
+            p->b->resalias_fnfield_param_mask = p->candidates;
+        }
+        bool pc = true;
+        for (int r = 0; pc && r < 4096; r++) {
+            pc = false;
+            for (FnfieldPendingParams *p = pfs; p; p = p->next)
+                if (fnfield_param_refine(p->b, p->params, p->n_params, p->body))
+                    pc = true;
+        }
+        for (FnfieldPendingParams *p = pfs; p; p = p->next) {
+            if (pc) {
+                p->b->nonretain_fnfield_param_mask = p->eager_mask;
+                p->b->resalias_fnfield_param_mask = p->eager_resalias;
+            } else {
+                p->b->nonretain_fnfield_param_mask |= p->eager_mask;
+                p->b->resalias_fnfield_param_mask |= p->eager_resalias;
+            }
+        }
+    }
     if (!lets && !fns) return;
     for (FnfieldPendingFn *f = fns; f; f = f->next) {
         f->b->returns_fresh_fnfield = true;
@@ -758,7 +867,9 @@ void elab_fnfield_resolve_pending(Elab *e) {
     }
     for (FnfieldPendingLet *l = lets; l; l = l->next) {
         if (l->eager_owner) l->b->fnfield_owner = true;
-        if (l->b->fnfield_owner && l->guards_ok) l->b->drops_fn_fields = true;
+        if (l->b->fnfield_owner && l->guards_ok && !l->b->drops_fn_fields &&
+            !(l->scope && fnfield_struct_escapes(l->scope, l->b, l->init)))
+            l->b->drops_fn_fields = true;
     }
 }
 
@@ -3663,9 +3774,25 @@ Expr *elab_let(Elab *e, const Form *call) {
      * struct that escapes (returned / moved / consumed) is never flagged (no
      * double-free).  Deliberately NOT injected as a defer -- see
      * Binding.drops_fn_fields -- so a colored fn stays CPS-admissible. */
+    /* fnfield-owner-struct-copy-outlives-scope: the `let` as one node (its
+     * final one is built below), so the copy walk sees the body and every
+     * sibling init together.  Arena-held: the end-of-program pass walks it
+     * again with every function's masks in. */
+    Expr *fnfield_scope = NULL;
     for (uint32_t k = 0; k < n_binds; k++) {
         const AdtDef *ad = elab_byval_drop_adt(binds[k].binding->type);
         if (!ad) continue;
+        if (!fnfield_scope && elab_type_owns_boxed_fnfield(binds[k].binding->type)) {
+            LetBinding *lbs = (LetBinding *)arena_alloc(e->arena,
+                                                        n_binds * sizeof(LetBinding));
+            memcpy(lbs, binds, n_binds * sizeof(LetBinding));
+            fnfield_scope = expr_new(e->arena, EX_LET,
+                                     body ? body->type : binds[k].binding->type,
+                                     call->span);
+            fnfield_scope->as.let_.bindings = lbs;
+            fnfield_scope->as.let_.n = n_binds;
+            fnfield_scope->as.let_.body = body;
+        }
         bool guards_ok = false;
         if (!(binding_moved_during_init[k] || binds[k].binding->is_moved ||
               is_binding_consumed(body, binds[k].binding)) &&
@@ -3683,8 +3810,12 @@ Expr *elab_let(Elab *e, const Form *call) {
          * not elaborated yet answers "not fresh" for now, and the
          * end-of-program pass asks again (elab_fnfield_resolve_pending). */
         if (elab_type_owns_boxed_fnfield(binds[k].binding->type))
-            elab_fnfield_note_let(e, binds[k].binding, binds[k].init, guards_ok);
-        if (guards_ok && binds[k].binding->fnfield_owner)
+            elab_fnfield_note_let(e, binds[k].binding, binds[k].init,
+                                  fnfield_scope, guards_ok);
+        /* fnfield-owner-struct-copy-outlives-scope: and no copy of it outlives
+         * the `let` -- captured by a lambda, stored, kept by a callee. */
+        if (guards_ok && binds[k].binding->fnfield_owner && fnfield_scope &&
+            !fnfield_struct_escapes(fnfield_scope, binds[k].binding, binds[k].init))
             binds[k].binding->drops_fn_fields = true;
     }
 

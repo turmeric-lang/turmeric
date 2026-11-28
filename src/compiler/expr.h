@@ -601,6 +601,19 @@ struct Binding {
      * function not yet elaborated, which is a leak, never a double free. */
     bool          returns_fresh_fnfield;
     uint32_t      fresh_fnfield_via_param_mask;
+    /* fnfield-owner-struct-copy-outlives-scope: bit i set when parameter i is
+     * a by-value struct with closure fields that the body only reads -- calls
+     * through, reads fields of, or hands on to a parameter that does the same
+     * (fnfield_struct_escapes).  A caller's owner struct handed there does not
+     * escape, so its `let` may still free its closures.  Inferred per function
+     * (elab_stamp_fnfield_param_mask) and decided again for the whole program
+     * at the end (elab_fnfield_resolve_pending). */
+    uint32_t      nonretain_fnfield_param_mask;
+    /* ...and bit i when the body keeps that parameter nowhere but its result
+     * (`(defn pick [h g n] (if (> n 0) h g))`, `(defn ident [x] x)`): a
+     * caller's walk treats the call's result as another name for the struct
+     * it passed.  A superset of the mask above. */
+    uint32_t      resalias_fnfield_param_mask;
     /* fnfield-struct-binder-frees-borrowed-closure: this let local's INIT gave
      * it the closures in its boxed fn fields (elab_fnfield_init_is_fresh).  The
      * precondition for drops_fn_fields; also read when the local is moved on or

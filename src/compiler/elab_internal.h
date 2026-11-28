@@ -1027,6 +1027,7 @@ typedef struct Elab {
      * whole program is in (elab_fnfield_resolve_pending).  Arena lists. */
     struct FnfieldPendingLet *fnfield_pending_lets;
     struct FnfieldPendingFn  *fnfield_pending_fns;
+    struct FnfieldPendingParams *fnfield_pending_params;
     uint64_t          borrow_clock;
     uint64_t         *borrow_loop_marks;
     uint32_t          n_borrow_loop_marks, cap_borrow_loop_marks;
@@ -2211,7 +2212,12 @@ void elab_stamp_fnfield_freshness(Elab *e, Binding *b, Binding **params,
 bool fnfield_result_can_carry(Type t);
 /* A let local of a closure-field struct, noted for the end-of-program pass:
  * `guards_ok` is every condition for the scope-end free except ownership. */
-void elab_fnfield_note_let(Elab *e, Binding *b, const Expr *init, bool guards_ok);
+void elab_fnfield_note_let(Elab *e, Binding *b, const Expr *init,
+                           const Expr *scope, bool guards_ok);
+/* fnfield-owner-struct-copy-outlives-scope: Binding.nonretain_fnfield_param_mask,
+ * stamped once the body is elaborated and decided again at the end. */
+void elab_stamp_fnfield_param_mask(Elab *e, Binding *b, Binding **params,
+                                   uint32_t n_params, const Expr *body);
 /* Decide every noted let and function again, now that no callee is a forward
  * reference; called once the whole program is elaborated. */
 void elab_fnfield_resolve_pending(Elab *e);

@@ -8282,7 +8282,7 @@ static Expr *elab_method_call_impl(Elab *e, const Form *call) {
                              * asked again at the end of the program. */
                             lb->binding->fnfield_owner = elab_fnfield_init_is_fresh(obj);
                             lb->binding->drops_fn_fields = lb->binding->fnfield_owner;
-                            elab_fnfield_note_let(e, lb->binding, obj, true);
+                            elab_fnfield_note_let(e, lb->binding, obj, NULL, true);
                             get_field->as.get_field_.struct_expr = rv;
                             Expr *let_expr = expr_new(e->arena, EX_LET,
                                                       call_out->type, call->span);

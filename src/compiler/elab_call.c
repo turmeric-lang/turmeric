@@ -3676,7 +3676,7 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
             bool ok = !fnfield_result_can_carry(inner->type);
             lb->binding->fnfield_owner = elab_fnfield_init_is_fresh(obj);
             lb->binding->drops_fn_fields = ok && lb->binding->fnfield_owner;
-            elab_fnfield_note_let(e, lb->binding, obj, ok);
+            elab_fnfield_note_let(e, lb->binding, obj, NULL, ok);
             Expr *let_expr = expr_new(e->arena, EX_LET, inner->type, call->span);
             let_expr->as.let_.bindings = lb;
             let_expr->as.let_.n = 1;
