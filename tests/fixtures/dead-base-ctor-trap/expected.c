@@ -11171,6 +11171,7 @@ int main(int argc, char **argv) {
             tur_adt_Cons__int * __ps_209 = (__fn_5__spec__tur_adt_Cons__int___void__((void *)(intptr_t)(_un_uncall_unhead_un10_11)));
             if (tur_panicking) { tur_panic_root_exit(); }
             __t207 = __ps_209;
+            TUR_CLOSURE_DROP(_un_uncall_unhead_un10_11);
         }
         int64_t __ps_210 = (thead__spec__int64_t_tur_adt_Cons__int__(__t207));
         if (tur_panicking) { tur_panic_root_exit(); }

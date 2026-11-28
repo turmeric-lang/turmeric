@@ -15,6 +15,7 @@
  * pulling the whole emit-internal surface into the elaborator. */
 bool closure_binding_escapes(const Expr *e, const Binding *b);
 bool expr_subtree_has_inline_c(const Expr *e);
+bool closure_env_drop_frees_box_only(const struct Closure *c);   /* emit_core.c */
 /* dynamic-returned-closure-env-is-never-freed: the `any` walk with the
  * self-application slots admitted, defined emit-side. */
 bool any_box_binding_escapes_self_apply(const Expr *e, const Binding *b,
@@ -14574,6 +14575,29 @@ Expr *elab_defn(Elab *e, const Form *call) {
             _fc->as.closure_.closure->fn) {
             struct Closure *_c = _fc->as.closure_.closure;
             bool _ok = fn_result_kind_is_scalar_copy(_c->fn->return_type.kind);
+            /* closure-stored-beyond-its-let-has-no-owner: the env of a lambda
+             * that captures anything -- a `^mut` cell, a struct, a handle, a
+             * closure the factory built -- is as fresh as a scalar-capture
+             * one when its drop glue frees only the env box
+             * (closure_env_drop_frees_box_only: no `rc`, `^fat` or Drop
+             * capture, no inline C touching the env).  Its captures are words
+             * the env holds without owning, so freeing the box releases
+             * nothing anyone else uses.  The result gate is the one
+             * let_binding_env_freeable already relaxed: an aggregate, carrier
+             * or cstr result is copied out and cannot point into the box
+             * unless inline C took its address.  The factory-tail
+             * `count-then-stop` / `sax-transform-handler` shape. */
+            bool _box_only = false;
+            if (closure_env_drop_frees_box_only(_c)) {
+                TypeKind _rk = _c->fn->return_type.kind;
+                if (fn_result_kind_is_scalar_copy(_rk) ||
+                    _rk == TY_ADT || _rk == TY_APP || _rk == TY_CSTR)
+                    _box_only = true;
+                else
+                    _box_only = false;
+            } else {
+                _box_only = false;
+            }
             /* closure-env-capturing-closures-not-released: a closure-typed
              * PARAMETER captured by a combinator's closure -- `q-not`'s `p`.
              * The env holds it without owning it (its glue frees only the
@@ -14590,6 +14614,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++)
                         if (params[_pi] == _cb) { _param = true; _pmask |= 1u << _pi; break; }
                 if (!_param) _ok = false;
+            }
+            if (!_ok && _box_only) {
+                /* The wider rule: fresh, but no closure parameter is said to
+                 * die with the result (fresh_closure_captured_params stays 0),
+                 * so callers keep their own frees exactly as before. */
+                _ok = true;
+                _pmask = 0;
             }
             b->returns_fresh_closure = _ok;
             b->fresh_closure_captured_params = _ok ? _pmask : 0;

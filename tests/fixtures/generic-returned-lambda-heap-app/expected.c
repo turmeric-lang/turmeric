@@ -11420,6 +11420,7 @@ int main(int argc, char **argv) {
             tur_adt_Box__float * __ps_221 = (__fn_17__spec__tur_adt_Box__float___void___double((void *)(intptr_t)(_un_uncall_unhead_un38_39), 7.1));
             if (tur_panicking) { tur_panic_root_exit(); }
             __t219 = __ps_221;
+            TUR_CLOSURE_DROP(_un_uncall_unhead_un38_39);
         }
         printf("%g\n", (double)((double)((tur_adt_Box__float *)(intptr_t)(__t219))->v));
         tur_adt_Box__int * __t222;
@@ -11441,6 +11442,7 @@ int main(int argc, char **argv) {
             tur_adt_Box__int * __ps_227 = (__fn_17__spec__tur_adt_Box__int___void___int64_t((void *)(intptr_t)(_un_uncall_unhead_un42_43), INT64_C(4)));
             if (tur_panicking) { tur_panic_root_exit(); }
             __t225 = __ps_227;
+            TUR_CLOSURE_DROP(_un_uncall_unhead_un42_43);
         }
         printf("%lld\n", (long long)((int64_t)((tur_adt_Box__int *)(intptr_t)(__t225))->v));
         tur_adt_Box__cstr * __t228;
@@ -11462,6 +11464,7 @@ int main(int argc, char **argv) {
             tur_adt_Box__cstr * __ps_233 = (__fn_17__spec__tur_adt_Box__cstr___void___const_char__((void *)(intptr_t)(_un_uncall_unhead_un46_47), __tur_str_2));
             if (tur_panicking) { tur_panic_root_exit(); }
             __t231 = __ps_233;
+            TUR_CLOSURE_DROP(_un_uncall_unhead_un46_47);
         }
         puts((const char *)((tur_adt_Box__cstr *)(intptr_t)(__t231))->v);
         {
@@ -11474,6 +11477,7 @@ int main(int argc, char **argv) {
                 tur_adt_Pt__float __ps_236 = (__fn_24__spec__tur_adt_Pt__float_void___double((void *)(intptr_t)(_un_uncall_unhead_un48_49), 3.5));
                 if (tur_panicking) { tur_panic_root_exit(); }
                 __t234 = __ps_236;
+                TUR_CLOSURE_DROP(_un_uncall_unhead_un48_49);
             }
             tur_adt_Pt__float p_50 = __t234;
             (void)p_50;
@@ -11490,6 +11494,7 @@ int main(int argc, char **argv) {
                 tur_adt_Pt__int __ps_239 = (__fn_24__spec__tur_adt_Pt__int_void___int64_t((void *)(intptr_t)(_un_uncall_unhead_un51_52), INT64_C(6)));
                 if (tur_panicking) { tur_panic_root_exit(); }
                 __t237 = __ps_239;
+                TUR_CLOSURE_DROP(_un_uncall_unhead_un51_52);
             }
             tur_adt_Pt__int q_53 = __t237;
             (void)q_53;
@@ -11505,6 +11510,7 @@ int main(int argc, char **argv) {
                 tur_adt_Cons__float * __ps_242 = (__fn_31__spec__tur_adt_Cons__float___void___double((void *)(intptr_t)(_un_uncall_unhead_un54_55), 7.1));
                 if (tur_panicking) { tur_panic_root_exit(); }
                 __t240 = __ps_242;
+                TUR_CLOSURE_DROP(_un_uncall_unhead_un54_55);
             }
             tur_adt_Cons__float * c_56 = __t240;
             (void)c_56;

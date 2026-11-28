@@ -1,0 +1,36 @@
+;; closure-stored-beyond-its-let-has-no-owner (factories): a function whose
+;; tail is a lambda hands every caller a fresh env.  The caller freed it only
+;; when every capture was a scalar and so was the lambda's result; now it is
+;; enough that the env's drop glue frees just the box -- the captures are words
+;; the env holds without owning -- and that an aggregate result cannot point
+;; into the box (no inline C touching it).  Leak-checked: each env below is
+;; freed by the caller, bound or passed straight to a parameter that calls it.
+(defdata Ctl (Go) (Halt))
+(defn show [c : Ctl] : int (match c (Go) 0 (Halt) 1))
+(defn apply-it [f : (fn [int] Ctl) x : int] : Ctl (f x))
+(defn apply-int [f : (fn [int] int) x : int] : int (f x))
+
+;; an ADT result
+(defn threshold [limit : int] : (fn [int] Ctl)
+  (fn [x : int] : Ctl (if (>= x limit) (Halt) (Go))))
+
+;; a closure parameter behind a let wrapper (not the bare-lambda shape)
+(defn tagged [f : (fn [int] int) t : int] : (fn [int] int)
+  (let [u (* t 10)]
+    (fn [x : int] : int (+ (f x) u))))
+
+;; a cstr captured, an applied-type result
+(defn labeller [s : cstr] : (fn [int] (Option cstr))
+  (fn [x : int] : (Option cstr) (if (> x 0) (Some s) (None))))
+
+(defn main [] : int
+  (println (show (apply-it (threshold 3) 5)))
+  (let [t (threshold 10)]
+    (println (show (t 5)))
+    (println (show (t 15))))
+  (let [g (tagged (fn [x : int] : int (* x 2)) 3)]
+    (println (g 4)))
+  (let [l (labeller "pos")]
+    (println (match (l 1) (Some v) v (None) "none"))
+    (println (match (l 0) (Some v) v (None) "none")))
+  0)

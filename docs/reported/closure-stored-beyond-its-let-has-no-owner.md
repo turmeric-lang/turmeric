@@ -8,6 +8,25 @@ written at that argument, and frees it at the end of its last owner's `let`.
 `closure-in-escaping-struct-kept` went from 80 to 56 B leaked (on `main` that
 fixture is a use-after-free).
 
+**Factories, 2026-11-28.** A function whose tail is a lambda
+(`returns_fresh_closure`) hands its caller a fresh env, and the caller frees
+it. That used to require scalar captures and a scalar result. Now it is
+enough that the env's drop glue frees only the box
+(`closure_env_drop_frees_box_only`) and that an ADT, applied or `cstr` result
+cannot point into it. A factory capturing a `^mut` cell, a closure, a struct
+or a handle -- the spices' `count-then-stop` and `sax-transform-handler` --
+is freed by its caller.
+
+- Nine fixtures leak less and two go clean: `fat-box-ascribed-aggregate-return`
+  and `poly-combinator-application-element-inference`, which carry
+  `requires.leak-check` now. `fresh-closure-nonscalar-captures` pins the rule.
+- The `xml`, `html`, `dom-core` and `signal` shards pass. Under
+  `TUR_SANITIZE_PROGRAMS=1` there is no memory-safety error, and leaks went
+  down 896 B in `xml`, about 55 KB in `html` and 160 B in `dom-core`.
+- What the env captured is still not freed: a `^mut` cell, a lambda the
+  factory built, a struct's closures. That is "Let a lambda's env own...",
+  below.
+
 The move is refused, and the lambda still leaks, when:
 
 - the lambda is used again;
