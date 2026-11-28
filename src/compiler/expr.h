@@ -590,6 +590,22 @@ struct Binding {
      * a fresh producer (call_returns_fresh_sum_box).  Zero when the body is
      * unconditionally fresh (returns_fresh_sum_box) or not fresh at all. */
     uint32_t      fresh_sum_via_param_mask;
+    /* fnfield-struct-binder-frees-borrowed-closure: the function's every value
+     * path is a by-value struct whose boxed closure fields the CALLER owns -- a
+     * constructor given fresh closures, a let local that owned one and hands it
+     * out, or a call to a function so flagged.  A let bound to such a call may
+     * free the closures at scope end (local-struct-drop).  The mask is the
+     * param-forwarding half, as fresh_sum_via_param_mask: bit i set when a
+     * path returns move-only by-value parameter i, so a call is fresh exactly
+     * when that argument is.  Stamped after the body (elab_fns.c); false for a
+     * function not yet elaborated, which is a leak, never a double free. */
+    bool          returns_fresh_fnfield;
+    uint32_t      fresh_fnfield_via_param_mask;
+    /* fnfield-struct-binder-frees-borrowed-closure: this let local's INIT gave
+     * it the closures in its boxed fn fields (elab_fnfield_init_is_fresh).  The
+     * precondition for drops_fn_fields; also read when the local is moved on or
+     * returned, which hands that ownership to the next binder. */
+    bool          fnfield_owner;
     /* class-defn-constraint-not-discharged-at-call-site: backlink to the owning
      * FnDef's typeclass constraint set (`^Encode T`, or the `[(Encode T)]`
      * middle-vector form), or NULL for a binding with no constraints.  Stamped

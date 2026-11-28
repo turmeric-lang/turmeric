@@ -1,5 +1,8 @@
 # A let binder frees the closure of a struct it does not own
 
+**Status: RESOLVED 2026-11-28** -- see [Resolution](#resolution). The text
+down to it is the report as filed.
+
 **Severity: high (double free / use-after-free on the default build).** A
 `let` local whose type is a by-value struct with a closure field frees that
 closure at scope end (local-struct-drop). The rule assumes the local owns the
@@ -7,7 +10,7 @@ closure. Three ordinary shapes break that assumption, and each frees a closure
 that its real owner frees again or still uses.
 
 Found 2026-11-24 while executing
-[cps-byvalue-struct-with-closure-field](../archive/cps-byvalue-struct-with-closure-field.md).
+[cps-byvalue-struct-with-closure-field](cps-byvalue-struct-with-closure-field.md).
 All three reproduce on `main` at `1227412b`, with no effects involved: the
 first two in direct-emitted code, the third in a function the CPS backend
 emits anyway (`mk__cps`), where the entry boundary's reap does the freeing.
@@ -119,3 +122,72 @@ The CPS path mirrors the direct one (`emit_fnfield_reap`,
 Do not `let`-bind a copy of a closure-field struct or the result of a function
 that hands one back; use the original binding. Build such a struct from a
 closure written at the constructor call.
+
+## Resolution
+
+**Fixed 2026-11-28**, by fix direction 1: the binder asks its init.
+
+**The rule.** A let local frees its struct's closures only when it is the
+**owner** -- `Binding.fnfield_owner`, decided from the init before the body is
+elaborated (`elab_fnfield_init_is_fresh`, `src/compiler/elab_forms.c`). The
+old guards (moved, consumed, leaves the scope) still apply on top. An init is
+fresh when it is:
+
+- a constructor whose every boxed fn field is given a closure minted there: a
+  lambda literal, a function name boxed into a fat handle (`EX_FN_TO_FAT`), or
+  a call to a `returns_fresh_closure` function;
+- a call to a function stamped `returns_fresh_fnfield`, or one fresh through a
+  parameter (`fresh_fnfield_via_param_mask`) whose argument is fresh;
+- a move-only local that was the owner (the move hands it over);
+- a `let` / `do` / `if` / `match` whose every value path is one of those.
+
+A `^copy` local is never the owner by copying one. As a function's RESULT it
+is: the local's own free was withheld because the value leaves the scope
+(`fnfield_local_leaves_scope`), so the caller's binder takes it over. That is
+the `(let [h (H n (fn ...))] h)` constructor shape.
+
+**The per-function stamp.** `elab_stamp_fnfield_freshness` runs beside
+`elab_stamp_sum_freshness` once a `defn` body is elaborated, with the same
+greatest-fixed-point treatment of a self-call. A path that returns a move-only
+by-value parameter, or that stores a closure parameter in a fn field, sets that
+parameter's mask bit. The closure parameter counts only when the body names it
+exactly once (a variable or a capture), so a function that also stores it
+elsewhere, or puts it in two fields, is not fresh.
+
+**The unbound receiver.** `(.f (S ...) x)` is hoisted into a `let` so the
+constructor's closures have an owner (`elab_typeclasses.c`). It is hoisted now
+only when that constructor is fresh.
+
+**What it costs.** Anything the walk cannot prove is a leak, never a free.
+Measured against `main` by emitting every fixture: exactly one drop site
+moved. It is the `r` in `cps-byvalue-struct-closure-field-value`, a
+`(pick h g 3)` result, which was this report's repro 2 hidden by
+`__dk_reap_closure_once`. A function defined after its caller is not stamped
+yet, so a call to it leaks its struct's closures.
+
+**Repro 3's other half.** The struct built from a closure parameter no longer
+frees it, and the caller's own closure is not freed by the caller either. The
+callee's parameter counts as retained because it is stored in a constructor.
+That leak (24 B per closure) is
+[fnfield-ctor-param-closure-leaks-in-caller](../reported/fnfield-ctor-param-closure-leaks-in-caller.md).
+
+**Regression checks.**
+
+- `tests/run.sh`: 4362 passed, 0 failed.
+- `tests/run-leak-check.sh`: no failures. The new
+  `fnfield-struct-binder-borrowed-closure` is known-open for the leak above.
+- The turmeric-spices SAX parsers (`SaxParser`, `HtmlSaxParser`) are bound
+  by `match` on a `(Result P E)`, never by a `let`, so this rule never freed
+  their closures and does not change them.
+
+Pinned by `tests/fixtures/fnfield-struct-binder-owns-only-fresh` (leak-checked:
+all three repros' owners, every fresh shape, and a constructor function storing
+its closure parameter) and `tests/fixtures/fnfield-struct-binder-borrowed-closure`
+(repro 3 and its relatives; a use-after-free still fails the gate).
+
+## Found on the way
+
+- [ctor-closure-param-with-scalar-args-refused](../reported/ctor-closure-param-with-scalar-args-refused.md)
+  -- open. A constructor given a closure parameter typed `(fn [int] int)` is
+  a type error. The same constructor with `(fn [Ev] int)`, Ev a `defdata`,
+  compiles.

@@ -2193,6 +2193,13 @@ Expr *elab_own_byval_copy(Elab *e, Expr *v, Binding *local);
  * delegated control op reaches the direct emitter, which aborts. */
 /* struct-temporary-fn-field-box-leaks (elab_forms.c). */
 bool elab_type_owns_boxed_fnfield(Type t);
+/* fnfield-struct-binder-frees-borrowed-closure: does `init` hand its binder
+ * the closures in a by-value struct's boxed fn fields (elab_forms.c)? */
+bool elab_fnfield_init_is_fresh(const Expr *init);
+/* ...and the per-function half: Binding.returns_fresh_fnfield /
+ * fresh_fnfield_via_param_mask, stamped once the body is elaborated. */
+void elab_stamp_fnfield_freshness(Binding *b, Binding **params, uint32_t n_params,
+                                  const Expr *body);
 Expr *elab_bind_control_temp(Elab *e, Expr *value, LetBinding *lb);
 Expr *elab_hoist_control_operands(Elab *e, Expr *node);
 /* union-tagged-union-c-emission: tag a member value flowing into a union slot.

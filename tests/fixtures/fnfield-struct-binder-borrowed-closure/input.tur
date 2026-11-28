@@ -1,0 +1,40 @@
+;; fnfield-struct-binder-frees-borrowed-closure, repro 3: a struct built from a
+;; closure PARAMETER does not own it -- the caller does -- so neither the let
+;; that binds it, nor an unbound receiver called through, nor the binder of a
+;; function that wraps the parameter frees it.  Each used to, and the caller's
+;; second call ran a freed closure.  The caller's own closure leaks now (see
+;; known-leak); a use-after-free still fails the leak-check gate.
+(defdata Ev (Start int) (End))
+(defn ev [n : int] : Ev (Start n))
+(defn ev-n [e : Ev] : int (match e (Start n) n (End) 0))
+(defstruct H [raw : int handler : (fn [Ev] int)])
+
+(defn mk [f : (fn [Ev] int)] : int
+  (let [h (H 1 f)]
+    ((.handler h) (End))))
+(defn call-tmp [f : (fn [Ev] int)] : int ((.handler (H 1 f)) (ev 5)))
+(defn wrap [f : (fn [Ev] int)] : H (H 2 f))
+(defn via-wrap [f : (fn [Ev] int)] : int
+  (let [h (wrap f)] ((.handler h) (ev 6))))
+
+;; a constructor function that stores its closure parameter is fresh only
+;; for a fresh argument, and only when it names the parameter once
+(defstruct ^copy P [raw : int handler : (fn [Ev] int)])
+(defn p-new [n : int h : (fn [Ev] int)] : P (P n h))
+(defn p-dup [h : (fn [Ev] int)] : P (do (h (End)) (P 3 h)))
+
+(defn main [] : int
+  (let [k 7
+        g (fn [e : Ev] : int (+ (ev-n e) k))]
+    (println (mk g))
+    (println (mk g))
+    (println (call-tmp g))
+    (println (call-tmp g))
+    (println (via-wrap g))
+    (println (via-wrap g))
+    (let [c (p-new 2 g)
+          d (p-dup g)]
+      (println ((.handler c) (ev 1)))
+      (println ((.handler d) (ev 1))))
+    (println (g (ev 0))))
+  0)

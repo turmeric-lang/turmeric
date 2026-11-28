@@ -1,0 +1,87 @@
+;; fnfield-struct-binder-frees-borrowed-closure: a let local of a by-value
+;; struct with a closure field frees that closure at scope end only when its
+;; INIT gave it the closure -- a constructor applied to a lambda or a function
+;; name, a call to a function that returns such a struct, or a move-only local
+;; handed over.  A copy of a `^copy` struct, a `^copy` struct a callee hands
+;; back, and a struct built from a borrowed closure free nothing; each was a
+;; use-after-free.  Leak-checked: every closure here still has exactly one
+;; owner that frees it.
+(defstruct M [raw : int handler : (fn [int] int)])
+(defstruct ^copy C [raw : int handler : (fn [int] int)])
+(defn ten [x : int] : int (* x 10))
+
+;; the report's repro 1: a rebinding of a ^copy struct is a copy
+(defn copy-rebound [] : int
+  (let [n 3
+        h (C 100 (fn [x : int] : int (* x n)))]
+    (let [g h] (println ((.handler g) 2)))
+    ((.handler h) 2)))
+
+;; the report's repro 2: a function that returns the ^copy struct it was given
+(defn pick [h : C n : int] : C h)
+(defn copy-picked [] : int
+  (let [h (C 100 (fn [x : int] : int (* x 10)))]
+    (let [r (pick h 3)]
+      (println ((.handler r) 4)))
+    ((.handler h) 5)))
+
+;; ...and through a self-recursive function, rebound once more
+(defn spin [c : C n : int] : C (if (= n 0) c (spin c (- n 1))))
+(defn copy-spun [n : int] : int
+  (let [c (C n (fn [x : int] : int (* x n)))]
+    (let [d (spin c 3)
+          e d]
+      (+ ((.handler d) 1) ((.handler e) 1) ((.handler c) 1)))))
+
+;; move-only: a rebinding takes the value over, and so does a callee's result
+(defn move-rebound [n : int] : int
+  (let [h (M n (fn [x : int] : int (+ x n)))]
+    (let [g h] ((.handler g) 1))))
+(defn pass-on [h : M] : M h)
+(defn move-passed [n : int] : int
+  (let [h (M n (fn [x : int] : int (* x n)))]
+    (let [r (pass-on h)] ((.handler r) 2))))
+
+;; constructor functions, written every way: the caller's binder owns these
+(defn mk-m [n : int] : M (M n (fn [x : int] : int (- x n))))
+(defn mk-c [n : int] : C
+  (let [h (C n (fn [x : int] : int (+ x n n)))]
+    h))
+(defn mk-branch [n : int] : C
+  (if (> n 0) (C n (fn [x : int] : int (+ x n))) (C 0 ten)))
+(defn chain [n : int] : C (mk-branch n))
+
+;; a constructor function that stores its closure PARAMETER: the caller's
+;; binder owns the result when the caller handed it a fresh lambda.  (Its
+;; argument type is not `int` for the reason in
+;; docs/reported/ctor-closure-param-with-scalar-args-refused.md.)
+(defdata Ev (Tick int))
+(defn tick-n [e : Ev] : int (match e (Tick n) n))
+(defstruct ^copy P [raw : int handler : (fn [Ev] int)])
+(defn p-new [n : int h : (fn [Ev] int)] : P (P n h))
+(defn p-new2 [h : (fn [Ev] int)] : P (p-new 9 h))
+
+(defn main [] : int
+  (println (copy-rebound))
+  (println (copy-picked))
+  (println (copy-spun 2))
+  (println (move-rebound 3))
+  (println (move-passed 4))
+  (let [a (mk-m 5)
+        b (mk-c 6)
+        c (mk-branch 7)
+        d (mk-branch 0)
+        e (chain 8)
+        f (C 1 ten)
+        k 4
+        g (p-new 1 (fn [e : Ev] : int (+ (tick-n e) k)))
+        h (p-new2 (fn [e : Ev] : int (* (tick-n e) k)))]
+    (println ((.handler a) 100))
+    (println ((.handler b) 100))
+    (println ((.handler c) 100))
+    (println ((.handler d) 100))
+    (println ((.handler e) 100))
+    (println ((.handler f) 100))
+    (println ((.handler g) (Tick 100)))
+    (println ((.handler h) (Tick 100))))
+  0)

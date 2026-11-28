@@ -74,7 +74,8 @@ Pinned by `tests/fixtures/fnfield-struct-local-returned` (leak-checked: plain
 return, through `if`, a `^copy` struct, an early `return`, and a local that
 stays put). On `main` that fixture is a heap-use-after-free under ASan.
 
-## Still open
+## Related
 
-The binder of a struct someone else owns is a separate problem, filed as
-[fnfield-struct-binder-frees-borrowed-closure](../reported/fnfield-struct-binder-frees-borrowed-closure.md).
+The binder of a struct someone else owns was a separate problem, filed as
+[fnfield-struct-binder-frees-borrowed-closure](fnfield-struct-binder-frees-borrowed-closure.md)
+and fixed 2026-11-28.

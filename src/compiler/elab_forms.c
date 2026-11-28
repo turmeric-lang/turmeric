@@ -405,6 +405,207 @@ static bool fnfield_local_leaves_scope(const Expr *body, const Binding *b) {
     return fnfield_value_carries(body, b, 0) || fnfield_return_carries(body, b);
 }
 
+/* fnfield-struct-binder-frees-borrowed-closure: does `e` produce a struct whose
+ * boxed closure fields belong to whoever binds it?
+ *
+ * local-struct-drop frees a let local's closures at scope end.  It used to
+ * decide that from the binding's TYPE alone, so it also freed closures the
+ * local only borrowed: a copy of a `^copy` struct (`(let [g h] ...)`), a
+ * `^copy` struct a callee handed back (`(pick h 3)`), and a struct built from
+ * a closure parameter (`(H 1 f)`, f the caller's).  Each was a use-after-free
+ * or double free.  This asks the INIT instead.
+ *
+ * A closure word is owned when it was minted here: a lambda literal, a
+ * function name boxed into a fat handle (EX_FN_TO_FAT mallocs the `{shim, fn}`
+ * box, or hands out a static one whose drop is a no-op), or a call to a
+ * returns_fresh_closure function.  A variable, a field read or any other call
+ * names a closure someone else owns.
+ *
+ * A struct value is owned when it is a constructor applied to owned closures
+ * in every boxed fn field, a call to a returns_fresh_fnfield function (or one
+ * fresh through a parameter whose argument is), a move-only local that owned
+ * its value (the move hands it over), or a branch / let / do whose every
+ * value path is one of those.  A `^copy` local is a copy, never the owner --
+ * except as a function's result (`tail`), where the local's own free was
+ * withheld because the value leaves (fnfield_local_leaves_scope), so the
+ * caller's binder takes it over.
+ *
+ * `params` / `need`: the stamp walk over a function body, where returning a
+ * move-only by-value parameter is fresh exactly when the caller's argument is.
+ *
+ * A false answer costs a leak; a wrong true is the use-after-free. */
+/* How many times `b` is named in `e` -- as a variable or a lambda's capture
+ * (a lambda's body is a boundary; its capture list says what it names). */
+typedef struct { const Binding *b; int n; } FnfieldUseUd;
+static bool fnfield_use_visit(const Expr *x, void *ud) {
+    FnfieldUseUd *u = (FnfieldUseUd *)ud;
+    if (x->kind == EX_VAR) {
+        if (x->as.var.binding == u->b) u->n++;
+        return u->n > 1;
+    }
+    if (x->kind == EX_CLOSURE) {
+        const struct Closure *c = x->as.closure_.closure;
+        if (c)
+            for (uint32_t i = 0; i < c->n_captures; i++)
+                if (c->captures[i] == u->b) u->n++;
+        return u->n > 1;
+    }
+    return cps_visit_children(x, fnfield_use_visit, ud);
+}
+
+static bool fnfield_closure_is_fresh(const Expr *a, Binding **params,
+                                     uint32_t n_params, uint32_t *need,
+                                     const Expr *fn_body) {
+    for (int depth = 0; a && depth < 64; depth++) {
+        switch (a->kind) {
+            case EX_ASCRIBE: a = a->as.ascribe_.inner; continue;
+            case EX_CLOSURE: return true;
+            case EX_FN_TO_FAT:
+                /* inner_is_fat: a wrapper box (which owns nothing) or the
+                 * inner handle passed through -- owned only if that is. */
+                if (!a->as.fn_to_fat_.inner_is_fat) return true;
+                a = a->as.fn_to_fat_.inner;
+                continue;
+            case EX_CALL:
+                return !a->as.call_.ctor && a->as.call_.fn_binding &&
+                       a->as.call_.fn_binding->returns_fresh_closure;
+            case EX_VAR: {
+                /* The stamp walk: a closure PARAMETER stored in the result is
+                 * the caller's argument, so the call is fresh when that is --
+                 * `(defn parser-new [h] (Parser (raw) h))`.  Only when the
+                 * body names it exactly once: a second use could store it
+                 * elsewhere, or put it in two fields (one free each). */
+                const Binding *b = a->as.var.binding;
+                for (uint32_t i = 0; b && params && need && fn_body &&
+                                     i < n_params && i < 32; i++) {
+                    if (params[i] != b) continue;
+                    if (b->type.kind != TY_FN) return false;
+                    FnfieldUseUd u = { b, 0 };
+                    fnfield_use_visit(fn_body, &u);
+                    if (u.n != 1) return false;
+                    *need |= (1u << i);
+                    return true;
+                }
+                return false;
+            }
+            default:
+                return false;
+        }
+    }
+    return false;
+}
+
+static bool fnfield_struct_is_copy(Type t) {
+    const AdtDef *ad = elab_byval_drop_adt(t);
+    return !ad || ad->is_copy;
+}
+
+static bool fnfield_fresh_walk(const Expr *e, bool tail, Binding **params,
+                               uint32_t n_params, uint32_t *need,
+                               const Expr *fn_body, int depth) {
+    if (!e || depth > 64) return false;
+    switch (e->kind) {
+        case EX_ASCRIBE:
+            return fnfield_fresh_walk(e->as.ascribe_.inner, tail, params, n_params,
+                                      need, fn_body, depth + 1);
+        case EX_DO:
+            return e->as.do_.n > 0 &&
+                   fnfield_fresh_walk(e->as.do_.items[e->as.do_.n - 1], tail, params,
+                                      n_params, need, fn_body, depth + 1);
+        case EX_LET:
+        case EX_LETREC:
+            return fnfield_fresh_walk(e->as.let_.body, tail, params, n_params, need,
+                                      fn_body, depth + 1);
+        case EX_IF:
+            return e->as.if_.else_or_null &&
+                   fnfield_fresh_walk(e->as.if_.then_, tail, params, n_params, need,
+                                      fn_body, depth + 1) &&
+                   fnfield_fresh_walk(e->as.if_.else_or_null, tail, params, n_params,
+                                      need, fn_body, depth + 1);
+        case EX_MATCH:
+            if (e->as.match_.n_arms == 0) return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (!fnfield_fresh_walk(e->as.match_.arms[i].body, tail, params,
+                                        n_params, need, fn_body, depth + 1))
+                    return false;
+            return true;
+        case EX_VAR: {
+            const Binding *b = e->as.var.binding;
+            if (!b) return false;
+            for (uint32_t i = 0; params && need && i < n_params && i < 32; i++) {
+                if (params[i] != b) continue;
+                if (fnfield_struct_is_copy(b->type)) return false;
+                *need |= (1u << i);
+                return true;
+            }
+            if (!b->fnfield_owner) return false;
+            if (!fnfield_struct_is_copy(b->type)) return true;
+            return tail && !b->drops_fn_fields;
+        }
+        case EX_CALL: {
+            const CtorDef *ctor = e->as.call_.ctor;
+            if (ctor) {
+                const AdtDef *ad = elab_byval_drop_adt(e->type);
+                if (!ad || ad->ctors[0] != ctor ||
+                    e->as.call_.n_args != ctor->n_fields)
+                    return false;
+                for (uint32_t fi = 0; fi < ctor->n_fields; fi++)
+                    if (elab_field_is_boxed_fnfield(ctor, fi) &&
+                        !fnfield_closure_is_fresh(e->as.call_.args[fi], params,
+                                                  n_params, need, fn_body))
+                        return false;
+                return true;
+            }
+            const Binding *fb = e->as.call_.fn_binding;
+            if (!fb || e->as.call_.dict_arg) return false;
+            if (fb->returns_fresh_fnfield) return true;
+            uint32_t m = fb->fresh_fnfield_via_param_mask;
+            if (!m) return false;
+            for (uint32_t i = 0; i < 32; i++) {
+                if (!(m & (1u << i))) continue;
+                if (i >= e->as.call_.n_args) return false;
+                const Expr *arg = e->as.call_.args[i];
+                bool ok = (fb->type.kind == TY_FN && i < fb->type.as.fn.arity &&
+                           fb->type.as.fn.arg_kinds &&
+                           fb->type.as.fn.arg_kinds[i] == TY_FN)
+                    ? fnfield_closure_is_fresh(arg, params, n_params, need, fn_body)
+                    : fnfield_fresh_walk(arg, false, params, n_params, need,
+                                         fn_body, depth + 1);
+                if (!ok) return false;
+            }
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
+bool elab_fnfield_init_is_fresh(const Expr *init) {
+    return fnfield_fresh_walk(init, false, NULL, 0, NULL, NULL, 0);
+}
+
+void elab_stamp_fnfield_freshness(Binding *b, Binding **params, uint32_t n_params,
+                                  const Expr *body) {
+    if (!b) return;
+    b->returns_fresh_fnfield = false;
+    b->fresh_fnfield_via_param_mask = 0;
+    if (b->type.kind != TY_FN || !b->type.as.fn.result_full_type ||
+        !elab_type_owns_boxed_fnfield(*b->type.as.fn.result_full_type))
+        return;
+    /* A self-recursive producer reads its own flag at the self-call: decide
+     * it as a greatest fixed point, as elab_stamp_sum_freshness does. */
+    uint32_t need = 0;
+    b->returns_fresh_fnfield = true;
+    bool fresh = fnfield_fresh_walk(body, true, params, n_params, &need, body, 0);
+    b->returns_fresh_fnfield = false;
+    if (!(fresh && need == 0)) {
+        need = 0;
+        fresh = fnfield_fresh_walk(body, true, params, n_params, &need, body, 0);
+    }
+    b->returns_fresh_fnfield = fresh && need == 0;
+    b->fresh_fnfield_via_param_mask = fresh ? need : 0;
+}
+
 /* ---- internal define splicing ---- */
 
 /* splice_body_def_head -- is `f` a body-position binding form, and under which
@@ -2688,6 +2889,10 @@ Expr *elab_let(Elab *e, const Form *call) {
         /* What the scope-exit pass below will ask of this binding, recorded
          * now so a branch join inside the body can ask it too. */
         b->scope_drop_inst = binding_closure_drop_inst(e, b, init);
+        /* fnfield-struct-binder-frees-borrowed-closure: decided now, before the
+         * body, so a binder in the body initialised from this one can ask. */
+        if (elab_byval_drop_adt(b->type))
+            b->fnfield_owner = elab_fnfield_init_is_fresh(init);
         n_binds++;
 
         /* compiled-closure-copies-a-captured-mut: a `^mut` a lambda in the
@@ -3305,6 +3510,9 @@ Expr *elab_let(Elab *e, const Form *call) {
     for (uint32_t k = 0; k < n_binds; k++) {
         const AdtDef *ad = elab_byval_drop_adt(binds[k].binding->type);
         if (!ad) continue;
+        /* fnfield-struct-binder-frees-borrowed-closure: only a binder whose
+         * init gave it the closures frees them. */
+        if (!binds[k].binding->fnfield_owner) continue;
         if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
             is_binding_consumed(body, binds[k].binding))
             continue;
