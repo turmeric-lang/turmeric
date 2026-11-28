@@ -1,0 +1,3 @@
+(defpackage cdlib
+  :version "0.1.0"
+  :exports [cd/cls cd/inst])

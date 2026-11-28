@@ -45,7 +45,7 @@ a reset). `math-walkthrough` checks clean; it loaded a module that never existed
 
 **What is still in the way of the other example notebooks** is a different
 wall, filed as
-[notebook-cells-cannot-call-inline-c-spices](../reported/notebook-cells-cannot-call-inline-c-spices.md):
+[notebook-cells-cannot-call-inline-c-spices](notebook-cells-cannot-call-inline-c-spices.md):
 their imports resolve now, but `plot`, `linalg`, `stats` and `frame` do their
 work in inline-C bodies, which the interpreter does not run. Running them
 also turned up two inline-C executor defects, fixed with this:

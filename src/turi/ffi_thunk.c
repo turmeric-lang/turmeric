@@ -80,6 +80,7 @@ static const char *class_name(char c) {
         case 'F': return ":float32-class";
         case 'v': return ":void";
         case 's': return "a record";
+        case 'c': return "a function";
         default:  return "<unknown>";
     }
 }
@@ -106,7 +107,142 @@ typedef struct FfiBindingUd {
     char                  *rec_sig;
     size_t                *rec_arg_at;
     const struct AdtDef  **rec_defs;
+    /* An export with a callback slot (class 'c'): per slot, the callback's
+     * signature and the boxes made for it so far (NULL for any other slot;
+     * the array itself NULL until the first is noted).  Noted, like the
+     * records above, from the module's own defn when it is imported
+     * (tur_ffi_native_note_callback) -- the manifest says only :fn. */
+    struct FfiCbSlot     **cb_slots;
+    uint32_t               cb_n;      /* length of cb_slots: the env may
+                                       * outlive the image at teardown */
 } FfiBindingUd;
+
+/* ------------------------------------------------------------------ */
+/* notebook-cells-cannot-call-inline-c-spices: callback slots          */
+/* ------------------------------------------------------------------ */
+
+/* One fat closure the session made for a callback slot: the heap words
+ *
+ *     mem[0]  header -- the closure drop function, a no-op (the box is the
+ *             session's, not the callee's: tur_closure_drop reads it)
+ *     mem[1]  slot 0 -- the image's `<mangled>__ffi_cb<k>` trampoline, which
+ *             the fat protocol calls as `R (*)(void *box, A...)`
+ *     mem[2]  tur_ffi_cb_dispatch, which the trampoline calls back through
+ *     mem[3]  the dispatch context: the Turmeric function and its classes
+ *
+ * with the handle pointing at mem[1].  Made once per (slot, function) and
+ * kept until the env is freed: compiled code may hold the handle for as
+ * long as the session (a renderer stored in a plot), and nothing tells us
+ * when it lets go. */
+typedef struct FfiCbBox {
+    const void      *key;     /* the TuriClosure it calls */
+    TurFfiCbCtx     *ctx;
+    int64_t         *mem;
+    struct FfiCbBox *next;
+} FfiCbBox;
+
+typedef struct FfiCbSlot {
+    TurFfiCbSpec spec;
+    FfiCbBox    *boxes;
+} FfiCbSlot;
+
+static void ffi_cb_box_keep(void *h) { (void)h; }
+
+static void ffi_cb_spec_clear(TurFfiCbSpec *sp) {
+    free(sp->arg_classes);
+    free(sp->sig);
+    free(sp->arg_at);
+    free((void *)sp->arg_defs);
+    memset(sp, 0, sizeof *sp);
+}
+
+static void ffi_cb_slot_free(FfiCbSlot *cs) {
+    if (!cs) return;
+    for (FfiCbBox *b = cs->boxes, *nx; b; b = nx) {
+        nx = b->next;
+        tur_ffi_cb_ctx_free(b->ctx);
+        free(b->mem);
+        free(b);
+    }
+    ffi_cb_spec_clear(&cs->spec);
+    free(cs);
+}
+
+static bool ffi_export_has_callbacks(const TurSpiceExport *e) {
+    for (uint32_t k = 0; k < e->n_args; k++)
+        if (e->arg_classes[k] == 'c') return true;
+    return false;
+}
+
+/* The handle for `fn` in callback slot k, made on first use.  NULL with
+ * *err set when it cannot be made. */
+static int64_t *ffi_cb_handle_for(TuriEnv *env, const FfiBindingUd *bud,
+                                  uint32_t k, TuriValue fn, TuriValue *err) {
+    const TurSpiceExport *e = bud->export_;
+    FfiCbSlot *cs = bud->cb_slots ? bud->cb_slots[k] : NULL;
+    if (!cs) {
+        *err = turi_errorf(
+            "ffi: '%s/%s' arg %u is a callback; import its module first so "
+            "the session knows the callback's signature",
+            e->module, e->name, k);
+        return NULL;
+    }
+    void *tramp = e->cb_tramps ? e->cb_tramps[k] : NULL;
+    if (!tramp) {
+        *err = turi_errorf(
+            "ffi: '%s/%s' arg %u is a callback and its image has no "
+            "__ffi_cb%u trampoline -- rebuild the spice",
+            e->module, e->name, k, k);
+        return NULL;
+    }
+    const void *key = fn.as_closure;
+    for (FfiCbBox *b = cs->boxes; b; b = b->next)
+        if (b->key == key) return b->mem + 1;
+
+    const TurFfiCbSpec *sp = &cs->spec;
+    TurFfiCbCtx *ctx = tur_ffi_cb_ctx_new(env, fn, sp->ret_class,
+                                          sp->arg_classes, sp->n_args);
+    FfiCbBox *b = (FfiCbBox *)calloc(1, sizeof *b);
+    int64_t *mem = (int64_t *)calloc(4, sizeof(int64_t));
+    if (ctx && sp->sig) {
+        /* The context owns what it is given: hand it copies. */
+        size_t slen = strlen(sp->sig) + 1;
+        char *sig = (char *)malloc(slen);
+        size_t *at = (size_t *)calloc(sp->n_args ? sp->n_args : 1, sizeof(size_t));
+        if (sig && at) {
+            memcpy(sig, sp->sig, slen);
+            if (sp->n_args) memcpy(at, sp->arg_at, sp->n_args * sizeof(size_t));
+        }
+        if (!sig || !at || tur_ffi_cb_ctx_set_agg(ctx, sig, at, sp->arg_defs,
+                                                  sp->ret_def) != 0) {
+            free(sig); free(at);
+            tur_ffi_cb_ctx_free(ctx);
+            ctx = NULL;
+        }
+    }
+    if (!ctx || !b || !mem) {
+        tur_ffi_cb_ctx_free(ctx);
+        free(b); free(mem);
+        *err = turi_error("ffi: out of memory making a callback");
+        return NULL;
+    }
+    void (*keep)(void *) = ffi_cb_box_keep;
+    void (*dispatch)(void *, const long long *, const double *,
+                     const void *const *, long long *, double *, void *)
+        = tur_ffi_cb_dispatch;
+    /* Function pointers into the words, by memcpy (ISO C has no direct
+     * function-pointer <-> integer conversion). */
+    memcpy(&mem[0], &keep, sizeof keep);
+    memcpy(&mem[1], &tramp, sizeof tramp);
+    memcpy(&mem[2], &dispatch, sizeof dispatch);
+    mem[3] = (int64_t)(intptr_t)ctx;
+    b->key = key;
+    b->ctx = ctx;
+    b->mem = mem;
+    b->next = cs->boxes;
+    cs->boxes = b;
+    return mem + 1;
+}
 
 static bool ffi_export_has_records(const TurSpiceExport *e) {
     if (e->ret_class == 's') return true;
@@ -180,7 +316,6 @@ static bool ffi_skip_jit_thunk(void) {
 
 static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
                                   void *ud) {
-    (void)env;
     const FfiBindingUd *bud = (const FfiBindingUd *)ud;
     const TurSpiceExport *e = bud->export_;
 
@@ -266,6 +401,20 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
             }
             i_vals[k] = (int64_t)(intptr_t)rec_bufs[1 + k];
             f_vals[k] = 0.0;
+        } else if (cls == 'c') {
+            /* A callback: the session's fat box around the image's
+             * trampoline, which calls this function back. */
+            if (args[k].tag != TURI_CLOSURE || !args[k].as_closure) {
+                result = turi_errorf(
+                    "ffi: '%s/%s' arg %u: expected %s, got %s",
+                    e->module, e->name, k,
+                    class_name(cls), tag_name(args[k].tag));
+                goto cleanup;
+            }
+            int64_t *h = ffi_cb_handle_for(env, bud, k, args[k], &result);
+            if (!h) goto cleanup;
+            i_vals[k] = (int64_t)(intptr_t)h;
+            f_vals[k] = 0.0;
         } else if (cls == 'i') {
             if (marshal_arg_i(&args[k], &i_vals[k]) != 0) {
                 result = turi_errorf(
@@ -348,6 +497,9 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
                 sigp[0] = e->ret_class;
                 sigp[1] = ':';
                 if (nslots) memcpy(sigp + 2, e->arg_classes, nslots);
+                /* A callback slot is the int64 closure handle in C. */
+                for (uint32_t k = 0; k < nslots; k++)
+                    if (sigp[2 + k] == 'c') sigp[2 + k] = 'i';
                 sigp[nslots + 2] = '\0';
                 jt = jp->thunk_for(sigp, NULL, 0);
             }
@@ -732,6 +884,11 @@ static void ffi_owned_ud_free(void *p) {
     free(o->ud.rec_sig);
     free(o->ud.rec_arg_at);
     free(o->ud.rec_defs);
+    if (o->ud.cb_slots) {
+        for (uint32_t k = 0; k < o->ud.cb_n; k++)
+            ffi_cb_slot_free(o->ud.cb_slots[k]);
+        free(o->ud.cb_slots);
+    }
     free(o->qkey);
     free(o);
 }
@@ -754,7 +911,7 @@ uint32_t tur_ffi_install_spice_bindings_owned(TuriEnv *env, TurSpiceImage *img) 
                         || e->ret_class == 'v' || e->ret_class == 's';
         for (uint32_t k = 0; marshalable && k < e->n_args; k++)
             marshalable = e->arg_classes[k] == 'i' || e->arg_classes[k] == 'f'
-                       || e->arg_classes[k] == 's';
+                       || e->arg_classes[k] == 's' || e->arg_classes[k] == 'c';
         if (!marshalable) continue;
         FfiOwnedUd *o = (FfiOwnedUd *)calloc(1, sizeof(*o));
         if (!o) continue;
@@ -801,6 +958,33 @@ bool tur_ffi_native_note_records(TuriNativeFn fn, void *ud, char *sig,
     return true;
 }
 
+bool tur_ffi_native_wants_callbacks(TuriNativeFn fn, const void *ud) {
+    if (fn != ffi_native_shim || !ud) return false;
+    const FfiBindingUd *bud = (const FfiBindingUd *)ud;
+    return bud->export_ && !bud->cb_slots &&
+           ffi_export_has_callbacks(bud->export_);
+}
+
+bool tur_ffi_native_note_callback(TuriNativeFn fn, void *ud, uint32_t k,
+                                  TurFfiCbSpec *spec) {
+    if (fn != ffi_native_shim || !ud || !spec) return false;
+    FfiBindingUd *bud = (FfiBindingUd *)ud;
+    const TurSpiceExport *e = bud->export_;
+    if (!e || k >= e->n_args || e->arg_classes[k] != 'c') return false;
+    if (!bud->cb_slots) {
+        bud->cb_slots = (FfiCbSlot **)calloc(e->n_args, sizeof(FfiCbSlot *));
+        if (!bud->cb_slots) return false;
+        bud->cb_n = e->n_args;
+    }
+    if (bud->cb_slots[k]) return false;
+    FfiCbSlot *cs = (FfiCbSlot *)calloc(1, sizeof *cs);
+    if (!cs) return false;
+    cs->spec = *spec;          /* ownership taken */
+    memset(spec, 0, sizeof *spec);
+    bud->cb_slots[k] = cs;
+    return true;
+}
+
 const char *tur_ffi_native_spice_module(TuriNativeFn fn, const void *ud) {
     if (fn != ffi_native_shim || !ud) return NULL;
     const FfiBindingUd *bud = (const FfiBindingUd *)ud;
@@ -825,6 +1009,15 @@ TurFfiCbCtx *tur_ffi_cb_ctx_new(TuriEnv *env, TuriValue fn, char ret_class,
         memcpy(c->arg_classes, arg_classes, n);
     }
     return c;
+}
+
+void tur_ffi_cb_ctx_free(TurFfiCbCtx *ctx) {
+    if (!ctx) return;
+    free(ctx->arg_classes);
+    free(ctx->sig);
+    free(ctx->arg_at);
+    free((void *)ctx->arg_defs);
+    free(ctx);
 }
 
 int tur_ffi_cb_ctx_set_agg(TurFfiCbCtx *ctx, char *sig, size_t *arg_at,
