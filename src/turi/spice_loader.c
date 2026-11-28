@@ -65,6 +65,7 @@ static void spice_export_free(TurSpiceExport *e) {
     free(e->name);
     free(e->mangled);
     free(e->arg_classes);
+    free(e->cb_tramps);
 }
 
 void tur_spice_image_free(TurSpiceImage *img) {
@@ -411,6 +412,9 @@ static char class_for_tag(const char *tag, bool is_return) {
     }
     /* A by-value record: its bytes cross through a pointer (ffi_thunk.c). */
     if (strcmp(tag, ":record") == 0) return 's';
+    /* A callback (fn) parameter: the slot is a closure box the host builds around
+     * the image's `<mangled>__ffi_cb<k>` trampoline (ffi_thunk.c). */
+    if (!is_return && strcmp(tag, ":fn") == 0) return 'c';
     if (strcmp(tag, ":float")   == 0
      || strcmp(tag, ":float32") == 0
      || strcmp(tag, ":float64") == 0) {
@@ -457,7 +461,41 @@ static int append_export(TurSpiceImage *img, char *module, char *name,
     e->fn_ptr = fn_ptr;
     e->ffi_shim = ffi_shim;
     e->arg_classes = arg_classes;  /* owned; freed in spice_export_free */
+    e->cb_tramps = NULL;
     return 0;
+}
+
+/* Look a symbol up in the image: the jit hook's item lookup for an
+ * in-process image, dlsym otherwise.  NULL, quietly, when it is absent. */
+static void *image_sym_quiet(TurSpiceImage *img, const char *sym) {
+    if (img->jit_image && g_jit_hook && g_jit_hook->sym)
+        return g_jit_hook->sym(img->jit_image, sym);
+    dlerror();
+    void *p = dlsym(img->handle, sym);
+    (void)dlerror();
+    return p;
+}
+
+/* notebook-cells-cannot-call-inline-c-spices: resolve the callback
+ * trampoline of every :fn slot of the export just appended.  A missing one
+ * (an image built before trampolines) is left NULL: the call reports
+ * "rebuild the spice" rather than the load failing. */
+static void resolve_cb_tramps(TurSpiceImage *img, TurSpiceExport *e) {
+    bool any = false;
+    for (uint32_t k = 0; k < e->n_args && !any; k++)
+        any = e->arg_classes[k] == 'c';
+    if (!any) return;
+    e->cb_tramps = (void **)calloc(e->n_args, sizeof(void *));
+    if (!e->cb_tramps) return;
+    size_t cap = strlen(e->mangled) + 32;
+    char *sym = (char *)malloc(cap);
+    if (!sym) return;
+    for (uint32_t k = 0; k < e->n_args; k++) {
+        if (e->arg_classes[k] != 'c') continue;
+        snprintf(sym, cap, "%s__ffi_cb%u", e->mangled, (unsigned)k);
+        e->cb_tramps[k] = image_sym_quiet(img, sym);
+    }
+    free(sym);
 }
 
 /* Parse `<mod>/<name> -> <mangled> :: (<tags>) -> <ret>` into one
@@ -628,7 +666,10 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
     int arc = append_export(img, module, name, mangled, ret_class,
                             arg_classes, n_args, is_variadic, rest_class,
                             fn_ptr, ffi_shim);
-    if (arc == 0) img->exports[img->n_exports - 1].ret_tag = ret_tag;
+    if (arc == 0) {
+        img->exports[img->n_exports - 1].ret_tag = ret_tag;
+        resolve_cb_tramps(img, &img->exports[img->n_exports - 1]);
+    }
     return arc;
 }
 

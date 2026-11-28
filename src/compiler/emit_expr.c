@@ -2225,6 +2225,18 @@ const Binding *emit_poly_wrap_fncps_closure(const Expr *pw) {
     return tb && cps_ir_fncps_closure_sig_ok(&tb->type) ? tb : NULL;
 }
 
+/* ER2 (fn-value-fat-normalization stage 1): true when a call through
+ * function-valued binding `b` dispatches on the fat protocol -- slot 0 of the
+ * box, the box as env.  A `^fat` binding, a boxed fn type, or a nominal fn
+ * PARAMETER the shared normalization rule puts on the fat protocol.  The
+ * invoke dispatch below asks this, and so does a spice export's callback-slot
+ * trampoline (emit_module.c ffi_cb_param_supported), which must build exactly
+ * the handle this dispatch will call. */
+bool emit_fn_binding_invokes_fat(const Binding *b) {
+    return b->is_fat || b->type.as.fn.boxed ||
+           (b->is_param && fn_param_type_is_fat_normalized(&b->type));
+}
+
 static Type emit_fn_result_type_from_type(Type fn_type) {
     if (fn_type.kind == TY_FN && fn_type.as.fn.result_full_type) {
         return *fn_type.as.fn.result_full_type;
@@ -12629,9 +12641,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * (poly-result-hof-capturing-closure-sigbus) into a working
                  * call.  Scoped to parameters; let-bound TY_FN locals keep
                  * their existing paths. */
-                if (fn_binding->is_fat || fn_binding->type.as.fn.boxed ||
-                    (fn_binding->is_param &&
-                     fn_param_type_is_fat_normalized(&fn_binding->type))) {
+                if (emit_fn_binding_invokes_fat(fn_binding)) {
                     char *raw_ptr = name_for_binding(ctx, fn_binding);
                     /* A TY_FN parameter is stored as int64_t in C; the fat-call
                      * protocol wants the box as a void *, so coerce once. */

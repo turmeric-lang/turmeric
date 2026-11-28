@@ -13952,7 +13952,87 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 static Type ffi_rec_slot_type(Type t) {
     if (t.kind == TY_ADT && t.as.adt_.def && t.as.adt_.def->is_opaque)
         return TYPE_INT;
+    /* An applied opaque handle, `(Col float)`, is the same word. */
+    if (t.kind == TY_APP) {
+        const AdtDef *d = type_adt_app_def(&t);
+        if (d && d->is_opaque) return TYPE_INT;
+    }
+    /* A callback slot is the int64 closure handle in C. */
+    if (t.kind == TY_FN) return TYPE_INT;
     return t;
+}
+
+static Type ffi_kind_type(TypeKind k) {
+    Type t;
+    memset(&t, 0, sizeof t);
+    t.kind = k;
+    t.hkt_kind = KIND_STAR;
+    return t;
+}
+
+/* notebook-cells-cannot-call-inline-c-spices: a spice export's callback
+ * parameter (a `(fn [float] float)`, `^fat` or plain; manifest :fn) is called back
+ * through a dispatch context that needs the callback's own signature -- the
+ * classes of its arguments and result, and the record layouts among them.
+ * The manifest says only :fn; the parameter's declared function type says
+ * the rest, so it is noted when the module's defn is imported, exactly as
+ * the records above are.  The emitter admits a callback only when every
+ * argument and the result is a scalar, an opaque handle or a by-value record
+ * (emit_module.c ffi_cb_param_supported), which is what this classifies. */
+static void ffi_note_export_callbacks(const Expr *e, const FnDef *fd,
+                                      TuriClosure *cl) {
+    bool have_fn = e->type.kind == TY_FN;
+    for (uint32_t j = 0; j < fd->n_params; j++) {
+        const Type *full = (have_fn && e->type.as.fn.arg_full_types &&
+                            j < e->type.as.fn.arity)
+                         ? e->type.as.fn.arg_full_types[j] : NULL;
+        Type ft = full ? *full
+                : (fd->params && fd->params[j]) ? fd->params[j]->type
+                                                : fd->param_types[j];
+        if (ft.kind != TY_FN) continue;
+        uint32_t n = ft.as.fn.arity;
+        TurFfiCbSpec sp;
+        memset(&sp, 0, sizeof sp);
+        Type *pt = (Type *)calloc(n ? n : 1, sizeof(Type));
+        sp.arg_classes = (char *)calloc(n ? n : 1, 1);
+        sp.arg_defs = (const AdtDef **)calloc(n ? n : 1, sizeof(AdtDef *));
+        sp.n_args = n;
+        bool ok = pt && sp.arg_classes && sp.arg_defs;
+        bool any_rec = false;
+        for (uint32_t i = 0; ok && i < n; i++) {
+            Type at = (ft.as.fn.arg_full_types && ft.as.fn.arg_full_types[i])
+                    ? *ft.as.fn.arg_full_types[i]
+                    : ffi_kind_type((TypeKind)ft.as.fn.arg_kinds[i]);
+            pt[i] = ffi_rec_slot_type(at);
+            sp.arg_defs[i] = extern_slot_agg_def(pt[i]);
+            char c = sp.arg_defs[i] ? '{'
+                   : tur_jit_ffi_class_for_kind(pt[i].kind, 0);
+            if (c == '?' || c == 'v') ok = false;
+            if (sp.arg_defs[i]) any_rec = true;
+            sp.arg_classes[i] = c;
+        }
+        Type rt = ft.as.fn.result_full_type ? *ft.as.fn.result_full_type
+                                            : ffi_kind_type(ft.as.fn.result_kind);
+        rt = ffi_rec_slot_type(rt);
+        if (ok) {
+            sp.ret_def = extern_slot_agg_def(rt);
+            sp.ret_class = sp.ret_def ? '{' : tur_jit_ffi_class_for_kind(rt.kind, 1);
+            if (sp.ret_class == '?') ok = false;
+            if (sp.ret_def) any_rec = true;
+        }
+        if (ok && any_rec) {
+            sp.arg_at = (size_t *)calloc(n ? n : 1, sizeof(size_t));
+            sp.sig = sp.arg_at ? agg_sig_build(rt, pt, n, sp.arg_at) : NULL;
+            if (!sp.sig) ok = false;
+        }
+        free(pt);
+        if (!ok || !tur_ffi_native_note_callback(cl->native, cl->native_ud, j, &sp)) {
+            free(sp.arg_classes);
+            free(sp.sig);
+            free(sp.arg_at);
+            free((void *)sp.arg_defs);
+        }
+    }
 }
 
 static void ffi_note_export_records(const Expr *e, const FnDef *fd,
@@ -14290,6 +14370,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                     if (tur_ffi_native_wants_records(nat.as_closure->native,
                                                      nat.as_closure->native_ud))
                         ffi_note_export_records(e, fndef, nat.as_closure);
+                    if (tur_ffi_native_wants_callbacks(nat.as_closure->native,
+                                                       nat.as_closure->native_ud))
+                        ffi_note_export_callbacks(e, fndef, nat.as_closure);
                     TuriValue bare = turi_env_get(env, fname);
                     if (bare.tag != TURI_CLOSURE ||
                         bare.as_closure != nat.as_closure)

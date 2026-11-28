@@ -1,0 +1,11 @@
+;; build-shared-class-defaults: a class whose default bodies return a
+;; carrier-ABI type ((Vec cstr)) and a by-value record (Marks), compiled into
+;; the instance's module -- a second C unit -- under `tur build --shared`.
+(defmodule cd/cls
+  (export Marks no-marks)
+  (defstruct Marks [a : int b : int])
+  (defn no-marks [] : Marks (make-struct Marks 3 4))
+  (defclass Lab [a]
+    (name [r : a] : cstr "")
+    (labels [r : a] : (Vec cstr) (:: (vec-new) (Vec cstr)))
+    (marks [r : a] : Marks (no-marks))))
