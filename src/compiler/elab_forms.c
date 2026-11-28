@@ -334,7 +334,7 @@ bool elab_type_owns_boxed_fnfield(Type t) {
  * can hold it -- `(Ok h)`, `(pick h g)`.  A `let` that rebinds it is followed
  * through the alias.  Conservative the safe way: answering yes costs a leak,
  * answering no where the value does leave is the use-after-free. */
-static bool fnfield_result_can_carry(Type t) {
+bool fnfield_result_can_carry(Type t) {
     switch (t.kind) {
         case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_SYM:
         case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
@@ -460,6 +460,11 @@ static bool fnfield_closure_is_fresh(const Expr *a, Binding **params,
         switch (a->kind) {
             case EX_ASCRIBE: a = a->as.ascribe_.inner; continue;
             case EX_CLOSURE: return true;
+            /* A poly `{env, fn}` pair (an unboxed fn parameter, a method
+             * closure) re-packed as a fat handle: the `{shim, fn, env}` box is
+             * minted here and owns nothing, so whoever holds it frees just
+             * the box -- the env stays its owner's. */
+            case EX_POLY_TO_FAT: return true;
             case EX_FN_TO_FAT:
                 /* inner_is_fat: a wrapper box (which owns nothing) or the
                  * inner handle passed through -- owned only if that is. */
@@ -584,8 +589,37 @@ bool elab_fnfield_init_is_fresh(const Expr *init) {
     return fnfield_fresh_walk(init, false, NULL, 0, NULL, NULL, 0);
 }
 
-void elab_stamp_fnfield_freshness(Binding *b, Binding **params, uint32_t n_params,
-                                  const Expr *body) {
+typedef struct FnfieldPendingLet {
+    struct FnfieldPendingLet *next;
+    Binding    *b;
+    const Expr *init;
+    bool        guards_ok;
+    bool        eager_owner;
+} FnfieldPendingLet;
+typedef struct FnfieldPendingFn {
+    struct FnfieldPendingFn *next;
+    Binding    *b;
+    Binding   **params;
+    uint32_t    n_params;
+    const Expr *body;
+    bool        eager_fresh;
+    uint32_t    eager_mask;
+} FnfieldPendingFn;
+
+void elab_fnfield_note_let(Elab *e, Binding *b, const Expr *init, bool guards_ok) {
+    if (!e || !e->arena || !b || !init) return;
+    FnfieldPendingLet *n =
+        (FnfieldPendingLet *)arena_alloc(e->arena, sizeof(FnfieldPendingLet));
+    n->b = b;
+    n->init = init;
+    n->guards_ok = guards_ok;
+    n->eager_owner = b->fnfield_owner;
+    n->next = e->fnfield_pending_lets;
+    e->fnfield_pending_lets = n;
+}
+
+void elab_stamp_fnfield_freshness(Elab *e, Binding *b, Binding **params,
+                                  uint32_t n_params, const Expr *body) {
     if (!b) return;
     b->returns_fresh_fnfield = false;
     b->fresh_fnfield_via_param_mask = 0;
@@ -604,6 +638,92 @@ void elab_stamp_fnfield_freshness(Binding *b, Binding **params, uint32_t n_param
     }
     b->returns_fresh_fnfield = fresh && need == 0;
     b->fresh_fnfield_via_param_mask = fresh ? need : 0;
+    if (e && e->arena && body) {
+        FnfieldPendingFn *n =
+            (FnfieldPendingFn *)arena_alloc(e->arena, sizeof(FnfieldPendingFn));
+        n->b = b;
+        n->params = params;
+        n->n_params = n_params;
+        n->body = body;
+        n->eager_fresh = b->returns_fresh_fnfield;
+        n->eager_mask = b->fresh_fnfield_via_param_mask;
+        n->next = e->fnfield_pending_fns;
+        e->fnfield_pending_fns = n;
+    }
+}
+
+/* fnfield-struct-binder-frees-borrowed-closure (forward references): the
+ * answers above are read as each let and each defn is elaborated, so a caller
+ * written before its callee saw "not fresh" -- the callee had no stamp yet --
+ * and its struct's closures leaked.  Mutual recursion had the same problem
+ * from both sides, and a self-recursive function that threads a parameter
+ * through (`(if done m (spin m (- n 1)))`) lost its mask to the fallback.
+ *
+ * Once the program is in, decide all of them together as one greatest fixed
+ * point: start every noted function at "fresh" and every noted let at
+ * "owner", then lower whatever a walk does not confirm until nothing moves.
+ * A function's answer only ever goes fresh -> fresh-through-more-parameters
+ * -> not fresh, and a let's owner -> not, so this terminates.  It is sound
+ * for the reason the single-function case is: a returned value comes out of
+ * a finite chain of calls ending in a path with no call, and the walk checked
+ * that every such path mints the closures or takes them from an owner.
+ *
+ * An answer that was already yes stays yes (it was derived from less), and a
+ * let that turns owner here gets the scope-end free its other guards already
+ * allowed.  The emitters read the flags after this. */
+void elab_fnfield_resolve_pending(Elab *e) {
+    FnfieldPendingLet *lets = e->fnfield_pending_lets;
+    FnfieldPendingFn  *fns  = e->fnfield_pending_fns;
+    e->fnfield_pending_lets = NULL;
+    e->fnfield_pending_fns = NULL;
+    if (!lets && !fns) return;
+    for (FnfieldPendingFn *f = fns; f; f = f->next) {
+        f->b->returns_fresh_fnfield = true;
+        f->b->fresh_fnfield_via_param_mask = 0;
+    }
+    for (FnfieldPendingLet *l = lets; l; l = l->next) l->b->fnfield_owner = true;
+
+    bool changed = true;
+    int rounds = 0;
+    for (; changed && rounds < 4096; rounds++) {
+        changed = false;
+        for (FnfieldPendingLet *l = lets; l; l = l->next) {
+            if (l->b->fnfield_owner && !elab_fnfield_init_is_fresh(l->init)) {
+                l->b->fnfield_owner = false;
+                changed = true;
+            }
+        }
+        for (FnfieldPendingFn *f = fns; f; f = f->next) {
+            Binding *b = f->b;
+            if (!b->returns_fresh_fnfield && !b->fresh_fnfield_via_param_mask)
+                continue;   /* already at the bottom */
+            uint32_t need = 0;
+            bool fresh = fnfield_fresh_walk(f->body, true, f->params, f->n_params,
+                                            &need, f->body, 0);
+            bool nf = fresh && need == 0;
+            uint32_t nm = fresh ? need : 0;
+            if (nf != b->returns_fresh_fnfield ||
+                nm != b->fresh_fnfield_via_param_mask) {
+                b->returns_fresh_fnfield = nf;
+                b->fresh_fnfield_via_param_mask = nm;
+                changed = true;
+            }
+        }
+    }
+    if (changed) {
+        /* Did not settle: keep only what was decided on the way in. */
+        for (FnfieldPendingFn *f = fns; f; f = f->next) {
+            f->b->returns_fresh_fnfield = f->eager_fresh;
+            f->b->fresh_fnfield_via_param_mask = f->eager_mask;
+        }
+        for (FnfieldPendingLet *l = lets; l; l = l->next)
+            l->b->fnfield_owner = l->eager_owner;
+        return;
+    }
+    for (FnfieldPendingLet *l = lets; l; l = l->next) {
+        if (l->eager_owner) l->b->fnfield_owner = true;
+        if (l->b->fnfield_owner && l->guards_ok) l->b->drops_fn_fields = true;
+    }
 }
 
 /* ---- internal define splicing ---- */
@@ -3510,20 +3630,26 @@ Expr *elab_let(Elab *e, const Form *call) {
     for (uint32_t k = 0; k < n_binds; k++) {
         const AdtDef *ad = elab_byval_drop_adt(binds[k].binding->type);
         if (!ad) continue;
-        /* fnfield-struct-binder-frees-borrowed-closure: only a binder whose
-         * init gave it the closures frees them. */
-        if (!binds[k].binding->fnfield_owner) continue;
-        if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
-            is_binding_consumed(body, binds[k].binding))
-            continue;
-        if (fnfield_local_leaves_scope(body, binds[k].binding)) continue;
-        const CtorDef *ctor = ad->ctors[0];
-        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-            if (!elab_field_is_boxed_fnfield(ctor, fi)) continue;
-            if (is_field_consumed(body, binds[k].binding, fi)) continue;
-            binds[k].binding->drops_fn_fields = true;
-            break;
+        bool guards_ok = false;
+        if (!(binding_moved_during_init[k] || binds[k].binding->is_moved ||
+              is_binding_consumed(body, binds[k].binding)) &&
+            !fnfield_local_leaves_scope(body, binds[k].binding)) {
+            const CtorDef *ctor = ad->ctors[0];
+            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                if (!elab_field_is_boxed_fnfield(ctor, fi)) continue;
+                if (is_field_consumed(body, binds[k].binding, fi)) continue;
+                guards_ok = true;
+                break;
+            }
         }
+        /* fnfield-struct-binder-frees-borrowed-closure: only a binder whose
+         * init gave it the closures frees them.  Noted either way: a callee
+         * not elaborated yet answers "not fresh" for now, and the
+         * end-of-program pass asks again (elab_fnfield_resolve_pending). */
+        if (elab_type_owns_boxed_fnfield(binds[k].binding->type))
+            elab_fnfield_note_let(e, binds[k].binding, binds[k].init, guards_ok);
+        if (guards_ok && binds[k].binding->fnfield_owner)
+            binds[k].binding->drops_fn_fields = true;
     }
 
     /* byvalue-recursive-adt-boxes-are-never-freed: the same flagging for a

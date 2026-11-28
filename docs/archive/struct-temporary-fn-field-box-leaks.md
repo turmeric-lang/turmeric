@@ -83,3 +83,11 @@ allocations before, clean after.
 
 Suite 3556/0; `tests/run-leak-check.sh` 121/0 (3 known-open); the type fuzzer
 (`--crossing fn_field`, 200 cases, and seed 3333) reports no bug class.
+
+## Later: the call-head spelling (2026-11-28)
+
+`((.run (mk n)) x)`, with the field read as the call head, was not covered
+by the hoist above and still leaked the receiver's closure. It is bound the
+same way now (`elab_call_head_expr`, `src/compiler/elab_call.c`), and frees
+only a receiver that minted its closures. See
+[fnfield-struct-binder-frees-borrowed-closure](fnfield-struct-binder-frees-borrowed-closure.md).

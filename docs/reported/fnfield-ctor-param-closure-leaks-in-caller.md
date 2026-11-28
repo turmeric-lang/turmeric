@@ -38,6 +38,33 @@ frees `g` at scope end, and the program is leak-clean.
 its relatives (an unbound receiver `(.handler (H 1 f))`, a function that returns
 the wrapped parameter) with a `known-leak` marker.
 
+## Two more shapes with no owner
+
+Both were freed on `main` by the struct's binder, with nothing proving the
+struct was the closure's only holder. They leak now.
+
+**A let-bound closure stored in a struct.** `cap` is nobody's to free: its
+own `let` sees it escape into the constructor, and the struct did not mint it.
+
+```turmeric
+(defstruct Holder [run : (fn [int] int)])
+(defn main [] : int
+  (let [k   3
+        cap (fn [x : int] : int (+ x k))]
+    (let [h (Holder cap)]
+      (println ((.run h) 1))))
+  0)
+```
+
+`tests/fixtures/closure-slot-ptr-void-param-sinks` has this shape (its `cap`
+is also pushed into a vec and passed to four calls) and leaks 24 B more than
+on `main`. When the closure's only use is that one constructor argument, not
+in a loop, not captured, and with no `perform` between the two, the struct
+could take it over.
+
+**A closure a generic call hands back.** `(Holder (ident f))`: the walk does
+not know whether `ident` returned its argument or something new.
+
 ## Root cause
 
 `main` frees `g` only when `g` does not escape (`let_binding_env_freeable`,

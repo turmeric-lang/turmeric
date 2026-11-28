@@ -14811,7 +14811,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * detect an inline-C callee without walking back to the FnDef. */
     b->body_is_inline_c = (body && body->kind == EX_INLINE_C);
     elab_stamp_sum_freshness(b, params, n_params, body);
-    elab_stamp_fnfield_freshness(b, params, n_params, body);
+    elab_stamp_fnfield_freshness(e, b, params, n_params, body);
     fd->closure = NULL;
     fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
     /* Phase 19: Store declared effect row (ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER). */

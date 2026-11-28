@@ -3650,7 +3650,44 @@ static Expr *saffron_dyn_call_on(Elab *e, const Form *call, Expr *fnv) {
     return elab_hoist_control_operands(e, dc);
 }
 
+static Expr *elab_call_head_expr_inner(Elab *e, const Form *call, Expr *head_expr);
+
+/* struct-temporary-fn-field-box-leaks, the call-head spelling: `((.run (mk n))
+ * x)` reads a closure out of a struct no binding holds, so nothing released
+ * the closure the callee minted for it.  The method spelling `(.run (mk n) x)`
+ * already binds such a receiver (elab_typeclasses.c); do the same here, so the
+ * `let` is the owner and frees the closure after the call -- when the
+ * receiver is fresh (asked again at the end of the program for a callee
+ * defined further down), and only when the call's result is a plain scalar
+ * that cannot point back into the closure. */
 static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
+    Expr *gf = head_expr;
+    while (gf && gf->kind == EX_ASCRIBE) gf = gf->as.ascribe_.inner;
+    if (gf && gf->kind == EX_GET_FIELD && gf->as.get_field_.struct_expr) {
+        Expr *obj = gf->as.get_field_.struct_expr;
+        const Expr *ro = obj;
+        while (ro && ro->kind == EX_ASCRIBE) ro = ro->as.ascribe_.inner;
+        if (ro && ro->kind == EX_CALL && elab_type_owns_boxed_fnfield(obj->type)) {
+            LetBinding *lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+            Expr *rv = elab_bind_control_temp(e, obj, lb);
+            gf->as.get_field_.struct_expr = rv;
+            Expr *inner = elab_call_head_expr_inner(e, call, head_expr);
+            if (!inner) return NULL;
+            bool ok = !fnfield_result_can_carry(inner->type);
+            lb->binding->fnfield_owner = elab_fnfield_init_is_fresh(obj);
+            lb->binding->drops_fn_fields = ok && lb->binding->fnfield_owner;
+            elab_fnfield_note_let(e, lb->binding, obj, ok);
+            Expr *let_expr = expr_new(e->arena, EX_LET, inner->type, call->span);
+            let_expr->as.let_.bindings = lb;
+            let_expr->as.let_.n = 1;
+            let_expr->as.let_.body = inner;
+            return let_expr;
+        }
+    }
+    return elab_call_head_expr_inner(e, call, head_expr);
+}
+
+static Expr *elab_call_head_expr_inner(Elab *e, const Form *call, Expr *head_expr) {
     TypeKind head_kind = head_expr->type.kind;
     /* Any dialect: see the `any` callee in elab_call
      * (turmeric-module-cannot-call-a-scheme-procedure-value). */

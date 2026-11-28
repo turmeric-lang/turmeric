@@ -8270,17 +8270,19 @@ static Expr *elab_method_call_impl(Elab *e, const Form *call) {
                          * release its owner. */
                         const Expr *ro = obj;
                         while (ro && ro->kind == EX_ASCRIBE) ro = ro->as.ascribe_.inner;
-                        /* fnfield-struct-binder-frees-borrowed-closure: only
-                         * a receiver that minted its closures owns them --
-                         * `(.run (S f) x)` with `f` a parameter does not. */
                         if (ro && (ro->kind == EX_CALL || ro->kind == EX_MAKE_STRUCT) &&
-                            elab_type_owns_boxed_fnfield(obj->type) &&
-                            elab_fnfield_init_is_fresh(obj)) {
+                            elab_type_owns_boxed_fnfield(obj->type)) {
                             LetBinding *lb = (LetBinding *)arena_alloc(
                                 e->arena, sizeof(LetBinding));
                             Expr *rv = elab_bind_control_temp(e, obj, lb);
-                            lb->binding->fnfield_owner = true;
-                            lb->binding->drops_fn_fields = true;
+                            /* fnfield-struct-binder-frees-borrowed-closure:
+                             * only a receiver that minted its closures owns
+                             * them -- `(.run (S f) x)` with `f` a parameter
+                             * does not.  A callee defined further down is
+                             * asked again at the end of the program. */
+                            lb->binding->fnfield_owner = elab_fnfield_init_is_fresh(obj);
+                            lb->binding->drops_fn_fields = lb->binding->fnfield_owner;
+                            elab_fnfield_note_let(e, lb->binding, obj, true);
                             get_field->as.get_field_.struct_expr = rv;
                             Expr *let_expr = expr_new(e->arena, EX_LET,
                                                       call_out->type, call->span);

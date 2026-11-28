@@ -3272,6 +3272,8 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         /* Arena-allocated in an earlier call's arena; a module's pending
          * forward results never outlive the module anyway. */
         e.fwd_pending_results = NULL;
+        e.fnfield_pending_lets = NULL;
+        e.fnfield_pending_fns  = NULL;
         /* PS4: everything defined so far belongs to earlier turns. */
         e.turn_continues_session = true;
         e.turn_start_n_globals   = e.global.n;
@@ -4007,6 +4009,11 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * the flag is off this is a no-op, keeping every non-using program's reset
      * codegen byte-for-byte unchanged. */
     elab_wrap_resets_for_crossfn_resume(&e);
+
+    /* fnfield-struct-binder-frees-borrowed-closure: every defn is elaborated
+     * now, so decide closure-field ownership again for the lets and functions
+     * that read a forward reference.  Only flags the emitters read change. */
+    elab_fnfield_resolve_pending(&e);
 
     /* used-attr-whole-program: force-load any ^used-bearing modules that the
      * entry reaches only via a raw mangled C symbol (no `(import)`), so their

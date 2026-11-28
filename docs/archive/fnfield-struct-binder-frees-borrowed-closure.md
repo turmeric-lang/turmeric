@@ -134,8 +134,9 @@ old guards (moved, consumed, leaves the scope) still apply on top. An init is
 fresh when it is:
 
 - a constructor whose every boxed fn field is given a closure minted there: a
-  lambda literal, a function name boxed into a fat handle (`EX_FN_TO_FAT`), or
-  a call to a `returns_fresh_closure` function;
+  lambda literal, a function name boxed into a fat handle (`EX_FN_TO_FAT`), an
+  unboxed fn parameter re-packed into one (`EX_POLY_TO_FAT`: the box is new
+  and owns nothing), or a call to a `returns_fresh_closure` function;
 - a call to a function stamped `returns_fresh_fnfield`, or one fresh through a
   parameter (`fresh_fnfield_via_param_mask`) whose argument is fresh;
 - a move-only local that was the owner (the move hands it over);
@@ -155,15 +156,45 @@ exactly once (a variable or a capture), so a function that also stores it
 elsewhere, or puts it in two fields, is not fresh.
 
 **The unbound receiver.** `(.f (S ...) x)` is hoisted into a `let` so the
-constructor's closures have an owner (`elab_typeclasses.c`). It is hoisted now
-only when that constructor is fresh.
+constructor's closures have an owner (`elab_typeclasses.c`). That `let` frees
+them now only when the receiver is fresh.
 
 **What it costs.** Anything the walk cannot prove is a leak, never a free.
-Measured against `main` by emitting every fixture: exactly one drop site
-moved. It is the `r` in `cps-byvalue-struct-closure-field-value`, a
-`(pick h g 3)` result, which was this report's repro 2 hidden by
-`__dk_reap_closure_once`. A function defined after its caller is not stamped
-yet, so a call to it leaks its struct's closures.
+Measured against `main` by emitting every fixture and comparing the closure
+frees:
+
+- `cps-byvalue-struct-closure-field-value` lost one: the `r` of
+  `(pick h g 3)`, which was this report's repro 2 hidden by
+  `__dk_reap_closure_once`.
+- `closure-slot-ptr-void-param-sinks` lost one, and leaks 24 B more: a
+  let-bound closure `cap` that is also pushed into a vec and passed to four
+  calls was freed by the one struct that held it. Nothing proved the struct
+  was its last user.
+- `fn-value-at-tyvar-slot-static-box` lost one, with no effect: the field
+  holds `(ident plus1)`, whose box is the shared static one.
+- `closure-field-boxed-all-shapes`, `fn-param-stored-in-struct-field` and
+  `refine-fn-variance-ok` gained frees and leak less (96 -> 48 B, 88 -> 24 B,
+  48 -> 24 B): the call-head receiver below.
+
+The second and third are in
+[fnfield-ctor-param-closure-leaks-in-caller](../reported/fnfield-ctor-param-closure-leaks-in-caller.md).
+
+**Forward references.** The answers are read as each `let` and each `defn` is
+elaborated, so a caller written above its callee saw "not fresh" and leaked.
+Every such `let` and function is noted (`elab_fnfield_note_let`, the stamp)
+and decided again once the program is in (`elab_fnfield_resolve_pending`,
+called from `elaborate_program_session`), as one greatest fixed point: start
+every noted function at "fresh" and every noted `let` at "owner", and lower
+whatever a walk does not confirm until nothing moves. That also settles
+mutual recursion, and a self-recursive function that threads a move-only
+parameter through (`(if done m (spin m (- n 1)))`). Only flags the emitters
+read change.
+
+**The call-head receiver.** `((.run (mk n)) x)` reads a closure out of a
+struct no binding holds. The method spelling `(.run (mk n) x)` already bound
+such a receiver so a `let` owns it; the call-head spelling did not, and leaked
+on `main` too. `elab_call_head_expr` (`src/compiler/elab_call.c`) binds it
+now, and frees only when the call's result is a plain scalar.
 
 **Repro 3's other half.** The struct built from a closure parameter no longer
 frees it, and the caller's own closure is not freed by the caller either. The
@@ -173,17 +204,22 @@ That leak (24 B per closure) is
 
 **Regression checks.**
 
-- `tests/run.sh`: 4362 passed, 0 failed.
+- `tests/run.sh`: 4363 passed, 0 failed.
 - `tests/run-leak-check.sh`: no failures. The new
   `fnfield-struct-binder-borrowed-closure` is known-open for the leak above.
+- A module imported by another (single-file build and `tur build <dir>`):
+  the importer's binder frees the struct a module function built.
 - The turmeric-spices SAX parsers (`SaxParser`, `HtmlSaxParser`) are bound
   by `match` on a `(Result P E)`, never by a `let`, so this rule never freed
-  their closures and does not change them.
+  their closures and does not change them. The spices' suites were not run.
 
 Pinned by `tests/fixtures/fnfield-struct-binder-owns-only-fresh` (leak-checked:
 all three repros' owners, every fresh shape, and a constructor function storing
 its closure parameter) and `tests/fixtures/fnfield-struct-binder-borrowed-closure`
-(repro 3 and its relatives; a use-after-free still fails the gate).
+(repro 3 and its relatives; a use-after-free still fails the gate), and
+`tests/fixtures/fnfield-struct-binder-forward-callee` (leak-checked: callers
+above their callees, both receiver spellings, mutual recursion; on `main` it
+is a heap-use-after-free).
 
 ## Found on the way
 

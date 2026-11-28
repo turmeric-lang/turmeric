@@ -1,0 +1,52 @@
+;; fnfield-struct-binder-frees-borrowed-closure, forward references: whether a
+;; let local owns its struct's closures is asked of the callee that built the
+;; struct, and a callee written further down had no answer yet -- so the
+;; caller leaked them.  The question is asked again once the whole program is
+;; elaborated, as one fixed point, which also settles mutual recursion and a
+;; self-recursive function that threads its parameter through.  Leak-checked.
+(defstruct M [raw : int handler : (fn [int] int)])
+(defstruct ^copy C [raw : int handler : (fn [int] int)])
+
+;; callers before their callees: bound, rebound, and through a second function
+(defn use-later [n : int] : int
+  (let [h (mk-later n)]
+    ((.handler h) 1)))
+(defn use-chain [n : int] : int
+  (let [h (mk-chain n)
+        g h]
+    ((.handler g) 3)))
+;; an unbound receiver, in both spellings
+(defn use-tmp [n : int] : int ((.handler (mk-later n)) 2))
+(defn use-tmp-method [n : int] : int (.handler (mk-later n) 4))
+(defn mk-chain [n : int] : M (mk-later n))
+(defn mk-later [n : int] : M (M n (fn [x : int] : int (+ x n))))
+
+;; mutual recursion, every base case fresh
+(defn even-c [n : int] : C
+  (if (= n 0) (C 0 (fn [x : int] : int x)) (odd-c (- n 1))))
+(defn odd-c [n : int] : C
+  (if (= n 0) (C 1 (fn [x : int] : int (+ x 1))) (even-c (- n 1))))
+
+;; a move-only struct threaded through a self-recursive function
+(defn spin [m : M n : int] : M (if (= n 0) m (spin m (- n 1))))
+
+;; mutual recursion that can hand back a ^copy parameter is NOT fresh: `keep`
+;; still owns it, and frees it once
+(defn ping [c : C n : int] : C (if (= n 0) c (pong c (- n 1))))
+(defn pong [c : C n : int] : C (if (= n 0) (C 9 (fn [x : int] : int (- x 9))) (ping c n)))
+
+(defn main [] : int
+  (println (use-later 10))
+  (println (use-chain 10))
+  (println (use-tmp 10))
+  (println (use-tmp-method 10))
+  (let [c (even-c 3)]
+    (println ((.handler c) 5)))
+  (let [m (M 4 (fn [x : int] : int (* x 4)))
+        s (spin m 3)]
+    (println ((.handler s) 5)))
+  (let [keep (C 2 (fn [x : int] : int (* x 2)))]
+    (let [p (ping keep 0)]
+      (println ((.handler p) 5)))
+    (println ((.handler keep) 6)))
+  0)

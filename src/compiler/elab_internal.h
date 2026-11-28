@@ -1021,6 +1021,12 @@ typedef struct Elab {
      * (elab_nonretain_resolve_forward). */
     struct NonretainPending *nonretain_pending;
     uint32_t          n_nonretain_pending, cap_nonretain_pending;
+    /* fnfield-struct-binder-frees-borrowed-closure (forward references): every
+     * let local and function whose closure-field ownership was decided while
+     * some callee was still unelaborated, kept to be decided again once the
+     * whole program is in (elab_fnfield_resolve_pending).  Arena lists. */
+    struct FnfieldPendingLet *fnfield_pending_lets;
+    struct FnfieldPendingFn  *fnfield_pending_fns;
     uint64_t          borrow_clock;
     uint64_t         *borrow_loop_marks;
     uint32_t          n_borrow_loop_marks, cap_borrow_loop_marks;
@@ -2198,8 +2204,17 @@ bool elab_type_owns_boxed_fnfield(Type t);
 bool elab_fnfield_init_is_fresh(const Expr *init);
 /* ...and the per-function half: Binding.returns_fresh_fnfield /
  * fresh_fnfield_via_param_mask, stamped once the body is elaborated. */
-void elab_stamp_fnfield_freshness(Binding *b, Binding **params, uint32_t n_params,
-                                  const Expr *body);
+void elab_stamp_fnfield_freshness(Elab *e, Binding *b, Binding **params,
+                                  uint32_t n_params, const Expr *body);
+/* Can a value of type `t` hold a struct's closure, so that handing it out of a
+ * scope carries the closure along?  False for the plain scalars and cstr. */
+bool fnfield_result_can_carry(Type t);
+/* A let local of a closure-field struct, noted for the end-of-program pass:
+ * `guards_ok` is every condition for the scope-end free except ownership. */
+void elab_fnfield_note_let(Elab *e, Binding *b, const Expr *init, bool guards_ok);
+/* Decide every noted let and function again, now that no callee is a forward
+ * reference; called once the whole program is elaborated. */
+void elab_fnfield_resolve_pending(Elab *e);
 Expr *elab_bind_control_temp(Elab *e, Expr *value, LetBinding *lb);
 Expr *elab_hoist_control_operands(Elab *e, Expr *node);
 /* union-tagged-union-c-emission: tag a member value flowing into a union slot.
