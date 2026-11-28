@@ -702,7 +702,7 @@ void turi_env_preload_stdlib(TuriEnv *env, const char *stdlib_root);
  * Returns the number of exports bound, 0 when that spice is already attached,
  * or -1 after printing why the build or load failed -- once: the env records
  * the failure and answers -1 without rebuilding for the rest of its life.
- * See docs/reported/notebook-cells-cannot-call-inline-c-spices.md */
+ * See docs/archive/notebook-cells-cannot-call-inline-c-spices.md */
 #define TURI_HAS_ATTACH_SPICE 1
 int turi_env_attach_spice(TuriEnv *env, const char *spice_root, const char *tur_bin);
 

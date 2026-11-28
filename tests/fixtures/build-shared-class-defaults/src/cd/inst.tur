@@ -1,0 +1,23 @@
+;; R takes every default: its `labels` was declared `tur_adt_Vec__cstr *` in
+;; inst.h but defined `int64_t` in inst.c.  S overrides `labels` with a tail
+;; call to a helper of this module, and takes the default `marks`, whose
+;; `(no-marks)` -- declared only in cls.h -- then named its temp with the tail
+;; call's `(Vec cstr)`.  Both: docs/archive/notebook-cells-cannot-call-inline-
+;; c-spices.md, "Resolved 2026-11-28".
+(defmodule cd/inst
+  (import cd/cls :refer [Marks no-marks])
+  (export r-label-count s-label-count s-marks-sum)
+  (defstruct ^copy R [n : int])
+  (defstruct ^copy S [n : int])
+  (defn two-labels [n : int] : (Vec cstr)
+    (let [v (:: (vec-new) (Vec cstr))]
+      (vec-push! v "x")
+      (vec-push! v "y")
+      v))
+  (definstance Lab [R]
+    (name [r] "r"))
+  (definstance Lab [S]
+    (labels [r] (two-labels (. r n))))
+  (defn r-label-count [] : int (vec-len (labels (R 1))))
+  (defn s-label-count [] : int (vec-len (labels (S 1))))
+  (defn s-marks-sum [] : int (let [m (marks (S 1))] (+ (* 10 (. m a)) (. m b)))))

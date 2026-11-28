@@ -659,6 +659,23 @@ Arguments are marshaled per the defn's signature recorded in
 - **`:float` class** -- `:float`, `:float32`, `:float64`. Passed in a
   vector register.
 
+Three more slot kinds ride on those registers:
+
+- **Opaque handles** -- a `defopaque` type (`Frame`, `(Col float)`) is a
+  word, in the `:int` class.
+- **`:record`** -- a by-value `defstruct` (linalg's `mat`) crosses as its C
+  bytes, packed from the session's record and rebuilt from a record result.
+  The layout comes from the module's own defn, so import the module before
+  calling the export.
+- **`:fn`** -- a callback parameter, `^fat` (plot's
+  `^fat f : (fn [float] float)`) or plain (`f : (fn [float] float)`), takes
+  a session function, a `defn` or a `fn` literal. The library carries a
+  trampoline for each such slot, and the session wraps the function in a
+  closure box that calls back into it. Supported when the callback's
+  arguments and result are scalars, opaque handles or by-value records. As
+  with records, import the module first: its defn gives the callback's
+  signature.
+
 The marshaler accepts compatible Turmeric values:
 
 ```
@@ -680,12 +697,16 @@ error: ffi: 'sh/add42' expects 1 arg, got 0
 
 ### Current limits (v1)
 
-- **Variadic exports** (`& rest :type`) are recognised but not
-  callable from the REPL. The error message is explicit; the marshaling
-  code for cons-list rest args lives in a later phase.
-- **Struct / ADT returns** can't yet be reconstructed on the
-  interpreter side. The error suggests sticking to primitive
-  (`:int` / `:float` / `:cstr` / etc.) returns for now.
+- **Other structured types** -- a heap ADT, an existential, a `(Vec T)`
+  -- have no class, so an export taking or returning one gets no `__ffi`
+  shim. The REPL reports that when the export is called. An embedder that
+  attaches the spice (the notebook) leaves the export's own defn in place
+  instead, and the spice's inline-C bodies refuse when it runs. plot's
+  typed API is the case in point:
+  [plot-typed-api-has-no-ffi-shim](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/plot-typed-api-has-no-ffi-shim.md).
+- **A callback whose signature is not scalars, opaque handles and
+  records** (an ADT, a `(Vec T)`, another function), or a C function
+  pointer (`extern-c`'s typed kind), gets no shim the same way.
 - **Spice exports are pre-bound**, so you don't need to import them --
   call them directly. A top-level `(import M :refer [...])` (or `:as`)
   does work at the prompt since 2026-10-10, for a module the REPL can

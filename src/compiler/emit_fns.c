@@ -6118,6 +6118,16 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     const char *saved_current_fn_ret_ctype = ctx->current_fn_ret_ctype;
     ctx->current_fn_ret_ctype = current_fn_ret_ctype_eff;
+    /* docs/archive/notebook-cells-cannot-call-inline-c-spices.md (the
+     * --shared bugs): a tail call left unhoisted
+     * re-notes its return type for the `return` that consumes it, and nothing
+     * after the body clears it -- so the first direct call of the NEXT
+     * function whose callee has no forward-declaration entry (one declared
+     * only in an imported module's header) named its temp with the previous
+     * function's result type.  plot's `--shared` image: a defaulted
+     * `frame-marks` body's `(no-frame-marks)` temp spelled `tur_adt_Vec__cstr *`
+     * after the instance's `legend-labels` tail-called a `(Vec cstr)` helper. */
+    ctx->call_ret_note[0] = '\0';
     bool saved_in_user_main = ctx->in_user_main;
     ctx->in_user_main = is_main_check;
     /* byval-spine-drop-past-early-exit: see EmitCtx.current_fn_spine_drop_safe.

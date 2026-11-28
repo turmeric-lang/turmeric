@@ -63,6 +63,10 @@ typedef struct TurSpiceExport {
                            * (class 'i': the callee receives one int64 cons-list
                            * pointer) */
     bool     is_variadic; /* true when the manifest line had `& :tag` */
+    void   **cb_tramps;   /* notebook-cells-cannot-call-inline-c-spices: per
+                           * slot, the dlsym'd `<mangled>__ffi_cb<k>` callback
+                           * trampoline of a :fn (class 'c') slot, else NULL.
+                           * NULL as a whole when no slot has one.  Owned. */
     char     rest_class;  /* ffi-spices-integration-plan S2: the rest ELEMENT
                            * class ('i' or 'f') from the manifest's `& :tag`,
                            * so the REPL marshaller knows whether cons heads

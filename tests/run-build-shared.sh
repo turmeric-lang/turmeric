@@ -288,6 +288,30 @@ else
 fi
 rm -rf "$FXM/build"
 
+# notebook-cells-cannot-call-inline-c-spices (the two --shared bugs): class
+# default bodies compiled into the instance's module.
+# A carrier-ABI default result must be int64_t in inst.h as in inst.c, and a
+# defaulted body's first call must not take the previous method's result type
+# (plot's --shared image hit both).
+CD="tests/fixtures/build-shared-class-defaults"
+CD_LIB="$WORK/libcd.$LIB_EXT"
+cd_out=$("$TUR" build --shared "$CD" -o "$CD_LIB" 2>&1)
+cd_rc=$?
+if [ $cd_rc -ne 0 ]; then
+    fail "build-shared-class-defaults" "tur build --shared exit=$cd_rc: $cd_out"
+elif ! $CC_BIN -O0 -std=c99 -Wall -Isrc -o "$WORK/cd-harness" "$CD/harness.c" $DL_LIBS 2>"$WORK/cd-cc.err"; then
+    fail "build-shared-class-defaults" "cc failed: $(cat "$WORK/cd-cc.err")"
+else
+    cd_run=$("$WORK/cd-harness" "$CD_LIB" 2>&1)
+    cd_expect='R labels = 0, S labels = 2, S marks = 34'
+    if [ "$cd_run" != "$cd_expect" ]; then
+        fail "build-shared-class-defaults" "expected '$cd_expect', got '$cd_run'"
+    else
+        pass "build-shared-class-defaults"
+    fi
+fi
+rm -rf "$CD/build"
+
 echo
 echo "build-shared: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

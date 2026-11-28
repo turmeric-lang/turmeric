@@ -15,7 +15,7 @@
 > [interpret-takes-no-include-path-or-spice-discovery](interpret-takes-no-include-path-or-spice-discovery.md)
 > (`-I` on the interpreter),
 > [spice-repl-plan](spice-repl-plan.md) (the REPL's spice image),
-> [notebook-cells-cannot-call-inline-c-spices](../reported/notebook-cells-cannot-call-inline-c-spices.md)
+> [notebook-cells-cannot-call-inline-c-spices](notebook-cells-cannot-call-inline-c-spices.md)
 > (`turi_env_attach_spice`).
 
 ## Goal

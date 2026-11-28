@@ -447,6 +447,16 @@ boolean spellings -- and `:wasm-options` the same inside `if(EMSCRIPTEN)`.
 A pair whose key is not a CMake identifier or whose value contains CMake
 syntax is skipped with a `spice:` message (`cmake_opt_ok`).
 
+Each dep is added with `CMAKE_PROJECT_INCLUDE` pointing at
+`<build>/_tur_project_hook.cmake` (`emit_promote_imported_helper`), so every
+`project()` call inside it defers `_tur_promote_imported` to the end of its
+directory. That makes the directory's `IMPORTED` targets global, which is the
+only way the walk -- run here, after the dep's directories have finished --
+can see an imported target the dep made for itself. The hook is set after the
+dep's options, since an `:options` entry for `CMAKE_PROJECT_INCLUDE` is a
+`CACHE FORCE` set that drops the normal variable, and the hook includes that
+cache entry in turn. `unset(CMAKE_PROJECT_INCLUDE)` follows the last dep.
+
 ### The JSON manifest
 
 The same file then builds a JSON string and writes it with
