@@ -8270,8 +8270,12 @@ static Expr *elab_method_call_impl(Elab *e, const Form *call) {
                          * release its owner. */
                         const Expr *ro = obj;
                         while (ro && ro->kind == EX_ASCRIBE) ro = ro->as.ascribe_.inner;
+                        /* fnfield-struct-binder-frees-borrowed-closure: only a
+                         * receiver that owns its closures -- not one built from
+                         * a borrowed closure, or a ^copy a call handed back. */
                         if (ro && (ro->kind == EX_CALL || ro->kind == EX_MAKE_STRUCT) &&
-                            elab_type_owns_boxed_fnfield(obj->type)) {
+                            elab_type_owns_boxed_fnfield(obj->type) &&
+                            elab_fnfield_value_owned(e, obj, NULL)) {
                             LetBinding *lb = (LetBinding *)arena_alloc(
                                 e->arena, sizeof(LetBinding));
                             Expr *rv = elab_bind_control_temp(e, obj, lb);

@@ -224,6 +224,27 @@ struct Binding {
      * there exactly as it did before local fn-field drops existed) while
      * uncolored functions release it. */
     bool          drops_fn_fields;
+    /* fnfield-struct-binder-frees-borrowed-closure: what drops_fn_fields asks
+     * of a binding's INIT, so it frees only closures the binding owns.
+     *
+     * fnfield_let_init: this let binding's initializer (any kind), read when a
+     *   later binding is initialised FROM this one (`(let [g h] ...)`), whose
+     *   ownership is then h's.
+     * fnfield_takers: on a let-bound CLOSURE local, the struct bindings that
+     *   stored it in a boxed fn-field and were flagged on the assumption that
+     *   they own it.  When the closure's own let ends, any further use of it
+     *   (or a use in a loop or a capture) un-flags them: the closure is then
+     *   shared, and freeing it in the struct would leave the other use
+     *   reading freed memory.
+     * fnfield_ret_stamped / fnfield_ret_owned: on a defn, whether its body
+     *   was walked, and whether every value it returns is a struct whose
+     *   boxed fn-fields the caller then owns (a constructor of fresh
+     *   closures, or a local holding one) -- not a parameter it was lent or
+     *   a ^copy of one. */
+    struct Expr  *fnfield_let_init;
+    struct FnfieldTaker *fnfield_takers;
+    bool          fnfield_ret_stamped;
+    bool          fnfield_ret_owned;
     /* async-capturing-body-env-never-freed: this let-bound fresh capturing
      * closure's only use is as the body of one `async` spawn, so the SPAWN
      * owns its env box (tur_async_owns_env, dropped when the body settles)
