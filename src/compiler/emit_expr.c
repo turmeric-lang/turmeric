@@ -251,6 +251,8 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
                     closure->capture_drop_insts[i]->method_impls[0]->binding);
                 buf_printf(out, "    %s(__e->%s);\n", dm, cf);
                 free(dm); free(cf);
+            } else if (cap && i < 32 && (closure->owned_capture_mask & (1u << i))) {
+                emit_owned_capture_release(out, cap);
             }
         }
         buf_puts(out,
@@ -2929,6 +2931,8 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     /* closure-stored-beyond-its-let-has-no-owner: moved into the next
      * binding's struct, which frees it. */
     if (b->fnfield_moved_into) return false;
+    /* ...or owned by the env of the lambda that captures it. */
+    if (b->owned_by_capture) return false;
     /* letrec-mutual-recursion-between-capturing-closures: the members capture
      * one another, so each is "escaping" into a sibling's env by the walk
      * below, and neither box was ever freed (64 B a call of the report's
@@ -23411,4 +23415,31 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
     }
     return atom_nil();
+}
+
+/* closure-stored-beyond-its-let-has-no-owner: the env drop glue's release of
+ * a capture the env OWNS (Closure.owned_capture_mask) -- a lambda through its
+ * own glue, a closure-owning struct through each boxed closure field.  Written
+ * out inline rather than through drop_fnfields_<T>, which the module may
+ * define after this env. */
+void emit_owned_capture_release(Buf *out, const Binding *cap) {
+    char *cf = raw_name_for_binding(cap);
+    if (cap->type.kind == TY_FN) {
+        buf_printf(out, "    if (__e->%s) TUR_CLOSURE_DROP(__e->%s);\n", cf, cf);
+    } else if (cap->type.kind == TY_ADT && cap->type.as.adt_.def &&
+               cap->type.as.adt_.def->n_ctors == 1 && cap->type.as.adt_.def->ctors[0]) {
+        const AdtDef *def = cap->type.as.adt_.def;
+        const CtorDef *ctor = def->ctors[0];
+        for (int32_t fi = (int32_t)ctor->n_fields - 1; fi >= 0; fi--) {
+            if (!(ctor->fields[fi].kind == TY_FN && ctor->fields[fi].full_type &&
+                  ctor->fields[fi].full_type->kind == TY_FN &&
+                  ctor->fields[fi].full_type->as.fn.boxed))
+                continue;
+            char *mp = adt_field_member_path(def, ctor, (uint32_t)fi);
+            buf_printf(out, "    if (__e->%s.%s) TUR_CLOSURE_DROP(__e->%s.%s);\n",
+                       cf, mp, cf, mp);
+            free(mp);
+        }
+    }
+    free(cf);
 }

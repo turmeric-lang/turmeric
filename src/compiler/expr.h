@@ -626,6 +626,11 @@ struct Binding {
      * (let_binding_env_freeable, cps_closure_env_freeable).  NULL otherwise.
      * Set by elab_fnfield_resolve_pending. */
     const struct Expr *fnfield_moved_into;
+    /* closure-stored-beyond-its-let-has-no-owner: this binding (a lambda, or a
+     * struct owning its closures) is owned by the env of the lambda that
+     * captures it (Closure.owned_capture_mask), which frees it; its own
+     * scope-end free is off. */
+    bool          owned_by_capture;
     /* class-defn-constraint-not-discharged-at-call-site: backlink to the owning
      * FnDef's typeclass constraint set (`^Encode T`, or the `[(Encode T)]`
      * middle-vector form), or NULL for a binding with no constraints.  Stamped
@@ -1529,6 +1534,14 @@ struct Closure {
      * build (CT_LETRAW) even though it captures.  Its boxed env is reaped at the
      * handler case (the generalized __Shift P3.d reap). */
     bool           is_effect_payload;
+    /* closure-stored-beyond-its-let-has-no-owner: bit i set when this env OWNS
+     * capture i -- a lambda or a closure-owning struct bound right before this
+     * lambda, captured by it and by nothing else, which its own `let` would
+     * not free (it escapes inside this env).  The env drop glue then releases
+     * it: TUR_CLOSURE_DROP for a lambda, each closure field for a struct.  The
+     * capture's binding carries owned_by_capture so its own free stays off.
+     * Decided at the end of elaboration (elab_fnfield_resolve_pending). */
+    uint32_t       owned_capture_mask;
 };
 
 typedef struct LetBinding {

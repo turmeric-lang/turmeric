@@ -3,8 +3,10 @@
 ;; scope.  Here each one is used AFTER its `let` has ended -- the struct handed
 ;; back through a function, its closure field kept in a global, the struct
 ;; captured by a lambda that is returned -- so freeing it there would be a
-;; use-after-free.  Nothing frees these closures, so they leak (see
-;; known-leak); a use-after-free still fails the leak-check gate.
+;; use-after-free.  Each is freed by whoever holds it last instead: the
+;; caller's binder of the struct `leak-out` hands back (the lambda moved into
+;; it), the global (never freed, reachable), and the env of the returned lambda
+;; (which owns the struct it captured).  Leak-checked.
 (defstruct Holder [run : (fn [int] int)  tag : int])
 (defn keep [h : Holder] : Holder h)
 (defn zero [x : int] : int 0)

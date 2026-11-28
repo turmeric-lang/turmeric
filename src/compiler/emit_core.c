@@ -2203,6 +2203,53 @@ bool expr_contains_inline_c_block(const Expr *e) {
     return esc_inline_c_visit(e, NULL);
 }
 
+/* closure-stored-beyond-its-let-has-no-owner: may the env of `lam` -- a lambda
+ * literal created right after binding `idx` of `let`, and capturing it --
+ * own that binding, so its drop glue frees it?  The caller has checked the
+ * shape (adjacency, no other mention outside `lam`); this checks the uses:
+ *
+ *   - the binding would not be freed by its own `let` anyway: it escapes by
+ *     the more permissive closure walk (a lambda) or by the struct walk (a
+ *     closure-owning struct), so the env is not a second owner;
+ *   - inside `lam`, its uses keep it in -- calls, field reads, handing it to
+ *     a parameter that only reads it -- so nothing `lam` does lets a copy
+ *     out, and `lam`'s result cannot carry it (closure_result_may_view_capture);
+ *   - no inline C in `lam` touches its env.
+ *
+ * A lambda capture must be a lambda literal (a fresh env of its own); a
+ * struct capture must own its closures (Binding.fnfield_owner). */
+static bool closure_result_may_view_capture(const Expr *x, const struct Closure *c,
+                                            int depth);
+bool closure_capture_can_be_owned(const Expr *let, uint32_t idx, const Expr *lam) {
+    if (!let || !lam || lam->kind != EX_CLOSURE || idx >= let->as.let_.n) return false;
+    const struct Closure *c = lam->as.closure_.closure;
+    const Binding *b = let->as.let_.bindings[idx].binding;
+    const Expr *init = let->as.let_.bindings[idx].init;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!c || !c->fn || !c->fn->body || !b || !init) return false;
+    if (c->is_shift_receiver || c->is_effect_payload || c->fat_captures_borrowed) return false;
+    uint32_t at = UINT32_MAX;
+    for (uint32_t i = 0; i < c->n_captures; i++)
+        if (c->captures[i] == b) at = i;
+    if (at == UINT32_MAX || at >= 32) return false;
+    if (c->capture_drop_insts && c->capture_drop_insts[at]) return false;
+    if (b->is_fat || b->is_global || b->type.kind == TY_RC) return false;
+    if (closure_body_inline_c_touches_env(c)) return false;
+    if (closure_result_may_view_capture(c->fn->body, c, 0)) return false;
+    if (b->type.kind == TY_FN) {
+        if (init->kind != EX_CLOSURE) return false;
+        if (!closure_let_binding_escapes_reaped(let, idx)) return false;
+        if (closure_binding_escapes(c->fn->body, b)) return false;
+        return true;
+    }
+    if (b->type.kind == TY_ADT && b->fnfield_owner) {
+        if (!fnfield_struct_escapes(let, b, let->as.let_.bindings[idx].init)) return false;
+        if (fnfield_struct_escapes(c->fn->body, b, NULL)) return false;
+        return true;
+    }
+    return false;
+}
+
 /* The expressions whose value is `e`'s value -- its tail positions -- and
  * every `return`'s value in it (a nested lambda's own `return` excluded). */
 #define ESC_MAX_TAILS 64

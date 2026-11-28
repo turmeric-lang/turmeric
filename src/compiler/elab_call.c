@@ -7855,6 +7855,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     /* Build Closure struct */
     struct Closure *pap_closure = (struct Closure *)arena_alloc(e->arena, sizeof(struct Closure));
     pap_closure->fn = pap_fd;
+    pap_closure->owned_capture_mask = 0;   /* arena mem is not zeroed */
     pap_closure->captures = pap_captures;
     pap_closure->n_captures = (uint8_t)n_pap_captures;
     pap_closure->env_name = pap_env_sym;
@@ -13607,6 +13608,7 @@ static bool convert_mapper_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
     struct Closure *clo = (struct Closure *)arena_alloc(e->arena, sizeof(struct Closure));
     clo->fn = M;
     clo->fat_captures_borrowed = false;   /* arena mem is not zeroed */
+    clo->owned_capture_mask = 0;
     Binding **caps = (Binding **)arena_alloc(e->arena, n_cap * sizeof(Binding *));
     for (uint8_t k = 0; k < n_cap; k++) caps[k] = cap_dicts[k];
     clo->captures = caps;

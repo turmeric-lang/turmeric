@@ -1,0 +1,34 @@
+;; closure-stored-beyond-its-let-has-no-owner: env ownership refused -- the
+;; lambda hands back what it captured, stores it in a global (inside a struct),
+;; hands back the struct it captured, or shares it with a second lambda; and, when the
+;; capturing lambda is only called, the captured lambda's own `let` frees it.
+;; In the first four the capture is used after the env is gone, so a wrong
+;; ownership is a use-after-free, which fails the leak-check gate even with the
+;; known-leak marker.
+(defstruct Holder [run : (fn [int] int)  tag : int])
+(defn zero [x : int] : int 0)
+(def ^mut kept : Holder (Holder zero 0))
+(defn get-step [k : int] : (fn [] (fn [int] int))
+  (let [step (fn [x : int] : int (+ x k))]
+    (fn [] : (fn [int] int) step)))
+(defn stash-step [k : int] : (fn [] int)
+  (let [step (fn [x : int] : int (* x k))]
+    (fn [] : int (do (set! kept (Holder step 1)) 0))))
+(defn get-run [k : int] : (fn [] Holder)
+  (let [h (Holder (fn [x : int] : int (- x k)) 1)]
+    (fn [] : Holder h)))
+(defn pair-of [k : int] : (fn [int] int)
+  (let [step (fn [x : int] : int (+ x k))
+        a    (fn [x : int] : int (step x))]
+    (fn [x : int] : int (+ (a x) (step x)))))
+(defn confined [k : int] : int
+  (let [step (fn [x : int] : int (+ x k))
+        a    (fn [x : int] : int (step (step x)))]
+    (a 1)))
+(defn main [] : int
+  (let [s (let [g (get-step 3)] (g))] (println (s 1)))
+  (let [_ (let [g (stash-step 4)] (g))] (println ((.run kept) 2)))
+  (let [r (let [g (get-run 5)] (g))] (println ((.run r) 10)))
+  (let [p (pair-of 2)] (println (p 1)))
+  (println (confined 7))
+  0)

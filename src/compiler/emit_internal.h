@@ -1268,6 +1268,11 @@ void fnfield_struct_param_uses(const Expr *body, const Binding *p,
                                bool *reads, bool *result_only);
 /* Any inline-C block anywhere in `e`, nested lambdas included (precise). */
 bool expr_contains_inline_c_block(const Expr *e);
+/* closure-stored-beyond-its-let-has-no-owner: may `lam`'s env own binding
+ * `idx` of `let` (Closure.owned_capture_mask)? */
+bool closure_capture_can_be_owned(const Expr *let, uint32_t idx, const Expr *lam);
+/* ...and the env drop glue's release of such a capture (emit_expr.c). */
+void emit_owned_capture_release(Buf *out, const Binding *cap);
 /* Does any inline-C block occur under `e`?  (emit_core.c) */
 bool expr_subtree_has_inline_c(const Expr *e);
 /* catch-unwind-thunk-closure-leak scoped-free escape analysis: like

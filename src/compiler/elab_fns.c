@@ -14567,8 +14567,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * fresh env (Turmeric lets are not memoised); the let-bound intermediates
          * are the factory's own scope and do not affect the returned env, whose
          * captures/result are still checked scalar-Copy below. */
-        while (_fc && (_fc->kind == EX_LET || _fc->kind == EX_ASCRIBE))
+        /* ...and a one-item `do`, which a `let` binding a closure-owning
+         * struct wraps its body in (local-struct-drop). */
+        while (_fc && (_fc->kind == EX_LET || _fc->kind == EX_ASCRIBE ||
+                       (_fc->kind == EX_DO && _fc->as.do_.n == 1)))
             _fc = (_fc->kind == EX_ASCRIBE) ? _fc->as.ascribe_.inner
+                : (_fc->kind == EX_DO)      ? _fc->as.do_.items[0]
                                             : _fc->as.let_.body;
         if (_fc && _fc->kind == EX_CLOSURE && _fc->as.closure_.closure &&
             _fc->as.closure_.closure->n_captures > 0 &&
@@ -16314,6 +16318,7 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
         struct Closure *closure = (struct Closure *)arena_alloc(e->arena, sizeof(struct Closure));
         closure->fn = fd;
         closure->fat_captures_borrowed = false;   /* arena mem is not zeroed */
+        closure->owned_capture_mask = 0;
         /* Copy captures into arena memory so it shares the closure's lifetime. */
         Binding **arena_captures = (Binding **)arena_alloc(e->arena, n_captures * sizeof(Binding *));
         memcpy(arena_captures, captures, n_captures * sizeof(Binding *));

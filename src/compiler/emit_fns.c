@@ -6295,6 +6295,11 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
                             fd->closure->capture_drop_insts[i]->method_impls[0]->binding);
                         buf_printf(file, "    %s(__e->%s);\n", dm, cf);
                         free(dm); free(cf);
+                    } else if (cap && i < 32 &&
+                               (fd->closure->owned_capture_mask & (1u << i))) {
+                        /* closure-stored-beyond-its-let-has-no-owner: a capture
+                         * this env owns (emit_expr.c twin). */
+                        emit_owned_capture_release(file, cap);
                     }
                 }
                 buf_puts(file, "    free((void *)((char *)__p - sizeof(void *)));\n}\n");

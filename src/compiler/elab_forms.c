@@ -15,6 +15,7 @@ void fnfield_struct_param_uses(const Expr *body, const Binding *p,
 bool expr_contains_inline_c_block(const Expr *e);
 bool closure_let_binding_escapes(const Expr *let, uint32_t idx);
 bool closure_let_binding_escapes_reaped(const Expr *let, uint32_t idx);
+bool closure_capture_can_be_owned(const Expr *let, uint32_t idx, const Expr *lam);
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -811,6 +812,8 @@ typedef struct FnfieldPendingMove {
     struct FnfieldPendingMove *next;
     const Expr *let;
     uint32_t    idx;
+    const Expr *lam;   /* non-NULL: a capture candidate -- this lambda's env
+                        * may own binding idx (closure_capture_can_be_owned) */
 } FnfieldPendingMove;
 
 static const Expr *fnfield_peel_ascribe(const Expr *x) {
@@ -857,7 +860,7 @@ static bool fnfield_mention_visit(const Expr *x, void *ud) {
 }
 
 void elab_fnfield_note_moves(Elab *e, const Expr *let) {
-    if (!e || !e->arena || !let || let->kind != EX_LET || let->as.let_.n < 2) return;
+    if (!e || !e->arena || !let || let->kind != EX_LET || let->as.let_.n < 1) return;
     for (uint32_t i = 0; i + 1 < let->as.let_.n; i++) {
         const Binding *cb = let->as.let_.bindings[i].binding;
         const Expr *ci = fnfield_peel_ascribe(let->as.let_.bindings[i].init);
@@ -874,9 +877,114 @@ void elab_fnfield_note_moves(Elab *e, const Expr *let) {
             (FnfieldPendingMove *)arena_alloc(e->arena, sizeof(FnfieldPendingMove));
         n->let = let;
         n->idx = i;
+        n->lam = NULL;
         n->next = e->fnfield_pending_moves;
         e->fnfield_pending_moves = n;
     }
+    /* closure-stored-beyond-its-let-has-no-owner (env ownership): binding i a
+     * lambda or a closure-owning struct, and the very next thing evaluated a
+     * lambda literal that captures it -- binding i+1's init, or, for the last
+     * binding, the `let`'s result (through nested `let`s whose inits cannot
+     * perform). */
+    for (uint32_t i = 0; i < let->as.let_.n; i++) {
+        const Binding *cb = let->as.let_.bindings[i].binding;
+        if (!cb || !(cb->type.kind == TY_FN || elab_type_owns_boxed_fnfield(cb->type)))
+            continue;
+        /* Not a `letrec` member, and not a lambda that captures a sibling: two
+         * members capturing each other would each own the other (a cycle, so
+         * a double free). */
+        if (cb->is_letrec_binding) continue;
+        {
+            const Expr *ci = fnfield_peel_ascribe(let->as.let_.bindings[i].init);
+            bool knot = false;
+            if (ci && ci->kind == EX_CLOSURE && ci->as.closure_.closure) {
+                const struct Closure *kc = ci->as.closure_.closure;
+                for (uint32_t ki = 0; ki < kc->n_captures && !knot; ki++)
+                    for (uint32_t j = 0; j < let->as.let_.n; j++)
+                        if (kc->captures[ki] == let->as.let_.bindings[j].binding)
+                            knot = true;
+            }
+            if (knot) continue;
+        }
+        const Expr *lam = NULL;
+        if (i + 1 < let->as.let_.n) {
+            lam = fnfield_peel_ascribe(let->as.let_.bindings[i + 1].init);
+        } else {
+            lam = let->as.let_.body;
+            for (int d = 0; lam && d < 16; d++) {
+                lam = fnfield_peel_ascribe(lam);
+                if (lam && lam->kind == EX_DO && lam->as.do_.n == 1) {
+                    lam = lam->as.do_.items[0];
+                    continue;
+                }
+                if (lam && lam->kind == EX_LET) {
+                    bool pure = true;
+                    for (uint32_t j = 0; j < lam->as.let_.n; j++)
+                        if (!fnfield_move_pure_arg(lam->as.let_.bindings[j].init)) pure = false;
+                    if (!pure) { lam = NULL; break; }
+                    lam = lam->as.let_.body;
+                    continue;
+                }
+                break;
+            }
+        }
+        if (!lam || lam->kind != EX_CLOSURE || !lam->as.closure_.closure) continue;
+        bool captures = false;
+        const struct Closure *cc = lam->as.closure_.closure;
+        for (uint32_t ci = 0; ci < cc->n_captures; ci++)
+            if (cc->captures[ci] == cb) captures = true;
+        if (!captures) continue;
+        FnfieldPendingMove *n =
+            (FnfieldPendingMove *)arena_alloc(e->arena, sizeof(FnfieldPendingMove));
+        n->let = let;
+        n->idx = i;
+        n->lam = lam;
+        n->next = e->fnfield_pending_moves;
+        e->fnfield_pending_moves = n;
+    }
+}
+
+/* Mentions of `b` in `x`, the subtree `skip` left out. */
+typedef struct { const Binding *b; int n; const Expr *skip; } FnfieldSkipUd;
+static bool fnfield_skip_visit(const Expr *x, void *ud) {
+    FnfieldSkipUd *u = (FnfieldSkipUd *)ud;
+    if (x == u->skip) return false;
+    FnfieldMentionUd m = { u->b, 0 };
+    if (x->kind == EX_CALL && x->as.call_.fn_binding == u->b) u->n++;
+    switch (x->kind) {
+        case EX_VAR: case EX_CLOSURE: case EX_FN_DEF: case EX_DEFER:
+        case EX_INLINE_C: case EX_SET: {
+            FnfieldUseUd uu = { u->b, 0 };
+            (void)fnfield_use_visit(x, &uu);
+            u->n += uu.n;
+            if (x->kind == EX_VAR || x->kind == EX_CLOSURE || x->kind == EX_FN_DEF)
+                return u->n > 0;
+            break;
+        }
+        default:
+            break;
+    }
+    (void)m;
+    if (u->n > 0) return true;
+    return cps_visit_children(x, fnfield_skip_visit, ud);
+}
+
+static void fnfield_decide_capture(const FnfieldPendingMove *m) {
+    const Expr *let = m->let;
+    Binding *cb = let->as.let_.bindings[m->idx].binding;
+    if (!cb || cb->owned_by_capture || cb->fnfield_moved_into) return;
+    /* Named nowhere in the `let` outside the capturing lambda. */
+    FnfieldSkipUd u = { cb, 0, m->lam };
+    for (uint32_t j = 0; j < let->as.let_.n && u.n == 0; j++)
+        if (j != m->idx) fnfield_skip_visit(let->as.let_.bindings[j].init, &u);
+    if (u.n == 0) fnfield_skip_visit(let->as.let_.body, &u);
+    if (u.n != 0) return;
+    if (!closure_capture_can_be_owned(let, m->idx, m->lam)) return;
+    struct Closure *c = m->lam->as.closure_.closure;
+    for (uint32_t i = 0; i < c->n_captures && i < 32; i++)
+        if (c->captures[i] == cb) c->owned_capture_mask |= 1u << i;
+    cb->owned_by_capture = true;
+    cb->drops_fn_fields = false;
 }
 
 static void fnfield_decide_move(const FnfieldPendingMove *m) {
@@ -885,7 +993,7 @@ static void fnfield_decide_move(const FnfieldPendingMove *m) {
     Binding *cb = let->as.let_.bindings[i].binding;
     const Binding *hb = let->as.let_.bindings[i + 1].binding;
     const Expr *c = fnfield_peel_ascribe(let->as.let_.bindings[i + 1].init);
-    if (!cb || !hb || !c || cb->fnfield_moved_into) return;
+    if (!cb || !hb || !c || cb->fnfield_moved_into || cb->is_letrec_binding) return;
     const AdtDef *ad = elab_byval_drop_adt(hb->type);
     const CtorDef *ctor = c->as.call_.ctor;
     if (!ad || ad->ctors[0] != ctor || c->as.call_.n_args != ctor->n_fields ||
@@ -939,6 +1047,7 @@ static void fnfield_decide_move(const FnfieldPendingMove *m) {
  * An answer that was already yes stays yes (it was derived from less), and a
  * let that turns owner here gets the scope-end free its other guards already
  * allowed.  The emitters read the flags after this. */
+static void fnfield_resolve_ownership(FnfieldPendingLet *lets, FnfieldPendingFn *fns);
 void elab_fnfield_resolve_pending(Elab *e) {
     FnfieldPendingLet    *lets = e->fnfield_pending_lets;
     FnfieldPendingFn     *fns  = e->fnfield_pending_fns;
@@ -974,7 +1083,16 @@ void elab_fnfield_resolve_pending(Elab *e) {
     }
     FnfieldPendingMove *mvs = e->fnfield_pending_moves;
     e->fnfield_pending_moves = NULL;
-    for (FnfieldPendingMove *m = mvs; m; m = m->next) fnfield_decide_move(m);
+    for (FnfieldPendingMove *m = mvs; m; m = m->next)
+        if (!m->lam) fnfield_decide_move(m);
+    fnfield_resolve_ownership(lets, fns);
+    /* closure-stored-beyond-its-let-has-no-owner: env ownership, once every
+     * owner and every scope-end free is decided. */
+    for (FnfieldPendingMove *m = mvs; m; m = m->next)
+        if (m->lam) fnfield_decide_capture(m);
+}
+
+static void fnfield_resolve_ownership(FnfieldPendingLet *lets, FnfieldPendingFn *fns) {
     if (!lets && !fns) return;
     for (FnfieldPendingFn *f = fns; f; f = f->next) {
         f->b->returns_fresh_fnfield = true;

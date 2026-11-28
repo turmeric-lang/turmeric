@@ -27,6 +27,29 @@ is freed by its caller.
   factory built, a struct's closures. That is "Let a lambda's env own...",
   below.
 
+**Env ownership, 2026-11-28.** The env of a lambda can now OWN a capture
+(`Closure.owned_capture_mask`), and its drop glue frees it: `TUR_CLOSURE_DROP`
+for a lambda, each closure field for a struct. The capture must be a lambda
+or a closure-owning struct, bound right before the lambda -- the next
+binding, or the `let`'s result -- and named nowhere else. Its own `let` must
+not be freeing it anyway, and the lambda's uses of it must keep it in; the
+lambda's result must not be able to reach it.
+
+Repro 3, an owner struct captured by a returned lambda, and a closure a
+factory built (`twice-of`'s `step`) are freed now
+(`closure-env-owns-capture`, leak-checked). `closure-in-escaping-struct-kept`
+runs clean and lost its `known-leak` marker. `closure-env-owns-capture-refused`
+(known-leak) pins the refusals: the lambda hands the capture back, stores it,
+hands back the struct, or shares it with a second lambda.
+
+Excluded: `letrec` members and lambdas that capture a sibling -- two
+mutually capturing members would each own the other.
+
+**A bug caught on the way:** `Closure` comes from arena memory that is not
+zeroed. The first build of this read garbage mask bits from three allocation
+sites, which turned a leak-checked fixture into a use-after-free. Each site
+now initialises it.
+
 The move is refused, and the lambda still leaks, when:
 
 - the lambda is used again;
@@ -36,9 +59,17 @@ The move is refused, and the lambda still leaks, when:
   resume would build two structs around one lambda.
 
 `tests/fixtures/closure-move-refused` pins those (known-leak); a wrong move
-there is a double free. Still open, below: repros 2 and 3, a closure in a
-vec, a generic call's result, and an owner struct whose copy outlives its
-`let`.
+there is a double free.
+
+**Still open after all of the above:**
+- repro 2, a closure kept in a global or a vec;
+- `closure-slot-ptr-void-param-sinks`'s closure, pushed into a vec and stored
+  in a struct;
+- a generic call's result;
+- an owner struct whose copy is kept in a global (the overwritten initial
+  value of a `^mut` global included);
+- the refused moves and captures;
+- a `^mut` cell captured by a returned lambda.
 
 **Checked for the move:** every fixture's closure frees, emitted against the
 previous commit, changed only in `closure-in-escaping-struct-kept`.
@@ -123,10 +154,11 @@ its `let` into whatever it escapes to.
    down the `let`, or one whose other arguments are calls, needs a "nothing
    between could perform" check that does not exist yet. A conditional
    constructor would then leak on the branch not taken.
-2. **Let a lambda's env own a struct it captures** (repro 3, and an owner
-   struct captured by a returned lambda). The env glue is shallow: it frees
-   the env box and nothing it captured. A capture the escape walk proves is
-   the struct's last use could make the glue call `drop_fnfields_<T>` on it.
+2. ~~**Let a lambda's env own a struct it captures.**~~ Done (above) for a
+   capture bound right before the lambda. A `^mut` cell a returned lambda
+   captures is still never freed: its owner is the cell machinery
+   (mut-cell-is-never-freed), which frees a cell only when every capturing
+   lambda dies in its scope.
 3. A closure stored in a vec or a global (repro 2) needs the container to
    own its elements, which is a container-ownership question, not this one.
 4. A generic call's result (`(Holder (ident f))`): `ident` keeps its argument

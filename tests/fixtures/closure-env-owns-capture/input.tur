@@ -1,0 +1,29 @@
+;; closure-stored-beyond-its-let-has-no-owner: a lambda or a closure-owning
+;; struct bound right before a lambda that captures it -- and named nowhere
+;; else -- is OWNED by that lambda's env, whose drop glue frees it: a closure
+;; a factory built, an owner struct (^copy and move-only), and a lambda moved
+;; into a struct that is then captured.  Each returned lambda is freed by its
+;; caller, and its glue frees what it owns.  Leak-checked.
+(defstruct Holder [run : (fn [int] int)  tag : int])
+(defstruct ^copy C [run : (fn [int] int)  tag : int])
+(defn twice-of [k : int] : (fn [int] int)
+  (let [step (fn [x : int] : int (+ x k))]
+    (fn [x : int] : int (step (step x)))))
+(defn cap-copy [k : int] : (fn [int] int)
+  (let [h (C (fn [x : int] : int (- x k)) 3)]
+    (fn [x : int] : int ((.run h) x))))
+(defn cap-move [k : int] : (fn [int] int)
+  (let [h (Holder (fn [x : int] : int (+ x k)) 3)]
+    (fn [x : int] : int ((.run h) x))))
+(defn capture-out [k : int] : (fn [int] int)
+  (let [cap (fn [x : int] : int (- x k))
+        h   (Holder cap 3)]
+    (fn [x : int] : int ((.run h) x))))
+(defn apply-int [f : (fn [int] int) x : int] : int (f x))
+(defn main [] : int
+  (println (apply-int (twice-of 4) 1))
+  (let [w (twice-of 5)] (println (w 0)))
+  (let [f (cap-copy 5)] (println (f 10)))
+  (let [g (cap-move 5)] (println (g 10)))
+  (let [h (capture-out 5)] (println (h 10)))
+  0)
