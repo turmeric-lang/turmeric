@@ -7300,6 +7300,10 @@ static char *emit_any_drop_arm(EmitCtx *ctx, Buf *body, char *v);
  * B4 wide rule AND-NOT this one -- i.e. it negated the exact predicate that
  * applies -- and measured itself firing on nothing; that is why this is
  * spelled as the single call and nothing else. */
+/* cps-match-sum-payload-box-not-freed: set while a CPS direct-dispatch match
+ * whose producer the CPS backend lowers emits its arm's box release -- the box
+ * is then registered with the entry's reap list once, not freed. */
+static bool g_vsp_free_reap_once = false;
 static bool boxed_struct_payload_walk(EmitCtx *ctx, Buf *body, const char *name,
                                       Type t, bool emit, const char *access) {
     /* `access` spells how the aggregate's members are reached: NULL means the
@@ -7334,8 +7338,12 @@ static bool boxed_struct_payload_walk(EmitCtx *ctx, Buf *body, const char *name,
             if (!emit) return true;
             char *mp = adt_field_member_path(def, c, fi);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "    if (%s%s) free((void *)(intptr_t)%s%s);\n",
-                       pfx, mp, pfx, mp);
+            if (g_vsp_free_reap_once)
+                buf_printf(body, "    if (%s%s) __dk_reap_ptr_once((tur_dkw)(%s%s));\n",
+                           pfx, mp, pfx, mp);
+            else
+                buf_printf(body, "    if (%s%s) free((void *)(intptr_t)%s%s);\n",
+                           pfx, mp, pfx, mp);
             free(mp);
         }
         if (emit && tagged) { indent_buf(body, ctx->indent); buf_puts(body, "    break;\n"); }
@@ -7408,6 +7416,10 @@ static bool match_binder_is_word(const Binding *b) {
     }
 }
 static bool match_scrut_owns_carrier_cell(EmitCtx *ctx, const Expr *m, Type scrut_ty) {
+    /* A CPS-lowered producer's cell is left alone: a cell can be region
+     * memory, and the reap list's plain-pointer kind releases with free. */
+    if (ctx->match_tail && ctx->match_tail->node == m && ctx->match_tail->fresh_scrut_reap)
+        return false;
     const Expr *s = match_owned_scrutinee(ctx, m);
     while (s && s->kind == EX_ASCRIBE) s = s->as.ascribe_.inner;
     if (!s || s->kind != EX_CALL) return false;
@@ -7429,7 +7441,10 @@ static bool match_scrut_owns_carrier_cell(EmitCtx *ctx, const Expr *m, Type scru
  * switch, because a tail-position arm ends in its own `return` or backedge. */
 static void emit_match_arm_vsp_free(EmitCtx *ctx, Buf *body, Type scrut_ty,
                                     const char *access) {
+    g_vsp_free_reap_once = ctx->match_tail && ctx->match_tail->fresh_scrut &&
+                           ctx->match_tail->fresh_scrut_reap;
     boxed_struct_payload_walk(ctx, body, NULL, scrut_ty, true, access);
+    g_vsp_free_reap_once = false;
 }
 
 /* RM1: free an erased sum-carrier cell.  Shallow by default (the accessors

@@ -1352,6 +1352,16 @@ void emit_cps_runtime_prelude(Buf *out) {
 "}\n"
 "__attribute__((unused)) static DK *__dk_reap_keep(DK *k) { __dk_reap_push(k, 1); return k; }\n"
 "__attribute__((unused)) static tur_dkw __dk_reap_ptr(tur_dkw p) { __dk_reap_push((void *)p, 0); return p; }\n"
+/* cps-match-sum-payload-box-not-freed: register a plain block unless it is
+ * already registered -- a multi-shot resume can deliver one fresh payload box
+ * to the same match twice, and each delivery reaches the registration. */
+"__attribute__((unused)) static tur_dkw __dk_reap_ptr_once(tur_dkw p) {\n"
+"    if (!p) return p;\n"
+"    for (size_t i = __dk_reap_n; i-- > 0; )\n"
+"        if (__dk_reap_v[i] == (void *)p && __dk_reap_kind[i] == 0) return p;\n"
+"    __dk_reap_push((void *)p, 0);\n"
+"    return p;\n"
+"}\n"
 /* cps-cell-promoted-mut-shared-across-multishot-resumes: a by-reference cell a
  * resume copy may re-cell (__dk_cells_fresh) carries its own size in a 16-byte
  * header before the value, so a `bool`, a narrow integer or a plain-data

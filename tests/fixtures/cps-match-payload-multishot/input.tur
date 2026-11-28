@@ -1,8 +1,10 @@
 ;; cps-match-sum-payload-box-not-freed, multi-shot: a CPS `match` frees a fresh
-;; scrutinee's payload box only when its producer is a direct call.  A
-;; producer the CPS backend lowers can deliver the SAME box twice under a
-;; multi-shot resume (`early` builds it before it performs), so those boxes
-;; are left alone (see known-leak); freeing one would be a double free, which
+;; scrutinee's payload box when its producer is a direct call, and registers it
+;; with the entry's reap list once (__dk_reap_ptr_once) when the CPS backend
+;; lowers the producer -- `late` is resumed twice, so two boxes, each reaped.
+;; `early` builds its box, performs, then returns it: a multi-shot resume would
+;; hand the same box out twice, so it is not a fresh producer at all and its box
+;; is left alone (see known-leak).  A wrong free here is a double free, which
 ;; still fails the leak-check gate.  Compiled only: the interpreter cannot take
 ;; these multi-shot continuations.
 (defeffect Pick [] : bool)

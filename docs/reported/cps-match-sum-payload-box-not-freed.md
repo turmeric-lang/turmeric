@@ -17,13 +17,21 @@ engines; 48 B leaked before). turmeric-spices: `html/tests/sax_tokens.tur` and
 under `TUR_SANITIZE_PROGRAMS=1` show no memory-safety error (`html` 416 B
 less leaked).
 
-**Still open:** a producer the CPS backend lowers. Under a multi-shot resume
-it can deliver the SAME box to the match twice: `early` in
-`tests/fixtures/cps-match-payload-multishot` builds it, then performs, then
-returns it. So a free here would be a double free, and that box is left
-alone (known-leak). Freeing it needs a deduplicating reap
-(`__dk_reap_ptr_once`, kind 0, like `__dk_reap_closure_once`). That is a
-preamble change, so every snapshot moves.
+**A producer the CPS backend lowers, same day.** Under a multi-shot resume
+such a producer can deliver one box to the match twice. Its box is now
+registered with the entry's reap list once, through the new preamble helper
+`__dk_reap_ptr_once` (kind 0, deduplicating, like `__dk_reap_closure_once`;
+`MatchTailCtx.fresh_scrut_reap`), and freed after every resume. The split
+runtime and 162 snapshots were regenerated for the helper, 7 lines each. A
+carrier cell is left alone on that path, because a cell can be region memory
+and kind 0 releases with `free`.
+
+**Still open:** `early` in `tests/fixtures/cps-match-payload-multishot`
+builds its box, performs, then returns it, so a multi-shot resume hands the
+same box out twice. The sum freshness walk therefore does not stamp it fresh
+(a `perform` in the body is an escape there), and no consumer, on either
+path, frees its box: 16 B (known-leak). Freeing it would need every consumer
+of a "fresh but possibly repeated" result to reap rather than free.
 
 **Severity: low-medium (leak, one box per match).** A by-value struct inside a
 `(Result T E)` or `(Option T)` rides a heap box. A `match` on a fresh producer

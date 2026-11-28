@@ -293,6 +293,7 @@ struct CTerm {
                   * direct emitter (so it runs once per match, and its box is
                   * fresh each time); NULL otherwise. */
                  const struct Expr *fresh_scrut;
+                 bool fresh_scrut_reap;   /* the call is CPS-lowered: reap, once */
                  /* The direct dispatch's guards read these enclosing
                   * variables (each arm's own binders excluded): the capture
                   * and mutation walks visit them like the scrutinee. */

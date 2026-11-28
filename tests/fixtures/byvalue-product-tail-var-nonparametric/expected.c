@@ -2852,6 +2852,13 @@ static void __dk_reap_push(void *p, unsigned char kind) {
 }
 __attribute__((unused)) static DK *__dk_reap_keep(DK *k) { __dk_reap_push(k, 1); return k; }
 __attribute__((unused)) static tur_dkw __dk_reap_ptr(tur_dkw p) { __dk_reap_push((void *)p, 0); return p; }
+__attribute__((unused)) static tur_dkw __dk_reap_ptr_once(tur_dkw p) {
+    if (!p) return p;
+    for (size_t i = __dk_reap_n; i-- > 0; )
+        if (__dk_reap_v[i] == (void *)p && __dk_reap_kind[i] == 0) return p;
+    __dk_reap_push((void *)p, 0);
+    return p;
+}
 __attribute__((unused)) static void *__dk_cell_new(size_t sz) {
     size_t *h = (size_t *)malloc(16 + sz);
     h[0] = sz; h[1] = 0;

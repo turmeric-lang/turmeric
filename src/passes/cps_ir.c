@@ -5346,6 +5346,7 @@ static CTerm *build_match_term(CpsB *b, Expr *e, CAtom scrut, CKont kont) {
     CTerm *t = new_term(b, CT_MATCH);
     t->as.match.scrut = scrut;
     t->as.match.fresh_scrut = NULL;
+    t->as.match.fresh_scrut_reap = false;
     t->as.match.adt = e->as.match_.scrutinee->type.as.adt_.def;
     uint32_t n = e->as.match_.n_arms;
     t->as.match.n_arms = n;
@@ -5428,8 +5429,11 @@ static CTerm *build_direct_match_term(CpsB *b, Expr *e, CKont kont) {
     t->as.match.scrut = sa;
     t->as.match.adt = NULL;
     t->as.match.direct = m;
-    t->as.match.fresh_scrut =
-        (bind_scrut && ps && ps->kind == EX_CALL && safe_to_delegate(b, scrut)) ? scrut : NULL;
+    /* A delegated call runs once per match, so its box is freed like the
+     * direct path's; one the CPS backend lowers can be delivered twice by a
+     * multi-shot resume, so its box is reaped, once. */
+    t->as.match.fresh_scrut = (bind_scrut && ps && ps->kind == EX_CALL) ? scrut : NULL;
+    t->as.match.fresh_scrut_reap = t->as.match.fresh_scrut && !safe_to_delegate(b, scrut);
     uint32_t n = e->as.match_.n_arms;
     t->as.match.n_arms = n;
     CMatchArm *arms = arena_alloc(b->a, n * sizeof(CMatchArm));

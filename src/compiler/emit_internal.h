@@ -963,6 +963,10 @@ typedef struct MatchTailCtx {
      * call, so the match's ownership rules can ask it whether the box is
      * fresh.  NULL otherwise. */
     const Expr *fresh_scrut;
+    /* ...and that call is one the CPS backend lowers, which a multi-shot
+     * resume can deliver twice: register the box with the entry's reap list
+     * once (__dk_reap_ptr_once) instead of freeing it. */
+    bool fresh_scrut_reap;
 } MatchTailCtx;
 
 /* True when `e` is the match emit_tail is currently emitting, so an arm body
