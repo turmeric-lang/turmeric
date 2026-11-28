@@ -1890,6 +1890,7 @@ static void emit_tail_drop_hoist_do(EmitCtx *ctx, Buf *body, const Expr *fn_e,
     for (uint32_t i = (uint32_t)last + 1; i < e->as.do_.n; i++)
         emit_frame_push_defer(ctx, body, frame_var, e->as.do_.items[i]);
     emit_tail(ctx, body, fn_e, fd, e->as.do_.items[last], result_kind, is_main);
+    emit_frame_flush_panic_exits(ctx, body, frame_var);
     ctx->frame_var = saved_frame;
     free(frame_var);
 }
@@ -2274,6 +2275,22 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         }
         default:
             break;
+    }
+
+    /* The panic leaf rule above, for any other `!`-typed tail -- a `do` that
+     * opens a frame to hold a drop registered ahead of a panicking arm
+     * (elab_branch_with_scope_drop, caught-panic-skips-scope-exit-drops) has
+     * no value to spell either. */
+    if (e->type.kind == TY_NEVER && !ctx->tail_void && ctx->current_fn_ret_ctype &&
+        strcmp(ctx->current_fn_ret_ctype, "void") != 0) {
+        char *z = emit_c_zero_of(ctx->current_fn_ret_ctype);
+        if (z) {
+            emit_stmt(ctx, body, e);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "return %s;\n", z);
+            free(z);
+            return;
+        }
     }
 
     /* void-self-tail-call-not-lowered: a leaf of a `: nil` body is a

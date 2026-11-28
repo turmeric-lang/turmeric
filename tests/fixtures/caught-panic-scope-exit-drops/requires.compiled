@@ -1,0 +1,3 @@
+The interpreter does not run a let's injected scope-exit drops on a panic
+or early-return exit: docs/reported/turi-early-return-skips-injected-drops.md.
+Delete this marker when that is fixed.

@@ -828,6 +828,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             /* Restore frame state */
             emit_frame_clear_pending_drops(frame_var);
+            emit_frame_flush_panic_exits(ctx, body, frame_var);
             ctx->frame_var = saved_frame;
             free(frame_var);
             return;
