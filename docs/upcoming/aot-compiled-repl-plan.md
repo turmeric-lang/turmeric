@@ -227,7 +227,7 @@ What graduation accepted, rather than fixed:
   the JIT is reached, so a `defmacro*` never compiles C mid-compile.
 - **Embedders still cannot reach it.** Only `tur`'s `main.c` installs the
   compile hook, so libturi embedders (the notebook spice) keep the error:
-  [notebook-cells-cannot-call-inline-c-spices](../reported/notebook-cells-cannot-call-inline-c-spices.md).
+  [notebook-cells-cannot-call-inline-c-spices](../archive/notebook-cells-cannot-call-inline-c-spices.md).
 
 **As built.** `src/turi/inline_c_jit.{h,c}` is the MIR-free half, in
 `tur_core`. The compile is a hook that `tur` registers from `main.c` on a

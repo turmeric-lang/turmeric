@@ -23,6 +23,13 @@
  *   dep-twice  -- calls into a :spices dep (afdep/util): the image is built
  *                 from the spice root with the dep linked in, and the dep's
  *                 exports are not the image's
+ *   apply-sum / count-if / pf-apply / pf-sample / crv-new + crv-at + crv-free --
+ *                 `^fat` callback parameters: a session closure crosses as a
+ *                 fat box around the image's `__ffi_cb<k>` trampoline, which
+ *                 calls back into the interpreter -- with a float, a bool
+ *                 result, a record argument, a record result, and a callback
+ *                 the compiled side stores and calls on a later export call
+ *                 (plot's renderers)
  *
  * Needs a `tur` to build the image: TUR_BIN (ctest sets it), else ./build/tur.
  * Linked with ENABLE_EXPORTS (-rdynamic): the image resolves the runtime it
@@ -66,6 +73,18 @@ static bool is_int(TuriValue v, int64_t want) {
     return v.tag == TURI_INT && v.as_int == want;
 }
 
+static bool is_float(TuriValue v, double want) {
+    if (v.tag != TURI_FLOAT) {
+        if (turi_is_error(v)) fprintf(stderr, "  got error: %s\n", turi_error_message(v));
+        else fprintf(stderr, "  got tag %d\n", (int)v.tag);
+        return false;
+    }
+    double d = v.as_float - want;
+    if (d < 0) d = -d;
+    if (d > 1e-9) fprintf(stderr, "  got %.17g, want %.17g\n", v.as_float, want);
+    return d <= 1e-9;
+}
+
 static TuriValue native_seven(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
     (void)env; (void)args; (void)n; (void)ud;
     return turi_int(7);
@@ -75,7 +94,47 @@ static const char *FIXTURE =
     "(defmodule afx/core\n"
     "  (import afdep/util :refer [twice])\n"
     "  (export add-loop wrapped box-new box-get box-free tagged-id Pt pt-sum answer\n"
-    "          greet even-word? dep-twice B3 pt-make b3-sum b3-make)\n"
+    "          greet even-word? dep-twice B3 pt-make b3-sum b3-make\n"
+    "          apply-sum count-if Pf pf-apply pf-sample Crv crv-new crv-at crv-free)\n"
+    "  (defn apply-sum [^fat f : (fn [float] float) n : int] : float\n"
+    "    ```c\n"
+    "    double s = 0;\n"
+    "    for (int64_t i = 0; i < n; i++) s += TUR_APPLY1_T(double, double, f, (double)i + 0.5);\n"
+    "    return s;\n"
+    "    ```)\n"
+    "  (defn count-if [^fat p : (fn [int] bool) n : int] : int\n"
+    "    ```c\n"
+    "    int64_t c = 0;\n"
+    "    for (int64_t i = 0; i < n; i++) if (TUR_APPLY1_T(int64_t, int64_t, p, i)) c++;\n"
+    "    return c;\n"
+    "    ```)\n"
+    "  (defstruct Pf [x : float y : float])\n"
+    "  (defn pf-apply [^fat f : (fn [Pf] float) x : float] : float\n"
+    "    (+ (f (Pf x (* x 2.0))) (__triple-f x)))\n"
+    "  (defn pf-sample [^fat f : (fn [float] Pf) t : float] : float\n"
+    "    (let [p (f t)] (+ (. p x) (+ (. p y) (__triple-f 0.0)))))\n"
+    "  (defn __triple-f [x : float] : float\n"
+    "    ```c\n"
+    "    double r = 0;\n"
+    "    for (int i = 0; i < 3; i++) r += x;\n"
+    "    return r;\n"
+    "    ```)\n"
+    "  (defopaque Crv :ptr<void>)\n"
+    "  (defn __crv-new-raw [^fat f : (fn [float] float)] : ptr<void>\n"
+    "    ```c\n"
+    "    int64_t *c = (int64_t *)malloc(sizeof(int64_t));\n"
+    "    for (int i = 0; i < 1; i++) c[i] = f;\n"
+    "    return (void *)c;\n"
+    "    ```)\n"
+    "  (defn __crv-at-raw [c : ptr<void> x : float] : float\n"
+    "    ```c\n"
+    "    int64_t f = 0;\n"
+    "    for (int i = 0; i < 1; i++) f = ((int64_t *)c)[i];\n"
+    "    return TUR_APPLY1_T(double, double, f, x);\n"
+    "    ```)\n"
+    "  (defn crv-new [^fat f : (fn [float] float)] : Crv (:: (__crv-new-raw f) Crv))\n"
+    "  (defn crv-at [c : Crv x : float] : float (__crv-at-raw (:: c ptr<void>) x))\n"
+    "  (defn crv-free [c : Crv] : nil (__box-free-raw (:: c ptr<void>)))\n"
     "  (defn dep-twice [x : int] : int (+ 1 (twice x)))\n"
     "  (defn add-loop [a : int b : int] : int\n"
     "    ```c\n"
@@ -179,7 +238,8 @@ int main(void) {
     snprintf(note, sizeof(note), "%s/afx/notes/walkthrough.tur.md", root);
     const char *imp =
         "(import afx/core :refer [add-loop wrapped box-new box-get box-free Pt pt-sum answer\n"
-    "                         pt-make B3 b3-sum b3-make])";
+    "                         pt-make B3 b3-sum b3-make apply-sum count-if\n"
+    "                         Pf pf-apply pf-sample crv-new crv-at crv-free])";
 
     /* Control: without the image, the first inline-C call is the refusal. */
     TuriEnv *ctl = turi_env_new();
@@ -196,9 +256,10 @@ int main(void) {
     turi_env_set_search_path_for(env, note);
     int n = turi_env_attach_spice_for_module(env, "afx/core", tur);
     /* add-loop wrapped box-new box-get box-free answer greet even-word?
-     * dep-twice pt-sum pt-make b3-sum b3-make -- not tagged-id (no
-     * definition), not the dep's `twice` (not this spice's export). */
-    CHECK(n == 13, "attach: binds the thirteen exports the FFI can marshal");
+     * dep-twice pt-sum pt-make b3-sum b3-make apply-sum count-if pf-apply
+     * pf-sample crv-new crv-at crv-free -- not tagged-id (no definition), not the
+     * dep's `twice` (not this spice's export). */
+    CHECK(n == 20, "attach: binds the twenty exports the FFI can marshal");
     CHECK(turi_env_attach_spice_for_module(env, "afx/core", tur) == 0,
           "attach: a module an attached image provides is not loaded twice");
     CHECK(turi_env_attach_spice_for_module(env, "no/such-module", tur) == 0,
@@ -230,6 +291,30 @@ int main(void) {
           "attached: a :cstr export returns the string");
     TuriValue ev = turi_eval(env, "(afx/core/even-word? 6)");
     CHECK(ev.tag == TURI_BOOL && ev.as_bool, "attached: a :bool export returns a boolean");
+    /* Callbacks.  A float probe with a fractional part (0.5 + i, times
+     * 1.5): 0.75 + 2.25 + 3.75. */
+    turi_eval(env, "(defn times-1-5 [x : float] : float (* x 1.5))");
+    CHECK(is_float(turi_eval(env, "(apply-sum times-1-5 3)"), 6.75),
+          "callback: a cell's defn is called back from compiled code");
+    CHECK(is_float(turi_eval(env, "(apply-sum times-1-5 3)"), 6.75),
+          "callback: a second call reuses the same box");
+    CHECK(is_float(turi_eval(env,
+              "(let [k 2.5] (apply-sum (fn [x : float] : float (* x k)) 3))"), 11.25),
+          "callback: a capturing fn literal crosses too");
+    turi_eval(env, "(defn odd-int? [i : int] : bool (= (mod i 2) 1))");
+    CHECK(is_int(turi_eval(env, "(count-if odd-int? 7)"), 3),
+          "callback: a :bool result reaches the compiled caller");
+    turi_eval(env, "(defn pf-sum [p : Pf] : float (+ (. p x) (. p y)))");
+    CHECK(is_float(turi_eval(env, "(pf-apply pf-sum 1.25)"), 7.5),
+          "callback: a record argument is rebuilt for the cell");
+    turi_eval(env, "(defn pf-at [t : float] : Pf (Pf t (* t 3.0)))");
+    CHECK(is_float(turi_eval(env, "(pf-sample pf-at 0.75)"), 3.0),
+          "callback: a record result is packed for the compiled caller");
+    CHECK(is_float(turi_eval(env, "(let [c (crv-new times-1-5)] (let [y (crv-at c 7.1)] (crv-free c) y))"), 7.1 * 1.5),
+          "callback: compiled code keeps the handle and calls it on a later call");
+    CHECK(turi_is_error(turi_eval(env, "(apply-sum 3 3)")),
+          "callback: a non-function in a callback slot is refused");
+
     turi_eval(env, "(defn wrapped [x : int] : int 0)");
     CHECK(is_int(turi_eval(env, "(wrapped 5)"), 0),
           "attached: a cell's own defn of the same name takes over");
@@ -243,7 +328,7 @@ int main(void) {
           "attach: a directory with no build.tur above it is an error");
     char spice[1100];
     snprintf(spice, sizeof(spice), "%s/afx", root);
-    CHECK(turi_env_attach_spice(sh, spice, tur) == 13, "attach by root: same thirteen bindings");
+    CHECK(turi_env_attach_spice(sh, spice, tur) == 20, "attach by root: same twenty bindings");
     CHECK(is_int(turi_eval(sh, "(answer)"), 7),
           "attach: a host-bound bare name is not clobbered");
     CHECK(is_int(turi_eval(sh, "(afx/core/answer)"), 42),

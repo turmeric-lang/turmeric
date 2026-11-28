@@ -12,6 +12,13 @@ Filed 2026-10-10, closing that report. **Narrowed the same day** (see the
 end): stats, frame, plot and linalg cells now run their spices compiled;
 what is left is a cell's `defn` handed to compiled code as a callback.
 
+> Status: **resolved 2026-11-28** -- a cell's `defn` (or `fn` literal)
+> crosses a `^fat` callback parameter of a spice export: see "Resolved
+> 2026-11-28" at the end. plot's cells fail again for a different reason --
+> its typed API's `AnyRenderer` results and `(Vec ...)` parameters have no
+> FFI class -- now tracked on its own:
+> [plot-typed-api-has-no-ffi-shim](../reported/plot-typed-api-has-no-ffi-shim.md).
+
 ## Repro
 
 From `turmeric-spices/spices/notebook`, with a `tur` built from `main`:
@@ -206,7 +213,7 @@ says so instead of guessing. The aggregate layout also learned that a
 emitter declares it. Every `linalg-walkthrough` cell runs: the product, the
 solves and the least-squares fit print what numpy gives.
 
-## Still open
+## Was still open (resolved 2026-11-28, below)
 
 1. **A cell's `defn` as a callback.** plot's `function` takes its callback
    as an untyped (so `:int`) parameter; a cell's `defn` is an interpreter
@@ -224,3 +231,59 @@ The examples' `ols-frame` cells run again, unwrapping the result with
 `#fx{Unsafe}` `image-hook-record-path` outside `(unsafe ...)` -- is fixed in
 the example.)
 
+## Resolved 2026-11-28: a cell's `defn` as a callback
+
+plot had already typed its callbacks (`^fat f : (fn [float] float)`), so what
+was missing was the host side: a way to MAKE the int64 closure handle such a
+parameter is in C, from an interpreter closure, in a process with no JIT (the
+notebook installs no c2mir provider, so `callback-ptr`'s route is not there).
+
+- **The image carries the trampoline.** For every `^fat` callback parameter
+  of an export, `tur build --shared` emits `<export>__ffi_cb<k>` beside the
+  export's `__ffi` shim (`emit_ffi_callback_trampoline`,
+  `src/compiler/emit_module.c`): exactly the slot-0 signature the fat
+  protocol calls, `R (*)(void *box, A...)`, packing its arguments into
+  position-indexed `iv`/`fv`/`sv` buffers and calling the dispatcher the box
+  names. The slot's FFI class is `'c'`, spelled `:fn` in the manifest; the
+  shim passes it as the int64 word. Admitted only where the trampoline can
+  carry it (`ffi_cb_param_supported`): a fat function type on the typed thunk
+  ABI whose arguments and result are scalars, opaque handles or by-value
+  records. Anything else keeps class `'?'` and the export its interpreted
+  defn, as before.
+- **The session builds the box.** The loader resolves each `:fn` slot's
+  trampoline (`resolve_cb_tramps`, `src/turi/spice_loader.c`). When a module
+  is imported, the interpreter notes each callback slot's signature from the
+  defn's declared function type (`ffi_note_export_callbacks`,
+  `src/turi/eval.c`) -- the manifest says only `:fn`, as it says only
+  `:record`. At the call, a closure in that slot becomes a fat box
+  `{no-op drop header, trampoline, tur_ffi_cb_dispatch, context}`
+  (`ffi_cb_handle_for`, `src/turi/ffi_thunk.c`), made once per (slot,
+  closure) and freed with the env. The dispatcher is read from the box, so
+  the image references no host symbol and still loads outside an
+  interpreter.
+
+Pinned by ctest `tur_embed_attach_spice` (a float callback, a `:bool`
+result, a record argument, a record result, a capturing `fn` literal, and a
+handle the compiled side stores and calls on a later call). From a real
+notebook cell, signal's `buffer-render` sampling a cell's `defn ramp`
+returns 1.875 at sample 3 (0.75 x 2.5).
+
+Two `--shared` codegen bugs blocked plot's image from building at all on the
+way (ordinary project builds compile one unit and never saw either); both are
+pinned by `tests/run-build-shared.sh`'s `build-shared-class-defaults`:
+
+- **A module header prototyped a carrier-returning instance method as the
+  struct pointer.** A class default body returning `(Vec cstr)` (plot's
+  `category-labels`, `legend-labels`), compiled into the instance's module,
+  is `int64_t` in the `.c` (the `__inst_` carrier rule of
+  `emit_fn_forward_decls` and `emit_fns.c`) but was `tur_adt_Vec__cstr *` in
+  the `.h`: "conflicting types" for every plot instance. The header mirrors
+  the rule now (`emit_header_inner`).
+- **A call temp took the previous function's result type.** A tail call left
+  unhoisted re-notes its return C type for the `return` that consumes it
+  (`ctx->call_ret_note`), and nothing cleared it after the body, so the first
+  direct call of the next function whose callee has no forward-declaration
+  entry -- one declared only in an imported header -- named its temp with
+  it: a defaulted `frame-marks` body's `(no-frame-marks)` became
+  `tur_adt_Vec__cstr * __ps = ...` after `legend-labels` tail-called a
+  `(Vec cstr)` helper. Cleared at each function's start (`emit_fns.c`).

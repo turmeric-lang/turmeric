@@ -12,7 +12,7 @@ notebook cell, `ols-frame` on a frame `read-csv-string` returned dereferences
 garbage.
 
 Filed 2026-10-10, found running the notebook examples
-([notebook-cells-cannot-call-inline-c-spices](../reported/notebook-cells-cannot-call-inline-c-spices.md)).
+([notebook-cells-cannot-call-inline-c-spices](notebook-cells-cannot-call-inline-c-spices.md)).
 
 ## Repro
 

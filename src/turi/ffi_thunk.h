@@ -106,6 +106,37 @@ typedef struct TurFfiCbCtx {
 TurFfiCbCtx *tur_ffi_cb_ctx_new(TuriEnv *env, TuriValue fn, char ret_class,
                                 const char *arg_classes, uint32_t n);
 
+/* Free a context and everything it owns -- only one whose callback nothing
+ * can call any more (a spice callback box dies with its env).  NULL is a
+ * no-op. */
+void tur_ffi_cb_ctx_free(TurFfiCbCtx *ctx);
+
+/* notebook-cells-cannot-call-inline-c-spices: the signature of a spice
+ * export's callback slot (manifest :fn, class 'c') -- what a dispatch
+ * context for it carries.  The same vocabulary as TurFfiCbCtx: ret_class and
+ * n_args arg_classes, and for a signature with a record slot ('{') the
+ * layout sig, each argument's offset into it and the record defs.  Every
+ * pointer is malloc'd and owned by whoever holds the spec. */
+typedef struct TurFfiCbSpec {
+    char                  ret_class;
+    char                 *arg_classes;
+    uint32_t              n_args;
+    char                 *sig;        /* NULL when no slot is a record */
+    size_t               *arg_at;
+    const struct AdtDef **arg_defs;
+    const struct AdtDef  *ret_def;
+} TurFfiCbSpec;
+
+/* True for a spice-export native with a callback slot whose signature has
+ * not been noted yet.  The interpreter then notes each one from the
+ * module's own defn (tur_ffi_native_note_callback), as it notes records.
+ * Note slot k's signature; takes ownership of the spec's pointers (and
+ * zeroes it) on success; false, owning nothing, when k is not a callback
+ * slot of this export or was noted already. */
+bool tur_ffi_native_wants_callbacks(TuriNativeFn fn, const void *ud);
+bool tur_ffi_native_note_callback(TuriNativeFn fn, void *ud, uint32_t k,
+                                  TurFfiCbSpec *spec);
+
 /* Attach aggregate-slot information to a context whose classes include
  * '{'.  Takes ownership of `sig` and `arg_at` (malloc'd by the caller);
  * copies `arg_defs`.  Returns 0 on success, nonzero on OOM (ownership is
