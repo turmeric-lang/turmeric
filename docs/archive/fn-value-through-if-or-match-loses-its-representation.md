@@ -45,20 +45,36 @@
 > binding holding the join does. Without that, every caller of such a function
 > kept the closure it passed (24 B a call).
 >
-> Not covered:
+> Also covered, in a follow-up the same day:
 >
-> - A join returned from a function, or wrapped in a `Some`, still leaks its
->   box. The declared-result path (`sel` below) did the same before this fix.
-> - In a function that performs, the CPS backend evicts a plain carrier
->   parameter that is used as a value, which a join now does. That function
->   is still refused, as it was on `main`. Filed as
->   [carrier-fn-param-in-join-evicts-effectful-fn](../reported/carrier-fn-param-in-join-evicts-effectful-fn.md).
->   A `^fat` parameter works there. On `main` it segfaulted.
+> - **A returned join.** A function whose result is a box it makes on every
+>   call is inferred `returns_fresh_closure`, as a closure factory is
+>   (`fn_join_returns_fresh_box`, `elab_fns.c`, run after stage 2). That covers
+>   a join, a `let` alias of one, and a bare carrier stage 2 boxed. A carrier
+>   parameter's bit goes in `fresh_closure_captured_params`, but only when the
+>   parameter appears nowhere else in the body. The caller then drops the box
+>   it was handed. This also stopped a leak `main` had for a function returning
+>   a captureless lambda (`let-tail-noncapturing-lambda-fat-temp`'s `direct`;
+>   its snapshot gained the drop).
+> - **A `(Some <join>)` local matched in place.** It is dropped like a lambda
+>   literal payload (`sum_payload_join_owned`, `emit_expr.c`). That includes
+>   a capturing lambda beside a defn, which leaked on `main` too.
+> - **A function that performs.** It was refused before, and on `main`.
+>   Resolved separately as
+>   [carrier-fn-param-in-join-evicts-effectful-fn](carrier-fn-param-in-join-evicts-effectful-fn.md).
+>
+> What still leaks is not specific to joins:
+>
+> - A caller keeps the closure it passed when the callee stores the parameter
+>   in a struct or a `Some`, or hands it back in a result. The same holds for a
+>   closure factory that captures the parameter, on `main`.
+> - A function returning `(Some <fn value>)` leaks the payload, lambda or join
+>   alike. That is the `sum-closure-payload-never-dropped` family.
 >
 > Pinned by `fn-value-through-if-or-match` (every row below, both arms, plus
 > float, cstr, two-argument, nested, diverging and ADT-`match` shapes),
-> `fn-value-join-box-reclaimed` (`requires.leak-check`) and
-> `errors/fn-value-join-signature-mismatch`.
+> `fn-value-join-box-reclaimed` (`requires.leak-check`, including the returned
+> and `Some` shapes) and `errors/fn-value-join-signature-mismatch`.
 
 **Severity: high (miscompile: several shapes compile and then segfault).** The
 other shapes are refused with a misleading diagnostic, or fail in the C

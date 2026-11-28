@@ -9546,6 +9546,155 @@ static void elab_normalize_fn_tail_leaves(Elab *e, Expr **slot,
     }
 }
 
+/* fn-value-through-if-or-match-loses-its-representation, the returned join:
+ * is `x` (a defn body, after the join and stage-2 conversions) a fn value
+ * every value of which is a box made fresh here -- a carrier parameter's
+ * EX_POLY_TO_FAT, a defn's static EX_FN_TO_FAT, or a capturing lambda over
+ * scalar captures with a scalar result?  Then each call hands back a box its
+ * caller owns, as a closure-returning factory does (returns_fresh_closure).
+ *
+ * A box of parameter `p` holds p's words without owning them, as a factory's
+ * env holds a captured fn parameter; its bit goes in *pmask.  That is only
+ * the whole story when nothing else can have kept the argument, so `p` may
+ * appear nowhere in the body but those leaves (the factory rule's "the body
+ * is the closure itself").  Inline C anywhere declines. */
+static bool fn_join_mentions(const Expr *x, const Binding *p);
+typedef struct { const Binding *p; bool hit; } FnJoinMentionUd;
+static bool fn_join_mentions_visit(const Expr *c, void *ud) {
+    FnJoinMentionUd *u = (FnJoinMentionUd *)ud;
+    if (fn_join_mentions(c, u->p)) u->hit = true;
+    return u->hit;
+}
+static bool fn_join_mentions(const Expr *x, const Binding *p) {
+    if (!x) return false;
+    if (x->kind == EX_VAR && x->as.var.binding == p) return true;
+    if (x->kind == EX_CALL && x->as.call_.fn_binding == p) return true;
+    if (x->kind == EX_CLOSURE && x->as.closure_.closure) {
+        const struct Closure *c = x->as.closure_.closure;
+        for (uint32_t i = 0; i < c->n_captures; i++)
+            if (c->captures[i] == p) return true;
+    }
+    FnJoinMentionUd u = { p, false };
+    cps_visit_children(x, fn_join_mentions_visit, &u);
+    return u.hit;
+}
+
+static bool fn_join_fresh_leaves(const Expr *x, Binding **params, uint32_t n_params,
+                                 uint32_t *pmask, const Expr **others, uint32_t *n_others,
+                                 int depth) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || depth > 64 || *n_others >= 64) return false;
+    if (x->type.kind == TY_NEVER || x->kind == EX_RETURN ||
+        x->kind == EX_PANIC || x->kind == EX_PANIC_WITH) {
+        others[(*n_others)++] = x;
+        return true;
+    }
+    switch (x->kind) {
+        case EX_DO:
+            if (x->as.do_.n == 0) return false;
+            for (uint32_t i = 0; i + 1 < x->as.do_.n && *n_others < 64; i++)
+                others[(*n_others)++] = x->as.do_.items[i];
+            return fn_join_fresh_leaves(x->as.do_.items[x->as.do_.n - 1], params, n_params,
+                                        pmask, others, n_others, depth + 1);
+        case EX_LET: {
+            /* `(let [h (if c f a2)] h)`: the body hands back the let's own
+             * binding, so its init is the value -- provided `h` is used for
+             * nothing else here. */
+            const Expr *bv = x->as.let_.body;
+            while (bv && bv->kind == EX_ASCRIBE) bv = bv->as.ascribe_.inner;
+            for (uint32_t i = 0; bv && bv->kind == EX_VAR && i < x->as.let_.n; i++) {
+                const Binding *hb = x->as.let_.bindings[i].binding;
+                if (!hb || bv->as.var.binding != hb || hb->is_mut) continue;
+                for (uint32_t k = 0; k < x->as.let_.n; k++) {
+                    if (k == i) continue;
+                    if (fn_join_mentions(x->as.let_.bindings[k].init, hb)) return false;
+                    if (*n_others < 64) others[(*n_others)++] = x->as.let_.bindings[k].init;
+                }
+                return fn_join_fresh_leaves(x->as.let_.bindings[i].init, params, n_params,
+                                            pmask, others, n_others, depth + 1);
+            }
+            for (uint32_t i = 0; i < x->as.let_.n && *n_others < 64; i++)
+                others[(*n_others)++] = x->as.let_.bindings[i].init;
+            return fn_join_fresh_leaves(x->as.let_.body, params, n_params, pmask,
+                                        others, n_others, depth + 1);
+        }
+        case EX_IF:
+            if (!x->as.if_.else_or_null) return false;
+            others[(*n_others)++] = x->as.if_.cond;
+            return fn_join_fresh_leaves(x->as.if_.then_, params, n_params, pmask,
+                                        others, n_others, depth + 1) &&
+                   fn_join_fresh_leaves(x->as.if_.else_or_null, params, n_params, pmask,
+                                        others, n_others, depth + 1);
+        case EX_MATCH:
+            if (x->as.match_.n_arms == 0) return false;
+            others[(*n_others)++] = x->as.match_.scrutinee;
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++) {
+                if (x->as.match_.arms[i].guard && *n_others < 64)
+                    others[(*n_others)++] = x->as.match_.arms[i].guard;
+                if (!fn_join_fresh_leaves(x->as.match_.arms[i].body, params, n_params,
+                                          pmask, others, n_others, depth + 1))
+                    return false;
+            }
+            return true;
+        case EX_POLY_TO_FAT: {
+            const Expr *in = x->as.poly_to_fat_.inner;
+            while (in && in->kind == EX_ASCRIBE) in = in->as.ascribe_.inner;
+            if (!in || in->kind != EX_VAR) return false;
+            for (uint32_t i = 0; i < n_params && i < 32; i++)
+                if (params[i] && params[i] == in->as.var.binding) {
+                    *pmask |= 1u << i;
+                    return true;
+                }
+            return false;   /* a carrier that is not a parameter here */
+        }
+        case EX_FN_TO_FAT: {
+            if (x->as.fn_to_fat_.inner_is_fat) return false;
+            const Expr *in = x->as.fn_to_fat_.inner;
+            while (in && in->kind == EX_ASCRIBE) in = in->as.ascribe_.inner;
+            const Binding *ib = (in && in->kind == EX_VAR) ? in->as.var.binding : NULL;
+            const Binding *root = (ib && ib->source_binding) ? ib->source_binding : ib;
+            return root && root->is_global && root->source_fn_def;   /* a bare defn */
+        }
+        case EX_CLOSURE: {
+            const struct Closure *c = x->as.closure_.closure;
+            if (!c || !c->fn || c->is_shift_receiver || c->is_effect_payload) return false;
+            if (!fn_result_kind_is_scalar_copy(c->fn->return_type.kind)) return false;
+            for (uint32_t i = 0; i < c->n_captures; i++)
+                if (!c->captures[i] ||
+                    !fn_result_kind_is_scalar_copy(c->captures[i]->type.kind))
+                    return false;
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
+static bool fn_join_returns_fresh_box(const Expr *body, Binding **params,
+                                      uint32_t n_params, uint32_t *pmask) {
+    *pmask = 0;
+    const Expr *x = body;
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || x->type.kind != TY_FN || !x->type.as.fn.boxed) {
+        /* stage 2 boxes a declared fn result without re-typing a bare leaf */
+        if (!x || (x->kind != EX_POLY_TO_FAT && x->kind != EX_FN_TO_FAT))
+            return false;
+    }
+    if (expr_subtree_has_inline_c(body)) return false;
+    const Expr *others[64];
+    uint32_t n_others = 0;
+    if (!fn_join_fresh_leaves(x, params, n_params, pmask, others, &n_others, 0))
+        return false;
+    if (n_others >= 64) return false;
+    /* A boxed parameter must appear in no other position of the body. */
+    for (uint32_t i = 0; i < n_params && i < 32; i++) {
+        if (!(*pmask & (1u << i))) continue;
+        for (uint32_t k = 0; k < n_others; k++)
+            if (fn_join_mentions(others[k], params[i])) return false;
+    }
+    return true;
+}
+
 void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                                 Expr *body) {
     b->nonretain_param_mask = 0;
@@ -14797,6 +14946,21 @@ Expr *elab_defn(Elab *e, const Form *call) {
               strncmp(b->name->name, "__inst_", 7) == 0)) {
             elab_normalize_fn_tail_leaves(e, &body, rft, NULL);
             rft->as.fn.boxed = true;
+        }
+    }
+
+    /* fn-value-through-if-or-match-loses-its-representation: a function whose
+     * result is a box it made on every call -- a fn-value join, or a carrier
+     * parameter stage 2 just boxed -- hands its caller a box the caller owns,
+     * exactly as a closure-returning factory does (see returns_fresh_closure
+     * above), and the box holds a boxed parameter the way that factory's env
+     * holds a captured fn parameter.  Checked after stage 2, which made the
+     * boxes of a declared fn result. */
+    if (b && body && !b->returns_fresh_closure) {
+        uint32_t _jmask = 0;
+        if (fn_join_returns_fresh_box(body, params, n_params, &_jmask)) {
+            b->returns_fresh_closure = true;
+            b->fresh_closure_captured_params = _jmask;
         }
     }
 

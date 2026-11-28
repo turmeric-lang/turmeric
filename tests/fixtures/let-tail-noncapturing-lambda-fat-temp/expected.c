@@ -11258,6 +11258,7 @@ int main(int argc, char **argv) {
             int64_t __ps_229 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(_un_uncall_unhead_un35_36)))((void *)(intptr_t)(_un_uncall_unhead_un35_36), INT64_C(7)));
             if (tur_panicking) { tur_panic_root_exit(); }
             __t227 = __ps_229;
+            TUR_CLOSURE_DROP(_un_uncall_unhead_un35_36);
         }
         printf("%lld\n", (long long)(__t227));
         int64_t __t230;

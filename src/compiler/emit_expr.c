@@ -4825,6 +4825,53 @@ static bool sum_closure_payload_walk_fmt(EmitCtx *ctx, Buf *body, const char *na
     return any;
 }
 
+/* fn-value-through-if-or-match-loses-its-representation: a `(Some <join>)`
+ * payload whose every value the join owns -- a carrier parameter's fresh
+ * EX_POLY_TO_FAT box or a defn's static box (both dropped by TUR_CLOSURE_DROP
+ * as themselves alone), or a capturing lambda written in the arm under the
+ * conditions the literal payload below meets.  At least one leaf must be a
+ * value (`any_leaf`). */
+static bool sum_payload_join_owned(const Expr *x, int depth, bool *any_leaf) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || depth > 64) return false;
+    if (x->type.kind == TY_NEVER || x->kind == EX_RETURN ||
+        x->kind == EX_PANIC || x->kind == EX_PANIC_WITH)
+        return true;
+    switch (x->kind) {
+        case EX_DO:
+            return x->as.do_.n > 0 &&
+                   sum_payload_join_owned(x->as.do_.items[x->as.do_.n - 1], depth + 1, any_leaf);
+        case EX_LET:
+            return sum_payload_join_owned(x->as.let_.body, depth + 1, any_leaf);
+        case EX_IF:
+            return x->as.if_.else_or_null &&
+                   sum_payload_join_owned(x->as.if_.then_, depth + 1, any_leaf) &&
+                   sum_payload_join_owned(x->as.if_.else_or_null, depth + 1, any_leaf);
+        case EX_MATCH:
+            if (x->as.match_.n_arms == 0) return false;
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                if (!sum_payload_join_owned(x->as.match_.arms[i].body, depth + 1, any_leaf))
+                    return false;
+            return true;
+        case EX_POLY_TO_FAT:
+            *any_leaf = true;
+            return true;
+        case EX_FN_TO_FAT:
+            *any_leaf = true;
+            return !x->as.fn_to_fat_.inner_is_fat;
+        case EX_CLOSURE: {
+            const struct Closure *c = x->as.closure_.closure;
+            *any_leaf = true;
+            return c && c->fn && !c->is_shift_receiver && !c->is_effect_payload &&
+                   (closure_env_drop_is_shallow(c) || closure_env_drop_frees_box_only(c) ||
+                    closure_env_drop_ok_under_scalar_result(c)) &&
+                   fndef_cannot_suspend(c->fn);
+        }
+        default:
+            return false;
+    }
+}
+
 static bool let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e,
                                              uint32_t i, const LetBindDecl *d) {
     const Binding *b = e->as.let_.bindings[i].binding;
@@ -4844,7 +4891,14 @@ static bool let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e,
      * releases a capture qualifies too when its result is a plain scalar --
      * every use here only invokes it, so nothing it returns can reference
      * the capture once the local is dropped. */
-    if (!a || a->kind != EX_CLOSURE ||
+    if (!a) return false;
+    if (a->kind == EX_IF || a->kind == EX_MATCH || a->kind == EX_DO || a->kind == EX_LET) {
+        /* a fn-value join as the payload (sum_payload_join_owned) */
+        bool any_leaf = false;
+        if (a->type.kind != TY_FN || !a->type.as.fn.boxed ||
+            !sum_payload_join_owned(a, 0, &any_leaf) || !any_leaf)
+            return false;
+    } else if (a->kind != EX_CLOSURE ||
         !(closure_env_drop_is_shallow(a->as.closure_.closure) ||
           closure_env_drop_frees_box_only(a->as.closure_.closure) ||
           closure_env_drop_ok_under_scalar_result(a->as.closure_.closure)) ||

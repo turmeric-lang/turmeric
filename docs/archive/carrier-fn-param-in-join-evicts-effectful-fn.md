@@ -1,5 +1,38 @@
 # A plain fn parameter used in a join evicts a function that performs
 
+> **RESOLVED 2026-11-28.** Fix direction 1, in four parts:
+>
+> - **The signature gate:** `fatparam_only_called` (`src/compiler/emit_cps_ir.c`)
+>   no longer counts a carrier parameter boxed whole (EX_POLY_TO_FAT) as a value
+>   use. The flag `g_ptc_box_ok` is set only for that gate, so threading
+>   decisions still read it as a value use.
+> - **The translator:** `is_delegatable_struct` (`src/passes/cps_ir.c`) delegates
+>   an EX_POLY_TO_FAT over an atomic operand, as it does a field read.
+> - **The slot:** `slot_ok_t` admits a boxed fn. A fat handle is one pointer
+>   word, the carrier `ptr<void>` already rides. Before this, a fn-typed value
+>   could not be a CPS join point's parameter, so a `let`-bound join live across
+>   a `perform` was evicted `BODY-STRUCT-CORE`. That includes a join of two `^fat`
+>   parameters, which was refused on `main` as well.
+> - **Ownership:** the boxes are reaped at the DK entry boundary
+>   (`cps_bind_let_init`). A join free of control is delegated whole
+>   (`cps_fn_join_box_freeable`) with `reap_env`. One that holds control, such as
+>   `(if c f (panic ...))`, is lowered arm by arm, and each arm's box is
+>   registered where it is made (`fn_join_mark_box_reaps`). Delegated whole, a
+>   capturing lambda arm is built and reaped there too, under
+>   `cps_closure_env_freeable`'s gate. It was evicted `BODY-UNSUPPORTED
+>   EX_CLOSURE` on `main`. A `(Some <join>)` payload is reaped by the CPS
+>   sum-closure path: its tag walk now continues into a join point's
+>   continuation.
+>
+> Pinned by `fn-value-join-in-effectful-fn` (`requires.leak-check`: call head,
+> live across a `perform` either way round, `match`, argument, `do`, panic arm,
+> capturing-lambda arm, and multi-shot resumes) and
+> `fn-value-join-in-effectful-fn-fat`.
+>
+> Found on the way, pre-existing: a defn passed to a `^fat` parameter of a
+> function that performs leaks its shim, join or not. Filed as
+> [fat-shim-arg-to-performing-callee-leaks](../reported/fat-shim-arg-to-performing-callee-leaks.md).
+
 **Severity: medium (false rejection, misleading diagnostic).** If a function
 performs an effect, a plain `(fn ...)` parameter cannot be one arm of an `if`
 or `match` whose value is then used. The function is refused with the CPS

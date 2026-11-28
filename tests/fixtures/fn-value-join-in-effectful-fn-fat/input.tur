@@ -1,0 +1,29 @@
+;; carrier-fn-param-in-join-evicts-effectful-fn, the `^fat` half: a join of two
+;; `^fat` parameters inside a function that performs.  The join is typed
+;; `boxed`, and a boxed fn crosses a CPS join / continuation slot as one word.
+;; On `main` this file was refused ("no lowering here": a fn value could not
+;; cross a CPS join), and a `^fat` join that did compile there read as a thin
+;; fn, so its call jumped into the box (SIGSEGV).  No requires.leak-check:
+;; a defn passed to a `^fat` parameter of a function that performs leaks its
+;; 24 B shim, join or not (fat-shim-arg-to-performing-callee-leaks).
+(defmodule m
+  (defeffect Ask [] : int)
+  (defn a1 [x : int] : int (+ x 1))
+  (defn a2 [x : int] : int (* x 2))
+  (defn ff [c : bool ^fat f : (fn [int] int) ^fat g : (fn [int] int)] : int
+    (let [h (if c f g)
+          q (perform (Ask))]
+      (+ q (h 10))))
+  (defn fm [n : int ^fat f : (fn [int] int)] : int
+    (+ (perform (Ask)) ((match n 0 f _ a2) 10)))
+  (defn main [] : int
+    (let [k 5
+          cl (fn [x : int] : int (+ x k))]
+      (println (handle (ff true a1 a2) (Ask [] r) (resume r 1000)))     ; 1011
+      (println (handle (ff false a1 a2) (Ask [] r) (resume r 1000)))    ; 1020
+      (println (handle (ff true cl a2) (Ask [] r) (resume r 1000)))     ; 1015
+      (println (handle (fm 0 cl) (Ask [] r) (resume r 1000)))           ; 1015
+      (println (handle (fm 1 cl) (Ask [] r) (resume r 1000)))           ; 1020
+      (println (handle (ff true cl a2)
+                 (Ask [] ^multishot r) (+ (resume r 1) (resume r 2)))))  ; 33
+    0))

@@ -416,6 +416,12 @@ static bool fn_erased_base(const FnDef *fd) {
 static bool slot_ok_t(const Type *t, TypeKind k) {
     Type rt; const Type *r = cps_resolve_ty(t, &rt);
     if (r != t) k = r->kind;
+    /* carrier-fn-param-in-join-evicts-effectful-fn: a BOXED fn value -- a fat
+     * closure handle, what a fn-value join yields -- is one pointer word, the
+     * same carrier as ptr<void> (type_eq treats them alike).  It crosses a
+     * join or a slot as that word; a call through it fat-dispatches. */
+    if (r && r->kind == TY_FN && r->as.fn.boxed && !r->as.fn.cfnptr)
+        return true;
     return slot_ty(k) || slot_box_ty(r) || carrier_handle_ok(r)
         || erased_adt_carrier(r) || adt_int64_carrier(r) || mono_erased_tyvar(r);
 }
@@ -824,6 +830,10 @@ static const FnDef *fd_for_binding(const Expr *program, const Binding *b);
 static const Expr *g_prog;   /* fwd (defined below): program the classifier is keyed on */
 static void ptc_walk(const Expr *e, const Binding *p, bool tail,
                      int *val, int *tailc, int *ntc);  /* fwd: param value/callee-use walk */
+/* carrier-fn-param-in-join-evicts-effectful-fn: set while fatparam_only_called
+ * walks -- a carrier param boxed whole (EX_POLY_TO_FAT) is not a value use for
+ * the signature gate; see there. */
+static bool g_ptc_box_ok = false;
 static bool binding_in_s(const Binding *b);  /* callee CPS-emitted? (cps->cps vs cps->direct) */
 static bool binding_cps_reachable(const Binding *b);  /* in_s OR mono-template */
 
@@ -3820,7 +3830,15 @@ static bool fn_byval_agg_param_ok(const FnDef *fd, const Binding *p) {
  * value-uses, so `val == 0` is the sound admission condition. */
 static bool fatparam_only_called(const FnDef *fd, const Binding *p) {
     int val = 0, tailc = 0, ntc = 0;
+    /* carrier-fn-param-in-join-evicts-effectful-fn: boxing `p` whole into a
+     * fat handle (EX_POLY_TO_FAT -- what a fn-value join does to its carrier
+     * arm) reads `.fn` / `.env` in place and yields ONE word, so it is not the
+     * slot-crossing value use this gate guards against.  The translator
+     * delegates the box (is_delegatable_struct).  Only this gate sees it so:
+     * param_thread_class still counts it, since a boxed `p` is not threaded. */
+    g_ptc_box_ok = true;
     ptc_walk(fd->body, p, true, &val, &tailc, &ntc);
+    g_ptc_box_ok = false;
     return val == 0;
 }
 
@@ -6264,6 +6282,15 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
             }
             return;
         }
+        case EX_POLY_TO_FAT:
+            if (g_ptc_box_ok) {
+                const Expr *in = e->as.poly_to_fat_.inner;
+                while (in && in->kind == EX_ASCRIBE) in = in->as.ascribe_.inner;
+                if (in && in->kind == EX_VAR && ptc_is_p(in->as.var.binding, p))
+                    return;
+            }
+            *val += ptc_count_all_uses(e, p);
+            return;
         default:
             /* Uncovered form (incl. EX_RESET, where a call to p runs under the
              * HOF's own prompt): treat every occurrence of p as a value-use so the

@@ -1155,6 +1155,13 @@ static bool is_delegatable_struct(const Expr *e) {
             return true;
         case EX_DEFAULT_OF:
             return true;
+        /* carrier-fn-param-in-join-evicts-effectful-fn: boxing a poly-carrier
+         * fn value (a parameter, by value) into a one-word fat handle -- what a
+         * fn-value join does to its carrier arm.  A value op over one atomic
+         * operand, like the field read above: the direct emitter spells it, and
+         * the box crosses a slot as the pointer it is. */
+        case EX_POLY_TO_FAT:
+            return is_atomic(e->as.poly_to_fat_.inner);
         /* perform-in-fn-with-any-param-has-no-cps-lowering: the `any` widen and
          * the three `any` readers are value ops of exactly this shape -- one
          * operand, no control operator, a result the direct emitter already
@@ -1491,10 +1498,189 @@ static bool cps_local_closure_env_freeable(const Expr *let, uint32_t idx) {
     return local_closure_shape(let, idx) != NULL;
 }
 
+/* carrier-fn-param-in-join-evicts-effectful-fn: a fn-value JOIN every value of
+ * which is a box the join made (elab_fn_join_yields_own_box: a carrier arm's
+ * fresh EX_POLY_TO_FAT box, a defn arm's static one) -- `((if c f a2) 10)`'s
+ * call-head temp, a let-bound join that is only called, a join hoisted for a
+ * non-retaining argument.  The direct emitter drops it at the let's scope exit
+ * (let_binding_env_freeable); a colored function's let has no scope exit, so
+ * it is reaped at the DK entry boundary as a fresh closure is.  A NULL-header
+ * box frees itself alone and a static one's drop is the no-op keep glue.  The
+ * whole join is delegated, so it must hold no control operator. */
+/* Does the join hold a control operator?  Its leaves are the boxes (control-
+ * free over an atomic operand); everything else -- a condition, a scrutinee, a
+ * guard, a non-tail item, a let init -- is asked of operand_uses_control, which
+ * defaults to "yes" for any form it does not know. */
+static bool fn_join_uses_control(const Expr *x, int depth) {
+    x = ascribe_peel(x);
+    if (!x) return false;
+    if (depth > 64) return true;
+    switch (x->kind) {
+        case EX_POLY_TO_FAT: return !is_atomic(x->as.poly_to_fat_.inner);
+        case EX_FN_TO_FAT:   return !is_atomic(x->as.fn_to_fat_.inner);
+        case EX_DO:
+            for (uint32_t i = 0; i + 1 < x->as.do_.n; i++)
+                if (operand_uses_control(x->as.do_.items[i])) return true;
+            return x->as.do_.n > 0 &&
+                   fn_join_uses_control(x->as.do_.items[x->as.do_.n - 1], depth + 1);
+        case EX_LET:
+            for (uint32_t i = 0; i < x->as.let_.n; i++)
+                if (operand_uses_control(x->as.let_.bindings[i].init)) return true;
+            return fn_join_uses_control(x->as.let_.body, depth + 1);
+        case EX_IF:
+            return operand_uses_control(x->as.if_.cond) ||
+                   fn_join_uses_control(x->as.if_.then_, depth + 1) ||
+                   fn_join_uses_control(x->as.if_.else_or_null, depth + 1);
+        case EX_MATCH:
+            if (operand_uses_control(x->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                if ((x->as.match_.arms[i].guard &&
+                     operand_uses_control(x->as.match_.arms[i].guard)) ||
+                    fn_join_uses_control(x->as.match_.arms[i].body, depth + 1))
+                    return true;
+            return false;
+        default:
+            return operand_uses_control(x);
+    }
+}
+/* The join's values, as the reap sees them: a box the join made, a diverging
+ * arm, or -- since the whole join is delegated, so the direct emitter builds
+ * the env -- a capturing lambda written in the arm, under the gate
+ * cps_closure_env_freeable puts on a let-bound one (scalar result, no inline C
+ * naming a capture; a shift receiver / effect payload is reaped elsewhere).
+ * `any_box` reports a box made at the join. */
+static bool cps_fn_join_leaves_owned(const Expr *x, TypeKind rk, int depth, bool *any_box) {
+    x = ascribe_peel(x);
+    if (!x || depth > 64) return false;
+    if (x->type.kind == TY_NEVER || x->kind == EX_RETURN ||
+        x->kind == EX_PANIC || x->kind == EX_PANIC_WITH)
+        return true;
+    switch (x->kind) {
+        case EX_DO:
+            return x->as.do_.n > 0 &&
+                   cps_fn_join_leaves_owned(x->as.do_.items[x->as.do_.n - 1], rk, depth + 1, any_box);
+        case EX_LET:
+            return cps_fn_join_leaves_owned(x->as.let_.body, rk, depth + 1, any_box);
+        case EX_IF:
+            return x->as.if_.else_or_null &&
+                   cps_fn_join_leaves_owned(x->as.if_.then_, rk, depth + 1, any_box) &&
+                   cps_fn_join_leaves_owned(x->as.if_.else_or_null, rk, depth + 1, any_box);
+        case EX_MATCH:
+            if (x->as.match_.n_arms == 0) return false;
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                if (!cps_fn_join_leaves_owned(x->as.match_.arms[i].body, rk, depth + 1, any_box))
+                    return false;
+            return true;
+        case EX_POLY_TO_FAT:
+            *any_box = true;
+            return true;
+        case EX_FN_TO_FAT:
+            if (x->as.fn_to_fat_.inner_is_fat) return false;
+            *any_box = true;
+            return true;
+        case EX_CLOSURE: {
+            const struct Closure *c = x->as.closure_.closure;
+            if (!c || c->is_shift_receiver || c->is_effect_payload) return false;
+            switch (rk) {
+                case TY_INT: case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                case TY_BOOL: case TY_NIL:
+                case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                    return !closure_body_inline_c_touches_env(c);
+                default:
+                    return false;
+            }
+        }
+        default:
+            return false;
+    }
+}
+/* The join at let-binding `idx` owns every value it yields and its binding
+ * stays in the let (see cps_fn_join_box_freeable, which also needs the join
+ * free of control so it can be delegated whole). */
+static bool cps_fn_join_owned_confined(const Expr *let, uint32_t idx) {
+    const Expr *init = ascribe_peel(let->as.let_.bindings[idx].init);
+    const Binding *bd = let->as.let_.bindings[idx].binding;
+    if (!init || !bd || let->kind != EX_LET) return false;
+    if (init->type.kind != TY_FN || !init->type.as.fn.boxed) return false;
+    if (init->kind != EX_IF && init->kind != EX_MATCH && init->kind != EX_DO &&
+        init->kind != EX_LET)
+        return false;
+    bool any_box = false;
+    if (!cps_fn_join_leaves_owned(init, init->type.as.fn.result_kind, 0, &any_box) ||
+        !any_box)
+        return false;
+    if (closure_binding_escapes_reaped(let->as.let_.body, bd)) return false;
+    for (uint32_t j = 0; j < let->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (closure_binding_escapes_reaped(let->as.let_.bindings[j].init, bd)) return false;
+    }
+    return true;
+}
+
+/* A join that holds control -- `(if c f (panic ...))`, whose panic arm this
+ * backend lowers itself -- is lowered arm by arm, each box a CT_LETRAW of its
+ * own.  Register each of those boxes with the entry reap where it is made
+ * (matched by the leaf node it delegates). */
+static bool fn_join_is_box_leaf(const Expr *x, const Expr *leaf, int depth) {
+    x = ascribe_peel(x);
+    if (!x || depth > 64) return false;
+    switch (x->kind) {
+        case EX_DO:
+            return x->as.do_.n > 0 &&
+                   fn_join_is_box_leaf(x->as.do_.items[x->as.do_.n - 1], leaf, depth + 1);
+        case EX_LET:
+            return fn_join_is_box_leaf(x->as.let_.body, leaf, depth + 1);
+        case EX_IF:
+            return fn_join_is_box_leaf(x->as.if_.then_, leaf, depth + 1) ||
+                   fn_join_is_box_leaf(x->as.if_.else_or_null, leaf, depth + 1);
+        case EX_MATCH:
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                if (fn_join_is_box_leaf(x->as.match_.arms[i].body, leaf, depth + 1))
+                    return true;
+            return false;
+        case EX_POLY_TO_FAT:
+        case EX_FN_TO_FAT:
+            return x == leaf;
+        default:
+            return false;
+    }
+}
+static void fn_join_mark_box_reaps(CTerm *t, const Expr *join, int depth) {
+    while (t && depth < 256) {
+        switch (t->kind) {
+            case CT_LETRAW:
+                if (t->as.letraw.e && fn_join_is_box_leaf(join, ascribe_peel(t->as.letraw.e), 0))
+                    t->as.letraw.reap_env = true;
+                t = t->as.letraw.body; break;
+            case CT_LETVAL:  t = t->as.letval.body;  break;
+            case CT_LETPRIM: t = t->as.letprim.body; break;
+            case CT_LETCALL: t = t->as.letcall.body; break;
+            case CT_LETCONT:
+                fn_join_mark_box_reaps(t->as.letcont.body, join, depth + 1);
+                t = t->as.letcont.jbody; break;
+            case CT_IF:
+                fn_join_mark_box_reaps(t->as.if_.then_, join, depth + 1);
+                t = t->as.if_.else_; break;
+            case CT_MATCH:
+                for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                    fn_join_mark_box_reaps(t->as.match.arms[i].body, join, depth + 1);
+                return;
+            default:
+                return;
+        }
+        depth++;
+    }
+}
+
+static bool cps_fn_join_box_freeable(const Expr *let, uint32_t idx) {
+    const Expr *init = ascribe_peel(let->as.let_.bindings[idx].init);
+    return cps_fn_join_owned_confined(let, idx) && !fn_join_uses_control(init, 0);
+}
 static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx, CTerm *rest) {
     Expr *init = (Expr *)let->as.let_.bindings[idx].init;
     if (cps_closure_env_freeable(let, idx) || cps_fresh_call_env_freeable(b, let, idx)
-        || cps_local_closure_env_freeable(let, idx)) {
+        || cps_local_closure_env_freeable(let, idx) || cps_fn_join_box_freeable(let, idx)) {
         CTerm *t = build_letraw(b, init, bx, rest);
         t->as.letraw.reap_env = true;
         t->as.letraw.reap_at_backedge = cps_closure_only_invoked(let, idx);
@@ -1511,6 +1697,10 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
         if (c) return c;
     }
     CTerm *t = cps_bind(b, init, bx, rest);
+    /* A confined fn-value join lowered arm by arm (it holds control, so it was
+     * not delegated whole above): reap each arm's box where it is made. */
+    if (t && cps_fn_join_owned_confined(let, idx))
+        fn_join_mark_box_reaps(t, ascribe_peel(init), 0);
     /* Only when the call was delegated as a raw let: that is the one lowering
      * whose binder holds the `any` the call returned, in this function. */
     if (t && t->kind == CT_LETRAW && t->as.letraw.e == init &&
@@ -1544,6 +1734,10 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
         else if (u->kind == CT_LETCALL) u = u->as.letcall.body;
         else if (u->kind == CT_LETPRIM) u = u->as.letprim.body;
         else if (u->kind == CT_LETVAL)  u = u->as.letval.body;
+        /* fn-value-through-if-or-match-loses-its-representation: a
+         * `(Some <join>)` binds the join's value at a join point, and the
+         * constructor call is that join's continuation. */
+        else if (u->kind == CT_LETCONT) u = u->as.letcont.jbody;
         else break;
     }
     return t;

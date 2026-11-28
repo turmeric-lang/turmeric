@@ -6,11 +6,15 @@
 ;;   a call head or a let that is only called  -- at the let's scope exit
 ;;   an argument to a non-retaining parameter   -- hoisted, then the same
 ;;   a struct's (fn ...) field                  -- the struct's drop glue
+;;   a function's result                        -- its caller (returns_fresh_closure)
+;;   a `Some` payload matched in place          -- the sum payload drop
 ;;
 ;; and the parameter boxed at the join does not escape through it, so a caller
 ;; that passes a capturing closure still frees that closure after the call.
-;; (`p-ctor` takes a defn: a carrier parameter stored in a struct field, join
-;; or not, already reads as retained, so a closure passed there is kept.)
+;; (`p-ctor`, `s-par` and the returned joins take a defn: a carrier parameter
+;; stored in a struct field or a `Some`, or handed back in a result, join or
+;; not, reads as retained -- as a closure factory's captured parameter does --
+;; so a closure passed there is kept.)
 ;; requires.leak-check runs this under ASan + LeakSanitizer: a box kept is a
 ;; leak per turn, and a closure freed while a box still points at it is a
 ;; use-after-free.  Each shape runs in a loop, with both arms taken.
@@ -34,6 +38,20 @@
 (defn m-adt [o : (Option int) f : (fn [int] int)] : int
   ((match o (Some _) f (None) a2) 10))
 (defn d-call [f : (fn [int] int)] : int ((let [g f] g) 10))
+;; returned: a declared result, an inferred one, a bare carrier stage 2 boxes,
+;; and a let alias of the join
+(defn r-sel [c : bool f : (fn [int] int)] : (fn [int] int) (if c f a2))
+(defn r-inf [c : bool f : (fn [int] int) g : (fn [int] int)] (if c f g))
+(defn r-id [f : (fn [int] int)] : (fn [int] int) f)
+(defn r-let [c : bool f : (fn [int] int)] : (fn [int] int) (let [h (if c f a2)] h))
+;; a Some payload: carrier beside a defn, capturing lambda beside a defn
+(defn s-par [c : bool f : (fn [int] int)] : int
+  (let [o (Some (if c f a2))]
+    (match o (Some h) (h 10) (None) 0)))
+(defn s-clo [c : bool k : int] : int
+  (let [o (Some (if c (fn [x : int] : int (+ x k)) a2))]
+    (match o (Some h) (h 10) (None) 0)))
+(defn a3 [x : int] : int (+ x 3))
 
 (defn run [i : int n : int acc : int k : int] : int
   (if (= i n)
@@ -48,7 +66,13 @@
                             (+ (p-clo c cl 3)
                                (+ (m-lit (mod i 2) cl)
                                   (+ (m-adt (if c (Some i) (None)) cl)
-                                     (d-call cl)))))))))]
+                                     (+ (d-call cl)
+                                        (+ ((r-sel c a3) 10)
+                                           (+ (let [h (r-inf c a3 a2)] (h 10))
+                                              (+ (app (r-id a3))
+                                                 (+ ((r-let c a3) 10)
+                                                    (+ (s-par c a3)
+                                                       (s-clo c k)))))))))))))))]
       (run (+ i 1) n (+ acc v) k))))
 
 (defn main [] : int
