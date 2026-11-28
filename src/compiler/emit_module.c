@@ -11527,6 +11527,18 @@ const char *emit_inst_method_linkage_attr(const FnDef *fd) {
     return fd->owner_instance->origin_file_id != 0 ? "__attribute__((weak)) " : "";
 }
 
+/* Direction (1) (mirror emit_fns.c): a non-spec instance method whose result
+ * is a carrier-ABI type -- a parameterized struct, or a class default body
+ * returning `(Vec cstr)` -- is declared and defined as the int64 carrier.
+ * One rule for the .c forward declaration and the module header, so the two
+ * cannot disagree (they did, for every plot instance in a --shared image:
+ * docs/archive/notebook-cells-cannot-call-inline-c-spices.md). */
+static bool emit_inst_method_result_is_carrier(const FnDef *fd, const Type *rft) {
+    return rft && fd->binding && fd->binding->name && fd->binding->name->name &&
+           strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
+           type_uses_carrier_abi(*rft);
+}
+
 static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                                   const Expr **items, uint32_t n_items) {
     /* S1: the per-program reset used to live HERE, which silently discarded
@@ -11586,10 +11598,8 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                  * returns the int64 carrier (mirror emit_fns.c's dict_clone_class
                  * branch in both the header and body-return paths). */
                 buf_puts(out, "int64_t");
-            } else if (e->type.as.fn.result_full_type &&
-                       fd->binding && fd->binding->name && fd->binding->name->name &&
-                       strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
-                       type_uses_carrier_abi(*e->type.as.fn.result_full_type)) {
+            } else if (emit_inst_method_result_is_carrier(fd,
+                           e->type.as.fn.result_full_type)) {
                 /* Direction (1): mirror emit_fns.c -- non-spec instance method
                  * returning a carrier-ABI parameterized struct emits int64_t. */
                 buf_puts(out, "int64_t");
@@ -23865,9 +23875,8 @@ static bool ffi_cb_param_supported(const Expr *e, const FnDef *fd, uint32_t j) {
      * carrier instead). */
     const Binding *pb = fd->params ? fd->params[j] : NULL;
     bool fat = pty->as.fn.boxed
-            || (pb && (pb->is_fat || pb->type.as.fn.boxed ||
-                       (pb->type.kind == TY_FN &&
-                        fn_param_type_is_fat_normalized(&pb->type))))
+            || (pb && (pb->is_fat ||
+                       (pb->type.kind == TY_FN && emit_fn_binding_invokes_fat(pb))))
             || (e->type.as.fn.arg_flags && j < e->type.as.fn.arity &&
                 FN_ARG_FLAG(e->type.as.fn, j, FA_FAT));
     if (!fat && !ffi_cb_param_is_poly(e, fd, j)) return false;
@@ -24670,15 +24679,10 @@ static int emit_header_inner(Buf *out, const char *module_name, const Expr *prog
                     bool typed_ptr = rft->kind == TY_PTR_VOID && rft->as.ptr.inner;
                     bool typed_struct = rft->kind == TY_STRUCT;
                     bool typed_cfnptr = rft->kind == TY_FN && rft->as.fn.cfnptr;
-                    bool inst_method = fd->binding && fd->binding->name &&
-                        strncmp(fd->binding->name->name, "__inst_", 7) == 0;
                     const char *inst_carrier = emit_inst_fn_return_carrier(fd, rft);
-                    if (inst_method && type_uses_carrier_abi(*rft)) {
-                        /* docs/archive/notebook-cells-cannot-call-inline-c-spices.md
-                         * (the --shared bugs): mirror emit_fn_forward_decls and emit_fns.c -- a
-                         * non-spec instance method returning a carrier-ABI
-                         * type (a class default `(Vec cstr)` body, plot's
-                         * `category-labels`) is the int64 carrier, so the
+                    if (emit_inst_method_result_is_carrier(fd, rft)) {
+                        /* The forward declaration's rule (a class default
+                         * `(Vec cstr)` body, plot's `category-labels`): the
                          * header must not prototype the struct pointer. */
                         buf_puts(out, "int64_t");
                     } else if (inst_carrier) {
