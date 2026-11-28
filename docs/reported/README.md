@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found fixing cps-threaded-fn-value-in-if-arm-skips-the-join (filed 2026-11-28)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cps-if-yielding-option-assigns-carrier-to-aggregate](cps-if-yielding-option-assigns-carrier-to-aggregate.md) | medium (cc error) | In a function the CPS emitter lowers, `(match (if c (some i) (none)) ...)` assigns the int64 carrier to a join declared at the `Option` aggregate type; cc rejects it. A helper computing the `Option` outside the CPS function works |
+
 ## Found executing cps-byvalue-struct-with-closure-field (filed 2026-11-27)
 
 | Report | Severity | One line |
