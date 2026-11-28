@@ -1750,9 +1750,20 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 ESC_PUSH(cur->as.await_.fut_expr);
                 break;
             }
-            case EX_ASYNC:
+            case EX_ASYNC: {
+                /* async-capturing-body-env-never-freed: a spawn of a closure
+                 * whose spawns each run a copy of its box
+                 * (Binding.spawn_copy_closure) retains nothing of `b`. */
+                const Expr *fe = cur->as.async_.fn_expr;
+                while (fe && (fe->kind == EX_ASCRIBE || fe->kind == EX_FN_TO_FAT))
+                    fe = fe->kind == EX_ASCRIBE ? fe->as.ascribe_.inner
+                                                : fe->as.fn_to_fat_.inner;
+                if (fe && fe->kind == EX_VAR && fe->as.var.binding == b &&
+                    b->spawn_copy_closure)
+                    break;
                 ESC_PUSH(cur->as.async_.fn_expr);   /* a bare `b` here escapes */
                 break;
+            }
 
             /* ---- leaves: cannot reference `b` ---- */
             case EX_NIL_LIT:

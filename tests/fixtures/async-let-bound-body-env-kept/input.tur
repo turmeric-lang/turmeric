@@ -2,11 +2,16 @@
 ;; NOT hand to the spawn (async-let-bound-body-env-dropped has the one it
 ;; does) -- each spawns the same closure value more than once, so a spawn
 ;; that dropped the box would leave the next spawn a freed env.  Not
-;; leak-checked: these keep the box, as before.  The answers must be right.
+;; leak-checked.  The answers must be right.
 ;;
 ;;   twice     -- the same local spawned twice in sequence
 ;;   in-while  -- spawned from a `while` body
 ;;   captured  -- spawned inside a lambda that captured it, called twice
+;;
+;; Since 2026-11-28 `twice` and `in-while`, whose captures are plain numbers,
+;; give each spawn a COPY of the box to own and drop the original at the
+;; let's scope exit (async-let-bound-body-env-copied-per-spawn, leak-checked).
+;; `captured` still keeps its box: the capture by `go` reads as an escape.
 ;;
 ;; Each hands its future to `drive`, so the body may still be parked when the
 ;; let exits.  A spawn awaited where it is written, `(await (async body))`,

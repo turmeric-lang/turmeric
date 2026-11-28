@@ -1,0 +1,111 @@
+;; async-capturing-body-env-never-freed: a capturing lambda BOUND TO A LOCAL
+;; and spawned more than once with some spawn NOT awaited where it is written
+;; -- its future handed to `drive`, so the body may still be parked when the
+;; let exits.  No one spawn may own the box (the next spawn runs it) and the
+;; let could not drop it, so it leaked (async-let-bound-body-env-kept).
+;;
+;; When every capture is a plain number, a byte copy of the box is a whole,
+;; independent env: each spawn now runs a COPY of its own, owns it and drops
+;; it when its body settles, and the let drops the original at its scope
+;; exit (Binding.spawn_copy_closure).  Leak-checked, 100 turns of each:
+;;
+;;   twice    -- spawned twice in sequence, each driven
+;;   in-while -- spawned from a `while` body
+;;   mixed    -- spawned twice and called directly
+;;   held     -- two futures held at once before either is driven
+;;   early    -- the let exits right after the spawn, the body still parked
+;;   typed    -- a `bool` body (the typed spawn), spawned twice
+;;
+;; A local captured by another lambda that spawns it still keeps the box
+;; (async-let-bound-body-env-kept's `captured`).
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+(defn twice [k : int] : int
+  (let [body (fn [] : int (* k 2))]
+    (+ (drive (async body)) (drive (async body)))))
+
+(defn in-while [k : int] : int
+  (let [body (fn [] : int (+ k 1))
+        ^mut i 0
+        ^mut acc 0]
+    (while (< i 3)
+      (set! acc (+ acc (drive (async body))))
+      (set! i (+ i 1)))
+    acc))
+
+(defn mixed [k : int] : int
+  (let [body (fn [] : int (+ k 3))]
+    (+ (drive (async body)) (+ (drive (async body)) (body)))))
+
+(defn held [k : int] : int
+  (let [body (fn [] : int (+ k 6))]
+    (let [f1 (async body)
+          f2 (async body)]
+      (+ (drive f1) (drive f2)))))
+
+(defn early [k : int] : int
+  (let [f (let [body (fn [] : int (+ k (sum-values 0 3 0)))]
+            (drive (async body))
+            (async body))]
+    (drive f)))
+
+(defn typed [k : int] : int
+  (let [body (fn [] : bool (> k 3))]
+    (+ (drive (async body)) (drive (async body)))))
+
+(defn turn [k : int] : int
+  (+ (twice k) (+ (in-while k) (+ (mixed k) (+ (held k) (+ (early k) (typed k)))))))
+
+(defn turns [i : int acc : int] : int
+  (if (= i 0) acc (turns (- i 1) (+ acc (turn i)))))
+
+(defn main [] : nil
+  (cur-cell true)
+  (println (twice 5))
+  (println (in-while 10))
+  (println (mixed 4))
+  (println (held 1))
+  (println (early 2))
+  (println (typed 5))
+  (println (turns 100 0))
+  (free-future (cur-cell false)))

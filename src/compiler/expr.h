@@ -251,6 +251,15 @@ struct Binding {
      * and the let does not drop it (set by the direct emitter's let, read at
      * the spawn: async_spawn_owns_env). */
     bool          spawn_owns_env;
+    /* async-capturing-body-env-never-freed: this let-bound fresh capturing
+     * closure, whose captures are plain numbers, is spawned in a way no one
+     * spawn may own -- more than once, some spawn not awaited where it is
+     * written.  Each spawn then runs a COPY of the env box that it owns and
+     * drops when its body settles, so a spawn is not an escape of the
+     * original, and the let drops the original at its scope exit.  Set by the
+     * direct emitter's let (let_mark_spawn_owned), read at the spawn and by
+     * the escape walk.  The closure, for its env struct's name. */
+    const struct Closure *spawn_copy_closure;
     /* byvalue-recursive-adt-boxes-are-never-freed: this local is a by-value
      * recursive ADT that does not escape, so the direct emitter frees its SPINE
      * at scope exit (`drop_localowned_<T>(&xs)`).  Emitted directly rather than as

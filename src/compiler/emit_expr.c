@@ -3058,13 +3058,64 @@ void emit_let_mark_spawn_owned_one(const Expr *e, uint32_t i) {
         let_sole_use_is_spawn_impl(e, i, true))
         b->spawn_owns_env = true;
 }
+/* async-capturing-body-env-never-freed: may each spawn of this closure run a
+ * COPY of its env box (Binding.spawn_copy_closure)?  Only when a byte copy is
+ * a whole, independent env: every capture a plain number -- no pointer, so a
+ * copy shares nothing with the original or with anything a scope frees (a
+ * `^mut` cell is a pointer capture and is refused); no drop instance; no
+ * inline C, which could hold an lvalue into the box. */
+static bool closure_env_spawn_copyable(const struct Closure *c) {
+    if (!c || !c->fn || c->n_captures == 0) return false;
+    if (c->is_shift_receiver || c->is_effect_payload) return false;
+    if (expr_subtree_has_inline_c(c->fn->body)) return false;
+    uint32_t heap_caps = 0;
+    for (uint32_t i = 0; i < c->n_captures; i++) {
+        const Binding *cap = c->captures[i];
+        if (!cap) return false;
+        if (cap->is_global) continue;
+        if (cap->is_fat || cap->is_mut || cap->is_mut_cell) return false;
+        if (c->capture_drop_insts && c->capture_drop_insts[i]) return false;
+        switch (cap->type.kind) {
+            case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_NIL:
+            case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+            case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            case TY_FLOAT32: case TY_FLOAT64:
+                break;
+            default:
+                return false;
+        }
+        heap_caps++;
+    }
+    return heap_caps > 0;
+}
+
 static void let_mark_spawn_owned(const Expr *e) {
     if (!e || e->kind != EX_LET) return;
     for (uint32_t i = 0; i < e->as.let_.n; i++) {
         Binding *b = e->as.let_.bindings[i].binding;
         if (b && !b->spawn_owns_env && !let_binding_env_freeable(e, i) &&
-            let_sole_use_is_spawn(e, i))
+            let_sole_use_is_spawn(e, i)) {
             b->spawn_owns_env = true;
+            continue;
+        }
+        /* async-capturing-body-env-never-freed: spawned more than once with
+         * some spawn not awaited where it is written (async-let-bound-body-
+         * env-kept's `twice` / `in-while`), so no one spawn may own the box
+         * and the let could not drop it -- a spawned body may still be
+         * running, parked, when the let exits.  When a byte copy is a whole
+         * env, each spawn runs a copy of its own instead, and the spawns are
+         * then no escape of the original: keep the mark only when that is
+         * what makes the let's drop fire. */
+        if (!b || b->spawn_owns_env || b->spawn_copy_closure) continue;
+        const Expr *init = e->as.let_.bindings[i].init;
+        while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+        if (!init || init->kind != EX_CLOSURE) continue;
+        if (b->type.kind != TY_FN || !b->type.as.fn.boxed) continue;
+        const struct Closure *c = init->as.closure_.closure;
+        if (!closure_env_spawn_copyable(c)) continue;
+        if (let_binding_env_freeable(e, i)) continue;
+        b->spawn_copy_closure = c;
+        if (!let_binding_env_freeable(e, i)) b->spawn_copy_closure = NULL;
     }
 }
 
@@ -18030,6 +18081,41 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * Route it to the env-taking spawn, which reads the thunk out of
                  * the box and invokes it with the box as its env. */
                 char *fn_val = emit_value(ctx, body, fn_expr);
+                /* async-capturing-body-env-never-freed: a closure whose spawns
+                 * each run a copy of its box (Binding.spawn_copy_closure) --
+                 * copy it here, header included, and hand the copy to the
+                 * spawn to own; the let drops the original. */
+                bool spawn_copy = false;
+                {
+                    const Expr *sv = fn_expr;
+                    while (sv && (sv->kind == EX_ASCRIBE || sv->kind == EX_FN_TO_FAT))
+                        sv = sv->kind == EX_ASCRIBE ? sv->as.ascribe_.inner
+                                                    : sv->as.fn_to_fat_.inner;
+                    const Binding *svb = (sv && sv->kind == EX_VAR) ? sv->as.var.binding : NULL;
+                    if (svb && svb->spawn_copy_closure && fn_expr->type.as.fn.boxed) {
+                        const struct Closure *sc = svb->spawn_copy_closure;
+                        const Symbol *en = sc->env_name;
+                        const EmitAbiSpecialization *_isp =
+                            emit_inner_closure_spec_for_binding(
+                                ctx, ctx->current_abi_specialization, sc->fn->binding);
+                        if (_isp && _isp->env_name_override) en = _isp->env_name_override;
+                        char *cbase = fresh_tmp(ctx);
+                        char *ccopy = fresh_tmp(ctx);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "void *%s = malloc(sizeof(void *) + sizeof(struct %s));\n",
+                                   cbase, en->name);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "memcpy(%s, (char *)(void *)(intptr_t)(%s) - sizeof(void *), "
+                                         "sizeof(void *) + sizeof(struct %s));\n",
+                                   cbase, fn_val, en->name);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "void *%s = (char *)%s + sizeof(void *);\n", ccopy, cbase);
+                        free(cbase);
+                        free(fn_val);
+                        fn_val = ccopy;
+                        spawn_copy = true;
+                    }
+                }
                 if (apl_typed) {
                     /* Typed spawn: a file-scope wrapper at the thunk's real
                      * prototype, converting the result to its slot bits. */
@@ -18072,7 +18158,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_puts(pbuf, "}\n\n");
                     }
                     indent_buf(body, ctx->indent);
-                    if (async_spawn_owns_env(fn_expr)) {
+                    if (spawn_copy || async_spawn_owns_env(fn_expr)) {
                         buf_puts(body, "tur_async_owns_env = 1;\n");
                         indent_buf(body, ctx->indent);
                     }
@@ -18086,7 +18172,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * The thread drops the box the spawn owns once the body
                      * has settled (tur_async_thread_main). */
                     indent_buf(body, ctx->indent);
-                    if (async_spawn_owns_env(fn_expr)) {
+                    if (spawn_copy || async_spawn_owns_env(fn_expr)) {
                         buf_puts(body, "tur_async_owns_env = 1;\n");
                         indent_buf(body, ctx->indent);
                     }
@@ -18095,7 +18181,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 } else {
                     indent_buf(body, ctx->indent);
                     if (fn_expr->type.as.fn.boxed) {
-                        if (async_spawn_owns_env(fn_expr)) {
+                        if (spawn_copy || async_spawn_owns_env(fn_expr)) {
                             buf_puts(body, "tur_async_owns_env = 1;\n");
                             indent_buf(body, ctx->indent);
                         }
