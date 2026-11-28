@@ -660,11 +660,26 @@ The walk:
   ```
 - for an entry that is a target with a linkable artifact, takes
   `$<TARGET_FILE:...>` (plus an rpath if it is shared);
-  This includes an imported target the dep found itself with `find_package`
-  (Manifold's `TBB::tbb`): the generated file sets
-  `CMAKE_FIND_PACKAGE_TARGETS_GLOBAL`, so on CMake 3.24 or newer such a target
-  is visible to the walk. On an older CMake it is not, and the entry is
-  dropped;
+- sees the dependency's own `IMPORTED` targets, which CMake keeps visible only
+  in the directory that made them and below -- the walk runs one directory
+  up. Each dependency directory that calls `project()` makes its imported
+  targets global as it finishes (CMake 3.21 or newer), and the generated file
+  sets `CMAKE_FIND_PACKAGE_TARGETS_GLOBAL` for the ones a `find_package` makes
+  in any directory (Manifold's `TBB::tbb`; CMake 3.24 or newer). One that
+  neither reaches -- an `add_library(... IMPORTED)` in a subdirectory with no
+  `project()` of its own -- is **not linked**, and `tur fetch` names it:
+
+  ```
+  spice: warning: link dependency 'Plain::extra' of target 'plainwrap' is a
+  CMake target the generated CMakeLists cannot see -- an IMPORTED target
+  created without GLOBAL, in a directory that calls no project(); it is NOT
+  linked. Create it GLOBAL, or add what it names with :link-flags.
+  ```
+
+  Making a target global is what writing `GLOBAL` would have done, cost
+  included: a dependency that creates one imported name, unguarded, in two
+  directories that cannot see each other stops configuring ("another target
+  with the same name already exists");
 - for an entry that is a target *without* one -- an `OBJECT_LIBRARY` or
   `INTERFACE_LIBRARY` -- **recurses into its requirements** rather than
   dropping it. raylib vendors glfw as an `OBJECT_LIBRARY`: its objects are
