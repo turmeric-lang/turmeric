@@ -43,6 +43,12 @@ directory is worse for triage than no index.
 | [cps-match-sum-payload-box-not-freed](cps-match-sum-payload-box-not-freed.md) | low-medium (leak, 16 B per match) | A `match` on a fresh `(Result P E)` whose arm performs is lowered by the CPS backend's `emit_match`, which has no counterpart of the direct emitter's `match_scrut_owns_vsp_box` free, so the struct payload's box leaks. Nothing to do with closure fields. A parser constructor returning `(Result P E)` matched inside a `handle` body is this shape |
 | ~~[fnfield-struct-local-freed-while-returned](../archive/fnfield-struct-local-freed-while-returned.md)~~ | high (use-after-free) | **RESOLVED 2026-11-27** (archived), in the same change: `(let [h (H n (fn ...))] h)` freed the closure at scope end and the caller called it afterwards -- every constructor function written with a `let`. A local the scope hands out is no longer flagged (`fnfield_local_leaves_scope`). Pinned by `fnfield-struct-local-returned` |
 
+## Found fixing fnfield-struct-binder-frees-borrowed-closure (filed 2026-11-28)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [carrier-fn-param-refused-by-constructor-fn-field](carrier-fn-param-refused-by-constructor-fn-field.md) | medium (false rejection) | `(defn mkp [f : (fn [int] int)] : H (H 1 f))` is TUR-E0001 "expected (fn [] : ?), got ptr<void>": a scalar-signature fn parameter rides the poly carrier (`ptr<void>`), and the EX_POLY_TO_FAT conversion (`elab_call.c:9707`) serves only a type-variable slot, not a boxed TY_FN field. `^fat f` or `make-struct` work around it |
+
 ## Follow-ups to #1486 (filed 2026-11-27)
 
 #1486 fixed four of the five reports from `spices/manifold` and listed what it
