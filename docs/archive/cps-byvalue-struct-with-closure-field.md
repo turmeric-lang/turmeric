@@ -232,7 +232,7 @@ the existing `cps-byvalue-struct-closure-field-param`.
   (measured on a probe of the SAX shape; the spices' own suites were not
   measured for leaks): the box is the Result's payload box now, where it was
   the struct's carrier box before.
-- [cps-while-then-uncarried-var-result-evicts](../reported/cps-while-then-uncarried-var-result-evicts.md)
-  -- open. A performing `while` followed by a bare variable the loop does not
+- [cps-while-then-uncarried-var-result-evicts](cps-while-then-uncarried-var-result-evicts.md)
+  -- resolved 2026-11-28. A performing `while` followed by a bare variable the loop does not
   set, which is what "return the struct after the loop" is.
 

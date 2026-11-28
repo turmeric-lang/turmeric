@@ -1,5 +1,8 @@
 # A performing `while` followed by a bare variable the loop does not set is refused
 
+**Status: RESOLVED 2026-11-28** -- see [Resolution](#resolution). The text
+below is the report as it stood while open.
+
 **Severity: medium (compile failure).** A function whose body is a `while`
 that performs, followed by a bare variable as its result, fails to compile
 with "this effect operation has no lowering here" when the loop does not
@@ -7,7 +10,7 @@ assign that variable. Returning a parameter after the loop is the common
 shape.
 
 Found 2026-11-24 while executing
-[cps-byvalue-struct-with-closure-field](../archive/cps-byvalue-struct-with-closure-field.md)
+[cps-byvalue-struct-with-closure-field](cps-byvalue-struct-with-closure-field.md)
 (the probe returned the struct parameter after the loop). Reproduces on `main`
 at `1227412b`, with any result type.
 
@@ -72,3 +75,18 @@ mode's own refusal (a `return` in the loop body) still applies.
 
 Make the result an expression: `(+ base 0)`, or for a struct bind the loop in
 a helper that returns nil and return the struct from the caller.
+
+## Resolution
+
+Fix direction taken as written. `build_loop` (`src/passes/cps_ir.c`) now
+collects the loop-carried set (`loop_collect_carried`) before choosing the
+continuation shape, and the result-variable shape requires the delivered
+variable to be in it. A bare variable the loop never sets -- a parameter, a
+by-value struct parameter, an outer `let` local -- falls to join mode like any
+other code after the loop, and join mode's own refusals (a control-free loop
+keeps whole-form delegation; a `return` in the body) still apply. The repro
+prints `100 101 102 100` on both engines.
+
+Fixture: `tests/fixtures/cps-while-then-uncarried-var-result` (an int
+parameter, a by-value struct parameter, a let-bound local, and the carried
+counter as the still-working result-variable case).

@@ -5095,13 +5095,30 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
      * (`join_mode` below): the helper delivers unit to the join, which the
      * emitter lifts as an escaping-join resume-frame, and every carried var
      * becomes a shared cell so the code after the loop reads its final value. */
+    /* Loop-carried vars = the ^mut set! targets (excluding loop-body locals).
+     * Computed before the shape choice: the result-variable shape needs the
+     * delivered var to be carried (cps-while-then-uncarried-var-result-evicts). */
+    const Binding *locals[64]; uint32_t n_locals = 0;
+    loop_collect_let_binders(body, locals, &n_locals, 64);
+    const Binding *vars[16]; uint32_t nv = 0;
+    if (!loop_collect_carried(body, locals, n_locals, vars, &nv, 16)) LOOP_REJECT();
+    if (nv > 16) LOOP_REJECT();
+    if (b->loop_depth) LOOP_REJECT();   /* nested loops: out of subset */
+
     const Binding *result_bd = NULL;
     bool unit_exit = false;
     bool join_mode = false;
     CKont rk;
+    /* cps-while-then-uncarried-var-result-evicts: a bare variable after the
+     * loop that the loop never sets (a parameter returned after the loop) is
+     * not the result-variable shape -- the helper has no param or cell for it.
+     * It is ordinary code after the loop, so it takes the join below. */
+    bool var_is_carried = rest->kind == CT_APPCONT &&
+        rest->as.appcont.v.kind == CA_VAR && rest->as.appcont.v.var &&
+        loop_idx(vars, nv, rest->as.appcont.v.var) >= 0;
     if (rest->kind == CT_APPCONT &&
         (rest->as.appcont.kont.kind == KK_RET || rest->as.appcont.kont.kind == KK_PROMPT) &&
-        ((rest->as.appcont.v.kind == CA_VAR && rest->as.appcont.v.var) ||
+        ((rest->as.appcont.v.kind == CA_VAR && var_is_carried) ||
          rest->as.appcont.v.kind == CA_UNIT ||
          (rest->as.appcont.v.kind == CA_CVAR && rest->as.appcont.v.cvar_id == x.id))) {
         rk = rest->as.appcont.kont;
@@ -5126,14 +5143,6 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         j.name = arena_strdup(b->a, "j", 1);
         rk = kont_var(j);
     }
-
-    /* Loop-carried vars = the ^mut set! targets (excluding loop-body locals). */
-    const Binding *locals[64]; uint32_t n_locals = 0;
-    loop_collect_let_binders(body, locals, &n_locals, 64);
-    const Binding *vars[16]; uint32_t nv = 0;
-    if (!loop_collect_carried(body, locals, n_locals, vars, &nv, 16)) LOOP_REJECT();
-    if (nv > 16) LOOP_REJECT();
-    if (b->loop_depth) LOOP_REJECT();   /* nested loops: out of subset */
 
     /* Soundness guard: reads resolve to loop-entry versions; unconditional single
      * set per carried var. */
