@@ -1,0 +1,47 @@
+;; fnfield-struct-binder-frees-borrowed-closure: a `let` local of a by-value
+;; struct with a closure field frees that closure at scope end -- but only a
+;; local that OWNS it may.  These locals share a closure someone else owns, and
+;; each used to free it under its owner, which then called or freed it again.
+;; Every closure here still has exactly one owner, so the run is leak-free as
+;; well.  Leak-checked: ASan is what sees the use-after-free.
+(defstruct ^copy C [raw : int handler : (fn [int] int)])
+(defstruct H [raw : int handler : (fn [int] int)])
+
+;; hands back the ^copy it was given: the result is the caller's copy
+(defn pick [c : C n : int] : C
+  c)
+
+;; builds one from a fresh closure: the caller owns the result
+(defn mk-copy [n : int] : C
+  (let [c (C n (fn [x : int] : int (- x n)))]
+    c))
+
+(defn main [] : int
+  ;; 1. a rebinding of a ^copy struct: `c` still owns the closure
+  (let [n 3
+        c (C 100 (fn [x : int] : int (* x n)))]
+    (let [g c] (println ((.handler g) 2)))
+    (println ((.handler c) 2)))
+  ;; 2. a function that returns the ^copy struct it was given
+  (let [c (C 100 (fn [x : int] : int (* x 10)))]
+    (let [r (pick c 3)]
+      (println ((.handler r) 4)))
+    (println ((.handler c) 5)))
+  ;; a ^copy built fresh by a function is still freed by its binder
+  (let [m (mk-copy 4)]
+    (println ((.handler m) 10)))
+  ;; a let-bound closure stored once is taken over by the struct
+  (let [n 6
+        f (fn [x : int] : int (+ x n))]
+    (let [h (H 1 f)]
+      (println ((.handler h) 1))))
+  ;; ... and so is one built in a sibling binding
+  (let [n 7
+        f (fn [x : int] : int (+ x n))
+        h (H 1 f)]
+    (println ((.handler h) 1)))
+  ;; a move-only struct moved into another binding: the new one owns it
+  (let [h (H 1 (fn [x : int] : int (+ x 100)))]
+    (let [g h]
+      (println ((.handler g) 1))))
+  0)

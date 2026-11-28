@@ -1,0 +1,54 @@
+;; fnfield-struct-binder-frees-borrowed-closure: a struct local stores a
+;; closure it does not own -- a parameter (the caller's), a let-bound closure
+;; called again afterwards or captured by another closure, one stored on every
+;; pass of a loop, or one a function stored and handed back.  Each local used to free the closure at its
+;; scope end while the closure was still in use: a use-after-free or double
+;; free.  None of them frees it now.
+;;
+;; Those closures have no owner at all, so they leak (`known-leak`): see
+;; docs/reported/let-bound-closure-shared-with-fnfield-struct-leaks.md.
+(defdata Ev (Start int) (End))
+(defstruct H [raw : int handler : (fn [int] int)])
+(defstruct E [raw : int handler : (fn [Ev] int)])
+
+;; 3. a struct built from a closure parameter
+(defn use-param [f : (fn [Ev] int)] : int
+  (let [h (E 1 f)]
+    ((.handler h) (End))))
+
+;; ... or built from one and handed back
+(defn wrap [f : (fn [Ev] int)] : E
+  (let [h (E 2 f)]
+    h))
+
+(defn main [] : int
+  (let [n 3
+        g (fn [e : Ev] : int n)]
+    (println (use-param g))
+    (println (use-param g)))
+  (let [n 4
+        g (fn [e : Ev] : int (+ n 1))]
+    (let [w (wrap g)]
+      (println ((.handler w) (End))))
+    (println (g (End))))
+  ;; a let-bound closure called again after the struct is gone
+  (let [n 5
+        f (fn [x : int] : int (* x n))]
+    (let [h (H 1 f)]
+      (println ((.handler h) 2)))
+    (println (f 3)))
+  ;; a closure another closure captures, called through it afterwards
+  (let [n 8
+        f (fn [x : int] : int (* x n))
+        user (fn [y : int] : int (f y))]
+    (let [h (H 1 f)]
+      (println ((.handler h) 2)))
+    (println (user 3)))
+  ;; a closure stored on every pass of a loop
+  (let [n 6
+        g (fn [x : int] : int (+ x n))]
+    (let [^mut i 0]
+      (while (< i 2)
+        (let [h (H i g)] (println ((.handler h) i)))
+        (set! i (+ i 1)))))
+  0)

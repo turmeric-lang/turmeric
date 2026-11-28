@@ -1,0 +1,54 @@
+;; carrier-fn-param-refused-by-constructor-fn-field: a `(fn ...)` parameter
+;; with a scalar signature rides the two-word poly carrier (ptr<void>).  Handed
+;; to a constructor's closure field -- `(H 1 f)` -- it was refused with
+;; "expected (fn [] : ?), got ptr<void>"; only `make-struct` compiled.  The
+;; constructor now boxes it onto the field's fat handle, typed with the
+;; field's own signature (so a float or cstr field dispatches at its types).
+(defstruct H [raw : int handler : (fn [int] int)])
+(defstruct ^copy C [raw : int handler : (fn [int] int)])
+(defstruct F [scale : (fn [float] float)])
+(defstruct G [g : (fn [int int] int) tag : int])
+(defstruct S [show : (fn [int] cstr)])
+
+(defn mkh [f : (fn [int] int)] : H (H 1 f))
+(defn mkc [f : (fn [int] int)] : C (C 2 f))
+(defn mkf [f : (fn [float] float)] : F (F f))
+(defn mkg [g : (fn [int int] int) t : int] : G (G g t))
+(defn mks [f : (fn [int] cstr)] : S (S f))
+
+;; a let alias of the parameter holds the same carrier
+(defn alias [f : (fn [int] int)] : H
+  (let [g f]
+    (H 3 g)))
+
+;; built and used in place
+(defn local [f : (fn [int] int)] : int
+  (let [h (H 4 f)]
+    ((.handler h) 10)))
+
+;; wrapped in another constructor
+(defn opt [f : (fn [int] int)] : (Option H) (Some (H 5 f)))
+
+(defn sq [x : float] : float (* x x))
+
+(defn main [] : int
+  (let [k   7
+        add (fn [x : int] : int (+ x k))]
+    (let [h (mkh add)] (println ((.handler h) 1)))
+    (let [c (mkc add)] (println ((.handler c) 2)))
+    (let [a (alias add)] (println ((.handler a) 3)))
+    (println (local add))
+    (println (add 100)))
+  (let [f (mkf sq)] (println ((.scale f) 1.5)))
+  (let [m 2.5
+        f (mkf (fn [x : float] : float (* x m)))]
+    (println ((.scale f) 3.1)))
+  (let [g (mkg (fn [a : int b : int] : int (* a b)) 9)]
+    (println ((.g g) 6 7))
+    (println (.tag g)))
+  (let [s (mks (fn [n : int] : cstr (if (> n 0) "pos" "neg")))]
+    (println ((.show s) 3)))
+  (match (opt (fn [x : int] : int (- x 1)))
+    (Some h) (println ((.handler h) 50))
+    (None) (println 0))
+  0)

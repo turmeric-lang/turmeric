@@ -223,7 +223,7 @@ the existing `cps-byvalue-struct-closure-field-param`.
   -- fixed in the same change. `(let [h (H n (fn ...))] h)` freed the closure
   at scope end and the caller called it afterwards. The CPS path would
   otherwise have mirrored it.
-- [fnfield-struct-binder-frees-borrowed-closure](../reported/fnfield-struct-binder-frees-borrowed-closure.md)
+- [fnfield-struct-binder-frees-borrowed-closure](fnfield-struct-binder-frees-borrowed-closure.md)
   -- open. A `let` bound to a copy of someone else's struct, or to one built
   from a closure parameter, frees a closure it does not own.
 - [cps-match-sum-payload-box-not-freed](../reported/cps-match-sum-payload-box-not-freed.md)

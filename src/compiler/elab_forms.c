@@ -405,6 +405,240 @@ static bool fnfield_local_leaves_scope(const Expr *body, const Binding *b) {
     return fnfield_value_carries(body, b, 0) || fnfield_return_carries(body, b);
 }
 
+/* fnfield-struct-binder-frees-borrowed-closure: does a binding initialised by
+ * `v` OWN the boxed closures in its fn-fields?
+ *
+ * local-struct-drop frees them at scope exit, which is right only for the
+ * binding that owns them.  The guards above (moved / consumed / leaves the
+ * scope) ask what the BODY does with the local; nothing asked where the value
+ * came from, and three ordinary inits hand over closures someone else frees
+ * or still calls:
+ *
+ *   - a `^copy` of another binding (`(let [g h] ...)`): h still owns them;
+ *   - a call that returns the `^copy` struct it was given (`(pick h 3)`);
+ *   - a constructor given a closure it does not own -- a parameter (the
+ *     caller's), a field of another struct, or a let-bound closure that is
+ *     used again afterwards.
+ *
+ * So the answer is "owns" only for a value built here from fresh closures, a
+ * move of a binding that owned them, or (for a move-only struct) any call --
+ * a by-value move-only result is the caller's.  Everything else keeps the
+ * closures, which leaks them: the safe direction, as the comment over
+ * fnfield_value_carries says.
+ *
+ * `taker` is the binding being decided.  When a constructor stores a let-bound
+ * closure local, the closure's own let decides later whether it was used only
+ * there (fnfield_release_shared_takers); the taker is recorded on it. */
+typedef struct FnfieldTaker {
+    Binding             *taker;
+    struct FnfieldTaker *next;
+} FnfieldTaker;
+
+static const Expr *fnfield_peel(const Expr *a) {
+    while (a) {
+        if (a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        else if (a->kind == EX_FN_TO_FAT) a = a->as.fn_to_fat_.inner;
+        else if (a->kind == EX_POLY_TO_FAT) a = a->as.poly_to_fat_.inner;
+        else if (a->kind == EX_POLY_WRAP) a = a->as.poly_wrap_.inner;
+        else break;
+    }
+    return a;
+}
+
+/* A closure value stored in a boxed fn-field: does the struct take it over? */
+static bool fnfield_closure_owned(Elab *e, const Expr *a, Binding *taker,
+                                  int depth) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    /* carrier-fn-param-refused-by-constructor-fn-field: a poly-carrier fn
+     * parameter stored in a field is boxed fresh here, { shim, fn, env } with
+     * a NULL drop header, so dropping it frees the box and never the env it
+     * points at -- the caller's closure is left alone.  The struct owns the
+     * box, whatever the carrier came from.  (A stack_ok box carries the
+     * no-op keep header, so its drop is harmless as well.) */
+    if (a && a->kind == EX_POLY_TO_FAT) return true;
+    a = fnfield_peel(a);
+    if (!a || depth > 32) return false;
+    switch (a->kind) {
+        case EX_FN:
+        case EX_CLOSURE:
+            /* a lambda written at the constructor: nobody else holds it */
+            return true;
+        case EX_CALL:
+            /* a closure a call hands back is the caller's */
+            return true;
+        case EX_VAR: {
+            Binding *cb = a->as.var.binding;
+            if (!cb || cb->is_param || cb->is_mut) return false;
+            if (cb->is_global)
+                /* a named defn is boxed fresh at the conversion; a global
+                 * `def` holding a closure value is shared */
+                return cb->source_fn_def != NULL;
+            /* a let-bound closure: owned only through a fresh init, and only
+             * if this is its one use (decided when its own let ends, which
+             * needs a taker to un-flag -- a defn's result walk has none) */
+            if (!taker || !cb->fnfield_let_init ||
+                !fnfield_closure_owned(e, cb->fnfield_let_init, NULL, depth + 1))
+                return false;
+            if (taker) {
+                FnfieldTaker *t = (FnfieldTaker *)arena_alloc(e->arena,
+                                                               sizeof(FnfieldTaker));
+                t->taker = taker;
+                t->next = cb->fnfield_takers;
+                cb->fnfield_takers = t;
+            }
+            return true;
+        }
+        default:
+            /* a field of another struct, a branch, ...: borrowed or unknown */
+            return false;
+    }
+}
+
+/* Every boxed fn-field argument of constructor node `v` (a ctor EX_CALL or an
+ * EX_MAKE_STRUCT) is a closure the new struct owns. */
+static bool fnfield_ctor_args_owned(Elab *e, const Expr *v, const AdtDef *ad,
+                                    Binding *taker, int depth) {
+    const CtorDef *ctor = ad->ctors[0];
+    Expr *const *args;
+    uint32_t n;
+    if (v->kind == EX_MAKE_STRUCT) {
+        args = v->as.make_struct_.field_values;
+        n = v->as.make_struct_.n_fields;
+    } else {
+        args = v->as.call_.args;
+        n = v->as.call_.n_args;
+    }
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        if (!elab_field_is_boxed_fnfield(ctor, fi)) continue;
+        if (fi >= n || !fnfield_closure_owned(e, args[fi], taker, depth + 1))
+            return false;
+    }
+    return true;
+}
+
+/* `ret` is true when `v` is in a function's result position (stamping a
+ * defn): there a local the function returns hands its ownership on, while in
+ * a let init a `^copy` of a local leaves ownership with the local. */
+static bool fnfield_value_owned(Elab *e, const Expr *v, const AdtDef *ad,
+                                Binding *taker, bool ret, int depth) {
+    if (!v || depth > 32) return false;
+    switch (v->kind) {
+        case EX_ASCRIBE:
+            return fnfield_value_owned(e, v->as.ascribe_.inner, ad, taker, ret,
+                                       depth + 1);
+        case EX_MAKE_STRUCT:
+            return fnfield_ctor_args_owned(e, v, ad, taker, depth);
+        case EX_CALL: {
+            if (v->as.call_.ctor)
+                return fnfield_ctor_args_owned(e, v, ad, taker, depth);
+            const Binding *fb = v->as.call_.fn_binding;
+            if (fb && fb->fnfield_ret_stamped) return fb->fnfield_ret_owned;
+            /* not walked (declared later, generic, extern, indirect): a
+             * move-only result is the caller's; a ^copy one may be a copy
+             * of something the callee was lent */
+            return !ad->is_copy;
+        }
+        case EX_VAR: {
+            const Binding *src = v->as.var.binding;
+            if (!src || src->is_global) return false;
+            if (src->is_param)
+                /* a by-value move-only parameter was moved in by the caller;
+                 * a ^copy or ^borrow one is still the caller's */
+                return !ad->is_copy && !src->is_borrow;
+            if (ad->is_copy && !ret) return false;
+            return fnfield_value_owned(e, src->fnfield_let_init, ad, taker, ret,
+                                       depth + 1);
+        }
+        case EX_DO:
+            return v->as.do_.n > 0 &&
+                   fnfield_value_owned(e, v->as.do_.items[v->as.do_.n - 1], ad,
+                                       taker, ret, depth + 1);
+        case EX_LET:
+        case EX_LETREC:
+            return fnfield_value_owned(e, v->as.let_.body, ad, taker, ret, depth + 1);
+        case EX_IF:
+            return v->as.if_.else_or_null &&
+                   fnfield_value_owned(e, v->as.if_.then_, ad, taker, ret, depth + 1) &&
+                   fnfield_value_owned(e, v->as.if_.else_or_null, ad, taker, ret,
+                                       depth + 1);
+        case EX_MATCH:
+            if (v->as.match_.n_arms == 0) return false;
+            for (uint32_t i = 0; i < v->as.match_.n_arms; i++)
+                if (!fnfield_value_owned(e, v->as.match_.arms[i].body, ad, taker,
+                                         ret, depth + 1))
+                    return false;
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* Uses of closure local `cb` in a scope, saturating at 2.  A use inside a
+ * `while` or a capture by a nested closure counts as many: either can run the
+ * storing constructor (or the closure) more than once. */
+typedef struct { const Binding *cb; int n; int in_loop; } FnfieldUseCount;
+static bool fnfield_count_visit(const Expr *c, void *ud);
+static void fnfield_count_uses(const Expr *x, FnfieldUseCount *u) {
+    if (!x || u->n >= 2) return;
+    switch (x->kind) {
+        case EX_VAR:
+            if (x->as.var.binding == u->cb) u->n += u->in_loop ? 2 : 1;
+            return;
+        case EX_CLOSURE: {
+            const struct Closure *c = x->as.closure_.closure;
+            if (c)
+                for (uint8_t i = 0; i < c->n_captures; i++)
+                    if (c->captures[i] == u->cb) { u->n = 2; return; }
+            return;
+        }
+        case EX_WHILE:
+            u->in_loop++;
+            cps_visit_children(x, fnfield_count_visit, u);
+            u->in_loop--;
+            return;
+        case EX_CALL:
+            if (x->as.call_.fn_binding == u->cb) u->n += u->in_loop ? 2 : 1;
+            break;
+        default:
+            break;
+    }
+    cps_visit_children(x, fnfield_count_visit, u);
+}
+static bool fnfield_count_visit(const Expr *c, void *ud) {
+    FnfieldUseCount *u = (FnfieldUseCount *)ud;
+    fnfield_count_uses(c, u);
+    return u->n >= 2;
+}
+
+/* At the end of closure local `cb`'s let: if the struct bindings that took it
+ * over were not its only use, they do not own it after all. */
+static void fnfield_release_shared_takers(Binding *cb, const Expr *body,
+                                          const LetBinding *later, uint32_t n_later) {
+    if (!cb->fnfield_takers) return;
+    FnfieldUseCount u = {cb, 0, 0};
+    fnfield_count_uses(body, &u);
+    for (uint32_t j = 0; j < n_later && u.n < 2; j++)
+        fnfield_count_uses(later[j].init, &u);
+    if (u.n >= 2)
+        for (FnfieldTaker *t = cb->fnfield_takers; t; t = t->next)
+            t->taker->drops_fn_fields = false;
+    cb->fnfield_takers = NULL;
+}
+
+/* For the field-call receiver hoist (elab_typeclasses.c) and defn stamping. */
+bool elab_fnfield_value_owned(Elab *e, const Expr *v, Binding *taker) {
+    const AdtDef *ad = elab_byval_drop_adt(v ? v->type : TYPE_NIL);
+    return ad && fnfield_value_owned(e, v, ad, taker, false, 0);
+}
+void elab_stamp_fnfield_ret(Elab *e, Binding *b, const Expr *body) {
+    if (!b || b->type.kind != TY_FN || !b->type.as.fn.result_full_type) return;
+    const AdtDef *ad = elab_byval_drop_adt(*b->type.as.fn.result_full_type);
+    if (!ad || !elab_type_owns_boxed_fnfield(*b->type.as.fn.result_full_type))
+        return;
+    b->fnfield_ret_owned = body && fnfield_value_owned(e, body, ad, NULL, true, 0);
+    b->fnfield_ret_stamped = true;
+}
+
 /* ---- internal define splicing ---- */
 
 /* splice_body_def_head -- is `f` a body-position binding form, and under which
@@ -2722,6 +2956,7 @@ Expr *elab_let(Elab *e, const Form *call) {
         }
         binds[n_binds].binding = b;
         binds[n_binds].init = init;
+        b->fnfield_let_init = init;
         binding_moved_during_init[n_binds] = false; /* new binding, not yet moved during init */
         /* What the scope-exit pass below will ask of this binding, recorded
          * now so a branch join inside the body can ask it too. */
@@ -3347,14 +3582,24 @@ Expr *elab_let(Elab *e, const Form *call) {
             is_binding_consumed(body, binds[k].binding))
             continue;
         if (fnfield_local_leaves_scope(body, binds[k].binding)) continue;
+        if (!elab_type_owns_boxed_fnfield(binds[k].binding->type)) continue;
         const CtorDef *ctor = ad->ctors[0];
-        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-            if (!elab_field_is_boxed_fnfield(ctor, fi)) continue;
-            if (is_field_consumed(body, binds[k].binding, fi)) continue;
+        bool any = false;
+        for (uint32_t fi = 0; fi < ctor->n_fields && !any; fi++)
+            any = elab_field_is_boxed_fnfield(ctor, fi) &&
+                  !is_field_consumed(body, binds[k].binding, fi);
+        /* fnfield-struct-binder-frees-borrowed-closure: and only a binding
+         * that owns the closures (asked last: it records the binding as a
+         * taker of any let-bound closure it stores) */
+        if (any && fnfield_value_owned(e, binds[k].init, ad, binds[k].binding,
+                                       false, 0))
             binds[k].binding->drops_fn_fields = true;
-            break;
-        }
     }
+    /* A let-bound closure some struct binding took over above (or in a
+     * nested let) and that is used again is shared: un-flag the takers. */
+    for (uint32_t k = 0; k < n_binds; k++)
+        fnfield_release_shared_takers(binds[k].binding, body, binds + k + 1,
+                                      n_binds - k - 1);
 
     /* byvalue-recursive-adt-boxes-are-never-freed: the same flagging for a
      * by-value RECURSIVE local, whose spine of boxes is freed at scope exit.

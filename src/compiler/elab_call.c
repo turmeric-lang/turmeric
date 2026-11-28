@@ -9719,6 +9719,45 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 args[i] = conv;
             }
         }
+        /* carrier-fn-param-refused-by-constructor-fn-field: the same carrier
+         * parameter handed to a constructor's boxed `(fn ...)` field --
+         * `(defn mk [f : (fn [int] int)] : H (H 1 f))` -- was refused here as
+         * "expected (fn [] : ?), got ptr<void>": the field holds a fat handle,
+         * and the box above served only a type-variable slot.  `make-struct`
+         * skips this check (ms_lenient) and the constructor post-pass in
+         * elab_call_inner boxes it there, which is why only that spelling
+         * compiled.  Box it here, as that post-pass does: the sink is the
+         * field's declared signature, so the slot-0 shim matches the field
+         * call's typed dispatch.  A constructor binding carries no
+         * arg_full_types, so the field type comes from its CtorDef; a
+         * signature that does not match is left to the mismatch below. */
+        if (expected_arg_kind == TY_FN && args[i]->type.kind == TY_PTR_VOID &&
+            fn_type.kind == TY_FN && fn_type.as.fn.result_kind == TY_ADT &&
+            !fn_binding->closure_fn_binding && fn_binding->name) {
+            const Expr *pv = args[i];
+            while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+            const Binding *pb = (pv && pv->kind == EX_VAR) ? pv->as.var.binding : NULL;
+            /* a parameter, or a let alias of one (which inherits is_poly_fn
+             * and poly_type, and holds the same carrier) */
+            const CtorDef *cd = (pb && pb->is_poly_fn && pb->poly_type &&
+                                 pb->poly_type->kind == TY_FN &&
+                                 !pb->poly_type->as.fn.cfnptr &&
+                                 pb->poly_type->as.fn.arity <= TUR_FAT_SHIM_MAX_ARITY)
+                ? elab_lookup_ctor(e, fn_binding->name) : NULL;
+            const Type *ft = (cd && cd->n_fields == fn_type.as.fn.arity &&
+                              i < cd->n_fields)
+                ? cd->fields[i].full_type : NULL;
+            if (ft && ft->kind == TY_FN && ft->as.fn.boxed && !ft->as.fn.cfnptr &&
+                !call_type_has_named_tyvar(ft) &&
+                fn_sig_kinds_match(ft, pb->poly_type)) {
+                Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *bt = *ft;
+                Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, *bt, args[i]->span);
+                conv->as.poly_to_fat_.inner = args[i];
+                conv->as.poly_to_fat_.sink_fn_type = ft;
+                args[i] = conv;
+            }
+        }
         bool arg_ok = (args[i]->type.kind == expected_arg_kind);
         /* typed-c-abi-function-pointers: a `(c-fn [A...] R)` parameter is a
          * bare C function pointer.  The same-kind match above would admit ANY
@@ -11276,6 +11315,20 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             if (n_type_bindings > 0 && call_type_has_named_tyvar(&expected_ty))
                 expected_ty = call_instantiate_type(e, &expected_ty, type_bindings,
                                                     n_type_bindings);
+            /* carrier-fn-param-refused-by-constructor-fn-field: a constructor
+             * binding carries no arg_full_types, so a `(fn ...)` field printed
+             * from its kind as `(fn [] : ?)`; take the field's declared type.
+             * And a fn parameter on the poly carrier is typed ptr<void>, which
+             * names its representation, not its type: print its signature. */
+            if (expected_ty.kind == TY_FN && expected_ty.as.fn.arity == 0 &&
+                !expected_ty.as.fn.arg_full_types && !expected_ty.as.fn.result_full_type &&
+                fn_type.kind == TY_FN && fn_type.as.fn.result_kind == TY_ADT &&
+                !fn_binding->closure_fn_binding && fn_binding->name) {
+                const CtorDef *dcd = elab_lookup_ctor(e, fn_binding->name);
+                if (dcd && dcd->n_fields == fn_type.as.fn.arity && i < dcd->n_fields &&
+                    dcd->fields[i].full_type && dcd->fields[i].full_type->kind == TY_FN)
+                    expected_ty = *dcd->fields[i].full_type;
+            }
             /* PH2.1: Build the type names into owned local buffers via
              * type_print rather than type_name. type_name returns a strdup-ed
              * heap string for composite kinds (handler, union, fn, ...) that no
@@ -11285,8 +11338,17 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             Buf expected_buf; buf_init(&expected_buf);
             type_print(&expected_buf, expected_ty);
             buf_putc(&expected_buf, '\0');
+            Type actual_ty = args[i]->type;
+            {
+                const Expr *av = args[i];
+                while (av && av->kind == EX_ASCRIBE) av = av->as.ascribe_.inner;
+                const Binding *ab = (av && av->kind == EX_VAR) ? av->as.var.binding : NULL;
+                if (actual_ty.kind == TY_PTR_VOID && ab && ab->is_poly_fn &&
+                    ab->poly_type && ab->poly_type->kind == TY_FN)
+                    actual_ty = *ab->poly_type;
+            }
             Buf actual_buf; buf_init(&actual_buf);
-            type_print(&actual_buf, args[i]->type);
+            type_print(&actual_buf, actual_ty);
             buf_putc(&actual_buf, '\0');
             diag_emit_with_code(DIAG_ERROR, args[i]->span, err_code,
                                 "function '%s' arg %u: expected %s, got %s",

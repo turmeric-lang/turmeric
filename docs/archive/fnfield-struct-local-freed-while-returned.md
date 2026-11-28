@@ -77,4 +77,4 @@ stays put). On `main` that fixture is a heap-use-after-free under ASan.
 ## Still open
 
 The binder of a struct someone else owns is a separate problem, filed as
-[fnfield-struct-binder-frees-borrowed-closure](../reported/fnfield-struct-binder-frees-borrowed-closure.md).
+[fnfield-struct-binder-frees-borrowed-closure](fnfield-struct-binder-frees-borrowed-closure.md).

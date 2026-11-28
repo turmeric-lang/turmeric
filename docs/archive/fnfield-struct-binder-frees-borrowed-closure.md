@@ -1,5 +1,26 @@
 # A let binder frees the closure of a struct it does not own
 
+> **RESOLVED 2026-11-28.** `drops_fn_fields` now asks the binding's init, not
+> only its body (`fnfield_value_owned`, `src/compiler/elab_forms.c`). A local
+> frees its closures only when it owns them: built here from fresh closures (a
+> lambda, a named defn, a call's closure result), moved from a binding that
+> owned them, a by-value move-only parameter, or a call -- for a `^copy` struct,
+> only a call to a defn whose results are stamped owned (`elab_stamp_fnfield_ret`).
+> A `^copy` of a local, a closure parameter, a field of another struct and a
+> global `def` are borrowed. A let-bound closure stored in a struct is owned
+> only if that is its one use: its own let un-flags the struct
+> (`fnfield_release_shared_takers`) when it is used again, captured, or stored
+> inside a `while`. That un-flagging also closed a fourth shape the report did
+> not list -- a let-bound closure stored in a struct and then called after the
+> struct's scope. The field-call receiver hoist (`elab_typeclasses.c`) asks the
+> same question.
+>
+> All four shapes now run clean of use-after-free and double free. Shapes that
+> share a closure with no other owner leak it instead -- the safe direction,
+> filed as [let-bound-closure-shared-with-fnfield-struct-leaks](../reported/let-bound-closure-shared-with-fnfield-struct-leaks.md).
+> Pinned by the leak-checked `fnfield-struct-binder-borrowed-closure` (clean)
+> and `fnfield-struct-binder-shared-closure` (`known-leak`).
+
 **Severity: high (double free / use-after-free on the default build).** A
 `let` local whose type is a by-value struct with a closure field frees that
 closure at scope end (local-struct-drop). The rule assumes the local owns the
@@ -7,7 +28,7 @@ closure. Three ordinary shapes break that assumption, and each frees a closure
 that its real owner frees again or still uses.
 
 Found 2026-11-24 while executing
-[cps-byvalue-struct-with-closure-field](../archive/cps-byvalue-struct-with-closure-field.md).
+[cps-byvalue-struct-with-closure-field](cps-byvalue-struct-with-closure-field.md).
 All three reproduce on `main` at `1227412b`, with no effects involved: the
 first two in direct-emitted code, the third in a function the CPS backend
 emits anyway (`mk__cps`), where the entry boundary's reap does the freeing.
