@@ -1897,6 +1897,91 @@ else
 fi
 rm -f "$GX_ERR" "$GX_ERR.run"; rm -rf "$GX"
 
+# cmake-dep-directory-scoped-imported-target-not-followed: an IMPORTED target a
+# dependency makes itself, without GLOBAL -- the usual way to wrap a vendored
+# or system library -- is visible only in its own directory, so the link walk
+# in the generated top-level file did not see it.  Its name passed through,
+# the consumer dropped it (it has `::`), and the program failed on undefined
+# references after a fetch that printed nothing.  The generated file now has
+# each dependency directory that calls project() make its imported targets
+# global at its end (Vendor::core at the top, Sub::core one level down), and
+# names one it cannot reach (Plain::extra, in a directory with no project()).
+# A CMAKE_PROJECT_INCLUDE the dep's :options set still runs in the dep.
+# Fetched twice: the second configure starts from a cache that holds it.
+IT=$(mktemp -d)
+mkdir -p "$IT/deps/lib/sub" "$IT/deps/lib/plain"
+cat >"$IT/deps/lib/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.20)
+project(lib C)
+add_library(core STATIC core.c)
+add_library(Vendor::core INTERFACE IMPORTED)
+set_target_properties(Vendor::core PROPERTIES INTERFACE_LINK_LIBRARIES core)
+add_subdirectory(sub)
+add_subdirectory(plain)
+add_library(top STATIC top.c)
+target_link_libraries(top PRIVATE Vendor::core subwrap plainwrap)
+EOF
+cat >"$IT/deps/lib/sub/CMakeLists.txt" <<'EOF'
+project(sub C)
+add_library(subcore STATIC subcore.c)
+add_library(Sub::core INTERFACE IMPORTED)
+set_target_properties(Sub::core PROPERTIES INTERFACE_LINK_LIBRARIES subcore)
+add_library(subwrap INTERFACE)
+target_link_libraries(subwrap INTERFACE Sub::core)
+EOF
+cat >"$IT/deps/lib/plain/CMakeLists.txt" <<'EOF'
+add_library(Plain::extra INTERFACE IMPORTED)
+set_target_properties(Plain::extra PROPERTIES INTERFACE_LINK_LIBRARIES tur_plain_lib)
+add_library(plainwrap INTERFACE)
+target_link_libraries(plainwrap INTERFACE Plain::extra)
+EOF
+cat >"$IT/deps/userhook.cmake" <<'EOF'
+set_property(GLOBAL APPEND PROPERTY TUR_USER_HOOK_RAN "${PROJECT_NAME}")
+get_property(_r GLOBAL PROPERTY TUR_USER_HOOK_RAN)
+file(WRITE "${CMAKE_BINARY_DIR}/user-hook-ran" "${_r}")
+EOF
+printf 'int core_value(void) { return 40; }\n' >"$IT/deps/lib/core.c"
+printf 'int sub_value(void) { return 1; }\n' >"$IT/deps/lib/sub/subcore.c"
+printf 'int core_value(void);\nint sub_value(void);\nint top_value(void) { return core_value() + sub_value() + 1; }\n' \
+    >"$IT/deps/lib/top.c"
+cmake_dep_app "$IT" lib top "top_value(void)" "top_value()"
+sed -i.bak "s|:targets \\[\"top\"\\]}|:targets [\"top\"] :options #map{:CMAKE_PROJECT_INCLUDE \"$IT/deps/userhook.cmake\"}}|" \
+    "$IT/app/build.tur"
+IT_ERR=$(mktemp)
+IT_MAN="$IT/app/cmake/spice-deps-manifest.json"
+( cd "$IT/app" && "$TUR_ABS" fetch ) >/dev/null 2>"$IT_ERR"
+it_rc=$?
+( cd "$IT/app" && "$TUR_ABS" fetch ) >/dev/null 2>"$IT_ERR.2"
+it_rc2=$?
+IT_OUT=$( cd "$IT/app" && "$TUR_ABS" run src/main.tur 2>"$IT_ERR.run" )
+it_run=$?
+IT_HOOK=$(cat "$IT/app/cmake/build/user-hook-ran" 2>/dev/null)
+it_warns=$(grep -c "spice: warning: link dependency 'Plain::extra' of target 'plainwrap'" "$IT_ERR")
+if ! cmake --version | awk 'NR==1 { split($3, v, "."); exit !(v[1] > 3 || (v[1] == 3 && v[2] >= 21)) }'; then
+    # IMPORTED_TARGETS, which says what to promote, is CMake 3.21.
+    echo "PASS cmake-dep-directory-scoped-imported-target-followed (skipped: CMake < 3.21)"
+    PASS=$((PASS + 1))
+elif [ "$it_rc" -eq 0 ] && [ "$it_rc2" -eq 0 ] && [ "$it_run" -eq 0 ] \
+   && [ "$IT_OUT" = "42" ] \
+   && grep -q 'libtop\.a", "[^"]*libcore\.a", "[^"]*libsubcore\.a"\]' "$IT_MAN" \
+   && ! grep -qF '::' "$IT_MAN" \
+   && ! grep -qF 'tur_plain_lib' "$IT_MAN" \
+   && [ "$it_warns" -eq 1 ] \
+   && ! grep -qF "'Vendor::core'" "$IT_ERR" \
+   && ! grep -qF "'Sub::core'" "$IT_ERR" \
+   && printf '%s\n' "$IT_HOOK" | grep -q '\(^\|;\)lib;sub$'; then
+    echo "PASS cmake-dep-directory-scoped-imported-target-followed"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL cmake-dep-directory-scoped-imported-target-followed (fetch rc=$it_rc/$it_rc2 run rc=$it_run out='$IT_OUT' warnings=$it_warns hook='$IT_HOOK')"
+    echo "  fetch stderr:"; sed 's/^/    /' "$IT_ERR" "$IT_ERR.2"
+    echo "  run stderr:"; sed 's/^/    /' "$IT_ERR.run"
+    [ -f "$IT_MAN" ] && { echo "  manifest:"; sed 's/^/    /' "$IT_MAN"; }
+    FAIL=$((FAIL + 1))
+    FAILED+=("cmake-dep-directory-scoped-imported-target-followed")
+fi
+rm -f "$IT_ERR" "$IT_ERR.2" "$IT_ERR.run"; rm -rf "$IT"
+
 # cmake-dep-cxx-runtime-not-linked: a static C++ library built and then failed
 # to link (undefined operator new, __cxa_*), because tur links with the C
 # driver and no CMake target lists the C++ runtime.  The generated CMake now

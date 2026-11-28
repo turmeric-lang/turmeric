@@ -88,7 +88,6 @@ Nine more were fixed the same day and are in `docs/archive/`:
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [cmake-dep-directory-scoped-imported-target-not-followed](cmake-dep-directory-scoped-imported-target-not-followed.md) | medium (link failure, no warning) | A library a dependency links through its own non-`GLOBAL` imported target is invisible to the link walk, which runs one directory up; the `Ns::name` goes into the manifest as a library name. #1486 covered only `find_package` targets on CMake 3.24+. |
 | [turi-early-return-skips-injected-drops](turi-early-return-skips-injected-drops.md) | low (interpreter only) | Under `tur --interpret`, an early `return` skips the scope-exit drop of an enclosing `let`: a Drop instance does not run on that path. The compiled program runs it. No effect involved. |
 | [match-statement-with-return-arm-and-nil-arm-invalid-c](match-statement-with-return-arm-and-nil-arm-invalid-c.md) | low (cc error) | `(match k 0 (return 20) _ nil)` as a statement declares an `int64_t` result temporary and assigns the `nil` arm's `((void)0)` to it; `cc` rejects the file. The interpreter runs it; `_ 0` compiles. Predates the early-return fix. |
 | [do-ending-in-return-is-not-seen-as-leaving](do-ending-in-return-is-not-seen-as-leaving.md) | low (false rejection) | `(if c (do (rel h) (return 0)) 0)` followed by a use of `h` is TUR-E0201: only a bare `return` arm counts as leaving. |

@@ -3733,6 +3733,16 @@ static void emit_link_iface_helper(FILE *f) {
     "# Resolve one target's INTERFACE_LINK_LIBRARIES into link-line tokens.\n"
     "set(_TUR_LINKABLE STATIC_LIBRARY SHARED_LIBRARY MODULE_LIBRARY\n"
     "                  UNKNOWN_LIBRARY EXECUTABLE)\n"
+    "\n"
+    "# One `spice: warning:` line per distinct message: two :targets of one dep\n"
+    "# that reach the same entry would otherwise say it twice.\n"
+    "function(_tur_warn_once msg)\n"
+    "  get_property(_said GLOBAL PROPERTY _TUR_WARNED)\n"
+    "  if(NOT msg IN_LIST _said)\n"
+    "    set_property(GLOBAL APPEND PROPERTY _TUR_WARNED \"${msg}\")\n"
+    "    message(NOTICE \"spice: warning: ${msg}\")\n"
+    "  endif()\n"
+    "endfunction()\n"
     "\n", f);
     fputs(
     "# Reduce the generator expressions in one link entry that can be decided at\n"
@@ -3944,7 +3954,7 @@ static void emit_link_iface_helper(FILE *f) {
     "          endif()\n"
     "          _tur_reduce_genex(\"${_pend}\" _red)\n"
     "          if(_red MATCHES \"\\\\$<\")\n"
-    "            message(NOTICE \"spice: warning: link dependency '${_pend}' of target '${tgt}' is a generator expression tur cannot evaluate; it is NOT linked. Add what it names with :link-flags.\")\n"
+    "            _tur_warn_once(\"link dependency '${_pend}' of target '${tgt}' is a generator expression tur cannot evaluate; it is NOT linked. Add what it names with :link-flags.\")\n"
     "            set(_pend \"\")\n"
     "            continue()\n"
     "          endif()\n"
@@ -3966,6 +3976,12 @@ static void emit_link_iface_helper(FILE *f) {
     "                _tur_walk_iface(\"${_e}\" _a _s)\n"
     "                set(_acc \"${_a}\")\n"
     "                set(_seen \"${_s}\")\n"
+    "              elseif(_e MATCHES \"::\")\n"
+    "                # Only a target can be spelled with `::` (CMP0028), so this\n"
+    "                # one exists but is out of sight from here: an IMPORTED\n"
+    "                # target _tur_promote_imported could not reach.  As a bare\n"
+    "                # name it would be dropped downstream without a word.\n"
+    "                _tur_warn_once(\"link dependency '${_e}' of target '${tgt}' is a CMake target the generated CMakeLists cannot see -- an IMPORTED target created without GLOBAL, in a directory that calls no project(); it is NOT linked. Create it GLOBAL, or add what it names with :link-flags.\")\n"
     "              else()\n"
     "                list(APPEND _acc \"${_e}\")\n"
     "              endif()\n"
@@ -4045,6 +4061,80 @@ static void emit_link_iface_helper(FILE *f) {
     "  set(${out_var} \"${_json}\" PARENT_SCOPE)\n"
     "endfunction()\n"
     "\n", f);
+}
+
+/* The CMake that makes a dependency's own IMPORTED targets visible to the link
+ * walk.
+ *
+ * An IMPORTED target is visible only in the directory that created it and
+ * below, unless it was created GLOBAL. The usual way a dependency wraps a
+ * vendored or system library -- `add_library(Vendor::core INTERFACE IMPORTED)`
+ * -- is therefore not a target where the walk and the manifest's
+ * $<TARGET_FILE:...> run, in the generated top-level file after
+ * add_subdirectory / FetchContent_MakeAvailable has returned. The entry then
+ * passed through as a bare name, and the consumer drops anything with `::`, so
+ * the program failed on undefined references with nothing said
+ * (docs/archive/cmake-dep-directory-scoped-imported-target-not-followed.md).
+ *
+ * CMake lets an IMPORTED target be made global afterwards (IMPORTED_GLOBAL),
+ * but only from the directory that created it, and a directory that has
+ * finished processing can no longer have a call deferred into it. So the
+ * promotion has to be scheduled from inside each of the dependency's
+ * directories while it runs. CMAKE_PROJECT_INCLUDE is the hook CMake offers
+ * for that: it is included at the end of every project() call, in the calling
+ * directory, and from there `cmake_language(DEFER CALL ...)` (3.19) runs
+ * _tur_promote_imported at the end of the same directory, when everything it
+ * creates exists. A subdirectory that calls no project() is not reached; the
+ * walk names what it links instead.
+ *
+ * CMAKE_FIND_PACKAGE_TARGETS_GLOBAL (set above it) covers find_package's
+ * targets in every directory on CMake 3.24+; this covers the rest in project
+ * directories. Both change visibility the way GLOBAL would: a dependency that
+ * creates one IMPORTED name unguarded in two directories that cannot see each
+ * other stops configuring. IMPORTED_TARGETS is 3.21, so on 3.20 nothing is
+ * promoted and the walk warns. */
+static void emit_promote_imported_helper(FILE *f) {
+    fputs(
+    "# Make the IMPORTED targets the current directory created global, so the\n"
+    "# link walk below sees them.  Deferred to the end of each dependency\n"
+    "# directory that calls project(), by the hook file that follows.\n"
+    "function(_tur_promote_imported)\n"
+    "  if(CMAKE_VERSION VERSION_LESS 3.21)\n"
+    "    return()\n"
+    "  endif()\n"
+    "  get_property(_ts DIRECTORY PROPERTY IMPORTED_TARGETS)\n"
+    "  foreach(_t IN LISTS _ts)\n"
+    "    get_target_property(_g \"${_t}\" IMPORTED_GLOBAL)\n"
+    "    if(NOT _g)\n"
+    "      set_property(TARGET \"${_t}\" PROPERTY IMPORTED_GLOBAL TRUE)\n"
+    "    endif()\n"
+    "  endforeach()\n"
+    "endfunction()\n"
+    "\n"
+    "# Included by every project() call in a dependency, through a normal\n"
+    "# CMAKE_PROJECT_INCLUDE set before each one is added.  A cache entry of that\n"
+    "# name (an :options entry) is shadowed by it, so it is included from here.\n"
+    "set(_TUR_PROJECT_HOOK \"${CMAKE_BINARY_DIR}/_tur_project_hook.cmake\")\n"
+    "file(CONFIGURE OUTPUT \"${_TUR_PROJECT_HOOK}\" CONTENT [=[\n"
+    "# AUTO-GENERATED by cmake/CMakeLists.txt. Do not edit.\n"
+    "get_property(_tur_hooked DIRECTORY PROPERTY _TUR_PROMOTE_SCHEDULED)\n"
+    "if(NOT _tur_hooked)\n"
+    "  set_property(DIRECTORY PROPERTY _TUR_PROMOTE_SCHEDULED 1)\n"
+    "  cmake_language(DEFER CALL _tur_promote_imported)\n"
+    "endif()\n"
+    "if(NOT \"$CACHE{CMAKE_PROJECT_INCLUDE}\" STREQUAL \"\")\n"
+    "  include(\"$CACHE{CMAKE_PROJECT_INCLUDE}\")\n"
+    "endif()\n"
+    "]=] @ONLY)\n"
+    "\n", f);
+}
+
+/* Point project() at the hook, just before one dep is added: after its
+ * :options, since a set(... CACHE ... FORCE) of CMAKE_PROJECT_INCLUDE removes
+ * the normal variable under CMP0126's OLD behaviour. */
+static void emit_project_hook_on(FILE *f, const char *indent) {
+    fprintf(f, "%sset(CMAKE_PROJECT_INCLUDE \"${_TUR_PROJECT_HOOK}\")\n",
+            indent);
 }
 
 /* Emit the CMake that computes ${_tur_lf_json} and ${_tur_ld_json} for one
@@ -5335,6 +5425,7 @@ bool pkg_gen_cmake_deps(const char *project_dir,
                "\"Bypass system find_package for :prefer-system deps\" OFF)\n\n");
 
     emit_link_iface_helper(f);
+    emit_promote_imported_helper(f);
 
     /* Declare and make available each dep */
     for (int i = 0; i < manifest->n_cmake_deps; i++) {
@@ -5355,6 +5446,7 @@ bool pkg_gen_cmake_deps(const char *project_dir,
              * backend. */
             emit_cmake_opts(f, d, d->opts, d->n_opts, "", false);
             emit_cmake_opts(f, d, d->wasm_opts, d->n_wasm_opts, "", true);
+            emit_project_hook_on(f, "");
             fprintf(f, "add_subdirectory(\"%s\" \"%s\")\n", abs_path,
                     build_subdir);
             fprintf(f, "set(_%s_resolved_via \"path\" CACHE INTERNAL \"\")\n\n",
@@ -5389,6 +5481,7 @@ bool pkg_gen_cmake_deps(const char *project_dir,
                 fprintf(f, "      GIT_REPOSITORY \"%s\"\n", d->url);
                 if (d->ref) fprintf(f, "      GIT_TAG        \"%s\"\n", d->ref);
                 fprintf(f, "    )\n");
+                emit_project_hook_on(f, "    ");
                 fprintf(f, "    FetchContent_MakeAvailable(%s)\n", d->name);
                 fprintf(f, "    set(_%s_resolved_via \"fetch\" CACHE INTERNAL \"\")\n",
                         d->name);
@@ -5417,11 +5510,15 @@ bool pkg_gen_cmake_deps(const char *project_dir,
             fprintf(f, ")\n");
             emit_cmake_opts(f, d, d->opts, d->n_opts, "", false);
             emit_cmake_opts(f, d, d->wasm_opts, d->n_wasm_opts, "", true);
+            emit_project_hook_on(f, "");
             fprintf(f, "FetchContent_MakeAvailable(%s)\n", d->name);
             fprintf(f, "set(_%s_resolved_via \"fetch\" CACHE INTERNAL \"\")\n\n",
                     d->name);
         }
     }
+
+    /* The deps are in; nothing below calls project(). */
+    fprintf(f, "unset(CMAKE_PROJECT_INCLUDE)\n\n");
 
     /* Generate spice-deps-manifest.json at cmake configure time.
      *

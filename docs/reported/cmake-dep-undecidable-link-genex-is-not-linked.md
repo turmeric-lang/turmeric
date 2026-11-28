@@ -17,7 +17,7 @@ Verified 2026-11-27 on `main` at `853f866`, CMake 3.28.
 ## Repro
 
 The layout of
-[cmake-dep-directory-scoped-imported-target-not-followed](cmake-dep-directory-scoped-imported-target-not-followed.md),
+[cmake-dep-directory-scoped-imported-target-not-followed](../archive/cmake-dep-directory-scoped-imported-target-not-followed.md),
 with this `deps/lib/CMakeLists.txt`:
 
 ```cmake
