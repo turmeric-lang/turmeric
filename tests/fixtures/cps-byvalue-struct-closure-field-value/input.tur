@@ -1,0 +1,96 @@
+;; cps-byvalue-struct-with-closure-field, the rest of it: a by-value struct
+;; whose only owning fields are closures crosses the CPS backend as a VALUE --
+;; rebound, captured by a lambda, handed to a generic, returned from a function
+;; that performs, delivered twice by a multi-shot resume -- and so does one
+;; with an opaque handle beside the closure (the SAX parser shape), which is
+;; laid out by value now.  Each of these was "this effect operation has no
+;; lowering here" before.  The struct is a borrowed bundle of words wherever
+;; it goes; the `let` that binds the fresh one frees its closure, once.
+;; Leak-checked.
+(defeffect Log [x : int] : nil)
+(defeffect Choose [] : bool)
+(defstruct ^copy H [raw : int handler : (fn [int] int)])
+
+(defn feed! [r : int s : int] : (Result int int)
+  (perform (Log (+ r s)))
+  (ok 0))
+
+;; rebound: the struct itself is a value in the body
+(defn feed-rebound [h : H n : int] : nil
+  (let [g      h
+        ^mut i 0]
+    (while (< i n)
+      (feed! ((.handler g) (.raw g)) i)
+      (set! i (+ i 1)))))
+
+;; captured by a lambda that outlives the perform
+(defn feed-captured [h : H n : int] : nil
+  (let [f      (fn [j : int] : int ((.handler h) j))
+        ^mut i 0]
+    (while (< i n)
+      (feed! (f (.raw h)) i)
+      (set! i (+ i 1)))))
+
+;; handed to a generic callee and read back
+(defn ident [T] [x : T] : T x)
+(defn feed-generic [h : H n : int] : nil
+  (let [^mut i 0]
+    (while (< i n)
+      (feed! (.raw (ident h)) i)
+      (set! i (+ i 1)))))
+
+;; returned from a function that performs: one it was given, one it builds
+(defn pick [h : H g : H n : int] : H
+  (feed! (.raw h) n)
+  (if (> n 0) h g))
+(defn mk [n : int] : H
+  (feed! n 1)
+  (H n (fn [x : int] : int (+ x n))))
+
+;; built before a multi-shot perform: both resumes deliver the same closure
+(defn mk-twice [n : int] : H
+  (let [h (H n (fn [x : int] : int (+ x n)))]
+    (if (perform (Choose)) h h)))
+(defn use-twice [n : int] : int
+  (let [m (mk-twice n)]
+    ((.handler m) (.raw m))))
+
+;; an opaque handle beside the handler: the SAX parser shape
+(defopaque Slot :ptr<void>)
+(defstruct ^copy Parser [raw : Slot handler : (fn [int] int)])
+(defn slot-new [n : int] : ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = n;
+  return p;
+  ```)
+(defn slot-val [x : Slot] : int
+  ```c
+  return *(int64_t *)(intptr_t)x;
+  ```)
+(defn slot-free [x : Slot] : nil
+  ```c
+  free((void *)(intptr_t)x);
+  ```)
+(defn push [p : Parser chunk : int] : (Result int int)
+  (feed! ((.handler p) (slot-val (.raw p))) chunk))
+
+(defn main [] : int
+  (let [h (H 100 (fn [x : int] : int (* x 10)))
+        g (H 200 (fn [x : int] : int (* x 20)))]
+    (handle (do (feed-rebound h 2)
+                (feed-captured h 2)
+                (feed-generic h 2)
+                (let [r (pick h g 3)
+                      m (mk 7)]
+                  (println ((.handler r) 4))
+                  (println ((.handler m) 4))))
+      (Log [x] k) (do (println x) (resume k nil))))
+  (println (handle (use-twice 7)
+             (Choose [] ^multishot k) (+ (resume k true) (resume k false))))
+  (let [s (slot-new 5)
+        p (Parser (:: s Slot) (fn [x : int] : int (* x 3)))]
+    (handle (do (push p 1) (push p 2))
+      (Log [x] k) (do (println x) (resume k nil)))
+    (slot-free (.raw p)))
+  0)

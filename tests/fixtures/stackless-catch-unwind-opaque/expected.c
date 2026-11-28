@@ -2871,6 +2871,13 @@ static DK *dk_frame_resume_borrow_owned(DKResumeFrame fn, tur_dkw env, size_t si
     k->env_owned = true; k->env_size = (uint16_t)size; return k;
 }
 __attribute__((unused)) static tur_dkw __dk_reap_closure(tur_dkw p) { __dk_reap_push((void *)p, 2); return p; }
+__attribute__((unused)) static tur_dkw __dk_reap_closure_once(tur_dkw p) {
+    if (!p) return p;
+    for (size_t i = __dk_reap_n; i-- > 0; )
+        if (__dk_reap_v[i] == (void *)p && __dk_reap_kind[i] == 2) return p;
+    __dk_reap_push((void *)p, 2);
+    return p;
+}
 __attribute__((unused)) static void __dk_reap_closure_now(tur_dkw p) {
     if (tur_dk_pinned) return;
     for (size_t i = __dk_reap_n; i-- > 0; ) {

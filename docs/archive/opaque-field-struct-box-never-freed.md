@@ -141,10 +141,11 @@ had declined to pay.
   a struct with an opaque field and a closure field, used in CPS-converted
   code; the same struct with an `int` in place of the opaque already fails on
   main. That is a CPS gap of its own, filed as
-  [cps-byvalue-struct-with-closure-field](../reported/cps-byvalue-struct-with-closure-field.md).
-  Until it closes, a struct with an opaque field beside a closure field stays
-  on the carrier ABI and still leaks its box -- once per SAX parser, not once
-  per node.
+  [cps-byvalue-struct-with-closure-field](cps-byvalue-struct-with-closure-field.md).
+  Until it closed, a struct with an opaque field beside a closure field stayed
+  on the carrier ABI and leaked its box -- once per SAX parser, not once per
+  node. **It closed 2026-11-27** and the exception went with it: such a
+  struct is a by-value product too.
 
 Measured on the change: `tests/run.sh` with no failures, `tests/run-leak-check.sh`
 unchanged, no codegen snapshot moved, and the dom-core, xml, html and ecs

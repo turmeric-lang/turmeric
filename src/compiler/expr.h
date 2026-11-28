@@ -1916,6 +1916,14 @@ struct Expr {
              * `return` no trailing defer would ever be reached. */
             Expr **owed_drops;
             uint32_t n_owed;
+            /* early-return-before-later-consume-leaks: the locals (and owned
+             * parameters) of the enclosing function with a scope-exit drop
+             * -- scope_drop_inst, or a `ref<T>` -- that this path still owns
+             * here.  A let decides its drop only after its whole body; when
+             * a LATER statement hands one on, the let appends no drop, and
+             * this `return` is told to release it (elab_returns_release). */
+            struct Binding **owned;
+            uint32_t n_owned;
         } return_;
         /* Phase 5 */
         struct { Expr *expr; }        ref_;    /* (ref expr) - inner expression */

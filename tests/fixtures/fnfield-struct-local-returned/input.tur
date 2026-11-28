@@ -1,0 +1,44 @@
+;; fnfield-struct-local-freed-while-returned: a by-value struct local with a
+;; closure field that its `let` hands out -- returned as the scope's value,
+;; through an `if`, wrapped in a constructor, or by `return` -- belongs to
+;; whoever receives it.  The scope-exit drop (local-struct-drop) freed its
+;; closure anyway, and the caller then called a freed closure: every
+;; constructor function written with a `let`.  A local that stays in its scope
+;; is still freed there.  Leak-checked, which is what sees the use-after-free
+;; (the plain suite reads the freed env and prints the right answer).
+(defstruct H [raw : int handler : (fn [int] int)])
+(defstruct ^copy C [raw : int handler : (fn [int] int)])
+
+(defn mk [n : int] : H
+  (let [h (H n (fn [x : int] : int (+ x n)))]
+    h))
+
+(defn mk-if [n : int] : H
+  (let [h (H n (fn [x : int] : int (* x n)))]
+    (if (> n 0) h h)))
+
+(defn mk-copy [n : int] : C
+  (let [c (C n (fn [x : int] : int (- x n)))]
+    c))
+
+(defn mk-early [n : int] : H
+  (let [h (H n (fn [x : int] : int (+ x (* 2 n))))]
+    (when (> n 0) (return h))
+    h))
+
+;; stays put: read and called, never handed out -- freed at scope end
+(defn local-only [n : int] : int
+  (let [h (H n (fn [x : int] : int (+ x n)))]
+    ((.handler h) (.raw h))))
+
+(defn main [] : int
+  (let [a (mk 7)]
+    (println ((.handler a) (.raw a))))
+  (let [b (mk-if 3)]
+    (println ((.handler b) (.raw b))))
+  (let [c (mk-copy 2)]
+    (println ((.handler c) 10)))
+  (let [d (mk-early 4)]
+    (println ((.handler d) 1)))
+  (println (local-only 21))
+  0)

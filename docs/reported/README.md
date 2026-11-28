@@ -34,13 +34,22 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found executing cps-byvalue-struct-with-closure-field (filed 2026-11-27)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [fnfield-struct-binder-frees-borrowed-closure](fnfield-struct-binder-frees-borrowed-closure.md) | high (double free / use-after-free) | A `let` local of a by-value struct with a closure field frees the closure at scope end whatever its init was. Three shapes free one they do not own: a rebinding of a `^copy` struct (`(let [g h] ...)`), the result of a function that returns the `^copy` struct it was given, and a struct built from a closure parameter (no `^copy` needed). `drops_fn_fields` is decided from the type and the body, never the init. Fix: flag only a fresh init, or apply the `:copy` line the recursive-spine free already has. On `main` before this session too |
+| [cps-match-sum-payload-box-not-freed](cps-match-sum-payload-box-not-freed.md) | low-medium (leak, 16 B per match) | A `match` on a fresh `(Result P E)` whose arm performs is lowered by the CPS backend's `emit_match`, which has no counterpart of the direct emitter's `match_scrut_owns_vsp_box` free, so the struct payload's box leaks. Nothing to do with closure fields. A parser constructor returning `(Result P E)` matched inside a `handle` body is this shape |
+| [cps-while-then-uncarried-var-result-evicts](cps-while-then-uncarried-var-result-evicts.md) | medium (compile failure) | A performing `while` followed by a bare variable the loop does not set (returning a parameter after the loop) is "no lowering here": `build_loop` commits to the result-variable shape on the form alone, then rejects because the variable is not loop-carried (`cps_ir.c:5186`), where join mode would have handled it. `(+ base 0)` compiles. Fix: choose the shape after the carried set is known |
+| ~~[fnfield-struct-local-freed-while-returned](../archive/fnfield-struct-local-freed-while-returned.md)~~ | high (use-after-free) | **RESOLVED 2026-11-27** (archived), in the same change: `(let [h (H n (fn ...))] h)` freed the closure at scope end and the caller called it afterwards -- every constructor function written with a `let`. A local the scope hands out is no longer flagged (`fnfield_local_leaves_scope`). Pinned by `fnfield-struct-local-returned` |
+
 ## Follow-ups to #1486 (filed 2026-11-27)
 
 #1486 fixed four of the five reports from `spices/manifold` and listed what it
 left. These are those leftovers, each measured on `main` at `853f866`, plus
 what was found while measuring and fixing them.
 
-Eight more were fixed the same day and are in `docs/archive/`:
+Nine more were fixed the same day and are in `docs/archive/`:
 
 - `cps-pass-drops-return-drop-lists`, a regression #1486 introduced: one
   `perform` or `handle` anywhere in a program made every function's `return`
@@ -60,14 +69,15 @@ Eight more were fixed the same day and are in `docs/archive/`:
   ran before the body's own defers, so a defer that read the local read a
   freed cell.
 - `owned-drop-parameter-is-never-dropped`: an `^affine` Drop value passed
-  by value was released by nobody unless the callee consumed it. It left the
-  `early-return-before-...` row below.
+  by value was released by nobody unless the callee consumed it.
+- `early-return-before-later-consume-leaks`: an early `return` leaked a
+  local (or owned parameter) that a later statement would have handed on.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [early-return-before-later-consume-leaks](early-return-before-later-consume-leaks.md) | medium (leak) | `(let [h (mk)] (if c (return 9) nil) (take h))` never releases `h` when `c` is true: the let appends no scope-exit drop because the body hands `h` on later, and the early `return` was left nothing to run. A `ref<T>` local leaks its cell the same way, and so does an owned parameter. Predates #1486. |
 | [cmake-dep-directory-scoped-imported-target-not-followed](cmake-dep-directory-scoped-imported-target-not-followed.md) | medium (link failure, no warning) | A library a dependency links through its own non-`GLOBAL` imported target is invisible to the link walk, which runs one directory up; the `Ns::name` goes into the manifest as a library name. #1486 covered only `find_package` targets on CMake 3.24+. |
 | [turi-early-return-skips-injected-drops](turi-early-return-skips-injected-drops.md) | low (interpreter only) | Under `tur --interpret`, an early `return` skips the scope-exit drop of an enclosing `let`: a Drop instance does not run on that path. The compiled program runs it. No effect involved. |
+| [match-statement-with-return-arm-and-nil-arm-invalid-c](match-statement-with-return-arm-and-nil-arm-invalid-c.md) | low (cc error) | `(match k 0 (return 20) _ nil)` as a statement declares an `int64_t` result temporary and assigns the `nil` arm's `((void)0)` to it; `cc` rejects the file. The interpreter runs it; `_ 0` compiles. Predates the early-return fix. |
 | [do-ending-in-return-is-not-seen-as-leaving](do-ending-in-return-is-not-seen-as-leaving.md) | low (false rejection) | `(if c (do (rel h) (return 0)) 0)` followed by a use of `h` is TUR-E0201: only a bare `return` arm counts as leaving. |
 | [cmake-dep-undecidable-link-genex-is-not-linked](cmake-dep-undecidable-link-genex-is-not-linked.md) | low (warns) | A link entry behind an expression the configure-time reducer does not know (version comparisons, `TARGET_PROPERTY`, ...) is left out, with a warning whose `:link-flags` remedy cannot name a library in the build tree. |
 | [tur-fetch-builds-cmake-deps-serially](tur-fetch-builds-cmake-deps-serially.md) | low (time) | `cmake --build` with no `--parallel`: a cold `spices/manifold` fetch is 3 min 44 s, and 1 min 5 s with `CMAKE_BUILD_PARALLEL_LEVEL=4`. |
@@ -92,8 +102,6 @@ Four reports filed with this one were resolved the same day and are in
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [effect-through-evicted-fn-aborts-at-run-time](effect-through-evicted-fn-aborts-at-run-time.md) | medium-high (run-time abort from a program that compiled) | Inside a `defmodule`, a `handle` whose performer is reached through an evicted function (a performing call in nested loops) builds and aborts with `unhandled effect`; at top level the same code is a build error. Whole-program. Suspect: the call-path taint's `edges` match callee bindings by pointer, and a module member's forward declaration is a second `Binding`. |
-| [module-effectful-fn-value-has-no-lowering](module-effectful-fn-value-has-no-lowering.md) | medium (correct program refused) | Inside a `defmodule`, an effectful lambda passed to a higher-order function, or one that calls a performer, is "no lowering here"; the same file without the `defmodule` runs. `fv_multi_tally` walks the unflattened program, so uses inside module members are not counted (`[E2-COLOR] uses=0`). The separate build accepts one of the two shapes since 2026-11-24. |
 | ~~[sepcomp-cross-module-effect-unhandled](../archive/sepcomp-cross-module-effect-unhandled.md)~~ | high, then medium | **RESOLVED 2026-11-24** (archived): a separately compiled build threads an effect across modules. A module exports the `__cps` twin of each exported function it CPS-emits, an importer threads its chain into it, effect tags are derived from the effect's name, and the units share one DK machine (its state was one copy per unit). A call that cannot thread is refused at its site, naming the side that failed. Was: refused outright (2026-10-18), and before that built and aborted with "unhandled effect". |
 
 ## Found executing five more reports (2026-11-07, second pass)
@@ -603,8 +611,8 @@ hits under ASan.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [cps-byvalue-struct-with-closure-field](cps-byvalue-struct-with-closure-field.md) | medium (compile failure) | **Narrowed 2026-11-05:** a by-value struct whose only owning fields are closures is admitted as a CPS parameter when the body only reads its fields (or hands it by value to a function that does), so the repro's `perform` lowers; pinned by `cps-byvalue-struct-closure-field-param`. **Open:** a body that stores / returns / captures the struct still evicts, and the closure exception in `adt_is_byvalue_product_d` stays, so an opaque field beside a closure (`HtmlSaxParser`, `SaxParser`) is still on the carrier ABI -- lifting it needs the spices' SAX suites as the check. Workaround: pass the closure as its own parameter. |
-| ~~[opaque-field-struct-box-never-freed](../archive/opaque-field-struct-box-never-freed.md)~~ | medium (leak) | **RESOLVED 2026-10-16** (archived): an opaque field is one word, so `adt_is_byvalue_product_d` admits it and a struct with one (`String` included) is a by-value product -- no box to leak. A `:heap` receiver's field read casts an opaque instead of reading it as an inline aggregate. Not beside a closure field, which keeps such a struct on the carrier ABI until `cps-byvalue-struct-with-closure-field` closes. The 2026-10-11 decision's inline-C ABI cost measured nil across stdlib and turmeric-spices. Pinned by `opaque-field-struct-freed` and `opaque-ptr-field-byvalue`. |
+| ~~[cps-byvalue-struct-with-closure-field](../archive/cps-byvalue-struct-with-closure-field.md)~~ | medium (compile failure) | **RESOLVED 2026-11-27** (archived): a by-value struct whose only owning fields are closures is a `slot_box_ty`, so the CPS backend boxes it across a slot, copies it into a continuation env, and passes and returns it like any owning-free aggregate -- rebound, captured, handed to a generic and returned from a performing function all lower. The closure exception in `adt_is_byvalue_product_d` is gone, so an opaque field beside a closure (`HtmlSaxParser`, `SaxParser`, the `plot` renderers) is by value; turmeric-spices `xml`, `html` and `plot` pass, also under ASan/UBSan. A `let` bound to a struct a call returned frees its closure on the CPS path (`__dk_reap_closure_once`). Pinned by `cps-byvalue-struct-closure-field-value` and `cps-byvalue-struct-closure-field-param`. |
+| ~~[opaque-field-struct-box-never-freed](../archive/opaque-field-struct-box-never-freed.md)~~ | medium (leak) | **RESOLVED 2026-10-16** (archived): an opaque field is one word, so `adt_is_byvalue_product_d` admits it and a struct with one (`String` included) is a by-value product -- no box to leak. A `:heap` receiver's field read casts an opaque instead of reading it as an inline aggregate. Beside a closure field too since 2026-11-27, when `cps-byvalue-struct-with-closure-field` closed. The 2026-10-11 decision's inline-C ABI cost measured nil across stdlib and turmeric-spices. Pinned by `opaque-field-struct-freed` and `opaque-ptr-field-byvalue`. |
 
 ## Found writing `stdlib/unicode.tur` (filed 2026-10-16)
 

@@ -316,6 +316,95 @@ bool elab_type_owns_boxed_fnfield(Type t) {
     return false;
 }
 
+/* fnfield-struct-local-freed-while-returned: does the value of `e` carry `b`
+ * out -- the struct itself, one of its fields, or something built from either?
+ *
+ * local-struct-drop frees a by-value struct local's closures when its `let`
+ * ends.  That is only right for a local that dies there.  `(let [h (H n (fn
+ * ...))] h)` -- every constructor function written with a `let` -- hands the
+ * struct to the caller, whose own binder owns it from then on; freeing here
+ * left the caller calling a freed closure.  Returning the value does not set
+ * `is_moved`, and is_binding_consumed looks for an explicit `drop!`, so
+ * neither guard saw it.
+ *
+ * Tail positions only, plus any `return`: a use that reads a field and calls
+ * it, or lends the struct to a function whose result is a plain scalar, keeps
+ * the local confined.  A call or constructor in a carrying position counts
+ * when it takes the struct (or a field) as a direct argument and its result
+ * can hold it -- `(Ok h)`, `(pick h g)`.  A `let` that rebinds it is followed
+ * through the alias.  Conservative the safe way: answering yes costs a leak,
+ * answering no where the value does leave is the use-after-free. */
+static bool fnfield_result_can_carry(Type t) {
+    switch (t.kind) {
+        case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_SYM:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64: case TY_CSTR: case TY_NEVER:
+            return false;
+        default:
+            return true;
+    }
+}
+static bool fnfield_value_carries(const Expr *e, const Binding *b, int depth) {
+    if (!e || depth > 64) return false;
+    switch (e->kind) {
+        case EX_ASCRIBE:
+            return fnfield_value_carries(e->as.ascribe_.inner, b, depth + 1);
+        case EX_VAR:
+            return e->as.var.binding == b;
+        case EX_GET_FIELD:
+            return fnfield_result_can_carry(e->type) &&
+                   fnfield_value_carries(e->as.get_field_.struct_expr, b, depth + 1);
+        case EX_DO:
+            return e->as.do_.n > 0 &&
+                   fnfield_value_carries(e->as.do_.items[e->as.do_.n - 1], b, depth + 1);
+        case EX_LET:
+        case EX_LETREC:
+            if (fnfield_value_carries(e->as.let_.body, b, depth + 1)) return true;
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (e->as.let_.bindings[i].binding &&
+                    fnfield_value_carries(e->as.let_.bindings[i].init, b, depth + 1) &&
+                    fnfield_value_carries(e->as.let_.body,
+                                          e->as.let_.bindings[i].binding, depth + 1))
+                    return true;
+            return false;
+        case EX_IF:
+            return fnfield_value_carries(e->as.if_.then_, b, depth + 1) ||
+                   fnfield_value_carries(e->as.if_.else_or_null, b, depth + 1);
+        case EX_MATCH:
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (fnfield_value_carries(e->as.match_.arms[i].body, b, depth + 1))
+                    return true;
+            return false;
+        case EX_CALL:
+            if (!fnfield_result_can_carry(e->type)) return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (fnfield_value_carries(e->as.call_.args[i], b, depth + 1)) return true;
+            return false;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (fnfield_value_carries(e->as.make_struct_.field_values[i], b, depth + 1))
+                    return true;
+            return false;
+        default:
+            return false;
+    }
+}
+static bool fnfield_return_carries(const Expr *e, const Binding *b);
+static bool fnfield_return_carries_visit(const Expr *c, void *ud) {
+    return fnfield_return_carries(c, (const Binding *)ud);
+}
+/* A `return` anywhere in the scope whose value carries `b`. */
+static bool fnfield_return_carries(const Expr *e, const Binding *b) {
+    if (!e) return false;
+    if (e->kind == EX_RETURN && fnfield_value_carries(e->as.return_.value, b, 0))
+        return true;
+    return cps_visit_children(e, fnfield_return_carries_visit, (void *)b);
+}
+static bool fnfield_local_leaves_scope(const Expr *body, const Binding *b) {
+    return fnfield_value_carries(body, b, 0) || fnfield_return_carries(body, b);
+}
+
 /* ---- internal define splicing ---- */
 
 /* splice_body_def_head -- is `f` a body-position binding form, and under which
@@ -849,17 +938,14 @@ Expr *elab_body_under_scope_drops(Elab *e, Expr *body, Span span) {
  * arm releases it, and the join then reads `b` as moved.  The arm keeps its
  * value and type; the drop is the same `(defer (<Drop.drop> b))` glue the let
  * would have appended, in the same trailing position. */
+static void return_owes_drop(Elab *e, Expr *ret, Binding *b, Expr *drop_call);
+
 Expr *elab_branch_with_scope_drop(Elab *e, Expr *branch, Binding *b, Span span) {
     /* An arm that is a `return` never reaches a trailing defer, so the
      * `return` runs the drop itself (return_.owed_drops). */
     if (branch->kind == EX_RETURN) {
         Expr *glue = elab_drop_glue_defer(e, b, b->scope_drop_inst, span);
-        uint32_t n = branch->as.return_.n_owed;
-        Expr **owed = (Expr **)arena_alloc(e->arena, (n + 1) * sizeof(Expr *));
-        if (n) memcpy(owed, branch->as.return_.owed_drops, n * sizeof(Expr *));
-        owed[n] = glue->as.defer_.body;
-        branch->as.return_.owed_drops = owed;
-        branch->as.return_.n_owed = n + 1;
+        return_owes_drop(e, branch, b, glue->as.defer_.body);
         return branch;
     }
     /* An arm that panics (or is otherwise `!`) never reaches a trailing
@@ -1487,6 +1573,9 @@ Expr *elab_let(Elab *e, const Form *call) {
     LetBinding *binds = NULL;
     bool       *binding_moved_during_init = NULL; /* tracks moves of preceding bindings during each init elaboration */
     uint32_t    n_binds = 0, cap = 0;
+    /* early-return-before-later-consume-leaks: the returns this let's inits
+     * and body reach start here. */
+    const uint32_t ret_log_start = e->n_ret_log;
     /* partial-application-of-borrow-param-consumes-affine-arg: bindings whose
      * initializer is a partial application that left a `^borrow` argument
      * unspent (elab_partial_apply), checked once the body is elaborated. */
@@ -2825,6 +2914,22 @@ Expr *elab_let(Elab *e, const Form *call) {
                 for (uint32_t j = k + 1; j < n_binds && spec_drop_ok[k]; j++)
                     spec_drop_ok[k] = spec_drop_uses_ok(binds[j].init, sb, 0);
             }
+            /* early-return-before-later-consume-leaks: a local this let will
+             * not drop because the body handed it on may still be owned on a
+             * path that left early, before the hand-off.  That `return` saw
+             * no drop pending; it releases the local itself.  Only a hand-off
+             * the flags recorded counts (a use only is_binding_consumed sees
+             * cannot be placed before or after the `return`), and before the
+             * injection below, which marks an auto-dropped ref consumed. */
+            for (uint32_t k = 0; k < n_binds && e->n_ret_log > ret_log_start; k++) {
+                Binding *lb = binds[k].binding;
+                bool kind_ok = lb->type.kind == TY_REF ||
+                               (lb->scope_drop_inst &&
+                                binding_closure_drop_inst(e, lb, binds[k].init));
+                if (!kind_ok) continue;
+                if (binding_moved_during_init[k] || lb->is_moved || lb->is_linear_consumed)
+                    elab_returns_release(e, ret_log_start, lb, call->span);
+            }
             /* First, collect all ref binding names that need drops (excluding moved ones) */
             uint32_t n_refs = 0;
             for (uint32_t k = 0; k < n_binds; k++) {
@@ -3217,6 +3322,7 @@ Expr *elab_let(Elab *e, const Form *call) {
         if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
             is_binding_consumed(body, binds[k].binding))
             continue;
+        if (fnfield_local_leaves_scope(body, binds[k].binding)) continue;
         const CtorDef *ctor = ad->ctors[0];
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (!elab_field_is_boxed_fnfield(ctor, fi)) continue;
@@ -6175,7 +6281,106 @@ Expr *elab_return(Elab *e, const Form *call) {
         else
             out->as.return_.n_moved = n;
     }
+    /* early-return-before-later-consume-leaks: and which ones it still owns
+     * -- the same two kinds, not yet handed on.  Only this function's own:
+     * a `return` in a lambda leaves the lambda, and the enclosing function's
+     * locals are not its to release. */
+    for (int pass = 0; pass < 2; pass++) {
+        uint32_t n = 0;
+        for (const Scope *cur = e->scope;
+             cur && cur != &e->global && cur != e->fn_entry_outer_scope;
+             cur = cur->parent) {
+            for (uint32_t i = 0; i < cur->n; i++) {
+                Binding *b = cur->bindings[i];
+                bool owns;
+                if (b->scope_drop_inst)
+                    owns = !elab_path_consumed(b, false, b->is_moved, USAGE_UNUSED,
+                                               b->usage_state);
+                else
+                    owns = b->type.kind == TY_REF && !b->is_moved &&
+                           !b->is_linear_consumed;
+                if (!owns) continue;
+                if (pass == 1) out->as.return_.owned[n] = b;
+                n++;
+            }
+        }
+        if (n == 0) break;
+        if (pass == 0)
+            out->as.return_.owned =
+                (Binding **)arena_alloc(e->arena, n * sizeof(Binding *));
+        else
+            out->as.return_.n_owned = n;
+    }
+    if (out->as.return_.n_owned > 0) {
+        if (e->n_ret_log == e->cap_ret_log) {
+            uint32_t cap = e->cap_ret_log ? e->cap_ret_log * 2 : 32;
+            Expr **grown = (Expr **)arena_alloc(e->arena, cap * sizeof(Expr *));
+            if (e->n_ret_log)
+                memcpy(grown, e->ret_log, e->n_ret_log * sizeof(Expr *));
+            e->ret_log = grown;
+            e->cap_ret_log = cap;
+        }
+        e->ret_log[e->n_ret_log++] = out;
+    }
     return out;
+}
+
+/* `(drop! b)` for a `ref<T>` local: the release a let appends at scope exit. */
+static Expr *elab_ref_drop_call(Elab *e, Binding *b, Span span) {
+    const BuiltinSpec *spec = builtin_lookup(e->sym_drop, b->type, 1);
+    if (!spec) return NULL;
+    Expr *var_expr = expr_new(e->arena, EX_VAR, b->type, span);
+    var_expr->as.var.binding = b;
+    Expr *drop_call = expr_new(e->arena, EX_BUILTIN, TYPE_NIL, span);
+    drop_call->as.builtin.spec = spec;
+    drop_call->as.builtin.n = 1;
+    drop_call->as.builtin.args = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+    drop_call->as.builtin.args[0] = var_expr;
+    return drop_call;
+}
+
+static bool binding_in(Binding *const *v, uint32_t n, const Binding *b) {
+    for (uint32_t i = 0; i < n; i++)
+        if (v[i] == b) return true;
+    return false;
+}
+
+/* Record that `ret` releases `b` itself: the drop call joins owed_drops, and
+ * `b` joins `moved` so a scope-exit drop still pending at this `return` is not
+ * run for it as well. */
+static void return_owes_drop(Elab *e, Expr *ret, Binding *b, Expr *drop_call) {
+    uint32_t n = ret->as.return_.n_owed;
+    Expr **owed = (Expr **)arena_alloc(e->arena, (n + 1) * sizeof(Expr *));
+    if (n) memcpy(owed, ret->as.return_.owed_drops, n * sizeof(Expr *));
+    owed[n] = drop_call;
+    ret->as.return_.owed_drops = owed;
+    ret->as.return_.n_owed = n + 1;
+    if (binding_in(ret->as.return_.moved, ret->as.return_.n_moved, b)) return;
+    uint32_t m = ret->as.return_.n_moved;
+    Binding **mv = (Binding **)arena_alloc(e->arena, (m + 1) * sizeof(Binding *));
+    if (m) memcpy(mv, ret->as.return_.moved, m * sizeof(Binding *));
+    mv[m] = b;
+    ret->as.return_.moved = mv;
+    ret->as.return_.n_moved = m + 1;
+}
+
+void elab_returns_release(Elab *e, uint32_t log_start, Binding *b, Span span) {
+    for (uint32_t i = log_start; i < e->n_ret_log; i++) {
+        Expr *ret = e->ret_log[i];
+        if (!binding_in(ret->as.return_.owned, ret->as.return_.n_owned, b)) continue;
+        /* Handed on by the value, or already released here by a join. */
+        if (binding_in(ret->as.return_.moved, ret->as.return_.n_moved, b)) continue;
+        Expr *drop_call;
+        if (b->scope_drop_inst)
+            drop_call = elab_drop_glue_defer(e, b, b->scope_drop_inst, span)
+                            ->as.defer_.body;
+        else if (b->type.kind == TY_REF)
+            drop_call = elab_ref_drop_call(e, b, span);
+        else
+            drop_call = NULL;
+        if (!drop_call) continue;
+        return_owes_drop(e, ret, b, drop_call);
+    }
 }
 
 /* Phase R1: ? operator — (? expr)

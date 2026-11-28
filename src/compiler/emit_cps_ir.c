@@ -195,6 +195,47 @@ static bool slot_erased_carrier_app(const Type *t) {
     return cn && strcmp(cn, "int64_t") == 0;
 }
 
+/* cps-byvalue-struct-with-closure-field: a by-value product whose ONLY owning
+ * fields are closures -- a handler or callback beside plain data, an opaque
+ * handle, a `cstr`.  The closure fields are what give it drop glue (a boxed
+ * fn field owns its fat handle, elab_structs.c), but nothing ever runs that
+ * glue on a COPY: the one `let` that binds the freshly built struct frees its
+ * closures (local-struct-drop: `drop_fnfields_<T>` on the direct path, the
+ * entry boundary's reap here -- emit_fnfield_reap), and a parameter, a
+ * rebinding, a capture, a field read or a returned value is a borrowed bundle
+ * of words.  That is exactly what a closure passed on its own already is to
+ * this backend (a TY_FN word in a slot is never retained or dropped), so the
+ * struct can go wherever an owning-free product can: boxed into a slot,
+ * copied into a continuation env, passed and returned by value.
+ *
+ * "Only closures" is the complement of every other rule that sets
+ * needs_drop_glue (elab_structs.c): no rc / ref / weak field, no nested
+ * owning aggregate or recursive spine (drop_inner_def), no owning `any`.
+ * Those keep the N3-O2 answer below -- their copies need a retain. */
+static bool type_has_unresolved_tyvar(const Type *t);
+static bool byval_fnfield_only_product(const Type *t) {
+    if (!t) return false;
+    Type _r; t = cps_resolve_ty(t, &_r);
+    if (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)) return false;
+    if (!type_is_byvalue_adt_product(*(Type *)t)) return false;
+    const AdtDef *d = slot_agg_def(t);
+    if (!d || !d->needs_drop_glue || d->n_ctors != 1 || !d->ctors[0]) return false;
+    if (d->n_type_params > 0 || type_has_unresolved_tyvar(t)) return false;
+    const CtorDef *c = d->ctors[0];
+    bool any_fn = false;
+    for (uint32_t i = 0; i < c->n_fields; i++) {
+        const CtorField *f = &c->fields[i];
+        if (f->drop_inner_def) return false;
+        switch (f->kind) {
+            case TY_FN: any_fn = true; break;
+            case TY_RC: case TY_REF: case TY_LREF: case TY_WEAK: return false;
+            case TY_ANY: if (!d->is_copy) return false; break;
+            default: break;
+        }
+    }
+    return any_fn;
+}
+
 static bool slot_box_ty(const Type *t) {
     if (!t) return false;
     Type _r; t = cps_resolve_ty(t, &_r);
@@ -231,7 +272,9 @@ static bool slot_box_ty(const Type *t) {
     if (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)) return false;
     if (!type_is_byvalue_adt_product(*(Type *)t)) return false;
     const AdtDef *d = slot_agg_def(t);
-    return d && !d->needs_drop_glue;
+    if (!d) return false;
+    if (!d->needs_drop_glue) return true;
+    return byval_fnfield_only_product(t);
 }
 
 /* A heap-passed ADT / struct handle (`(Vec int)` -> `tur_adt_Vec__int *`, a heap
@@ -955,24 +998,6 @@ static bool fat_param_handed_on(const Binding *fn, uint32_t i, const CAtom *a) {
     return cp->is_poly_fn && cp->poly_type && cp->poly_type->kind == TY_FORALL;
 }
 
-/* cps-byvalue-struct-with-closure-field: a closure-field struct handed BY
- * VALUE to a cps->cps callee whose own parameter at that position is the same
- * type and is admitted for it (only field reads, fn_byval_agg_param_ok).  The
- * `__cps` entry takes it by value; nothing crosses a one-word slot, and as on
- * the direct path the callee borrows it -- the caller's drop_fnfields (or the
- * CPS reap) releases its closures. */
-static bool byval_fnfield_only_product(const Type *t);
-static bool fn_byval_agg_param_ok(const FnDef *fd, const Binding *p);
-static bool fnfield_param_handed_on(const Binding *fn, uint32_t i, const CAtom *a) {
-    if (a->kind != CA_VAR && a->kind != CA_CVAR) return false;
-    if (!byval_fnfield_only_product(a->type)) return false;
-    const FnDef *cfd = fn ? fn->source_fn_def : NULL;
-    if (!cfd || i >= cfd->n_params || !cfd->params[i]) return false;
-    const Binding *cp = cfd->params[i];
-    if (!type_eq(cp->type, *a->type)) return false;
-    return fn_byval_agg_param_ok(cfd, cp);
-}
-
 static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
                          bool cps_to_direct, bool to_cps_entry) {
     bool cef = callee_effect_free(fn);
@@ -987,7 +1012,6 @@ static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
          * whose atom_is_fat_fn reject evicts the caller (E2b keeps a fat-fn param
          * that is only CALLED/CAPTURED, never re-threaded as an arg). */
         if (cef && atom_is_fn_value(&args[i]) && !atom_is_fat_fn(&args[i])) continue;
-        if (!cps_to_direct && fnfield_param_handed_on(fn, i, &args[i])) continue;
         if (cps_to_direct && !call_arg_ok(&args[i], true) &&
             call_arg_ok(&args[i], false) &&
             cps_direct_param_takes_agg_raw(fn, i, &args[i], to_cps_entry))
@@ -1548,7 +1572,7 @@ static bool owning_byvalue_aggregate(const Type *t) {
     if (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)) return false;
     if (!type_is_byvalue_adt_product(*(Type *)t)) return false;
     const AdtDef *d = slot_agg_def(t);
-    return d && d->needs_drop_glue;
+    return d && d->needs_drop_glue && !byval_fnfield_only_product(t);
 }
 
 /* E3a (owning-cloneable-capture): is this a 2-arg cloneable call frame that
@@ -3775,134 +3799,14 @@ static bool fn_single_concrete_sig(const FnDef *fd) {
  * (`conflicting types`).  The wrapper learned the by-pointer spelling
  * 2026-07-22 (sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch), so a
  * function that performs and takes `(Rect :int :int)` no longer evicts --
- * along with every function sharing its effect. */
-static int expr_count_all_uses(const Expr *e, const Binding *b);
-
-/* cps-byvalue-struct-with-closure-field: a by-value product whose only owning
- * fields are closures (a handler or callback beside plain data).  The closure
- * fields are what give it drop glue -- the caller's `drop_fnfields_<T>` frees
- * them at ITS scope end; a callee that takes the struct by value never drops
- * it (local-struct-drop) -- so for a callee it is a borrowed bundle of words,
- * exactly as it is on the direct path. */
-static bool byval_fnfield_only_product(const Type *t) {
-    if (!t) return false;
-    Type _r; t = cps_resolve_ty(t, &_r);
-    if (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)) return false;
-    if (!type_is_byvalue_adt_product(*(Type *)t)) return false;
-    const AdtDef *d = slot_agg_def(t);
-    if (!d || !d->needs_drop_glue || d->n_ctors != 1 || !d->ctors[0]) return false;
-    if (d->n_type_params > 0 || type_has_unresolved_tyvar(t)) return false;
-    const CtorDef *c = d->ctors[0];
-    bool any_fn = false;
-    for (uint32_t i = 0; i < c->n_fields; i++) {
-        TypeKind k = c->fields[i].kind;
-        if (k == TY_FN) { any_fn = true; continue; }
-        if (!slot_ty(k)) return false;
-    }
-    return any_fn;
-}
-
-static bool agg_param_only_field_reads(const Expr *e, const Binding *p);
-
-/* `p` passed whole, as argument `i` of `call`, to a plain named function whose
- * parameter there is the same type and is itself only field-read: still a
- * borrow, by value, all the way down.  Bounded, since a recursive callee asks
- * the question of itself. */
-static uint32_t g_agg_reader_depth;
-static bool agg_param_handed_to_reader(const Expr *call, uint32_t i, const Binding *p) {
-    const Binding *fb = call->as.call_.fn_binding;
-    if (!fb || call->as.call_.ctor || call->as.call_.dict_arg || call->as.call_.fn_expr)
-        return false;
-    const FnDef *cfd = fb->source_fn_def;
-    if (!cfd || !cfd->body || cfd->closure || i >= cfd->n_params || !cfd->params[i])
-        return false;
-    const Binding *cp = cfd->params[i];
-    if (!type_eq(cp->type, p->type)) return false;
-    if (cp == p) return true;
-    if (g_agg_reader_depth >= 8) return false;
-    g_agg_reader_depth++;
-    bool ok = agg_param_only_field_reads(cfd->body, cp);
-    g_agg_reader_depth--;
-    return ok;
-}
-
-/* Every use of `p` in `e` is a field read `(.f p)` -- the struct itself is never
- * passed, stored, returned, rebound or assigned.  Forms this walk does not take
- * apart refuse if they mention `p` at all (expr_count_all_uses is exhaustive). */
-static bool agg_param_only_field_reads(const Expr *e, const Binding *p) {
-    if (!e) return true;
-    switch (e->kind) {
-        case EX_VAR: return e->as.var.binding != p;
-        case EX_GET_FIELD: {
-            const Expr *s = e->as.get_field_.struct_expr;
-            while (s && s->kind == EX_ASCRIBE) s = s->as.ascribe_.inner;
-            if (s && s->kind == EX_VAR && s->as.var.binding == p) return true;
-            return agg_param_only_field_reads(e->as.get_field_.struct_expr, p);
-        }
-        case EX_CALL:
-            if (e->as.call_.fn_binding == p) return false;
-            if (!agg_param_only_field_reads(e->as.call_.fn_expr, p)) return false;
-            if (!agg_param_only_field_reads(e->as.call_.dict_arg, p)) return false;
-            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                const Expr *a = e->as.call_.args[i];
-                while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
-                if (a && a->kind == EX_VAR && a->as.var.binding == p &&
-                    agg_param_handed_to_reader(e, i, p))
-                    continue;
-                if (!agg_param_only_field_reads(e->as.call_.args[i], p)) return false;
-            }
-            return true;
-        case EX_BUILTIN:
-            for (uint32_t i = 0; i < e->as.builtin.n; i++)
-                if (!agg_param_only_field_reads(e->as.builtin.args[i], p)) return false;
-            return true;
-        case EX_DO:
-            for (uint32_t i = 0; i < e->as.do_.n; i++)
-                if (!agg_param_only_field_reads(e->as.do_.items[i], p)) return false;
-            return true;
-        case EX_LET:
-        case EX_LETREC:
-            for (uint32_t i = 0; i < e->as.let_.n; i++)
-                if (!agg_param_only_field_reads(e->as.let_.bindings[i].init, p)) return false;
-            return agg_param_only_field_reads(e->as.let_.body, p);
-        case EX_IF:
-            return agg_param_only_field_reads(e->as.if_.cond, p) &&
-                   agg_param_only_field_reads(e->as.if_.then_, p) &&
-                   agg_param_only_field_reads(e->as.if_.else_or_null, p);
-        case EX_WHILE:
-            return agg_param_only_field_reads(e->as.while_.cond, p) &&
-                   agg_param_only_field_reads(e->as.while_.body, p);
-        case EX_SET:
-            return e->as.set_.target != p &&
-                   agg_param_only_field_reads(e->as.set_.value, p);
-        case EX_ASCRIBE:
-            return agg_param_only_field_reads(e->as.ascribe_.inner, p);
-        case EX_RETURN:
-            return agg_param_only_field_reads(e->as.return_.value, p);
-        case EX_MATCH:
-            if (!agg_param_only_field_reads(e->as.match_.scrutinee, p)) return false;
-            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
-                if (!agg_param_only_field_reads(e->as.match_.arms[i].guard, p) ||
-                    !agg_param_only_field_reads(e->as.match_.arms[i].body, p))
-                    return false;
-            return true;
-        case EX_HANDLE: {
-            const HandleExpr *h = e->as.handle_.handle;
-            if (!h) return true;
-            for (uint32_t i = 0; i < h->n_cases; i++)
-                if (!agg_param_only_field_reads(h->cases[i].body, p)) return false;
-            return agg_param_only_field_reads(h->body, p);
-        }
-        default:
-            return expr_count_all_uses(e, p) == 0;
-    }
-}
-
+ * along with every function sharing its effect.
+ *
+ * cps-byvalue-struct-with-closure-field: a product whose only owning fields
+ * are closures is a slot_box_ty too (see there), so a parameter of one is
+ * admitted here like any other by-value aggregate, whatever the body does
+ * with it. */
 static bool fn_byval_agg_param_ok(const FnDef *fd, const Binding *p) {
-    if (!fn_single_concrete_sig(fd)) return false;
-    if (slot_box_ty(&p->type)) return true;
-    return byval_fnfield_only_product(&p->type) &&
-           agg_param_only_field_reads(fd->body, p);
+    return fn_single_concrete_sig(fd) && slot_box_ty(&p->type);
 }
 
 /* E2b soundness gate: the fat-closure (is_poly_fn) param `p` is only CALLED (as a
@@ -6775,10 +6679,13 @@ static bool thin_alias_visit(const Expr *e, void *ud) {
     cps_visit_children(e, thin_alias_visit, ud);
     return false;
 }
-static void thin_alias_collect(const Expr *program) {
+/* Over ensure_S's flattened items, like every whole-program walk below: the
+ * raw program items hold a `defmodule` as one opaque node, which hid a
+ * module's fn-value uses from all of them. */
+static void thin_alias_collect(const Expr **items, uint32_t np) {
     g_thin_alias_n = 0;
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        const Expr *it = program->as.program.items[i];
+    for (uint32_t i = 0; i < np; i++) {
+        const Expr *it = items[i];
         if (!it) continue;
         thin_alias_visit((it->kind == EX_FN_DEF && it->as.fn_def_.fn)
                          ? it->as.fn_def_.fn->body : it, NULL);
@@ -6922,11 +6829,11 @@ static void fv_multi_free(FvMulti *m) {
 
 /* The same item walk, and the same per-item accumulator, as the single-target
  * fn_value_threadable / fnval_stored_in_struct. */
-static void fv_multi_tally(const Expr *program, FvMulti *m) {
+static void fv_multi_tally(const Expr *program, const Expr **items, uint32_t np,
+                           FvMulti *m) {
     EffSet sink = {0};
-    uint32_t np = program->as.program.n;
     for (uint32_t i = 0; i < np; i++) {
-        Expr *it = program->as.program.items[i];
+        const Expr *it = items[i];
         if (!it) continue;
         const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
                          ? it->as.fn_def_.fn->body : it;
@@ -7004,14 +6911,14 @@ static bool fn_sig_has_tyvar_slot(const Type *t) {
     return false;
 }
 
-static bool param_is_thread_safe(const Expr *program, const FnDef *fd, uint32_t pi) {
+static bool param_is_thread_safe(const Expr *program, const Expr **items, uint32_t np,
+                                 const FnDef *fd, uint32_t pi) {
     if (!program || program->kind != EX_PROGRAM || !fd || !fd->binding) return false;
-    uint32_t np = program->as.program.n;
     int seen = 0;
     /* A pure value is fine where the dispatch can call it directly. */
     bool lenient = e2a_param_fallback_ok(fd, pi);
     for (uint32_t i = 0; i < np; i++) {
-        Expr *it = program->as.program.items[i];
+        const Expr *it = items[i];
         if (!it) continue;
         const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
                          ? it->as.fn_def_.fn->body : it;
@@ -7336,7 +7243,14 @@ static void reach_refs_reset(void) {
     g_reach_refs_ready = false;
     reach_index_reset(&g_reach_ix);
 }
-static bool fn_unreached(const Expr *program, const FnDef *fd) {
+/* `items`/`np`: ensure_S's FLATTENED view of the program.  cps_visit_children
+ * does not enter a `defmodule` (a declaration node), so over the raw program
+ * items no call made inside a module was recorded, and every member a module
+ * did not export read as unreached -- its effects zeroed, and with them the
+ * taint that keeps a handler and its performer on one machine
+ * (effect-through-evicted-fn-aborts-at-run-time). */
+static bool fn_unreached(const Expr *program, const Expr **items, uint32_t np,
+                         const FnDef *fd) {
     const Binding *b = fd ? fd->binding : NULL;
     if (!b || !b->name || !program || program->kind != EX_PROGRAM) return false;
     /* User code only: a stdlib helper may be reached by a call the emitter
@@ -7346,8 +7260,8 @@ static bool fn_unreached(const Expr *program, const FnDef *fd) {
         || addr_taken_has(b))
         return false;
     if (!g_reach_refs_ready) {
-        for (uint32_t i = 0; i < program->as.program.n; i++) {
-            const Expr *it = program->as.program.items[i];
+        for (uint32_t i = 0; i < np; i++) {
+            const Expr *it = items[i];
             if (!it) continue;
             reach_refs_visit((it->kind == EX_FN_DEF && it->as.fn_def_.fn)
                              ? it->as.fn_def_.fn->body : it, &g_reach_refs);
@@ -7543,7 +7457,7 @@ static void ensure_S(const Expr *program) {
     g_direct_only_fn_n = 0;
     g_alias_target_n = 0;     /* refilled by the tally walk below */
     reach_refs_reset();       /* fn_unreached's walk, refilled on first use */
-    thin_alias_collect(program);
+    thin_alias_collect(items, np);
     cps_ir_thread_param_reset();
     bool trace = getenv("TUR_TRACE_EVICT") != NULL;
     /* Every target first, then one tally walk for all of them (FvMulti), then
@@ -7570,7 +7484,7 @@ static void ensure_S(const Expr *program) {
     }
     FvMulti fvm;
     fv_multi_init(&fvm, tg_b, ntg);
-    fv_multi_tally(program, &fvm);
+    fv_multi_tally(program, items, np, &fvm);
     for (int ti = 0; ti < ntg; ti++) {
         FnDef *fd = tg_fd[ti];
         int sl = fvm_slot(&fvm, fd->binding);
@@ -7651,7 +7565,7 @@ static void ensure_S(const Expr *program) {
             for (uint32_t pi = 0; pi < fd->n_params; pi++) {
                 PtClass pc = param_thread_class(fd, pi);
                 if ((pc == PT_NOW || pc == PT_NONTAIL)
-                    && param_is_thread_safe(program, fd, pi))
+                    && param_is_thread_safe(program, items, np, fd, pi))
                     cps_ir_thread_param_add(fd->params[pi]);
             }
         }
@@ -7797,7 +7711,7 @@ static void ensure_S(const Expr *program) {
                 /* Never runs, so it taints nothing (fn_unreached) -- neither as
                  * an evicted fn nor through a whole-body delegation's seeding of
                  * the base taint below. */
-                if (fn_unreached(program, fd)) {
+                if (fn_unreached(program, items, np, fd)) {
                     memset(&en->perf, 0, sizeof en->perf);
                     memset(&en->hand, 0, sizeof en->hand);
                     memset(&en->eff, 0, sizeof en->eff);
@@ -10152,6 +10066,7 @@ static void emit_await(CE *ce, const CTerm *t);   /* F3 (cps-async) */
 static void emit_resume(CE *ce, const CTerm *t);
 static void emit_letraw(CE *ce, const CTerm *t);
 static void emit_letraw_fnfield_reap(CE *ce, const CTerm *t, const char *bn);
+static void emit_fnfield_reap(CE *ce, Buf *out, CVar x, const char *bn, bool once);
 static void emit_callcc(CE *ce, const CTerm *t);
 static void emit_heap_join(CE *ce, const CTerm *t);
 static void emit_escaping_join(CE *ce, const CTerm *t);  /* escaping joins */
@@ -10678,6 +10593,13 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
             cps_reset_landing_close(ce, rsl_lc);
             cps_site_clear(ce, site_lc);
             emit_letcall_sum_closure_reap(ce, t, bn);
+            /* cps-byvalue-struct-with-closure-field: the struct-local twin --
+             * a `let` local bound to a struct a plain function returned owns
+             * its closures as it does on the direct path (drop_fnfields_<T>
+             * at scope end there, the boundary's reap here).  Once: this
+             * statement sits in a continuation a multi-shot resume can run
+             * again, and a callee may hand back a struct it was given. */
+            emit_fnfield_reap(ce, NULL, t->as.letcall.x, bn, true);
             /* A by-value clone result is boxed and reaped above, so only the
              * unresolved callee's carrier word can owe the reader's drop. */
             if (!mclone_lc && !rr_lc && t->as.letcall.x.ty != TY_NIL)
@@ -11767,30 +11689,44 @@ static void emit_letraw(CE *ce, const CTerm *t) {
  * one, so each boxed field is registered with the entry boundary's reap
  * instead, as a headered closure (kind 2) -- the same channel `reap_env` uses
  * for a non-escaping closure env.  Reaping later than the scope's end is
- * safe for a value nothing outside the scope can name. */
-static void emit_letraw_fnfield_reap(CE *ce, const CTerm *t, const char *bn) {
-    const Binding *xb = t->as.letraw.x.bind;
+ * safe for a value nothing outside the scope can name.
+ *
+ * cps-byvalue-struct-with-closure-field: the same local bound to the RESULT of
+ * a cps->cps call (`(let [p (make-parser h)] ...)`, the callee performing)
+ * is the parameter of the join the callee delivers to, so the lifted join
+ * registers it as it reads the value out of its slot (`out` is that helper's
+ * buffer).  A join can run more than once -- a multi-shot resume inside the
+ * callee, after it built the struct, delivers the SAME closure again -- so
+ * that site registers through __dk_reap_closure_once. */
+static void emit_fnfield_reap(CE *ce, Buf *out, CVar x, const char *bn, bool once) {
+    const Binding *xb = x.bind;
     if (!xb || !xb->drops_fn_fields || xb->type.kind != TY_ADT) return;
     const AdtDef *def = xb->type.as.adt_.def;
     if (!def || def->n_ctors < 1 || !def->ctors[0]) return;
-    if (t->as.letraw.x.ty == TY_NIL || t->as.letraw.x.ty == TY_NEVER ||
-        t->as.letraw.x.ty == TY_FN)
-        return;
+    if (x.ty == TY_NIL || x.ty == TY_NEVER || x.ty == TY_FN) return;
     /* Only a binder declared as the aggregate itself: a carrier word or a
      * pointer names storage this binder does not own. */
-    const char *bct = binder_ctype_full(ce->ctx, t->as.letraw.x.ty,
-                                        t->as.letraw.x.type);
+    const char *bct = binder_ctype_full(ce->ctx, x.ty, x.type);
     if (!bct || strncmp(bct, "tur_adt_", 8) != 0 || strchr(bct, '*')) return;
     const CtorDef *ctor = def->ctors[0];
+    const char *fn = once ? "__dk_reap_closure_once" : "__dk_reap_closure";
     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
         const Type *ft = ctor->fields[fi].full_type;
         if (ctor->fields[fi].kind != TY_FN || !ft || ft->kind != TY_FN ||
             !ft->as.fn.boxed)
             continue;
         char *mp = adt_field_member_path(def, ctor, fi);
-        ce_line(ce, "__dk_reap_closure((tur_dkw)(%s).%s);", bn, mp);
+        if (out) {
+            indent_buf(out, 4);
+            buf_printf(out, "%s((tur_dkw)(%s).%s);\n", fn, bn, mp);
+        } else {
+            ce_line(ce, "%s((tur_dkw)(%s).%s);", fn, bn, mp);
+        }
         free(mp);
     }
+}
+static void emit_letraw_fnfield_reap(CE *ce, const CTerm *t, const char *bn) {
+    emit_fnfield_reap(ce, NULL, t->as.letraw.x, bn, false);
 }
 
 /* ---- binder pre-declaration ------------------------------------------ *
@@ -12325,6 +12261,11 @@ static bool term_k_only_resumed(const CTerm *t, const Binding *k) {
  * resuming-into case as a resume-frame, and consumed (cleared) on entry there:
  * the frame resumes the same `k` into the chain. */
 static const Binding *g_lh_resume_k = NULL;
+/* cps-byvalue-struct-with-closure-field: the source binding of the value
+ * parameter the next emit_lifted call binds (a heap join's `let` local), so
+ * the helper can register that local's closure fields (emit_fnfield_reap).
+ * Consumed and cleared by emit_lifted, like g_lh_resume_k. */
+static const Binding *g_lh_x_bind = NULL;
 
 /* fn-value-call-cps-frames-held-until-outer-entry: set by emit_heap_join for
  * the one emit_lifted call that renders its resume-frame join, and consumed
@@ -12364,6 +12305,8 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     g_lh_join_release = false;
     const Binding *resume_k = (mode == LH_RESUME_CONT) ? g_lh_resume_k : NULL;
     g_lh_resume_k = NULL;
+    const Binding *x_bind = g_lh_x_bind;
+    g_lh_x_bind = NULL;
     /* fn-value-fat-normalization (effect-row increment): a lifted helper is its
      * OWN function -- captures arrive through its frame env (`__cap->fN`) as
      * raw-named locals, never through the enclosing closure's env pointer.
@@ -12466,6 +12409,11 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         indent_buf(&tmp, 4);
         buf_printf(&tmp, "%s %s = %s;\n", xcty, xname, ld);
         free(ld);
+        if (x_bind) {
+            CVar xv; memset(&xv, 0, sizeof xv);
+            xv.bind = x_bind; xv.ty = xty; xv.type = xt;
+            emit_fnfield_reap(ce, &tmp, xv, xname, true);
+        }
         xparam_prev = emit_localvar_save_ctype(xname);
         xparam_saved = true;
         emit_localvar_record_ctype(xname, xcty);
@@ -12771,6 +12719,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     char frame[1200];
     if (caps || needs_kont) {
         g_lh_join_release = true;
+        g_lh_x_bind = t->as.letcont.param.bind;
         emit_lifted(ce, jname, LH_RESUME_CONT, xn, t->as.letcont.param.ty,
                     t->as.letcont.param.type, t->as.letcont.jbody, NULL, caps);
         char uw[48], uwc[360]; unw_take(uw, sizeof uw, uwc, sizeof uwc);
@@ -12789,6 +12738,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
                      "%s__dk_reap_node(dk_frame_resume_join(%s, %s, %s))%s", uw, jname, envexpr, ce->cur_k, uwc);
         free(envexpr);
     } else {
+        g_lh_x_bind = t->as.letcont.param.bind;
         emit_lifted(ce, jname, LH_PERFORM_CONT, xn, t->as.letcont.param.ty,
                     t->as.letcont.param.type, t->as.letcont.jbody, NULL, NULL);
         char uw[48], uwc[360]; unw_take(uw, sizeof uw, uwc, sizeof uwc);

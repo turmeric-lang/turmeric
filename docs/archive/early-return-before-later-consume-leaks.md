@@ -3,6 +3,9 @@
 **Severity:** medium (a leak, and a Drop instance that never runs, on one
 path of an ordinary shape; no diagnostic).
 
+> Status: **resolved 2026-11-27.** See [Resolution](#resolution). Fixture:
+> `tests/fixtures/early-return-before-later-consume` (`requires.leak-check`).
+
 A `let` decides once, after its whole body, whether to append a scope-exit
 drop for a local: it does not when the body hands the local on. An early
 `return` that leaves before that hand-off has nothing pending to run, and the
@@ -85,3 +88,39 @@ still owns.
   compute the list after elaborating it, as the `moved` list already is.
 - Fixture: the repro, plus the same two shapes with an owned parameter in
   place of the local, under `requires.leak-check`.
+
+## Resolution
+
+Fixed 2026-11-27. The decision stays where it was -- with the `let`, after its
+body -- and the `return` now carries what the let needs to act on it:
+
+- `elab_return` records `return_.owned`: the locals and owned parameters of
+  its own function (the scope walk stops at `fn_entry_outer_scope`, so a
+  `return` in a lambda sees none of the enclosing function's) that have a
+  scope-exit drop -- `scope_drop_inst`, or a `ref<T>` -- and that this path
+  has not handed on. It is computed after the returned value, like `moved`.
+  A `return` that owns anything is appended to `Elab.ret_log`.
+- `elab_let` notes the log length before its bindings. When it appends no
+  drop for a binding because the flags say it was handed on (`is_moved`,
+  `is_linear_consumed`, or moved during a later init),
+  `elab_returns_release` gives each logged `return` that still owned it the
+  drop (`owed_drops`) and lists it in `moved`. A hand-off only
+  `is_binding_consumed` sees is left alone: it cannot be placed before or
+  after the `return`, and releasing there could free a value twice.
+- `elab_owned_params_append_drops` does the same for an owned parameter the
+  body handed on.
+- The join's return-arm path (`elab_branch_with_scope_drop`) now also lists
+  the binding in `moved`, through the same helper; that is what tells the
+  let-end pass the `return` already releases it, so it runs once.
+
+A binding the let does drop is unchanged: the pending scope-exit drop still
+runs at the `return` (`emit_frame_run_pending_drops`), so codegen moves only
+for the shapes that leaked. The interpreter runs `owed_drops` already, so
+`tur --interpret` agrees on every case in the fixture -- the one shape it
+still misses, a drop the let *does* append, is
+[turi-early-return-skips-injected-drops](../reported/turi-early-return-skips-injected-drops.md).
+
+Covered beyond the repro: owned parameters (`if` and `when`), a `?` early
+exit, a `return` in a `match` arm, two nested lets, a join that already owed
+the drop, a `return` inside a lambda, and a local handed on by the returned
+value itself.

@@ -1,8 +1,31 @@
-# In a `defmodule`, an effectful function value that works at top level has no lowering
+# In a `defmodule`, an effectful function value that works at top level has no lowering (resolved)
+
+**Resolved 2026-11-27 (fix direction 1).** Both repros below build and print
+`20` and `13`. `fv_multi_tally`, `thin_alias_collect`, `param_is_thread_safe`
+and `fn_unreached` (`src/compiler/emit_cps_ir.c`) now take the flattened items
+`ensure_S` holds instead of reading `program->as.program.items`, so a use
+inside a module member is counted like one at top level. `nesc_fixpoint`
+already took the flattened items.
+
+The `m3` shape with `app0` in another module also runs now in a
+whole-program build (`tur run main.tur` prints `20`). Under separate
+compilation it is still refused, as described below.
+
+No `module-*` snapshot moved. Fixed with
+[effect-through-evicted-fn-aborts-at-run-time](effect-through-evicted-fn-aborts-at-run-time.md),
+which was the same unflattened walk seen from the other side.
+
+Test: `tests/fixtures/module-effectful-fn-value-threads` (both repros, and a
+lambda passed to a higher-order function directly, beside a pure named
+function, and held in a local).
+
+The report as filed follows.
+
+---
 
 **Severity:** medium (a correct program is refused; the same code outside
 `defmodule` builds and runs). Found 2026-11-24 executing
-[sepcomp-cross-module-effect-unhandled](../archive/sepcomp-cross-module-effect-unhandled.md).
+[sepcomp-cross-module-effect-unhandled](sepcomp-cross-module-effect-unhandled.md).
 It is a whole-program defect (`tur run`, `tur build <main.tur>`): one file is
 enough.
 
