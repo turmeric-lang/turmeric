@@ -1365,6 +1365,7 @@ static bool cps_closure_env_freeable(const Expr *let, uint32_t idx) {
     if (init->as.closure_.closure->n_captures == 0) return false;   /* capture-free: already delegatable */
     if (init->as.closure_.closure->is_shift_receiver) return false; /* reaped by P3.d */
     if (init->as.closure_.closure->is_effect_payload) return false; /* reaped at handler case */
+    if (b->fnfield_moved_into) return false;   /* closure-stored-beyond-its-let-has-no-owner: the struct frees it */
     if (b->type.kind != TY_FN) return false;
     switch (b->type.as.fn.result_kind) {
         case TY_INT: case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:

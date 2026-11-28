@@ -1,5 +1,36 @@
 # A closure stored where it outlives its `let` is never freed
 
+**Narrowed 2026-11-28.** Repro 1 is fixed: a `let`-bound lambda whose only
+destination is the struct the next binding builds is moved into it
+(`Binding.fnfield_moved_into`). The struct then owns it, as it would a lambda
+written at that argument, and frees it at the end of its last owner's `let`.
+`tests/fixtures/closure-moved-into-struct` (leak-checked) pins it, and
+`closure-in-escaping-struct-kept` went from 80 to 56 B leaked (on `main` that
+fixture is a use-after-free).
+
+The move is refused, and the lambda still leaks, when:
+
+- the lambda is used again;
+- another closure field of the struct is borrowed, since the struct would
+  then free that one too;
+- something evaluated between the two could perform, since a multi-shot
+  resume would build two structs around one lambda.
+
+`tests/fixtures/closure-move-refused` pins those (known-leak); a wrong move
+there is a double free. Still open, below: repros 2 and 3, a closure in a
+vec, a generic call's result, and an owner struct whose copy outlives its
+`let`.
+
+**Checked for the move:** every fixture's closure frees, emitted against the
+previous commit, changed only in `closure-in-escaping-struct-kept`.
+turmeric-spices `24d2bbd` (782 files that emit) changed in one free, in
+`xml/tests/sax_errors.tur`. `count-starts`' handler lambda is freed now: the
+parser's `__deliver-chunk` only calls it, through a thunk it hands to
+`with-region`, which the escape walk follows since the same day's
+fnfield-owner-struct-copy-outlives-scope fix. The `xml` shard passes, and its
+tests under `TUR_SANITIZE_PROGRAMS=1` show the same 8 leak reports as on
+`main` and no memory-safety error. One of those reports is 24 B smaller.
+
 **Severity: low-medium (leak, one closure env per construction, 24 B in the
 repros).** A `let`-bound capturing closure that ends up somewhere outliving the
 `let` -- a struct handed out of the scope, a global, a lambda that is returned,
@@ -68,15 +99,18 @@ its `let` into whatever it escapes to.
 
 ## Fix directions
 
-Owner structs only free when no copy outlives them (2026-11-28), so making
-a struct the owner is safe now. Before that, direction 1 would have spread
-the use-after-free above to every moved closure.
-
-1. **Move a closure into the struct that takes it.** When a `let`-bound
-   closure's only escape is into one constructor's closure field, and the
-   closure is not used after that point, make that struct the owner
-   (`fnfield_owner`) and drop the `let`'s free. Shapes 1 and 3 then free when
-   the struct's last owner does. This needs a "last use" check the escape walk
-   does not do today.
-2. A closure stored in a vec or a global needs the container to own its
-   elements, which is a container-ownership question, not this one.
+1. ~~**Move a closure into the struct that takes it.**~~ Done for the
+   adjacent-binding shape (above). It could widen: a constructor further
+   down the `let`, or one whose other arguments are calls, needs a "nothing
+   between could perform" check that does not exist yet. A conditional
+   constructor would then leak on the branch not taken.
+2. **Let a lambda's env own a struct it captures** (repro 3, and an owner
+   struct captured by a returned lambda). The env glue is shallow: it frees
+   the env box and nothing it captured. A capture the escape walk proves is
+   the struct's last use could make the glue call `drop_fnfields_<T>` on it.
+3. A closure stored in a vec or a global (repro 2) needs the container to
+   own its elements, which is a container-ownership question, not this one.
+4. A generic call's result (`(Holder (ident f))`): `ident` keeps its argument
+   nowhere but its result (`resalias_fnfield_param_mask` has the bit when the
+   argument is a struct), so the same inference for a closure argument would
+   let the struct's init be fresh when `f` is moved in.

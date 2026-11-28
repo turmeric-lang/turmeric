@@ -619,6 +619,13 @@ struct Binding {
      * precondition for drops_fn_fields; also read when the local is moved on or
      * returned, which hands that ownership to the next binder. */
     bool          fnfield_owner;
+    /* closure-stored-beyond-its-let-has-no-owner: this `let`-bound lambda was
+     * MOVED into the constructor call named here -- the next binding's init,
+     * its only mention -- so that struct owns it as it would a lambda written
+     * at the argument, and this binding's own scope-end free is off
+     * (let_binding_env_freeable, cps_closure_env_freeable).  NULL otherwise.
+     * Set by elab_fnfield_resolve_pending. */
+    const struct Expr *fnfield_moved_into;
     /* class-defn-constraint-not-discharged-at-call-site: backlink to the owning
      * FnDef's typeclass constraint set (`^Encode T`, or the `[(Encode T)]`
      * middle-vector form), or NULL for a binding with no constraints.  Stamped

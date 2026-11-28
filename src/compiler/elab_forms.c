@@ -13,6 +13,8 @@ bool fnfield_struct_escapes(const Expr *scope, const Binding *h, const Expr *ign
 void fnfield_struct_param_uses(const Expr *body, const Binding *p,
                                bool *reads, bool *result_only);
 bool expr_contains_inline_c_block(const Expr *e);
+bool closure_let_binding_escapes(const Expr *let, uint32_t idx);
+bool closure_let_binding_escapes_reaped(const Expr *let, uint32_t idx);
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -595,11 +597,19 @@ static bool fnfield_fresh_walk(const Expr *e, bool tail, Binding **params,
                 if (!ad || ad->ctors[0] != ctor ||
                     e->as.call_.n_args != ctor->n_fields)
                     return false;
-                for (uint32_t fi = 0; fi < ctor->n_fields; fi++)
-                    if (elab_field_is_boxed_fnfield(ctor, fi) &&
-                        !fnfield_closure_is_fresh(e->as.call_.args[fi], params,
+                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                    if (!elab_field_is_boxed_fnfield(ctor, fi)) continue;
+                    /* closure-stored-beyond-its-let-has-no-owner: a lambda
+                     * moved into THIS call is the call's own. */
+                    const Expr *mv = e->as.call_.args[fi];
+                    while (mv && mv->kind == EX_ASCRIBE) mv = mv->as.ascribe_.inner;
+                    if (mv && mv->kind == EX_VAR && mv->as.var.binding &&
+                        mv->as.var.binding->fnfield_moved_into == e)
+                        continue;
+                    if (!fnfield_closure_is_fresh(e->as.call_.args[fi], params,
                                                   n_params, need, fn_body))
                         return false;
+                }
                 return true;
             }
             const Binding *fb = e->as.call_.fn_binding;
@@ -769,6 +779,147 @@ void elab_stamp_fnfield_param_mask(Elab *e, Binding *b, Binding **params,
     }
 }
 
+/* closure-stored-beyond-its-let-has-no-owner: a `let`-bound lambda that ends
+ * up in a struct which outlives the `let` has no owner -- the `let` may not
+ * free it (the struct still calls it), and the struct did not mint it.  When
+ * the struct is the lambda's ONLY destination, let it take the lambda over:
+ *
+ *     (let [cap (fn ...)          ;; binding i
+ *           h   (Holder cap 1)]   ;; binding i+1: the only mention of cap
+ *       (keep h))
+ *
+ * is then owned exactly as `(let [h (Holder (fn ...) 1)] (keep h))` is: `h`
+ * is the owner (its init is fresh), frees it if no copy outlives its scope,
+ * and hands it to the caller's binder when returned.  `cap`'s own free is off
+ * (Binding.fnfield_moved_into), so one party frees it, never two.
+ *
+ * Exactly that equivalence is what is checked:
+ *   - binding i is a lambda literal, binding i+1 a by-value constructor call
+ *     with `cap` in exactly one boxed closure field;
+ *   - nothing is evaluated between them that could perform: the
+ *     constructor's other arguments are names, literals or lambdas, so a
+ *     multi-shot resume cannot run the constructor twice over one lambda;
+ *   - every other closure field of the constructor is fresh, so the struct
+ *     really is the owner (else `cap` would have no owner at all);
+ *   - `cap` is named nowhere else in the `let` -- not called, captured,
+ *     rebound or `set!`;
+ *   - `cap` escapes anyway, by the more permissive walk (a `perform` is
+ *     not an escape on the CPS path): a struct that stays in the `let`
+ *     already lets `cap`'s own `let` free it (EscAlias), and that is left
+ *     alone. */
+typedef struct FnfieldPendingMove {
+    struct FnfieldPendingMove *next;
+    const Expr *let;
+    uint32_t    idx;
+} FnfieldPendingMove;
+
+static const Expr *fnfield_peel_ascribe(const Expr *x) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    return x;
+}
+static bool fnfield_move_pure_arg(const Expr *a) {
+    a = fnfield_peel_ascribe(a);
+    if (!a) return false;
+    switch (a->kind) {
+        case EX_VAR: case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+        case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_SYM_LIT: case EX_CLOSURE:
+            return true;
+        case EX_FN_TO_FAT:
+            return fnfield_move_pure_arg(a->as.fn_to_fat_.inner);
+        case EX_POLY_TO_FAT:
+            return fnfield_move_pure_arg(a->as.poly_to_fat_.inner);
+        default:
+            return false;
+    }
+}
+/* Every mention of `b`, a call of it included (`(b x)` carries it in the
+ * call's fn_binding, which the use count above leaves out on purpose). */
+typedef struct { const Binding *b; int n; } FnfieldMentionUd;
+static bool fnfield_mention_visit(const Expr *x, void *ud) {
+    FnfieldMentionUd *u = (FnfieldMentionUd *)ud;
+    if (x->kind == EX_CALL && x->as.call_.fn_binding == u->b) u->n++;
+    FnfieldUseUd uu = { u->b, 0 };
+    /* fnfield_use_visit counts vars, captures, set!, inline C and defers --
+     * for this node only, so ask it about the node and recurse here. */
+    switch (x->kind) {
+        case EX_VAR: case EX_CLOSURE: case EX_FN_DEF: case EX_DEFER:
+        case EX_INLINE_C: case EX_SET:
+            (void)fnfield_use_visit(x, &uu);
+            u->n += uu.n;
+            if (x->kind == EX_VAR || x->kind == EX_CLOSURE || x->kind == EX_FN_DEF)
+                return u->n > 1;
+            break;
+        default:
+            break;
+    }
+    if (u->n > 1) return true;
+    return cps_visit_children(x, fnfield_mention_visit, ud);
+}
+
+void elab_fnfield_note_moves(Elab *e, const Expr *let) {
+    if (!e || !e->arena || !let || let->kind != EX_LET || let->as.let_.n < 2) return;
+    for (uint32_t i = 0; i + 1 < let->as.let_.n; i++) {
+        const Binding *cb = let->as.let_.bindings[i].binding;
+        const Expr *ci = fnfield_peel_ascribe(let->as.let_.bindings[i].init);
+        const Expr *ni = fnfield_peel_ascribe(let->as.let_.bindings[i + 1].init);
+        if (!cb || !ci || ci->kind != EX_CLOSURE || cb->type.kind != TY_FN) continue;
+        if (!ni || ni->kind != EX_CALL || !ni->as.call_.ctor) continue;
+        bool names = false;
+        for (uint32_t a = 0; a < ni->as.call_.n_args; a++) {
+            const Expr *av = fnfield_peel_ascribe(ni->as.call_.args[a]);
+            if (av && av->kind == EX_VAR && av->as.var.binding == cb) names = true;
+        }
+        if (!names) continue;
+        FnfieldPendingMove *n =
+            (FnfieldPendingMove *)arena_alloc(e->arena, sizeof(FnfieldPendingMove));
+        n->let = let;
+        n->idx = i;
+        n->next = e->fnfield_pending_moves;
+        e->fnfield_pending_moves = n;
+    }
+}
+
+static void fnfield_decide_move(const FnfieldPendingMove *m) {
+    const Expr *let = m->let;
+    uint32_t i = m->idx;
+    Binding *cb = let->as.let_.bindings[i].binding;
+    const Binding *hb = let->as.let_.bindings[i + 1].binding;
+    const Expr *c = fnfield_peel_ascribe(let->as.let_.bindings[i + 1].init);
+    if (!cb || !hb || !c || cb->fnfield_moved_into) return;
+    const AdtDef *ad = elab_byval_drop_adt(hb->type);
+    const CtorDef *ctor = c->as.call_.ctor;
+    if (!ad || ad->ctors[0] != ctor || c->as.call_.n_args != ctor->n_fields ||
+        c->as.call_.fn_expr || c->as.call_.dict_arg)
+        return;
+    uint32_t at = UINT32_MAX;
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        const Expr *a = c->as.call_.args[fi];
+        const Expr *av = fnfield_peel_ascribe(a);
+        if (av && av->kind == EX_VAR && av->as.var.binding == cb) {
+            if (at != UINT32_MAX || !elab_field_is_boxed_fnfield(ctor, fi)) return;
+            at = fi;
+            continue;
+        }
+        if (!fnfield_move_pure_arg(a)) return;
+        if (elab_field_is_boxed_fnfield(ctor, fi) &&
+            !fnfield_closure_is_fresh(a, NULL, 0, NULL, NULL))
+            return;
+    }
+    if (at == UINT32_MAX) return;
+    /* `cap` named once in the whole `let` -- that argument. */
+    FnfieldMentionUd u = { cb, 0 };
+    for (uint32_t j = 0; j < let->as.let_.n && u.n <= 1; j++)
+        if (j != i) fnfield_mention_visit(let->as.let_.bindings[j].init, &u);
+    if (u.n <= 1) fnfield_mention_visit(let->as.let_.body, &u);
+    if (u.n != 1) return;
+    /* The more permissive of the two walks the closure's own `let` may use: a
+     * CPS `let` frees through the reap list, where a `perform` is not an
+     * escape (cps_closure_env_freeable).  Escaping even there, no `let` would
+     * free it. */
+    if (!closure_let_binding_escapes_reaped(let, i)) return;
+    cb->fnfield_moved_into = c;
+}
+
 /* fnfield-struct-binder-frees-borrowed-closure (forward references): the
  * answers above are read as each let and each defn is elaborated, so a caller
  * written before its callee saw "not fresh" -- the callee had no stamp yet --
@@ -821,6 +972,9 @@ void elab_fnfield_resolve_pending(Elab *e) {
             }
         }
     }
+    FnfieldPendingMove *mvs = e->fnfield_pending_moves;
+    e->fnfield_pending_moves = NULL;
+    for (FnfieldPendingMove *m = mvs; m; m = m->next) fnfield_decide_move(m);
     if (!lets && !fns) return;
     for (FnfieldPendingFn *f = fns; f; f = f->next) {
         f->b->returns_fresh_fnfield = true;
@@ -4081,6 +4235,7 @@ Expr *elab_let(Elab *e, const Form *call) {
     out->as.let_.n = n_binds;
     out->as.let_.body = body;
     any_let_move_drop_to_use(out);
+    elab_fnfield_note_moves(e, out);
     return out;
 }
 

@@ -2926,6 +2926,9 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
         fresh_pap = p && p->kind == EX_CLOSURE && init->kind == EX_LET;
     }
     if (init->kind != EX_CLOSURE && !fresh_call && !fresh_pap) return false;
+    /* closure-stored-beyond-its-let-has-no-owner: moved into the next
+     * binding's struct, which frees it. */
+    if (b->fnfield_moved_into) return false;
     /* letrec-mutual-recursion-between-capturing-closures: the members capture
      * one another, so each is "escaping" into a sibling's env by the walk
      * below, and neither box was ever freed (64 B a call of the report's

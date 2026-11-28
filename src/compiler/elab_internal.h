@@ -1028,6 +1028,7 @@ typedef struct Elab {
     struct FnfieldPendingLet *fnfield_pending_lets;
     struct FnfieldPendingFn  *fnfield_pending_fns;
     struct FnfieldPendingParams *fnfield_pending_params;
+    struct FnfieldPendingMove   *fnfield_pending_moves;
     uint64_t          borrow_clock;
     uint64_t         *borrow_loop_marks;
     uint32_t          n_borrow_loop_marks, cap_borrow_loop_marks;
@@ -2218,6 +2219,9 @@ void elab_fnfield_note_let(Elab *e, Binding *b, const Expr *init,
  * stamped once the body is elaborated and decided again at the end. */
 void elab_stamp_fnfield_param_mask(Elab *e, Binding *b, Binding **params,
                                    uint32_t n_params, const Expr *body);
+/* closure-stored-beyond-its-let-has-no-owner: note a `let` whose binding i is
+ * a lambda the next binding's constructor may take over. */
+void elab_fnfield_note_moves(Elab *e, const Expr *let);
 /* Decide every noted let and function again, now that no callee is a forward
  * reference; called once the whole program is elaborated. */
 void elab_fnfield_resolve_pending(Elab *e);

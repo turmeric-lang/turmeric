@@ -1,0 +1,29 @@
+;; closure-stored-beyond-its-let-has-no-owner: a `let`-bound lambda whose only
+;; destination is the struct built by the next binding is MOVED into it --
+;; owned exactly as if the lambda were written at that argument -- so the
+;; struct's last owner frees it: here `main`'s binders, after it came back
+;; through a function, directly, or as a ^copy struct.  The lambda's own `let`
+;; does not free it.  Leak-checked.
+(defstruct Holder [run : (fn [int] int)  tag : int])
+(defstruct ^copy C [run : (fn [int] int)  tag : int])
+(defn keep [h : Holder] : Holder h)
+(defn leak-out [k : int] : Holder
+  (let [cap (fn [x : int] : int (+ x k))
+        h   (Holder cap 1)]
+    (keep h)))
+(defn mk [k : int] : Holder
+  (let [cap (fn [x : int] : int (* x k))
+        h   (Holder cap 2)]
+    h))
+(defn mk-c [k : int] : C
+  (let [cap (fn [x : int] : int (- x k))
+        h   (C cap 3)]
+    h))
+(defn main [] : int
+  (let [a (leak-out 3)
+        b (mk 4)
+        c (mk-c 5)]
+    (println ((.run a) 10))
+    (println ((.run b) 10))
+    (println ((.run c) 10)))
+  0)

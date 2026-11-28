@@ -1,0 +1,37 @@
+;; closure-stored-beyond-its-let-has-no-owner: the move into a struct is
+;; refused when the lambda is used again, when another closure field of the
+;; struct is borrowed (`borrowed`: the struct would then free the caller's `g`
+;; too), or when something between the two could perform (`called`).  Those
+;; lambdas keep no owner and leak (see known-leak); a wrong move here is a
+;; double free, which still fails the leak-check gate.
+(defdata Ev (Tick int))
+(defn tn [e : Ev] : int (match e (Tick n) n))
+(defstruct P [run : (fn [Ev] int)  alt : (fn [Ev] int)])
+(defstruct Holder [run : (fn [int] int)  tag : int])
+(defn zero [x : int] : int 0)
+(def ^mut kept : Holder (Holder zero 0))
+(defn keep [h : Holder] : Holder h)
+(defn side [] : int 7)
+(defn twice [k : int] : Holder
+  (let [cap (fn [x : int] : int (+ x k))
+        h   (Holder cap 1)]
+    (println (cap 1))
+    (keep h)))
+(defn borrowed [k : int f : (fn [Ev] int)] : P
+  (let [cap (fn [e : Ev] : int (* (tn e) k))
+        h   (P cap f)]
+    h))
+(defn called [k : int] : Holder
+  (let [cap (fn [x : int] : int (- x k))
+        h   (Holder cap (side))]
+    (keep h)))
+(defn main [] : int
+  (let [a (twice 3)
+        g (fn [e : Ev] : int (+ (tn e) 100))
+        b (borrowed 4 g)
+        c (called 5)]
+    (println ((.run a) 10))
+    (println ((.run b) (Tick 10)))
+    (println ((.alt b) (Tick 10)))
+    (println ((.run c) 10)))
+  0)
