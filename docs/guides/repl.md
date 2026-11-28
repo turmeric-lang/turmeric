@@ -703,7 +703,7 @@ error: ffi: 'sh/add42' expects 1 arg, got 0
   attaches the spice (the notebook) leaves the export's own defn in place
   instead, and the spice's inline-C bodies refuse when it runs. plot's
   typed API is the case in point:
-  [plot-typed-api-has-no-ffi-shim](../reported/plot-typed-api-has-no-ffi-shim.md).
+  [plot-typed-api-has-no-ffi-shim](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/plot-typed-api-has-no-ffi-shim.md).
 - **A callback whose signature is not scalars, opaque handles and
   records** (an ADT, a `(Vec T)`, another function), or a C function
   pointer (`extern-c`'s typed kind), gets no shim the same way.
