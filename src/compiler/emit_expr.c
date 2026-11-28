@@ -3059,34 +3059,47 @@ void emit_let_mark_spawn_owned_one(const Expr *e, uint32_t i) {
         b->spawn_owns_env = true;
 }
 /* async-capturing-body-env-never-freed: may each spawn of this closure run a
- * COPY of its env box (Binding.spawn_copy_closure)?  Only when a byte copy is
- * a whole, independent env: every capture a plain number -- no pointer, so a
- * copy shares nothing with the original or with anything a scope frees (a
- * `^mut` cell is a pointer capture and is refused); no drop instance; no
- * inline C, which could hold an lvalue into the box. */
+ * COPY of its env box (Binding.spawn_copy_closure)?  When the env's drop
+ * glue frees the box and nothing else (closure_env_drop_frees_box_only: no
+ * rc, owned `^fat` or Drop-instance capture, no inline C naming a capture),
+ * a byte copy shares only what the original shares -- a struct capture is a
+ * copy in the box, a pointer or `any` capture is a word nobody's glue frees
+ * -- so each spawn may own its copy.  The one capture refused is a `^mut`
+ * cell: mut_cell_escapes frees the cell once every closure capturing it is
+ * freeable by its let, which this mark makes true while a spawned copy may
+ * still be reading the cell. */
 static bool closure_env_spawn_copyable(const struct Closure *c) {
     if (!c || !c->fn || c->n_captures == 0) return false;
     if (c->is_shift_receiver || c->is_effect_payload) return false;
-    if (expr_subtree_has_inline_c(c->fn->body)) return false;
-    uint32_t heap_caps = 0;
+    if (!closure_env_drop_frees_box_only(c)) return false;
     for (uint32_t i = 0; i < c->n_captures; i++) {
         const Binding *cap = c->captures[i];
         if (!cap) return false;
         if (cap->is_global) continue;
-        if (cap->is_fat || cap->is_mut || cap->is_mut_cell) return false;
-        if (c->capture_drop_insts && c->capture_drop_insts[i]) return false;
-        switch (cap->type.kind) {
-            case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_NIL:
-            case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
-            case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
-            case TY_FLOAT32: case TY_FLOAT64:
-                break;
-            default:
-                return false;
-        }
-        heap_caps++;
+        if (cap->is_mut || cap->is_mut_cell) return false;
     }
-    return heap_caps > 0;
+    return true;
+}
+
+/* The CPS translator's half of the mark below (cps_let_mark_spawn_owned):
+ * set binding `i`'s spawn_copy_closure when its env may be copied per spawn,
+ * keep it only when `freeable` -- that backend's own reap rule -- then holds,
+ * and say whether it was kept. */
+bool emit_let_try_spawn_copy(const Expr *e, uint32_t i,
+                             bool (*freeable)(const Expr *, uint32_t)) {
+    if (!e || e->kind != EX_LET || i >= e->as.let_.n || !freeable) return false;
+    Binding *b = e->as.let_.bindings[i].binding;
+    if (!b || b->spawn_owns_env || b->spawn_copy_closure) return false;
+    const Expr *init = e->as.let_.bindings[i].init;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init || init->kind != EX_CLOSURE) return false;
+    if (b->type.kind != TY_FN || !b->type.as.fn.boxed) return false;
+    const struct Closure *c = init->as.closure_.closure;
+    if (!closure_env_spawn_copyable(c)) return false;
+    if (freeable(e, i)) return false;
+    b->spawn_copy_closure = c;
+    if (!freeable(e, i)) { b->spawn_copy_closure = NULL; return false; }
+    return true;
 }
 
 static void let_mark_spawn_owned(const Expr *e) {

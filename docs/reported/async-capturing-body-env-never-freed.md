@@ -1,5 +1,23 @@
 # A capturing `async` body's closure env is never freed
 
+**Narrowed a ninth time 2026-11-28 (later the same day): any box-only env,
+and the CPS backend's let.** The per-spawn copy below no longer needs plain
+numbers: any env whose drop glue frees the box and nothing else
+(`closure_env_drop_frees_box_only` -- a struct capture is a copy in the box, a
+`cstr`, pointer or `any` capture a word no glue frees) is copied, except one
+capturing a `^mut` cell: `mut_cell_escapes` frees the cell once every closure
+capturing it is freeable by its let, which the mark makes true while a copy
+may still read the cell (`closure_env_spawn_copyable`,
+`src/compiler/emit_expr.c`). And a let the CPS backend lowers takes the same
+mark (`emit_let_try_spawn_copy`, asked by `cps_let_mark_spawn_owned` with
+that backend's own reap rule, `cps_closure_env_freeable`), which also covers
+a single unawaited spawn in a CPS let whose scope can capture a continuation:
+a resumed continuation re-runs the spawn on a copy of its own, and the reap
+runs after every resume the entry sees. `async-let-bound-body-env-copied-per-spawn`
+gained a struct capture, a `cstr` capture, and three performing functions;
+`async-let-bound-body-env-kept` gained a `^mut` cell spawned twice (both
+spawns must update the same cell).
+
 **Narrowed an eighth time 2026-11-28: a let-bound lambda spawned more than
 once, some spawn NOT awaited -- when its captures are plain numbers.**
 `(let [body (fn [] ...)] (+ (drive (async body)) (drive (async body))))`, and
@@ -172,17 +190,18 @@ settles. Pinned by `tests/fixtures/async-capturing-body-env-dropped`
 (leak-checked: inline, parking every turn, and 200 spawns in a loop -- 4848 B
 in 202 allocations before, 0 now).
 
-**What is left (2026-11-28):** a capture whose drop glue releases something
--- an owned `^fat` closure, a Drop instance -- under a result that may view a
-capture: the capture itself, a let-bound local or match binder, a
-constructor, or a call whose arguments name a capture, in tail position (an
-`rc` cannot be captured by an async body at all, TUR-E0010); a lambda bound to
-a local and spawned more than once with some spawn NOT awaited where it is
-written, when a capture is not a plain number (a pointer, a struct, a
-`cstr`, a `^mut` cell) or the let is one the CPS backend lowers; spawned once,
-unawaited, in a CPS-lowered let whose scope can capture a continuation; a
-local captured by another lambda that spawns it; an inline-C block in the
-body that names a capture.
+**What is left (2026-11-28, after the ninth narrowing):** a capture whose
+drop glue releases something -- an owned `^fat` closure, a Drop instance --
+under a result that may view a capture: the capture itself, a let-bound local
+or match binder, a constructor, or a call whose arguments name a capture, in
+tail position (an `rc` cannot be captured by an async body at all,
+TUR-E0010); a let-bound lambda spawned more than once with some spawn not
+awaited whose env is not box-only (a Drop or owned `^fat` capture: a copy
+would need the capture's own clone) or that captures a `^mut` cell (copies
+would need the cell refcounted); a local captured by another lambda that
+spawns it (`async-let-bound-body-env-kept`'s `captured`: the capture reads as
+an escape, and proving otherwise needs the capturing lambda's own lifetime);
+an inline-C block in the body that names a capture.
 
 **Narrowed 2026-11-06: a scalar result admits a capture whose drop releases
 something.** `async_spawn_owns_env` (`src/compiler/emit_expr.c`) takes a

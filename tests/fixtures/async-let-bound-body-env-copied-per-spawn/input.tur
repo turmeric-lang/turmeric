@@ -4,10 +4,10 @@
 ;; let exits.  No one spawn may own the box (the next spawn runs it) and the
 ;; let could not drop it, so it leaked (async-let-bound-body-env-kept).
 ;;
-;; When every capture is a plain number, a byte copy of the box is a whole,
-;; independent env: each spawn now runs a COPY of its own, owns it and drops
-;; it when its body settles, and the let drops the original at its scope
-;; exit (Binding.spawn_copy_closure).  Leak-checked, 100 turns of each:
+;; When the env's drop frees the box and nothing else, a byte copy of the box
+;; is a whole env: each spawn now runs a COPY of its own, owns it and drops it
+;; when its body settles, and the let drops the original at its scope exit
+;; (Binding.spawn_copy_closure).  Leak-checked, 100 turns of each:
 ;;
 ;;   twice    -- spawned twice in sequence, each driven
 ;;   in-while -- spawned from a `while` body
@@ -15,9 +15,16 @@
 ;;   held     -- two futures held at once before either is driven
 ;;   early    -- the let exits right after the spawn, the body still parked
 ;;   typed    -- a `bool` body (the typed spawn), spawned twice
+;;   strct    -- a struct capture (a copy in the box)
+;;   str      -- a `cstr` capture (a pointer no glue frees)
+;;   cps      -- the CPS backend's let (a performing function): a perform
+;;               before the closure, one between the two spawns, and a
+;;               single unawaited spawn whose scope performs after it
 ;;
-;; A local captured by another lambda that spawns it still keeps the box
-;; (async-let-bound-body-env-kept's `captured`).
+;; A local captured by another lambda that spawns it, and a closure that
+;; captures a `^mut` cell, still keep the box (async-let-bound-body-env-kept).
+(load "stdlib/cstr.tur")
+
 (defn cur-cell [fresh : bool] : ptr<void>
   ```c
   static void *g = NULL;
@@ -93,8 +100,43 @@
   (let [body (fn [] : bool (> k 3))]
     (+ (drive (async body)) (drive (async body)))))
 
+(defstruct P [a : int b : int])
+
+(defeffect Ask [] :int)
+
+(defn twice-cps [k : int] : int
+  (let [x    (perform (Ask))
+        body (fn [] : int (* k x))]
+    (+ (drive (async body)) (drive (async body)))))
+
+(defn perf-between [k : int] : int
+  (let [body (fn [] : int (+ k 1))]
+    (let [a (drive (async body))
+          y (perform (Ask))
+          c (drive (async body))]
+      (+ a (+ c y)))))
+
+(defn once-cps [k : int] : int
+  (let [body (fn [] : int (+ k 1))]
+    (let [a (drive (async body))
+          y (perform (Ask))]
+      (+ a y))))
+
+(defn cps [k : int] : int
+  (handle (+ (twice-cps k) (+ (perf-between k) (once-cps k))) (Ask [] r) (resume r 2)))
+
+(defn strct [k : int] : int
+  (let [p    (P k 1)
+        body (fn [] : int (+ (.a p) (.b p)))]
+    (+ (drive (async body)) (drive (async body)))))
+
+(defn str [s : cstr] : int
+  (let [body (fn [] : int (cstr-len s))]
+    (+ (drive (async body)) (drive (async body)))))
+
 (defn turn [k : int] : int
-  (+ (twice k) (+ (in-while k) (+ (mixed k) (+ (held k) (+ (early k) (typed k)))))))
+  (+ (twice k) (+ (in-while k) (+ (mixed k) (+ (held k) (+ (early k) (+ (typed k)
+     (+ (strct k) (+ (str "abc") (cps k))))))))))
 
 (defn turns [i : int acc : int] : int
   (if (= i 0) acc (turns (- i 1) (+ acc (turn i)))))
@@ -107,5 +149,8 @@
   (println (held 1))
   (println (early 2))
   (println (typed 5))
+  (println (strct 5))
+  (println (str "ab"))
+  (println (cps 5))
   (println (turns 100 0))
   (free-future (cur-cell false)))

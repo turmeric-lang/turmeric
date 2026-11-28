@@ -4274,6 +4274,8 @@ static const Type *fn_alias_sig(const Binding *b);   /* fwd */
  * all: no perform / handle / shift / resume, no colored call.  The spawn's
  * own `await` is fine: it resumes once, after the spawn. */
 void emit_let_mark_spawn_owned_one(const Expr *e, uint32_t i);   /* emit_expr.c */
+bool emit_let_try_spawn_copy(const Expr *e, uint32_t i,
+                             bool (*freeable)(const Expr *, uint32_t));   /* emit_expr.c */
 typedef struct { CpsB *b; bool bad; } SpawnScopeUd;
 static bool spawn_scope_visit(const Expr *c, void *ud);
 static void spawn_scope_walk(const Expr *x, SpawnScopeUd *u) {
@@ -4317,6 +4319,15 @@ static void cps_let_mark_spawn_owned(CpsB *b, const Expr *let) {
             spawn_scope_walk(let->as.let_.bindings[j].init, &u);
         spawn_scope_walk(let->as.let_.body, &u);
         if (!u.bad) emit_let_mark_spawn_owned_one(let, i);
+        /* async-capturing-body-env-never-freed: spawned in a way no one
+         * spawn may own (more than once, some spawn not awaited) -- each
+         * spawn runs a copy of the box when a byte copy is a whole env, and
+         * the reap below takes the original.  A continuation resumed twice
+         * re-runs a spawn on a copy of its own, and the reap is this
+         * backend's, which every resume the entry sees runs before. */
+        const Binding *lb = let->as.let_.bindings[i].binding;
+        if (lb && !lb->spawn_owns_env)
+            (void)emit_let_try_spawn_copy(let, i, cps_closure_env_freeable);
     }
 }
 
