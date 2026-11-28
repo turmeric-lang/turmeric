@@ -63,13 +63,22 @@
 >   Resolved separately as
 >   [carrier-fn-param-in-join-evicts-effectful-fn](carrier-fn-param-in-join-evicts-effectful-fn.md).
 >
-> What still leaks is not specific to joins:
+> What still leaks is not specific to joins, and is tracked elsewhere:
 >
 > - A caller keeps the closure it passed when the callee stores the parameter
->   in a struct or a `Some`, or hands it back in a result. The same holds for a
->   closure factory that captures the parameter, on `main`.
+>   in a struct
+>   ([let-bound-closure-shared-with-fnfield-struct-leaks](../reported/let-bound-closure-shared-with-fnfield-struct-leaks.md))
+>   or in a `let`-bound `Some`
+>   ([fn-param-at-type-variable-slot-boxed-per-call](../reported/fn-param-at-type-variable-slot-boxed-per-call.md)),
+>   or hands it back in a result
+>   ([closure-arg-captured-by-factory-result-kept](../reported/closure-arg-captured-by-factory-result-kept.md)).
+>   A closure factory that captures the parameter does the same on `main`.
 > - A function returning `(Some <fn value>)` leaks the payload, lambda or join
->   alike. That is the `sum-closure-payload-never-dropped` family.
+>   alike
+>   ([returned-sum-closure-payload-never-dropped](../reported/returned-sum-closure-payload-never-dropped.md)).
+> - A function returning a captureless lambda from a `let` / `do` tail leaks
+>   its shim box
+>   ([returned-captureless-lambda-shim-leaks-through-let-or-do](../reported/returned-captureless-lambda-shim-leaks-through-let-or-do.md)).
 >
 > Pinned by `fn-value-through-if-or-match` (every row below, both arms, plus
 > float, cstr, two-argument, nested, diverging and ADT-`match` shapes),

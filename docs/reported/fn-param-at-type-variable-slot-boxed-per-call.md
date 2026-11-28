@@ -78,6 +78,36 @@ Measured on `fn-param-through-type-variable-slot` under ASan: one 32 B box
 per conversion, 9 of them (288 B). The rest of its 400 B report is the
 fixture's own: a `(Vec ...)` it never frees.
 
+**Also left (found 2026-11-28): a `let`-bound sum over the parameter.** The
+sum-wrapped narrowing (`mark_sum_wrapped_boxes_stack`, `elab_call.c`) asks
+only about a scrutinee written in place: the constructor itself, or a call
+whose callee puts the parameter in a constructor. The same sum held in a
+local and matched is not asked:
+
+```turmeric
+(defn s1 [f : (fn [int] int)] : int
+  (let [o (Some f)]
+    (match o (Some h) (h 10) (None) 0)))
+(defn turn [k : int] : int
+  (let [cl (fn [x : int] : int (+ x k))]
+    (s1 cl)))
+(defn run [i : int n : int acc : int] : int
+  (if (= i n) acc (run (+ i 1) n (+ acc (turn i)))))
+(defn main [] : int (println (run 0 50 0)) 0)
+```
+
+It prints `1725`. Under ASan it leaks 2800 B in 100 allocations, on `main` at
+`5aebfd41` and on the fn-value join branch alike. Per call that is the 32 B
+box made in `s1`, plus the caller's 24 B closure env, reachable only through
+the box. With a join of the parameter in the `Some`, `(Some (if c f a2))`, the
+join's box is dropped (`sum_payload_join_owned`), but the caller's closure is
+still kept, 24 B a call: putting `f` in the `Some` reads as retaining it.
+Fix direction: the let-bound analogue of the sum-wrapped rule, as
+the let elaboration already runs the passthrough marking for
+`(let [f (ident d)] ...)`. Give the box the stack when the local is only
+matched, its arms only invoke their binders, and the local is not used
+otherwise.
+
 ## Fix directions
 
 - Ask the result instead of the callee, the way
