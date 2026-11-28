@@ -48,6 +48,7 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[carrier-fn-param-refused-by-constructor-fn-field](../archive/carrier-fn-param-refused-by-constructor-fn-field.md)~~ | medium (false rejection) | **RESOLVED 2026-11-28** (archived): the arg check boxes the carrier into the field's fat handle (EX_POLY_TO_FAT, typed from the `CtorDef`), and the mismatch message names both signatures. Was: `(defn mkp [f : (fn [int] int)] : H (H 1 f))` is TUR-E0001 "expected (fn [] : ?), got ptr<void>": a scalar-signature fn parameter rides the poly carrier (`ptr<void>`), and the EX_POLY_TO_FAT conversion (`elab_call.c:9707`) serves only a type-variable slot, not a boxed TY_FN field. `^fat f` or `make-struct` work around it |
+| [fn-value-through-if-or-match-loses-its-representation](fn-value-through-if-or-match-loses-its-representation.md) | high (miscompile: SIGSEGV) | An `if`/`match` choosing between fn values, at least one a parameter, loses the arms' representation (poly carrier, `^fat` box, thin pointer), which lives on the BINDING, not the type. `((if c f a2) 10)` with a plain `f` and a named defn, and any join of two `^fat` params, compile and segfault (cell-2 join at `elab_forms.c:5203` boxes only the carrier arm; a `^fat` TY_FN is not `boxed`, so the join is thin-dispatched or double-shimmed). Two plain params are refused as "not directly callable" / TUR-E0001, or are a cc error. A returned join is correct (`elab_normalize_fn_tail_leaves`). Reproduces on `main` |
 
 ## Follow-ups to #1486 (filed 2026-11-27)
 
