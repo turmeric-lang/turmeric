@@ -1,5 +1,14 @@
 # A fn-typed parameter passed into a type-variable slot mallocs a box per call that nothing frees
 
+**RESOLVED 2026-11-28 (archived).** Every shape this report could close is
+closed: the on-the-spot, let-bound and sum-wrapped boxes live on the stack
+(2026-11-06, below). The one left -- the STORED shape, a box `vec-push!` keeps
+-- is not a hole in this conversion but a container question: the `Vec` that
+holds the box owns nothing its elements own, and a compiled `Vec` local is
+not freed at scope exit at all. It moved, with the same question about a
+by-value recursive element's spine, to
+[container-elements-have-no-owner](../reported/container-elements-have-no-owner.md).
+
 **Severity: low (32 B per call, at a narrow shape).**
 
 **Narrowed a third time 2026-11-06: the sum-wrapped shape.** `(match (some d)
@@ -120,5 +129,5 @@ box stays malloc'd.
 Still open: the let-bound, sum-wrapped and stored shapes above. The stored
 one is a real owner question. The other two want the same result-side
 question asked one step further, as
-[sum-closure-payload-never-dropped](sum-closure-payload-never-dropped.md)
+[sum-closure-payload-never-dropped](../reported/sum-closure-payload-never-dropped.md)
 item 2 asks it of `unwrap`.

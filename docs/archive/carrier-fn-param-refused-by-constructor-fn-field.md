@@ -115,6 +115,6 @@ Mark the parameter `^fat`, or build the struct with `make-struct`.
 
 ## Related
 
-- [fn-param-at-type-variable-slot-boxed-per-call](../reported/fn-param-at-type-variable-slot-boxed-per-call.md):
+- [fn-param-at-type-variable-slot-boxed-per-call](fn-param-at-type-variable-slot-boxed-per-call.md):
   the same carrier parameter passed to a type-variable slot. That is where
   the conversion this report needs comes from.

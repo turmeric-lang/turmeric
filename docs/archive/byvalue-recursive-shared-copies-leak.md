@@ -1,8 +1,15 @@
 # A by-value recursive value held in a container never has its spine freed
 
+**RESOLVED 2026-11-28 (archived).** Item 1 is fixed (clone at the borrow,
+"Fixed 2026-11-28" at the end). Item 2 -- a container never frees its
+elements' spines -- is the container ownership model rather than a hole in
+this analysis, and it moved, with the same question about a fat-handle box a
+`vec-push!` keeps, to
+[container-elements-have-no-owner](../reported/container-elements-have-no-owner.md).
+
 **Severity: low.** Leaks only; every shape that used to be a use-after-free
 is closed. Filed while closing
-[byvalue-recursive-adt-boxes-are-never-freed](../archive/byvalue-recursive-adt-boxes-are-never-freed.md);
+[byvalue-recursive-adt-boxes-are-never-freed](byvalue-recursive-adt-boxes-are-never-freed.md);
 **narrowed 2026-09-28** and **2026-11-28** -- see "What was fixed" below.
 
 **Narrowed 2026-11-28: item 1, clone at the borrow.** A shared view handed to

@@ -92,7 +92,7 @@ engines: a top-level fn, an `IO` one, a lambda, a capturing closure, a
 Left as it was:
 
 - The box is the malloc'd one, 32 B per call, as at a type-variable slot
-  ([fn-param-at-type-variable-slot-boxed-per-call](../reported/fn-param-at-type-variable-slot-boxed-per-call.md)).
+  ([fn-param-at-type-variable-slot-boxed-per-call](fn-param-at-type-variable-slot-boxed-per-call.md)).
 - A callback that performs a user effect and is forwarded through a row
   variable does not compile ("this effect operation has no lowering here").
   That is not the bridge: the documented workaround, a `#fx{e}` row on the

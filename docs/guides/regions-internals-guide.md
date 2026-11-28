@@ -769,7 +769,7 @@ set by the note makes that pop retire
 
 Open:
 
-- [byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-recursive-shared-copies-leak.md)
+- [container-elements-have-no-owner](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/container-elements-have-no-owner.md)
   and [carrier-sum-option-boxes-have-no-owner](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/carrier-sum-option-boxes-have-no-owner.md)
   -- leak reports that name a region as the remedy for part of their residue.
 

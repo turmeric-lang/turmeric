@@ -580,8 +580,9 @@ repro and the measurements.
 - [effect-nontail-resume-copies-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-nontail-resume-copies-held-until-outer-entry.md)
   -- an effect resumed non-tail, or more than once, in a loop holds its
   continuation copies until the outermost call returns.
-- [byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-recursive-shared-copies-leak.md)
-  -- by-value recursive values copied out of a borrow or a container leak.
+- [container-elements-have-no-owner](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/container-elements-have-no-owner.md)
+  -- what a container's elements own (a recursive spine, a closure box) is
+  never freed.
 
 ## Related
 
