@@ -11239,7 +11239,8 @@ static void cps_direct_match_arm(EmitCtx *ctx, Buf *body, const Expr *arm_body, 
 static void emit_direct_match(CE *ce, const CTerm *t) {
     EmitCtx *ctx = ce->ctx;
     CpsDirectMatch dm = { ce, t, 0, false };
-    MatchTailCtx mt = { t->as.match.direct, cps_direct_match_arm, &dm };
+    MatchTailCtx mt = { t->as.match.direct, cps_direct_match_arm, &dm,
+                        t->as.match.fresh_scrut };
     const MatchTailCtx *save_mt = ctx->match_tail;
     uint32_t dd_sum = ctx->n_sum_pending, dd_any = ctx->n_any_pending,
              dd_vsp = ctx->n_vsp_pending;

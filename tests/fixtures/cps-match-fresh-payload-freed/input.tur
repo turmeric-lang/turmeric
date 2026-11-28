@@ -1,0 +1,25 @@
+;; cps-match-sum-payload-box-not-freed: a `match` on a fresh `(Result P E)`
+;; whose arm performs is lowered by the CPS backend, which hands the dispatch
+;; to the direct emitter under a binder for the scrutinee -- so the direct
+;; emitter's rule "a fresh producer's payload box is freed once the arm has
+;; copied its binders out" no longer saw the call, and the box leaked.  When
+;; the producer is a direct call (run once per match), the rule sees it now.
+;; Leak-checked.
+(defeffect Log [x : int] : nil)
+(defstruct ^copy P [raw : int handler : int])
+(defn parser-new [n : int h : int] : (Result P int)
+  (if (< n 0) (Err n) (Ok (P n h))))
+;; the same match in a function of its own, called several times
+(defn one [n : int] : int
+  (match (parser-new n 2)
+    (Ok p)  (do (perform (Log (.raw p))) (+ (.raw p) (.handler p)))
+    (Err e) e))
+(defn main [] : int
+  ;; the report's repro
+  (handle
+    (match (parser-new 100 7)
+      (Ok p)  (do (perform (Log (.raw p))) (println (+ (.raw p) (.handler p))))
+      (Err e) (println e))
+    (Log [x] k) (do (println x) (resume k nil)))
+  (println (handle (+ (one 1) (one 2) (one -3)) (Log [x] k) (resume k nil)))
+  0)

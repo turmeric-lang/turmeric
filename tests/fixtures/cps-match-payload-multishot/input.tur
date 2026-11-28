@@ -1,0 +1,37 @@
+;; cps-match-sum-payload-box-not-freed, multi-shot: a CPS `match` frees a fresh
+;; scrutinee's payload box only when its producer is a direct call.  A
+;; producer the CPS backend lowers can deliver the SAME box twice under a
+;; multi-shot resume (`early` builds it before it performs), so those boxes
+;; are left alone (see known-leak); freeing one would be a double free, which
+;; still fails the leak-check gate.  Compiled only: the interpreter cannot take
+;; these multi-shot continuations.
+(defeffect Pick [] : bool)
+(defeffect Log [x : int] : nil)
+(defstruct ^copy P [raw : int tag : int])
+;; a CPS producer: builds the box after a multi-shot perform
+(defn late [n : int] : (Result P int)
+  (if (perform (Pick)) (Ok (P n 1)) (Ok (P n 2))))
+;; a CPS producer: builds the box, then performs, then returns it
+(defn early [n : int] : (Result P int)
+  (let [r (Ok (P n 3))]
+    (do (perform (Log n)) r)))
+(defn direct-mk [n : int] : (Result P int) (if (< n 0) (Err n) (Ok (P n 4))))
+(defn use-late [n : int] : int
+  (match (late n) (Ok p) (+ (.raw p) (.tag p)) (Err e) e))
+(defn use-early [n : int] : int
+  (match (early n) (Ok p) (+ (.raw p) (.tag p)) (Err e) e))
+;; a direct producer, an arm that performs multi-shot
+(defn use-direct [n : int] : int
+  (match (direct-mk n)
+    (Ok p) (if (perform (Pick)) (.raw p) (.tag p))
+    (Err e) e))
+(defn main [] : int
+  (println (handle (use-late 10) (Pick [] ^multishot k) (+ (resume k true) (resume k false))))
+  (println (handle (use-early 20) (Log [x] k) (resume k nil)))
+  (println (handle (use-direct 30) (Pick [] ^multishot k) (+ (resume k true) (resume k false))))
+  (let [^mut i 0 ^mut acc 0]
+    (while (< i 3)
+      (set! acc (+ acc (handle (use-direct i) (Pick [] ^multishot k) (+ (resume k true) (resume k false)))))
+      (set! i (+ i 1)))
+    (println acc))
+  0)

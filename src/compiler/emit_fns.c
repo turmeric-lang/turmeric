@@ -2243,7 +2243,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
              * what this function returns if the match is not exhaustive. */
             if (!tco_match_tail_ok(e)) break;
             MatchTailEnv env = { fn_e, fd, result_kind, is_main };
-            MatchTailCtx mt = { e, emit_tail_match_arm, &env };
+            MatchTailCtx mt = { e, emit_tail_match_arm, &env, NULL };
             const MatchTailCtx *save = ctx->match_tail;
             ctx->match_tail = &mt;
             char *v = emit_value(ctx, body, e);

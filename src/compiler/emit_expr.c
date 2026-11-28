@@ -7363,8 +7363,15 @@ static void emit_boxed_struct_payload_free(EmitCtx *ctx, Buf *body,
  * the box is a binder of the WHOLE scrutinee -- an `is_var` arm.  Patterns are
  * flat, so that is the one case to refuse.  A call already stamped for the
  * drop-after-consumer free is someone else's to release. */
+/* cps-match-sum-payload-box-not-freed: the scrutinee to judge -- the CPS
+ * direct dispatch's original call when it names it through a binder. */
+static const Expr *match_owned_scrutinee(const EmitCtx *ctx, const Expr *m) {
+    if (ctx->match_tail && ctx->match_tail->node == m && ctx->match_tail->fresh_scrut)
+        return ctx->match_tail->fresh_scrut;
+    return m->as.match_.scrutinee;
+}
 static bool match_scrut_owns_vsp_box(EmitCtx *ctx, const Expr *m, Type scrut_ty) {
-    const Expr *s = m->as.match_.scrutinee;
+    const Expr *s = match_owned_scrutinee(ctx, m);
     while (s && s->kind == EX_ASCRIBE) s = s->as.ascribe_.inner;
     if (!s || s->kind != EX_CALL) return false;
     if (emit_call_drop_after_stamped(ctx, s)) return false;
@@ -7401,7 +7408,7 @@ static bool match_binder_is_word(const Binding *b) {
     }
 }
 static bool match_scrut_owns_carrier_cell(EmitCtx *ctx, const Expr *m, Type scrut_ty) {
-    const Expr *s = m->as.match_.scrutinee;
+    const Expr *s = match_owned_scrutinee(ctx, m);
     while (s && s->kind == EX_ASCRIBE) s = s->as.ascribe_.inner;
     if (!s || s->kind != EX_CALL) return false;
     if (emit_call_drop_after_stamped(ctx, s)) return false;

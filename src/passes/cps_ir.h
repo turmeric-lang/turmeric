@@ -288,6 +288,11 @@ struct CTerm {
         struct { CAtom scrut; const struct AdtDef *adt;
                  CMatchArm *arms; uint32_t n_arms;
                  const struct Expr *direct;
+                 /* cps-match-sum-payload-box-not-freed: a direct dispatch's
+                  * original scrutinee, when it is a call delegated to the
+                  * direct emitter (so it runs once per match, and its box is
+                  * fresh each time); NULL otherwise. */
+                 const struct Expr *fresh_scrut;
                  /* The direct dispatch's guards read these enclosing
                   * variables (each arm's own binders excluded): the capture
                   * and mutation walks visit them like the scrutinee. */

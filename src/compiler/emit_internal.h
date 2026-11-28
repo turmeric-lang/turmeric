@@ -957,6 +957,12 @@ typedef struct MatchTailCtx {
     const Expr *node;       /* the EX_MATCH whose arms are in tail position */
     void (*emit_arm)(EmitCtx *ctx, Buf *body, const Expr *arm_body, void *env);
     void *env;              /* emit_tail's own fn_e / fd / result_kind / is_main */
+    /* cps-match-sum-payload-box-not-freed: the CPS backend's direct-dispatch
+     * match names its scrutinee through a fresh binder; when that binder holds
+     * the result of a direct (delegated, never-resumed) call, this is the
+     * call, so the match's ownership rules can ask it whether the box is
+     * fresh.  NULL otherwise. */
+    const Expr *fresh_scrut;
 } MatchTailCtx;
 
 /* True when `e` is the match emit_tail is currently emitting, so an arm body
