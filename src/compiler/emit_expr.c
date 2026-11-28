@@ -2908,10 +2908,88 @@ static bool letrec_members_confined(const Expr *e) {
     return true;
 }
 
+/* fn-value-through-if-or-match-loses-its-representation: is every value an
+ * `if` / `match` (through `do` / `let` tails) can yield a fat box the join
+ * itself made, so the binding holding the join owns whichever one it got?
+ *
+ *   EX_POLY_TO_FAT  a fresh { shim, fn, env } box with a NULL drop header:
+ *                   TUR_CLOSURE_DROP frees the box and leaves the carrier's
+ *                   env (the caller's) alone;
+ *   EX_FN_TO_FAT    over a bare fn: a static box (no-op keep header) or a
+ *                   fresh { shim, fn } one -- dropped the same way;
+ *   EX_CLOSURE      a capturing lambda written in the arm, nobody else holds
+ *                   it; admitted under the env-safe-result gate a let-bound
+ *                   closure gets (closure_init_result_env_safe).
+ *
+ * A fat parameter, a let alias or a call result is somebody else's, and makes
+ * the answer no.  `any_box` reports that some arm was boxed at the join. */
+static bool fn_join_leaves_fresh(const Expr *x, const Binding *b, int depth,
+                                 bool *any_box) {
+    if (!x || depth > 64) return false;
+    if (x->type.kind == TY_NEVER || x->kind == EX_RETURN ||
+        x->kind == EX_PANIC || x->kind == EX_PANIC_WITH)
+        return true;   /* yields nothing */
+    switch (x->kind) {
+        case EX_ASCRIBE:
+            return fn_join_leaves_fresh(x->as.ascribe_.inner, b, depth + 1, any_box);
+        case EX_DO:
+            return x->as.do_.n > 0 &&
+                   fn_join_leaves_fresh(x->as.do_.items[x->as.do_.n - 1], b,
+                                        depth + 1, any_box);
+        case EX_LET:
+        case EX_LETREC:
+            return fn_join_leaves_fresh(x->as.let_.body, b, depth + 1, any_box);
+        case EX_IF:
+            return x->as.if_.else_or_null &&
+                   fn_join_leaves_fresh(x->as.if_.then_, b, depth + 1, any_box) &&
+                   fn_join_leaves_fresh(x->as.if_.else_or_null, b, depth + 1, any_box);
+        case EX_MATCH:
+            if (x->as.match_.n_arms == 0) return false;
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                if (!fn_join_leaves_fresh(x->as.match_.arms[i].body, b, depth + 1,
+                                          any_box))
+                    return false;
+            return true;
+        case EX_POLY_TO_FAT:
+            *any_box = true;
+            return true;
+        case EX_FN_TO_FAT:
+            if (x->as.fn_to_fat_.inner_is_fat) return false;
+            *any_box = true;
+            return true;
+        case EX_CLOSURE: {
+            const struct Closure *c = x->as.closure_.closure;
+            if (!c || c->is_shift_receiver || c->is_effect_payload) return false;
+            Binding fb = *b;
+            fb.type = x->type;
+            return closure_init_result_env_safe(&fb, x);
+        }
+        default:
+            return false;
+    }
+}
+
 static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     const Expr *init = e->as.let_.bindings[idx].init;
     const Binding *b = e->as.let_.bindings[idx].binding;
     if (!init || !b) return false;
+    {
+        const Expr *j = init;
+        while (j && j->kind == EX_ASCRIBE) j = j->as.ascribe_.inner;
+        bool any_box = false;
+        if (j && (j->kind == EX_IF || j->kind == EX_MATCH || j->kind == EX_DO ||
+                  j->kind == EX_LET) &&
+            e->kind == EX_LET && b->type.kind == TY_FN && b->type.as.fn.boxed &&
+            fn_join_leaves_fresh(j, b, 0, &any_box) && any_box) {
+            if (closure_binding_escapes(e->as.let_.body, b)) return false;
+            for (uint32_t k = 0; k < e->as.let_.n; k++) {
+                if (k == idx) continue;
+                if (closure_binding_escapes(e->as.let_.bindings[k].init, b))
+                    return false;
+            }
+            return true;
+        }
+    }
     const Expr *pinit = init;
     while (pinit && pinit->kind == EX_ASCRIBE) pinit = pinit->as.ascribe_.inner;
     /* closure-drop-glue S1c: a call to a fresh-closure-returning fn (the
@@ -4823,6 +4901,53 @@ static bool sum_closure_payload_walk_fmt(EmitCtx *ctx, Buf *body, const char *na
     return any;
 }
 
+/* fn-value-through-if-or-match-loses-its-representation: a `(Some <join>)`
+ * payload whose every value the join owns -- a carrier parameter's fresh
+ * EX_POLY_TO_FAT box or a defn's static box (both dropped by TUR_CLOSURE_DROP
+ * as themselves alone), or a capturing lambda written in the arm under the
+ * conditions the literal payload below meets.  At least one leaf must be a
+ * value (`any_leaf`). */
+static bool sum_payload_join_owned(const Expr *x, int depth, bool *any_leaf) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || depth > 64) return false;
+    if (x->type.kind == TY_NEVER || x->kind == EX_RETURN ||
+        x->kind == EX_PANIC || x->kind == EX_PANIC_WITH)
+        return true;
+    switch (x->kind) {
+        case EX_DO:
+            return x->as.do_.n > 0 &&
+                   sum_payload_join_owned(x->as.do_.items[x->as.do_.n - 1], depth + 1, any_leaf);
+        case EX_LET:
+            return sum_payload_join_owned(x->as.let_.body, depth + 1, any_leaf);
+        case EX_IF:
+            return x->as.if_.else_or_null &&
+                   sum_payload_join_owned(x->as.if_.then_, depth + 1, any_leaf) &&
+                   sum_payload_join_owned(x->as.if_.else_or_null, depth + 1, any_leaf);
+        case EX_MATCH:
+            if (x->as.match_.n_arms == 0) return false;
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                if (!sum_payload_join_owned(x->as.match_.arms[i].body, depth + 1, any_leaf))
+                    return false;
+            return true;
+        case EX_POLY_TO_FAT:
+            *any_leaf = true;
+            return true;
+        case EX_FN_TO_FAT:
+            *any_leaf = true;
+            return !x->as.fn_to_fat_.inner_is_fat;
+        case EX_CLOSURE: {
+            const struct Closure *c = x->as.closure_.closure;
+            *any_leaf = true;
+            return c && c->fn && !c->is_shift_receiver && !c->is_effect_payload &&
+                   (closure_env_drop_is_shallow(c) || closure_env_drop_frees_box_only(c) ||
+                    closure_env_drop_ok_under_scalar_result(c)) &&
+                   fndef_cannot_suspend(c->fn);
+        }
+        default:
+            return false;
+    }
+}
+
 static bool let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e,
                                              uint32_t i, const LetBindDecl *d) {
     const Binding *b = e->as.let_.bindings[i].binding;
@@ -4842,7 +4967,14 @@ static bool let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e,
      * releases a capture qualifies too when its result is a plain scalar --
      * every use here only invokes it, so nothing it returns can reference
      * the capture once the local is dropped. */
-    if (!a || a->kind != EX_CLOSURE ||
+    if (!a) return false;
+    if (a->kind == EX_IF || a->kind == EX_MATCH || a->kind == EX_DO || a->kind == EX_LET) {
+        /* a fn-value join as the payload (sum_payload_join_owned) */
+        bool any_leaf = false;
+        if (a->type.kind != TY_FN || !a->type.as.fn.boxed ||
+            !sum_payload_join_owned(a, 0, &any_leaf) || !any_leaf)
+            return false;
+    } else if (a->kind != EX_CLOSURE ||
         !(closure_env_drop_is_shallow(a->as.closure_.closure) ||
           closure_env_drop_frees_box_only(a->as.closure_.closure) ||
           closure_env_drop_ok_under_scalar_result(a->as.closure_.closure)) ||
@@ -20929,11 +21061,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "tur_poly_fn_t %s = %s;\n", pf, pv);
             char *box = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            if (e->as.poly_to_fat_.stack_ok && ensure_fatbox_keep(ctx)) {
+            if (e->as.poly_to_fat_.stack_ok && !ctx->in_cps_fn &&
+                ensure_fatbox_keep(ctx)) {
                 /* poly-to-fat-box-leaks-per-call: the ^fat sink was proven not
                  * to retain (or drop) this value, so the { shim, fn, env } box
                  * is dead the moment the call returns -- give it the call's
                  * own stack frame, exactly as the bare-fn shim above does.
+                 * Not in a DK body, where the frame can be gone before a
+                 * continuation reads the box (the reap below, as the bare-fn
+                 * shim does: fat-shim-arg-to-performing-callee-leaks).
                  * Header is the no-op keep glue, so a drop through any path is
                  * harmless rather than a free() of the stack. */
                 char *pbase = fresh_tmp(ctx);
@@ -20957,6 +21093,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "int64_t *%s = (int64_t *)((char *)%s + sizeof(void *));\n",
                            box, pbase);
+                /* A non-retaining sink in a DK body: dead once every
+                 * continuation of this entry has run -- the entry's reaper. */
+                if (e->as.poly_to_fat_.stack_ok && ctx->in_cps_fn) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "(void)__dk_reap_ptr((intptr_t)%s);\n", pbase);
+                }
                 free(pbase);
             }
             /* poly-to-fat-typed-shim-plan + multiarg fix: pick the slot-0 shim

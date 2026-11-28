@@ -3358,6 +3358,38 @@ bool elab_retype_nullary_ctor_arm(Expr *arm, Type joined) {
     return true;
 }
 
+/* fn-value-through-if-or-match-loses-its-representation: the `match` side of
+ * the `if` join's fn-value normalization (elab_fn_join_to_fat).  Arms that are
+ * function values of one signature in more than one representation are each
+ * converted to the fat box, and the match is typed `boxed`. */
+static void match_fn_join(Elab *e, MatchArm *arms, uint32_t n_arms, Type *result_type) {
+    if (!arms || n_arms < 2) return;
+    Expr ***slots = (Expr ***)malloc(n_arms * sizeof(Expr **));
+    if (!slots) return;
+    for (uint32_t i = 0; i < n_arms; i++) slots[i] = &arms[i].body;
+    Type jt;
+    if (elab_fn_join_to_fat(e, (Expr **const *)slots, n_arms, &jt))
+        *result_type = jt;
+    free(slots);
+}
+
+/* The arm check runs one arm at a time against the join so far, and a fn
+ * value's representation is not in its type: a carrier arm reads `ptr<void>`
+ * beside a defn's `(fn ...)`.  Ask the fn join whether the arms so far and
+ * this one are one function type in several representations. */
+static bool match_arms_fn_joinable(const MatchArm *arms, uint32_t n_done,
+                                   const Expr *body, Type *out) {
+    Expr **vals = (Expr **)malloc((n_done + 1) * sizeof(Expr *));
+    if (!vals) return false;
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < n_done; i++)
+        if (arms[i].body) vals[k++] = arms[i].body;
+    vals[k++] = (Expr *)body;
+    bool ok = k >= 2 && elab_fn_join_compatible(vals, k, out);
+    free(vals);
+    return ok;
+}
+
 static bool match_arm_type_compatible(Elab *e, Type a, Type b, Type *out) {
     if (type_eq(a, b)) {
         /* match-result-temp-typed-from-first-arm: two arms of one fn type, a
@@ -4357,6 +4389,7 @@ Expr *elab_match(Elab *e, const Form *call) {
         free(member_covered);
 
         if (result_type.kind == TY_UNKNOWN) result_type = TYPE_NIL;
+        match_fn_join(e, arms, n_arms, &result_type);
         Expr *out = expr_new(e->arena, EX_MATCH, result_type, call->span);
         out->as.match_.scrutinee = scrutinee;
         out->as.match_.arms = arms;
@@ -4656,6 +4689,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             arm_moves_apply(e, &lm, lit_arms, call->span);
             arm_moves_free(&lm);
             arm_linear_free(&ll);
+            match_fn_join(e, lit_arms, n_arms, &lit_result);
             Expr *out = expr_new(e->arena, EX_MATCH, lit_result, call->span);
             out->as.match_.scrutinee = scrutinee;
             out->as.match_.arms      = lit_arms;
@@ -4846,7 +4880,8 @@ Expr *elab_match(Elab *e, const Form *call) {
             Type _wc_unified;
             if (result_type.kind != TY_UNKNOWN
                     && body->type.kind != TY_UNKNOWN
-                    && !match_arm_type_compatible(e, result_type, body->type, &_wc_unified)) {
+                    && !match_arm_type_compatible(e, result_type, body->type, &_wc_unified)
+                    && !match_arms_fn_joinable(arms, ai, body, &_wc_unified)) {
                 diag_emit_with_code(DIAG_ERROR, body_form->span,
                                     TUR_E0001_TYPE_MISMATCH,
                                     "match: arm types are incompatible -- "
@@ -5356,7 +5391,8 @@ Expr *elab_match(Elab *e, const Form *call) {
             Type _arm_unified;
             if (result_type.kind != TY_UNKNOWN
                     && body->type.kind != TY_UNKNOWN
-                    && !match_arm_type_compatible(e, result_type, body->type, &_arm_unified)) {
+                    && !match_arm_type_compatible(e, result_type, body->type, &_arm_unified)
+                    && !match_arms_fn_joinable(arms, ai, body, &_arm_unified)) {
                 if (adt->has_result_types && arm_senv.n > 0) {
                     char skolem_note[256];
                     int pos = 0;
@@ -5518,6 +5554,7 @@ Expr *elab_match(Elab *e, const Form *call) {
     mark_sum_wrapped_boxes_stack(scrutinee, arms, n_arms);
     arm_moves_apply(e, &mm, arms, call->span);
     arm_moves_free(&mm);
+    match_fn_join(e, arms, n_arms, &result_type);
     Expr *out = expr_new(e->arena, EX_MATCH, result_type, call->span);
     out->as.match_.scrutinee = scrutinee;
     out->as.match_.arms = arms;

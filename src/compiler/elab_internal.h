@@ -1978,6 +1978,19 @@ bool binding_mark_moved(Binding *b, Span use_span);
 bool binding_mark_lent(Binding *b, Span use_span);
 /* elab_call.c: shim a thin fn value to the fat representation (see there). */
 Expr *elab_fn_value_to_fat(Elab *e, Expr *value);
+/* elab_call.c: fn-value-through-if-or-match-loses-its-representation -- when
+ * the arms at *slots[0..n) are function values of one signature in more than
+ * one representation (or all fat), convert each to the fat box and return the
+ * join's boxed fn type in *out_type.  False, with nothing changed, otherwise. */
+bool elab_fn_join_to_fat(Elab *e, Expr **const *slots, uint32_t n, Type *out_type);
+/* The one-arm case: a `do` / `let` whose value is a carrier fn parameter is
+ * boxed at its leaf and typed `boxed`, in place. */
+void elab_fn_tail_carrier_to_fat(Elab *e, Expr *x);
+/* Would elab_fn_join_to_fat accept these values?  Fills the boxed join type. */
+bool elab_fn_join_compatible(Expr *const *vals, uint32_t n, Type *out_type);
+/* Is `a` a fn join every value of which is a box the join made, so whoever
+ * holds the join owns the box it yields? */
+bool elab_fn_join_yields_own_box(const Expr *a);
 /* byvalue-recursive-adt-boxes-are-never-freed: the by-value recursive (or
  * `any`-fielded) ADT def behind `t` whose spine a local owns and frees at
  * scope exit, or NULL.  elab_forms.c; shared with the parameter-mask

@@ -87,6 +87,12 @@ Measured on `fn-param-through-type-variable-slot` under ASan: one 32 B box
 per conversion, 9 of them (288 B). The rest of its 400 B report is the
 fixture's own: a `(Vec ...)` it never frees.
 
+**Found after this report was resolved (2026-11-28):** a `let`-bound sum over
+the parameter, `(let [o (Some f)] (match o ...))`, still leaks the box and the
+caller's closure. The sum-wrapped rule asks only about a scrutinee written in
+place. Filed as
+[fn-param-boxed-into-local-holder-kept](../reported/fn-param-boxed-into-local-holder-kept.md).
+
 ## Fix directions
 
 - Ask the result instead of the callee, the way

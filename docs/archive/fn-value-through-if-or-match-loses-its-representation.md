@@ -1,5 +1,91 @@
 # A function value chosen by an `if` or `match` loses its representation
 
+> **RESOLVED 2026-11-28.** Fix direction 1. The join picks one representation
+> and converts every arm to it: `elab_fn_join_to_fat` (`src/compiler/elab_call.c`)
+> classifies each value leaf, through `do` / `let` tails and nested `if` /
+> `match`, as carrier, fat or thin, the way `elab_normalize_fn_tail_leaves`
+> does for a defn's result. When the arms share one signature and are not all
+> thin, it boxes a carrier leaf (EX_POLY_TO_FAT), gives a thin one a static
+> box (`elab_fn_value_to_fat`), and leaves a fat one as it is. It then types
+> the join `boxed`, re-typing each wrapper on the way out. The `if` join
+> (`elab_forms.c`) calls it, and so do the union, literal and ADT `match`
+> constructions (`match_fn_join`, `elab_structs.c`). It replaces the cell-2
+> branch for every arm it can classify. Cell 2 still covers a carrier beside
+> a non-variable fat-normalized arm, the recursion case it was written for.
+>
+> Three neighbours of the same seam are covered too:
+>
+> - A `do` / `let` yielding a carrier is boxed the same way
+>   (`elab_fn_tail_carrier_to_fat`). It was refused as a call head, as a let
+>   init, and as a constructor argument, and it was a cc error as a `(fn ...)`
+>   argument.
+> - An `if` whose other arm diverges, `(if c f (panic ...))`, is boxed too.
+> - The ADT `match`'s per-arm type check consults the join
+>   (`match_arms_fn_joinable`). It used to reject a carrier arm beside a defn
+>   as "arm types are incompatible".
+>
+> Arms whose signatures differ are still a type error. The message now names a
+> carrier arm by its declared type, not `ptr<void>`. Two carriers of different
+> signatures, which `type_eq` matched as `ptr<void>`, now get that error and
+> are no longer refused later as "not callable".
+>
+> Ownership (fix direction 2): no stack box. A join's arms are emitted inside
+> the `if`'s C block, so a stack box would die before the join is read.
+> Instead, every box the join makes is fresh (NULL header) or static (the
+> keep header), so whoever holds the join owns the box it yields:
+>
+> - **Call head, or a `let` that is only called:** `let_binding_env_freeable`
+>   (`emit_expr.c`, `fn_join_leaves_fresh`) drops the box at scope exit.
+> - **Argument to a non-retaining parameter:** hoisted to a `__borrowc` temp
+>   (`arg_is_freeable_closure_source`), then freed the same way.
+> - **Constructor fn field:** owned (`fnfield_closure_owned`).
+>
+> The escape walk (`binding_escapes_impl_x`, `emit_core.c`) learned that a
+> parameter boxed at, or passed through, a join escapes only if the `let`
+> binding holding the join does. Without that, every caller of such a function
+> kept the closure it passed (24 B a call).
+>
+> Also covered, in a follow-up the same day:
+>
+> - **A returned join.** A function whose result is a box it makes on every
+>   call is inferred `returns_fresh_closure`, as a closure factory is
+>   (`fn_join_returns_fresh_box`, `elab_fns.c`, run after stage 2). That covers
+>   a join, a `let` alias of one, and a bare carrier stage 2 boxed. A carrier
+>   parameter's bit goes in `fresh_closure_captured_params`, but only when the
+>   parameter appears nowhere else in the body. The caller then drops the box
+>   it was handed. This also stopped a leak `main` had for a function returning
+>   a captureless lambda (`let-tail-noncapturing-lambda-fat-temp`'s `direct`;
+>   its snapshot gained the drop).
+> - **A `(Some <join>)` local matched in place.** It is dropped like a lambda
+>   literal payload (`sum_payload_join_owned`, `emit_expr.c`). That includes
+>   a capturing lambda beside a defn, which leaked on `main` too.
+> - **A function that performs.** It was refused before, and on `main`.
+>   Resolved separately as
+>   [carrier-fn-param-in-join-evicts-effectful-fn](carrier-fn-param-in-join-evicts-effectful-fn.md).
+>
+> What still leaks is not specific to joins, and is tracked elsewhere:
+>
+> - A caller keeps the closure it passed when the callee boxes the parameter
+>   into a local holder: a `let`-bound `Some`, or a join stored in a struct
+>   field
+>   ([fn-param-boxed-into-local-holder-kept](../reported/fn-param-boxed-into-local-holder-kept.md)).
+>   The bare parameter stored in a struct was fixed on `main`
+>   ([let-bound-closure-shared-with-fnfield-struct-leaks](let-bound-closure-shared-with-fnfield-struct-leaks.md)).
+>   The same happens when the callee hands the closure back in a result
+>   ([closure-arg-captured-by-factory-result-kept](../reported/closure-arg-captured-by-factory-result-kept.md)).
+>   A closure factory that captures the parameter does the same on `main`.
+> - A function returning `(Some <fn value>)` leaks the payload, lambda or join
+>   alike
+>   ([returned-sum-closure-payload-never-dropped](../reported/returned-sum-closure-payload-never-dropped.md)).
+> - A function returning a captureless lambda from a `let` / `do` tail leaks
+>   its shim box
+>   ([returned-captureless-lambda-shim-leaks-through-let-or-do](../reported/returned-captureless-lambda-shim-leaks-through-let-or-do.md)).
+>
+> Pinned by `fn-value-through-if-or-match` (every row below, both arms, plus
+> float, cstr, two-argument, nested, diverging and ADT-`match` shapes),
+> `fn-value-join-box-reclaimed` (`requires.leak-check`, including the returned
+> and `Some` shapes) and `errors/fn-value-join-signature-mismatch`.
+
 **Severity: high (miscompile: several shapes compile and then segfault).** The
 other shapes are refused with a misleading diagnostic, or fail in the C
 compiler.

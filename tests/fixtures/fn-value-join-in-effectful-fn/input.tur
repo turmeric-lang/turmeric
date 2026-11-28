@@ -1,0 +1,65 @@
+;; carrier-fn-param-in-join-evicts-effectful-fn: a fn-value join inside a
+;; function that performs, so the CPS backend lowers it.
+;;
+;; A plain `(fn [int] int)` parameter is a two-word poly carrier.  The join
+;; boxes it (EX_POLY_TO_FAT), which the CPS signature gate used to read as a
+;; value use of the carrier -- the function was evicted and its `perform` had
+;; "no lowering here".  The box is one word: the gate admits it now, the
+;; translator delegates it like a field read, and a boxed fn crosses a join or
+;; a continuation slot as the pointer it is.  The boxes are reaped at the DK
+;; entry boundary.  requires.leak-check runs this under ASan.
+;;
+;; The two-`^fat` rows are in fn-value-join-in-effectful-fn-fat.
+(defmodule m
+  (defeffect Ask [] : int)
+  (defn a1 [x : int] : int (+ x 1))
+  (defn a2 [x : int] : int (* x 2))
+  (defn app [g : (fn [int] int)] : int (g 10))
+  ;; the call head, after a perform
+  (defn call-head [c : bool f : (fn [int] int)] : int
+    (+ (perform (Ask)) ((if c f a2) 10)))
+  ;; the box made, then a perform, then the call: the box rides the continuation
+  (defn before [c : bool f : (fn [int] int) g : (fn [int] int)] : int
+    (let [h (if c f g)
+          q (perform (Ask))]
+      (+ q (h 10))))
+  ;; a perform first: the carrier itself rides the continuation
+  (defn after [c : bool f : (fn [int] int)] : int
+    (let [q (perform (Ask))]
+      ((if c f a2) q)))
+  ;; a match, an argument, a do
+  (defn mt [n : int f : (fn [int] int)] : int
+    (+ (perform (Ask)) ((match n 0 f _ a2) 10)))
+  (defn pass [c : bool f : (fn [int] int)] : int
+    (+ (perform (Ask)) (app (if c f a2))))
+  (defn dy [f : (fn [int] int)] : int
+    (+ (perform (Ask)) ((do (println "dy") f) 10)))
+  ;; an arm that panics (lowered arm by arm, each box reaped where it is made)
+  (defn div [c : bool f : (fn [int] int)] : int
+    (+ (perform (Ask)) ((if c f (panic "unreachable")) 10)))
+  ;; a capturing lambda as an arm
+  (defn clo [c : bool k : int] : int
+    (let [h (if c (fn [x : int] : int (+ x k)) a2)
+          q (perform (Ask))]
+      (+ q (h 10))))
+  (defn main [] : int
+    (println (handle (call-head true a1) (Ask [] r) (resume r 1000)))     ; 1011
+    (println (handle (call-head false a1) (Ask [] r) (resume r 1000)))    ; 1020
+    (println (handle (before true a1 a2) (Ask [] r) (resume r 1000)))     ; 1011
+    (println (handle (before false a1 a2) (Ask [] r) (resume r 1000)))    ; 1020
+    (println (handle (after true a1) (Ask [] r) (resume r 7)))            ; 8
+    (println (handle (after false a1) (Ask [] r) (resume r 7)))           ; 14
+    (println (handle (mt 0 a1) (Ask [] r) (resume r 1000)))               ; 1011
+    (println (handle (mt 1 a1) (Ask [] r) (resume r 1000)))               ; 1020
+    (println (handle (pass true a1) (Ask [] r) (resume r 1000)))          ; 1011
+    (println (handle (pass false a1) (Ask [] r) (resume r 1000)))         ; 1020
+    (println (handle (dy a1) (Ask [] r) (resume r 1000)))                 ; dy 1011
+    (println (handle (div true a1) (Ask [] r) (resume r 1000)))           ; 1011
+    (println (handle (clo true 5) (Ask [] r) (resume r 1000)))            ; 1015
+    (println (handle (clo false 5) (Ask [] r) (resume r 1000)))           ; 1020
+    ;; multi-shot: the continuation holding the box (or the carrier) runs twice
+    (println (handle (before true a1 a2)
+               (Ask [] ^multishot r) (+ (resume r 1) (resume r 2))))      ; 25
+    (println (handle (after false a1)
+               (Ask [] ^multishot r) (+ (resume r 1) (resume r 2))))      ; 6
+    0))

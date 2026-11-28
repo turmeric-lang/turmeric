@@ -17,9 +17,10 @@
 > shape: `fn-param-stored-in-struct-field` is back at `main`'s 88 B.
 >
 > Not covered: a carrier value that is not a variable, such as
-> `(H 1 (if c f g))`. The `if` is typed `ptr<void>` and is still refused.
-> That gap is wider than this shape, and some of it segfaults. It is open as
-> [fn-value-through-if-or-match-loses-its-representation](../reported/fn-value-through-if-or-match-loses-its-representation.md).
+> `(H 1 (if c f g))`. The `if` was typed `ptr<void>` and was still refused
+> (since fixed, the same day).
+> That gap is wider than this shape, and some of it segfaulted. It was filed as
+> [fn-value-through-if-or-match-loses-its-representation](fn-value-through-if-or-match-loses-its-representation.md).
 > Pinned by `carrier-fn-param-in-ctor-fn-field` and
 > `errors/carrier-fn-param-ctor-field-sig-mismatch`.
 
