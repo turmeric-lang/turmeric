@@ -134,6 +134,8 @@ must each be consumed, and a `match` hands the value inside back:
 ```
 
 ```sweet-exp
+defn try-open [path : cstr] : (Result FileHandle cstr) ...
+
 (match try-open("data.txt")
   (Ok fh) (close-file fh)
   (Err msg) (println msg))
