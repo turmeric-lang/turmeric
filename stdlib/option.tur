@@ -59,7 +59,8 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn some? [A] [^borrow o : (Option A)] : bool (match o (Some _) true (None) false))
+(defn some? [A] [^borrow o : (Option A)] : bool
+  (match o (Some _) true (None) false))
 ;;; none? -- check whether an Option[A] is empty.
 ;;;
 ;;; The complement of `some?`. It existed in the compiler's pure-builtin list
@@ -83,7 +84,8 @@
 ;;;
 ;;; Since: 2026-08-20
 
-(defn none? [A] [^borrow o : (Option A)] : bool (match o (Some _) false (None) true))
+(defn none? [A] [^borrow o : (Option A)] : bool
+  (match o (Some _) false (None) true))
 ;;; unwrap -- extract the value from a typed Option[A].
 ;;;
 ;;; Parameters:

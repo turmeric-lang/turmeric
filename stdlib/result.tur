@@ -76,7 +76,8 @@
 ;;; monomorph flows BY VALUE an `:int` parameter is a straddle the caller has to
 ;;; spill across rather than a harmless erasure.  A match body specializes per
 ;;; monomorph and still accepts a carrier value through the generic base.
-(defn ok? [A B] [^borrow r : (Result A B)] : bool (match r (Ok _) true (Err _) false))
+(defn ok? [A B] [^borrow r : (Result A B)] : bool
+  (match r (Ok _) true (Err _) false))
 ;;; err? -- check whether a Result[A B] is err.
 ;;;
 ;;; Parameters:
@@ -91,7 +92,8 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn err? [A B] [^borrow r : (Result A B)] : bool (match r (Ok _) false (Err _) true))
+(defn err? [A B] [^borrow r : (Result A B)] : bool
+  (match r (Ok _) false (Err _) true))
 ;;; ok-val -- extract the ok value from a typed Result[A B].
 ;;;
 ;;; Parameters:
