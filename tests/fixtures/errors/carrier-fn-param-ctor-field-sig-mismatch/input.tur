@@ -1,0 +1,7 @@
+;; carrier-fn-param-refused-by-constructor-fn-field: a parameter whose
+;; signature does not match the field is still refused, and the message names
+;; both function types -- it used to read "expected (fn [] : ?), got
+;; ptr<void>".
+(defstruct H [raw : int handler : (fn [int] int)])
+(defn mk [f : (fn [int] float)] : H (H 1 f))
+(defn main [] : int 0)

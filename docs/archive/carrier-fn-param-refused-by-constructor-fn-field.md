@@ -1,5 +1,26 @@
 # A function parameter with a scalar signature cannot be stored in a closure field
 
+> **RESOLVED 2026-11-28.** The argument check in `elab_call_fn_inner`
+> (`src/compiler/elab_call.c`) now boxes a poly-carrier fn parameter, or a
+> `let` alias of one, handed to a constructor's boxed `(fn ...)` field. It
+> builds the same EX_POLY_TO_FAT the constructor post-pass builds for
+> `make-struct`, typed with the field's declared signature from its `CtorDef`
+> (a constructor binding has no `arg_full_types`), and only when the
+> signatures match (`fn_sig_kinds_match`). A mismatch is still TUR-E0001, and
+> the message now names both types:
+> `expected (fn [int] : int), got (fn [int] : float)`.
+>
+> Ownership (fix direction 2): `fnfield_closure_owned` (`elab_forms.c`) counts
+> an EX_POLY_TO_FAT as owned. The box is fresh and has a NULL drop header, so
+> dropping it frees the box and leaves the caller's closure alone. That also
+> stopped a leak the parent fix had added to `make-struct`'s spelling of this
+> shape: `fn-param-stored-in-struct-field` is back at `main`'s 88 B.
+>
+> Not covered: a carrier value that is not a variable, such as
+> `(H 1 (if c f g))`. The `if` is typed `ptr<void>` and is still refused.
+> Pinned by `carrier-fn-param-in-ctor-fn-field` and
+> `errors/carrier-fn-param-ctor-field-sig-mismatch`.
+
 **Severity: medium (false rejection, misleading diagnostic).** A function
 parameter whose type has only scalar arguments and results, such as
 `(fn [int] int)`, cannot be passed to a struct constructor's closure field. The
@@ -14,7 +35,7 @@ The same parameter is accepted when it is passed to another function's
 `(fn [int] int)` parameter. A constructor function that takes the closure to
 store is an ordinary shape, so this is easy to hit. Found 2026-11-28 while
 writing fixtures for
-[fnfield-struct-binder-frees-borrowed-closure](../archive/fnfield-struct-binder-frees-borrowed-closure.md).
+[fnfield-struct-binder-frees-borrowed-closure](fnfield-struct-binder-frees-borrowed-closure.md).
 Reproduces on `main` at `318aaaf2`, before that change.
 
 ## Repro
@@ -92,6 +113,6 @@ Mark the parameter `^fat`, or build the struct with `make-struct`.
 
 ## Related
 
-- [fn-param-at-type-variable-slot-boxed-per-call](fn-param-at-type-variable-slot-boxed-per-call.md):
+- [fn-param-at-type-variable-slot-boxed-per-call](../reported/fn-param-at-type-variable-slot-boxed-per-call.md):
   the same carrier parameter passed to a type-variable slot. That is where
   the conversion this report needs comes from.

@@ -448,6 +448,14 @@ static const Expr *fnfield_peel(const Expr *a) {
 /* A closure value stored in a boxed fn-field: does the struct take it over? */
 static bool fnfield_closure_owned(Elab *e, const Expr *a, Binding *taker,
                                   int depth) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    /* carrier-fn-param-refused-by-constructor-fn-field: a poly-carrier fn
+     * parameter stored in a field is boxed fresh here, { shim, fn, env } with
+     * a NULL drop header, so dropping it frees the box and never the env it
+     * points at -- the caller's closure is left alone.  The struct owns the
+     * box, whatever the carrier came from.  (A stack_ok box carries the
+     * no-op keep header, so its drop is harmless as well.) */
+    if (a && a->kind == EX_POLY_TO_FAT) return true;
     a = fnfield_peel(a);
     if (!a || depth > 32) return false;
     switch (a->kind) {

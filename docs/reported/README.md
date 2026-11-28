@@ -47,7 +47,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [carrier-fn-param-refused-by-constructor-fn-field](carrier-fn-param-refused-by-constructor-fn-field.md) | medium (false rejection) | `(defn mkp [f : (fn [int] int)] : H (H 1 f))` is TUR-E0001 "expected (fn [] : ?), got ptr<void>": a scalar-signature fn parameter rides the poly carrier (`ptr<void>`), and the EX_POLY_TO_FAT conversion (`elab_call.c:9707`) serves only a type-variable slot, not a boxed TY_FN field. `^fat f` or `make-struct` work around it |
+| ~~[carrier-fn-param-refused-by-constructor-fn-field](../archive/carrier-fn-param-refused-by-constructor-fn-field.md)~~ | medium (false rejection) | **RESOLVED 2026-11-28** (archived): the arg check boxes the carrier into the field's fat handle (EX_POLY_TO_FAT, typed from the `CtorDef`), and the mismatch message names both signatures. Was: `(defn mkp [f : (fn [int] int)] : H (H 1 f))` is TUR-E0001 "expected (fn [] : ?), got ptr<void>": a scalar-signature fn parameter rides the poly carrier (`ptr<void>`), and the EX_POLY_TO_FAT conversion (`elab_call.c:9707`) serves only a type-variable slot, not a boxed TY_FN field. `^fat f` or `make-struct` work around it |
 
 ## Follow-ups to #1486 (filed 2026-11-27)
 
