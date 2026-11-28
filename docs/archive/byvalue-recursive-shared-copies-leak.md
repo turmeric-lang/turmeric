@@ -123,10 +123,15 @@ let-init machinery, so the clone node only ever names a plain local.
   placeholder signature (its parameter kinds read `int`) and no inferred
   mask, so the argument is recorded (`Elab.pending_spine_clones`) and judged
   after Pass 2 (`elab_resolve_pending_spine_clones`). Its copy still keeps the
-  callee's parameter owned; but the borrowing caller's OWN confinement was
-  decided while that hand-off still read as an escape, so the view's owner
-  keeps leaking in that one shape -- the forward-reference limit the
-  elaborator's ADT masks already have.
+  callee's parameter owned. Later the same day Pass 2 began elaborating a
+  defn with a by-value recursive ADT parameter before its callers, as it does
+  a generic one (`fgo_ann_is_rec_adt`, `src/compiler/elab_toplevel.c`), so a
+  forward callee is inferred by the time its caller is elaborated -- which
+  also fixed an owned local LENT to a forward callee (it was moved, and
+  nobody freed it) and a borrow handed to one (an escape);
+  `tests/fixtures/byval-recursive-adt-forward-callee-lent`. What a cycle of
+  such functions cannot be ordered around is
+  [byval-adt-lend-across-mutual-recursion](../reported/byval-adt-lend-across-mutual-recursion.md).
 - **Found on the way.** A `^borrow` handed to a result-alias parameter
   (`resalias_param_mask`) whose call returns a non-pointer scalar read as an
   escape outside a print: `(+ acc (via-borrow ys))` kept `ys`'s spine. Such a

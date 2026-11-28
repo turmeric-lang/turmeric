@@ -2464,6 +2464,45 @@ static bool fgo_ann_is_fn_type(const Elab *e, const Form *a) {
            a->as.list.items[0]->as.sym == e->sym_fn;
 }
 
+/* byval-adt-masks-blind-to-forward-callees: the by-value recursive ADT
+ * names of the statement list being ordered -- each `(defdata Name ...)` whose
+ * constructors mention `Name` -- set by fwd_gen_order_init for
+ * fgo_defn_name.  A parameter of such a type has a non-retaining /
+ * result-alias mask its forward decl cannot carry: the body infers it. */
+static const Symbol **g_fgo_rec_adts;
+static uint32_t       g_fgo_n_rec_adts;
+
+static bool fgo_form_mentions_sym(const Form *f, const Symbol *s, int depth) {
+    if (!f || depth > 16) return false;
+    if (f->tag == F_SYM || f->tag == F_KEYWORD) return f->as.sym == s;
+    switch (f->tag) {
+        case F_LIST: case F_VEC: case F_TYPE_ANN:
+            for (uint32_t k = 0; k < f->as.list.len; k++)
+                if (fgo_form_mentions_sym(f->as.list.items[k], s, depth + 1)) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
+/* Is the parameter annotation `a` a by-value recursive ADT -- one this list
+ * defines (g_fgo_rec_adts), or one already registered (an imported module's)? */
+static bool fgo_ann_is_rec_adt(const Elab *e, const Form *a) {
+    if (a->tag == F_TYPE_ANN && a->as.list.len >= 1) a = a->as.list.items[0];
+    if (a->tag != F_SYM && a->tag != F_KEYWORD) return false;
+    const Symbol *s = a->as.sym;
+    for (uint32_t i = 0; i < g_fgo_n_rec_adts; i++)
+        if (g_fgo_rec_adts[i] == s) return true;
+    for (uint32_t i = 0; i < e->n_adt_defs; i++) {
+        const AdtDef *d = e->adt_defs[i];
+        if (!d || !d->name || strcmp(d->name, s->name) != 0) continue;
+        Type t = type_from_kind(TY_ADT);
+        t.as.adt_.def = (AdtDef *)d;
+        if (elab_byval_localowned_adt(t)) return true;
+    }
+    return false;
+}
+
 /* forward-call-to-unannotated-return-typed-int: does the defn whose params
  * vector is item `pi` leave its return type to inference?  Its pass-1 forward
  * decl then returns the `int` placeholder, so a caller elaborated before the
@@ -2536,7 +2575,7 @@ static const Symbol *fgo_defn_name(const Elab *e, const Form *f, bool *lossy) {
         for (uint32_t pi = 0; pi < pv->as.list.len && !*lossy; pi++) {
             const Form *p = pv->as.list.items[pi];
             if ((p->tag == F_TYPE_ANN || p->tag == F_KEYWORD) &&
-                fgo_ann_is_fn_type(e, p))
+                (fgo_ann_is_fn_type(e, p) || fgo_ann_is_rec_adt(e, p)))
                 *lossy = true;
         }
         if (!*lossy && fgo_return_unannotated(e, f, k + 1))
@@ -2579,6 +2618,25 @@ void fwd_gen_order_init(FwdGenOrder *o, const Elab *e, Form *const *forms,
     memset(o, 0, sizeof *o);
     o->n = n;
     uint32_t n_defn = 0, n_lossy = 0;
+    /* byval-adt-masks-blind-to-forward-callees: a defn with a by-value
+     * recursive ADT parameter is ordered like a lossy one -- a caller
+     * elaborated before it reads its non-retaining / result-alias mask as 0,
+     * so an owned local it lends is MOVED (the callee then lends it too, and
+     * nobody frees it) and a borrow it hands on reads as an escape. */
+    g_fgo_n_rec_adts = 0;
+    g_fgo_rec_adts = n ? (const Symbol **)calloc(n, sizeof *g_fgo_rec_adts) : NULL;
+    for (uint32_t i = 0; i < n && g_fgo_rec_adts; i++) {
+        const Form *f = forms[i];
+        if (!f || f->tag != F_LIST || f->as.list.len < 3) continue;
+        const Form *h = f->as.list.items[0];
+        const Form *nm = f->as.list.items[1];
+        if (h->tag != F_SYM || h->as.sym != e->sym_defdata || nm->tag != F_SYM) continue;
+        for (uint32_t k = 2; k < f->as.list.len; k++)
+            if (fgo_form_mentions_sym(f->as.list.items[k], nm->as.sym, 0)) {
+                g_fgo_rec_adts[g_fgo_n_rec_adts++] = nm->as.sym;
+                break;
+            }
+    }
     for (uint32_t i = 0; i < n; i++) {
         bool g;
         if (!fgo_defn_name(e, forms[i], &g)) continue;
@@ -2587,7 +2645,12 @@ void fwd_gen_order_init(FwdGenOrder *o, const Elab *e, Form *const *forms,
             !elab_file_is_stdlib(forms[i]->span.file_id))
             n_lossy++;
     }
-    if (n_lossy == 0) return;
+    if (n_lossy == 0) {
+        free(g_fgo_rec_adts);
+        g_fgo_rec_adts = NULL;
+        g_fgo_n_rec_adts = 0;
+        return;
+    }
     o->name   = (const Symbol **)calloc(n, sizeof *o->name);
     o->state  = (uint8_t *)calloc(n, sizeof *o->state);
     o->primed = (bool *)calloc(n, sizeof *o->primed);
@@ -2615,6 +2678,9 @@ void fwd_gen_order_init(FwdGenOrder *o, const Elab *e, Form *const *forms,
             o->counts[k] = 1;
         }
     }
+    free(g_fgo_rec_adts);
+    g_fgo_rec_adts = NULL;
+    g_fgo_n_rec_adts = 0;
 }
 
 /* Does `f` bind `s` in a vector -- a parameter, a let or loop binding? */
