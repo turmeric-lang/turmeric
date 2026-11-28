@@ -116,6 +116,7 @@ static int count_uses(const Expr *e, const Binding *b) {
         case EX_DEREF:    return count_uses(e->as.deref_.expr, b);
         case EX_RC_OF:    return count_uses(e->as.rc_of_.expr, b);
         case EX_RC_CLONE: return count_uses(e->as.rc_clone_.expr, b);
+        case EX_BYVAL_CLONE: return count_uses(e->as.byval_clone_.expr, b);
         case EX_RC_DROP:  return count_uses(e->as.rc_drop_.expr, b);
         case EX_RC_PTR:   return count_uses(e->as.rc_ptr_.expr, b);
         case EX_RC_COUNT: return count_uses(e->as.rc_count_.expr, b);
@@ -248,6 +249,7 @@ static bool has_barrier(const Expr *e) {
         case EX_DEREF:         return has_barrier(e->as.deref_.expr);
         case EX_RC_OF:         return has_barrier(e->as.rc_of_.expr);
         case EX_RC_CLONE:      return has_barrier(e->as.rc_clone_.expr);
+        case EX_BYVAL_CLONE:   return has_barrier(e->as.byval_clone_.expr);
         case EX_RC_DROP:       return has_barrier(e->as.rc_drop_.expr);
         case EX_RC_PTR:        return has_barrier(e->as.rc_ptr_.expr);
         case EX_RC_FROM_REF:   return has_barrier(e->as.rc_from_ref_.expr);
@@ -523,6 +525,7 @@ static void analyze_expr(Expr *e) {
         case EX_DEREF:         analyze_expr(e->as.deref_.expr);         return;
         case EX_RC_OF:         analyze_expr(e->as.rc_of_.expr);         return;
         case EX_RC_CLONE:      analyze_expr(e->as.rc_clone_.expr);      return;
+        case EX_BYVAL_CLONE:   analyze_expr(e->as.byval_clone_.expr);   return;
         case EX_RC_DROP:       analyze_expr(e->as.rc_drop_.expr);       return;
         case EX_RC_PTR:        analyze_expr(e->as.rc_ptr_.expr);        return;
         case EX_RC_COUNT:      analyze_expr(e->as.rc_count_.expr);      return;

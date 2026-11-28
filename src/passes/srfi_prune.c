@@ -149,6 +149,7 @@ static bool init_has_no_effect(const Expr *e) {
         case EX_UNION_INJECT: return init_has_no_effect(e->as.union_inject_.value);
         case EX_FN_TO_FAT:    return init_has_no_effect(e->as.fn_to_fat_.inner);
         case EX_POLY_TO_FAT:  return init_has_no_effect(e->as.poly_to_fat_.inner);
+        case EX_BYVAL_CLONE:  return init_has_no_effect(e->as.byval_clone_.expr);
         case EX_POLY_WRAP:    return init_has_no_effect(e->as.poly_wrap_.inner);
         case EX_CAST:         return init_has_no_effect(e->as.cast_.expr);
         case EX_REINTERPRET:  return init_has_no_effect(e->as.reinterpret_.expr);
@@ -268,6 +269,7 @@ static bool alloc_only(Purity *pu, const Expr *e) {
         case EX_UNION_INJECT: return alloc_only(pu, e->as.union_inject_.value);
         case EX_FN_TO_FAT:    return alloc_only(pu, e->as.fn_to_fat_.inner);
         case EX_POLY_TO_FAT:  return alloc_only(pu, e->as.poly_to_fat_.inner);
+        case EX_BYVAL_CLONE:  return alloc_only(pu, e->as.byval_clone_.expr);
         case EX_POLY_WRAP:    return alloc_only(pu, e->as.poly_wrap_.inner);
         case EX_CAST:         return alloc_only(pu, e->as.cast_.expr);
         case EX_REINTERPRET:  return alloc_only(pu, e->as.reinterpret_.expr);
@@ -446,6 +448,7 @@ static void visit(Pr *p, const Expr *e) {
             return;
         case EX_FN_TO_FAT:   push(p, e->as.fn_to_fat_.inner);   return;
         case EX_POLY_TO_FAT: push(p, e->as.poly_to_fat_.inner); return;
+        case EX_BYVAL_CLONE: push(p, e->as.byval_clone_.expr); return;
 
         /* --- binding and sequencing ------------------------------------ */
         case EX_LET:

@@ -756,6 +756,8 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             return borrow_check_expr_recursive(ctx, e->as.fn_to_fat_.inner);
         case EX_POLY_TO_FAT:
             return borrow_check_expr_recursive(ctx, e->as.poly_to_fat_.inner);
+        case EX_BYVAL_CLONE:
+            return borrow_check_expr_recursive(ctx, e->as.byval_clone_.expr);
         case EX_ASCRIBE:
             return borrow_check_expr_recursive(ctx, e->as.ascribe_.inner);
         /* Phase HRT2: existential pack/open */

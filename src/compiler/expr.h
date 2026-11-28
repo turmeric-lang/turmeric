@@ -1131,6 +1131,12 @@ typedef enum ExprKind {
     EX_FN_TO_FAT,      /* A#1: auto-shim a bare fn into a fat closure for a ^fat param */
     EX_POLY_TO_FAT,    /* SC7: convert a tur_poly_fn_t (typeclass-method closure) into a fat-closure handle for a ^fat param */
     EX_ASCRIBE,        /* (:: expr type) — inline type ascription; erased at codegen */
+    /* byvalue-recursive-shared-copies-leak: a deep copy of a by-value recursive
+     * ADT's spine (`clone_localowned_<T>`), inserted by the elaborator where a
+     * SHARED VIEW -- a ^borrow, a global, a container element, a binder of one
+     * -- is handed to a parameter that consumes it.  The copy is a fresh owner,
+     * so the callee may discharge it and the view's real owner keeps its own. */
+    EX_BYVAL_CLONE,
     /* Phase HRT2: Existential types */
     EX_EXISTS_PACK,    /* (pack expr (exists [a] T)) — boxes value as existential */
     EX_EXISTS_OPEN,    /* (open packed [a v] body) — unboxes existential, binds v */
@@ -2237,6 +2243,8 @@ struct Expr {
          * conversion hands the box out and keeps the heap. */
         struct { struct Expr *inner; const struct Type *sink_fn_type;
                  bool stack_ok; } poly_to_fat_;
+        /* EX_BYVAL_CLONE: the shared view being copied. */
+        struct { struct Expr *expr; } byval_clone_;
         /* Phase HRT2: Existential types.
          * Phase EX1c: optional resolved constraint witnesses (one per constraint
          * in the target existential type).  NULL when the target has no

@@ -3201,6 +3201,7 @@ void elab_session_free(ElabSession *session) {
         free(e->borrow_loop_marks);
         free(e->borrow_pending);
         free(e->nonretain_pending);
+        free(e->pending_spine_clones);
         free(e->macros);
         free(e->macro_expansion_stack);
         free(e->loaded_modules);
@@ -3880,6 +3881,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         free(e.borrow_loop_marks);
         free(e.borrow_pending);
         free(e.nonretain_pending);
+        free(e.pending_spine_clones);
         free(e.macros);
         free(e.macro_expansion_stack);
         free((void *)e.load_expanded_paths);
@@ -4000,6 +4002,10 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * no preamble. */
     prof_enter(PROF_TYPECLASS);
     if (!elab_typeclass_superclasses_finish(&e)) rc = -1;
+
+    /* byvalue-recursive-shared-copies-leak: every callee is elaborated and
+     * inferred now, so the deferred shared-view arguments can be judged. */
+    elab_resolve_pending_spine_clones(&e);
     prof_exit(PROF_TYPECLASS);
 
     /* cps-backend-n6 cross-function resume: gated whole-program reset-wrapping.
@@ -4235,6 +4241,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         free(e.borrow_loop_marks);
         free(e.borrow_pending);
         free(e.nonretain_pending);
+        free(e.pending_spine_clones);
         free(e.macros);
         free(e.macro_expansion_stack);
         free(e.loaded_modules); /* Phase M2 */

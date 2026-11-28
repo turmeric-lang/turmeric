@@ -9699,6 +9699,7 @@ static bool unary_operand(const Expr *e, const Expr **operand) {
     case EX_POLY_WRAP:    *operand = e->as.poly_wrap_.inner;    return true;
     case EX_FN_TO_FAT:    *operand = e->as.fn_to_fat_.inner;    return true;
     case EX_POLY_TO_FAT:  *operand = e->as.poly_to_fat_.inner;  return true;
+    case EX_BYVAL_CLONE:  *operand = e->as.byval_clone_.expr;   return true;
     /* turi-borrow-is-a-copy: a borrow is a reference to a PLACE, not a
      * value transform of its operand, so it is not driven here -- the
      * black-box path below reaches its eval_expr arm. */
@@ -10179,6 +10180,7 @@ static bool ws_has_perform(const Expr *e) {
     case EX_POLY_WRAP:   return ws_has_perform(e->as.poly_wrap_.inner);
     case EX_FN_TO_FAT:   return ws_has_perform(e->as.fn_to_fat_.inner);
     case EX_POLY_TO_FAT: return ws_has_perform(e->as.poly_to_fat_.inner);
+    case EX_BYVAL_CLONE: return ws_has_perform(e->as.byval_clone_.expr);
     /* The driver descends both halves of a `while` (DK_WHILE), so it is as
      * transparent as an `if` -- answer from its parts rather than defaulting
      * to "may perform". */
@@ -10451,6 +10453,7 @@ static bool ws_capturable_rec(TuriEnv *env, EvalFrame *frame, const Expr *e, int
     case EX_POLY_WRAP:   return ws_capturable(env, frame, e->as.poly_wrap_.inner, depth);
     case EX_FN_TO_FAT:   return ws_capturable(env, frame, e->as.fn_to_fat_.inner, depth);
     case EX_POLY_TO_FAT: return ws_capturable(env, frame, e->as.poly_to_fat_.inner, depth);
+    case EX_BYVAL_CLONE: return ws_capturable(env, frame, e->as.byval_clone_.expr, depth);
     case EX_CATCH_UNWIND: {
         /* The driver models the boundary (DK_CATCH_UNWIND) and applies the
          * thunk beneath it on the work stack, so a perform in a thunk written
@@ -15064,6 +15067,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- SC7: tur_poly_fn_t -> fat-handle conversion is transparent here ---- */
     case EX_POLY_TO_FAT:
         return eval_expr(env, frame, e->as.poly_to_fat_.inner);
+
+    /* --- byvalue-recursive-shared-copies-leak: the spine copy is the
+     * compiled back end's ownership bookkeeping; the interpreter never frees a
+     * spine, so the value it copies is the value. --------------------------- */
+    case EX_BYVAL_CLONE:
+        return eval_expr(env, frame, e->as.byval_clone_.expr);
 
     /* --- Phase 12: borrows --- */
     /* turi-borrow-is-a-copy: `&` and `&mut` are references to a PLACE -- a

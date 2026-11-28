@@ -17864,6 +17864,38 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(inner);
             return result;
         }
+        case EX_BYVAL_CLONE: {
+            /* byvalue-recursive-shared-copies-leak: deep-copy a shared view's
+             * spine (`clone_localowned_<T>`, emit_adt_byval_drop_glue) so the
+             * consuming callee it is handed to owns what it frees.  The
+             * elaborator binds the view to a local first
+             * (elab_clone_shared_spine), so the operand is that local; it is
+             * still spilled when its recorded spelling is not the aggregate. */
+            const AdtDef *cd = e->type.kind == TY_ADT ? e->type.as.adt_.def : NULL;
+            char *src = emit_value(ctx, body, e->as.byval_clone_.expr);
+            if (!cd) return src;
+            char *mn = mangle_adt_name(cd->name);
+            size_t tl = strlen(mn) + 16;
+            char *tn = (char *)malloc(tl);
+            snprintf(tn, tl, "tur_adt_%s", mn);
+            const char *srcref = src;
+            char *spill = NULL;
+            if (!emit_value_is_recorded_as(src, tn)) {
+                spill = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s;\n", tn, spill, src);
+                srcref = spill;
+            }
+            char *out = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s %s = clone_localowned_%s(&%s);\n", tn, out, tn, srcref);
+            emit_localvar_record_ctype(out, tn);
+            free(spill);
+            free(src);
+            free(tn);
+            free(mn);
+            return out;
+        }
         case EX_RC_DROP: {
             /* (rc/drop r) - decrement strong count */
             char *inner = emit_value(ctx, body, e->as.rc_drop_.expr);

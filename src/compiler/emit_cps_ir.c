@@ -5729,6 +5729,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
         case EX_CONT_PRED:    REC(e->as.cont_pred_.expr); return;
         case EX_RC_OF:        REC(e->as.rc_of_.expr); return;
         case EX_RC_CLONE:     REC(e->as.rc_clone_.expr); return;
+        case EX_BYVAL_CLONE:  REC(e->as.byval_clone_.expr); return;
         case EX_RC_DROP:      REC(e->as.rc_drop_.expr); return;
         case EX_RC_PTR:       REC(e->as.rc_ptr_.expr); return;
         case EX_RC_COUNT:     REC(e->as.rc_count_.expr); return;

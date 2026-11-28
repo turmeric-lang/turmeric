@@ -10707,6 +10707,9 @@ static bool emit_abi_carrier_relay_walk(EmitCtx *ctx, const Expr *enclosing_fn,
         case EX_CAST:
             changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.cast_.expr, items, n_items);
             break;
+        case EX_BYVAL_CLONE:
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.byval_clone_.expr, items, n_items);
+            break;
         case EX_FN_TO_FAT:
             /* van-laarhoven-generic-inference-gap (gap 1, codegen): a thin
              * (non-capturing) lifted lambda boxed into a fat carrier
@@ -12102,6 +12105,55 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
             if (rs_tagged) buf_printf(out, "    }\n");
             buf_printf(out, "}\n\n");
         }
+    }
+
+    /* byvalue-recursive-shared-copies-leak: the CLONE glue, the copy-side twin
+     * of drop_localowned_ above.  `clone_localowned_<T>(&v)` returns a value
+     * that owns a spine of its own: every field drop_localowned would release
+     * is given a fresh owner -- an `rc` / `weak` takes a count, a box of the
+     * type itself is copied box by box (clone_glue_<T>) -- and every other
+     * field is copied as it is, exactly the fields the drop leaves alone.  The
+     * elaborator wraps a shared view handed to a consuming parameter in one
+     * (EX_BYVAL_CLONE), and only for a type adt_byval_spine_clonable accepts,
+     * so no field here lacks a copy rule.  The boxes come from the same
+     * allocator a constructor's do, so drop_glue's free matches them. */
+    if (adt_byval_spine_clonable(def)) {
+        const bool cl_tagged = adt_glue_is_tagged(def);
+        buf_printf(out, "static void *clone_glue_%s(const void *ptr) __attribute__((unused));\n",
+                   adt_c_name);
+        buf_printf(out, "static %s clone_localowned_%s(const %s *src) __attribute__((unused));\n",
+                   adt_c_name, adt_c_name, adt_c_name);
+        buf_printf(out, "static %s clone_localowned_%s(const %s *src) {\n",
+                   adt_c_name, adt_c_name, adt_c_name);
+        buf_printf(out, "    %s r = *src;\n", adt_c_name);
+        buf_printf(out, "    %s *s = &r;\n", adt_c_name);
+        if (cl_tagged) buf_printf(out, "    switch (s->tag) {\n");
+        for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+            const CtorDef *cc = def->ctors[ci];
+            if (cl_tagged) buf_printf(out, "    case %u:\n", ci);
+            for (uint32_t fi = 0; fi < cc->n_fields; fi++) {
+                char *mp = adt_field_member_path(def, cc, fi);
+                if (cc->fields[fi].drop_inner_def == def) {
+                    buf_printf(out,
+                               "    if (s->%s) s->%s = (int64_t)(intptr_t)clone_glue_%s((const void *)(intptr_t)s->%s);\n",
+                               mp, mp, adt_c_name, mp);
+                } else if (cc->fields[fi].kind == TY_RC) {
+                    buf_printf(out, "    if (s->%s) rc_strong_increment(s->%s);\n", mp, mp);
+                } else if (cc->fields[fi].kind == TY_WEAK) {
+                    buf_printf(out, "    if (s->%s) rc_weak_increment(s->%s);\n", mp, mp);
+                }
+                free(mp);
+            }
+            if (cl_tagged) buf_printf(out, "        break;\n");
+            if (!cl_tagged) break;
+        }
+        if (cl_tagged) buf_printf(out, "    }\n");
+        buf_printf(out, "    return r;\n}\n\n");
+        buf_printf(out, "static void *clone_glue_%s(const void *ptr) {\n", adt_c_name);
+        buf_printf(out, "    %s *b = (%s *)%s(sizeof(%s));\n",
+                   adt_c_name, adt_c_name, region_alloc_fn(), adt_c_name);
+        buf_printf(out, "    *b = clone_localowned_%s((const %s *)ptr);\n", adt_c_name, adt_c_name);
+        buf_printf(out, "    return b;\n}\n\n");
     }
 
     /* Walk glue -- enumerate strong (rc) children for the cycle walker. */
@@ -13759,6 +13811,7 @@ static bool preamble_uses_callcc(const Expr *e) {
         case EX_CAST:         return preamble_uses_callcc(e->as.cast_.expr);
         case EX_FN_TO_FAT:    return preamble_uses_callcc(e->as.fn_to_fat_.inner);
         case EX_POLY_TO_FAT:  return preamble_uses_callcc(e->as.poly_to_fat_.inner);
+        case EX_BYVAL_CLONE:  return preamble_uses_callcc(e->as.byval_clone_.expr);
         case EX_POLY_WRAP:    return preamble_uses_callcc(e->as.poly_wrap_.inner);
         default:
             return false;
@@ -21243,6 +21296,7 @@ static void gdef_collect_refs(const Expr *e, const Binding ***a, uint32_t *n, ui
         case EX_ANY_CAST:     gdef_collect_refs(e->as.any_cast_.value, a, n, cap);     return;
         case EX_ANY_IS:       gdef_collect_refs(e->as.any_is_.value, a, n, cap);       return;
         case EX_FN_TO_FAT:    gdef_collect_refs(e->as.fn_to_fat_.inner, a, n, cap);    return;
+        case EX_BYVAL_CLONE:  gdef_collect_refs(e->as.byval_clone_.expr, a, n, cap);  return;
         case EX_REINTERPRET:  gdef_collect_refs(e->as.reinterpret_.expr, a, n, cap);   return;
         case EX_GET_FIELD:    gdef_collect_refs(e->as.get_field_.struct_expr, a, n, cap); return;
         case EX_SET_FIELD:

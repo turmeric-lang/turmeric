@@ -556,6 +556,11 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.poly_to_fat_.inner);
             buf_putc(b, ')');
             break;
+        case EX_BYVAL_CLONE:
+            buf_puts(b, "(byval-clone ");
+            expr_print(b, e->as.byval_clone_.expr);
+            buf_putc(b, ')');
+            break;
         case EX_ASCRIBE:
             buf_puts(b, "(:: ");
             expr_print(b, e->as.ascribe_.inner);

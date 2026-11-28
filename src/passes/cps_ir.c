@@ -582,6 +582,7 @@ static const char *cps_form_name(const Expr *e) {
         case EX_FN_TO_FAT:     return "EX_FN_TO_FAT";
         case EX_POLY_WRAP:     return "EX_POLY_WRAP";
         case EX_POLY_TO_FAT:   return "EX_POLY_TO_FAT";
+        case EX_BYVAL_CLONE:   return "EX_BYVAL_CLONE";
         case EX_WHILE:         return "EX_WHILE";
         case EX_PANIC:         return "EX_PANIC";
         case EX_CONS_LIST:     return "EX_CONS_LIST";
@@ -1012,6 +1013,7 @@ static const Expr *owning_operand(const Expr *e) {
     switch (e->kind) {
         case EX_RC_OF:    return e->as.rc_of_.expr;
         case EX_RC_CLONE: return e->as.rc_clone_.expr;
+        case EX_BYVAL_CLONE: return e->as.byval_clone_.expr;
         case EX_RC_DROP:  return e->as.rc_drop_.expr;
         case EX_RC_COUNT: return e->as.rc_count_.expr;
         case EX_RC_PTR:   return e->as.rc_ptr_.expr;
@@ -1082,6 +1084,7 @@ static bool operand_uses_control(const Expr *e) {
             return false;
         case EX_RC_OF:    return operand_uses_control(e->as.rc_of_.expr);
         case EX_RC_CLONE: return operand_uses_control(e->as.rc_clone_.expr);
+        case EX_BYVAL_CLONE: return operand_uses_control(e->as.byval_clone_.expr);
         case EX_RC_DROP:  return operand_uses_control(e->as.rc_drop_.expr);
         case EX_RC_COUNT: return operand_uses_control(e->as.rc_count_.expr);
         case EX_RC_PTR:   return operand_uses_control(e->as.rc_ptr_.expr);
@@ -2578,6 +2581,7 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * direct emitter -- which also resolves the monomorphized ctor name. */
         case EX_RC_OF:    return safe_to_delegate(b, e->as.rc_of_.expr);
         case EX_RC_CLONE: return safe_to_delegate(b, e->as.rc_clone_.expr);
+        case EX_BYVAL_CLONE: return safe_to_delegate(b, e->as.byval_clone_.expr);
         case EX_RC_DROP:  return safe_to_delegate(b, e->as.rc_drop_.expr);
         case EX_RC_COUNT: return safe_to_delegate(b, e->as.rc_count_.expr);
         case EX_RC_PTR:   return safe_to_delegate(b, e->as.rc_ptr_.expr);
@@ -3248,6 +3252,7 @@ static bool item_has_control(const Expr *e) {
             return false;
         case EX_RC_OF:    return item_has_control(e->as.rc_of_.expr);
         case EX_RC_CLONE: return item_has_control(e->as.rc_clone_.expr);
+        case EX_BYVAL_CLONE: return item_has_control(e->as.byval_clone_.expr);
         case EX_RC_DROP:  return item_has_control(e->as.rc_drop_.expr);
         case EX_REINTERPRET: return item_has_control(e->as.reinterpret_.expr);
         /* Nested fn definitions are call-graph boundaries. */
@@ -3348,6 +3353,7 @@ static bool expr_has_unsafe_control(const Expr *e) {
             return false;
         case EX_RC_OF:    return expr_has_unsafe_control(e->as.rc_of_.expr);
         case EX_RC_CLONE: return expr_has_unsafe_control(e->as.rc_clone_.expr);
+        case EX_BYVAL_CLONE: return expr_has_unsafe_control(e->as.byval_clone_.expr);
         case EX_RC_DROP:  return expr_has_unsafe_control(e->as.rc_drop_.expr);
         case EX_RC_COUNT: return expr_has_unsafe_control(e->as.rc_count_.expr);
         case EX_RC_PTR:   return expr_has_unsafe_control(e->as.rc_ptr_.expr);
@@ -3408,6 +3414,7 @@ static bool expr_refs_binding(const Expr *e, uint32_t bid) {
             return false;
         case EX_RC_OF:    return expr_refs_binding(e->as.rc_of_.expr, bid);
         case EX_RC_CLONE: return expr_refs_binding(e->as.rc_clone_.expr, bid);
+        case EX_BYVAL_CLONE: return expr_refs_binding(e->as.byval_clone_.expr, bid);
         case EX_RC_DROP:  return expr_refs_binding(e->as.rc_drop_.expr, bid);
         case EX_REINTERPRET: return expr_refs_binding(e->as.reinterpret_.expr, bid);
         case EX_SHIFT:

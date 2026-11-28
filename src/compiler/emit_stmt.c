@@ -1655,6 +1655,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         /* Phase 9: rc<T> + weak<T> as statements */
         case EX_RC_OF:
         case EX_RC_CLONE:
+        case EX_BYVAL_CLONE:
         case EX_RC_PTR:
         case EX_RC_COUNT:
         case EX_RC_FROM_REF:
