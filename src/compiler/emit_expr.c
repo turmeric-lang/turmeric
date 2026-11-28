@@ -3201,6 +3201,9 @@ static bool mut_cell_escapes(const Expr *x, const Binding *cell, int depth) {
 static bool let_binding_mut_cell_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
     const Binding *b = e->as.let_.bindings[idx].binding;
     if (!b || !b->is_mut_cell || e->kind != EX_LET) return false;
+    /* closure-stored-beyond-its-let-has-no-owner: owned by the env of the
+     * lambda that captures it, which frees it. */
+    if (b->owned_by_capture) return false;
     if (ctx) g_scp_ctx = ctx;
     for (uint32_t j = idx + 1; j < e->as.let_.n; j++) {
         const Expr *init = e->as.let_.bindings[j].init;
@@ -23424,7 +23427,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
  * define after this env. */
 void emit_owned_capture_release(Buf *out, const Binding *cap) {
     char *cf = raw_name_for_binding(cap);
-    if (cap->type.kind == TY_FN) {
+    if (cap->is_mut_cell) {
+        /* The cell box, released as a `let` releases one it owns. */
+        buf_printf(out, "    if (__e->%s) %s((void *)(intptr_t)(__e->%s));\n",
+                   cf, regions_enabled() ? "tur_region_free" : "free", cf);
+    } else if (cap->type.kind == TY_FN) {
         buf_printf(out, "    if (__e->%s) TUR_CLOSURE_DROP(__e->%s);\n", cf, cf);
     } else if (cap->type.kind == TY_ADT && cap->type.as.adt_.def &&
                cap->type.as.adt_.def->n_ctors == 1 && cap->type.as.adt_.def->ctors[0]) {

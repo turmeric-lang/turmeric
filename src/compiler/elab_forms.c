@@ -888,7 +888,12 @@ void elab_fnfield_note_moves(Elab *e, const Expr *let) {
      * perform). */
     for (uint32_t i = 0; i < let->as.let_.n; i++) {
         const Binding *cb = let->as.let_.bindings[i].binding;
-        if (!cb || !(cb->type.kind == TY_FN || elab_type_owns_boxed_fnfield(cb->type)))
+        /* A `^mut` cell only as the last binding, captured by the `let`'s
+         * result: the lambda takes it out of the `let`, so the cell's own
+         * scope-end free (let_binding_mut_cell_freeable) can never fire. */
+        bool cell = cb && cb->is_mut_cell && i + 1 == let->as.let_.n;
+        if (!cb || !(cell || cb->type.kind == TY_FN ||
+                     elab_type_owns_boxed_fnfield(cb->type)))
             continue;
         /* Not a `letrec` member, and not a lambda that captures a sibling: two
          * members capturing each other would each own the other (a cycle, so

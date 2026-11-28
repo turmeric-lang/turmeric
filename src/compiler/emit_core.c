@@ -2220,6 +2220,36 @@ bool expr_contains_inline_c_block(const Expr *e) {
  * struct capture must own its closures (Binding.fnfield_owner). */
 static bool closure_result_may_view_capture(const Expr *x, const struct Closure *c,
                                             int depth);
+/* Does a lambda, nested defn or defer anywhere in `e` (nested ones included)
+ * capture `b`? */
+typedef struct { const Binding *b; bool hit; } EscCapUd;
+static bool esc_body_captures_visit(const Expr *x, void *ud) {
+    EscCapUd *u = (EscCapUd *)ud;
+    if (!x || u->hit) return u->hit;
+    const struct Closure *c = NULL;
+    if (x->kind == EX_CLOSURE) c = x->as.closure_.closure;
+    else if (x->kind == EX_FN_DEF && x->as.fn_def_.fn) c = x->as.fn_def_.fn->closure;
+    if (c) {
+        for (uint32_t i = 0; i < c->n_captures; i++)
+            if (c->captures[i] == u->b) { u->hit = true; return true; }
+        return false;   /* a lambda reaches `b` only by capturing it */
+    }
+    if (x->kind == EX_DEFER) {
+        for (uint8_t i = 0; i < x->as.defer_.n_captures; i++)
+            if (x->as.defer_.captures[i] == u->b) { u->hit = true; return true; }
+    }
+    if (x->kind == EX_INLINE_C && x->as.inline_c_.inline_c) {
+        const InlineC *ic = x->as.inline_c_.inline_c;
+        for (uint8_t i = 0; i < ic->n_captures; i++)
+            if (ic->captures[i] == u->b) { u->hit = true; return true; }
+    }
+    return cps_visit_children(x, esc_body_captures_visit, ud);
+}
+static bool esc_body_captures(const Expr *e, const Binding *b) {
+    EscCapUd u = { b, false };
+    esc_body_captures_visit(e, &u);
+    return u.hit;
+}
 bool closure_capture_can_be_owned(const Expr *let, uint32_t idx, const Expr *lam) {
     if (!let || !lam || lam->kind != EX_CLOSURE || idx >= let->as.let_.n) return false;
     const struct Closure *c = lam->as.closure_.closure;
@@ -2235,7 +2265,18 @@ bool closure_capture_can_be_owned(const Expr *let, uint32_t idx, const Expr *lam
     if (c->capture_drop_insts && c->capture_drop_insts[at]) return false;
     if (b->is_fat || b->is_global || b->type.kind == TY_RC) return false;
     if (closure_body_inline_c_touches_env(c)) return false;
-    if (closure_result_may_view_capture(c->fn->body, c, 0)) return false;
+    /* A scalar result is copied out and points at nothing; only a richer one
+     * could still reach the capture after the env is gone (as in
+     * closure_env_drop_ok_under_scalar_result). */
+    switch (c->fn->return_type.kind) {
+        case TY_INT: case TY_INT64: case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+        case TY_BOOL: case TY_NIL: case TY_INT8: case TY_INT16: case TY_INT32:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            break;
+        default:
+            if (closure_result_may_view_capture(c->fn->body, c, 0)) return false;
+            break;
+    }
     if (b->type.kind == TY_FN) {
         if (init->kind != EX_CLOSURE) return false;
         if (!closure_let_binding_escapes_reaped(let, idx)) return false;
@@ -2246,6 +2287,14 @@ bool closure_capture_can_be_owned(const Expr *let, uint32_t idx, const Expr *lam
         if (!fnfield_struct_escapes(let, b, let->as.let_.bindings[idx].init)) return false;
         if (fnfield_struct_escapes(c->fn->body, b, NULL)) return false;
         return true;
+    }
+    /* A `^mut` cell (the caller has checked that `lam` is the `let`'s result,
+     * which already takes the cell out of it).  The name is an alias whose
+     * reads and writes are `(.v cell)`, so the cell leaves `lam` only inside
+     * a lambda, a nested defn or a defer that captures it.  None may. */
+    if (b->is_mut_cell) {
+        if (idx + 1 != let->as.let_.n) return false;
+        return !esc_body_captures(c->fn->body, b);
     }
     return false;
 }

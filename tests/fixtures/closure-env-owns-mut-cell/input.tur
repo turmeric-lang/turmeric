@@ -1,0 +1,27 @@
+;; closure-stored-beyond-its-let-has-no-owner (cells): a `^mut` captured by the
+;; lambda a `let` returns lives in a heap cell that the `let` cannot free -- the
+;; lambda still uses it -- so it leaked once per call (turmeric-spices'
+;; `count-then-stop`).  The returned lambda's env owns it now and its drop glue
+;; frees it, when nothing inside the lambda captures the cell again.
+;; Leak-checked: each env, and its cell, is freed by the caller.
+(defdata Ctl (Go) (Halt))
+(defn show [c : Ctl] : int (match c (Go) 0 (Halt) 1))
+(defn apply-it [f : (fn [int] Ctl) x : int] : Ctl (f x))
+(defn counter [limit : int] : (fn [int] Ctl)
+  (let [^mut seen 0]
+    (fn [x : int] : Ctl
+      (do (set! seen (+ seen 1))
+          (if (>= seen limit) (Halt) (Go))))))
+;; an accumulator whose cell holds the running total
+(defn summer [start : int] : (fn [int] int)
+  (let [^mut total start]
+    (fn [x : int] : int (do (set! total (+ total x)) total))))
+(defn main [] : int
+  (println (show (apply-it (counter 1) 5)))
+  (let [g (counter 2)]
+    (println (show (g 1)))
+    (println (show (g 1))))
+  (let [s (summer 10)]
+    (println (s 1))
+    (println (s 2)))
+  0)

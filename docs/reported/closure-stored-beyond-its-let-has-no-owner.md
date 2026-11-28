@@ -45,6 +45,22 @@ hands back the struct, or shares it with a second lambda.
 Excluded: `letrec` members and lambdas that capture a sibling -- two
 mutually capturing members would each own the other.
 
+**`^mut` cells, the same day.** A `^mut` captured by the lambda a `let`
+returns -- `(let [^mut seen 0] (fn ...))`, turmeric-spices' `count-then-stop`
+and `signal`'s `cycle` -- is a third kind of owned capture. The returned
+lambda takes the cell out of the `let`, so the `let`'s own free
+(`let_binding_mut_cell_freeable`, switched off by `owned_by_capture`) could
+never fire. The glue frees the cell as that free would. It is refused when a
+lambda, nested defn or defer inside captures the cell again.
+
+`closure-env-owns-mut-cell` pins it, `closure-captured-mut-shared`'s
+`make-counter` goes leak-clean (now leak-checked), and the refusal joined
+`closure-env-owns-capture-refused`. The "result may reach the capture" check
+now applies only to a non-scalar result, as in
+`closure_env_drop_ok_under_scalar_result`: a scalar result is copied out.
+That let `summer`'s cell, and a scalar-result lambda's other captures, be
+owned.
+
 **A bug caught on the way:** `Closure` comes from arena memory that is not
 zeroed. The first build of this read garbage mask bits from three allocation
 sites, which turned a leak-checked fixture into a use-after-free. Each site
@@ -69,7 +85,8 @@ there is a double free.
 - an owner struct whose copy is kept in a global (the overwritten initial
   value of a `^mut` global included);
 - the refused moves and captures;
-- a `^mut` cell captured by a returned lambda.
+- a `^mut` cell shared by two lambdas in one `let`, or captured by a lambda
+  that is not the `let`'s result.
 
 **Checked for the move:** every fixture's closure frees, emitted against the
 previous commit, changed only in `closure-in-escaping-struct-kept`.

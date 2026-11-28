@@ -1,6 +1,7 @@
 ;; closure-stored-beyond-its-let-has-no-owner: env ownership refused -- the
 ;; lambda hands back what it captured, stores it in a global (inside a struct),
-;; hands back the struct it captured, or shares it with a second lambda; and, when the
+;; hands back the struct it captured, shares it with a second lambda, or (for
+;; a `^mut` cell) lets an inner lambda capture it; and, when the
 ;; capturing lambda is only called, the captured lambda's own `let` frees it.
 ;; In the first four the capture is used after the env is gone, so a wrong
 ;; ownership is a use-after-free, which fails the leak-check gate even with the
@@ -25,10 +26,18 @@
   (let [step (fn [x : int] : int (+ x k))
         a    (fn [x : int] : int (step (step x)))]
     (a 1)))
+;; 6. a ^mut cell an inner lambda captures and hands back out: the cell
+;;    outlives the env that would own it
+(defn leaky [k : int] : (fn [] (fn [] int))
+  (let [^mut n k]
+    (fn [] : (fn [] int) (fn [] : int (do (set! n (+ n 1)) n)))))
 (defn main [] : int
   (let [s (let [g (get-step 3)] (g))] (println (s 1)))
   (let [_ (let [g (stash-step 4)] (g))] (println ((.run kept) 2)))
   (let [r (let [g (get-run 5)] (g))] (println ((.run r) 10)))
   (let [p (pair-of 2)] (println (p 1)))
   (println (confined 7))
+  (let [inner (let [outer (leaky 10)] (outer))]
+    (println (inner))
+    (println (inner)))
   0)
