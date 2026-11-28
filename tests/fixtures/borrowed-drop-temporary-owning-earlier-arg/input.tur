@@ -1,0 +1,42 @@
+;; borrowed-drop-temporary-leaks-outside-the-hoist, the last shape: an OWNING
+;; argument -- a closure, a Drop value, a fresh value the callee consumes --
+;; before a fresh Drop temporary passed to a `^borrow` parameter, with an
+;; EFFECTFUL argument beside it.  The temporary was left unowned, a leak: the
+;; hoist would not reorder an owning argument past the effect.  Now an
+;; argument whose value is the same whenever it is read (an immutable
+;; variable, a lambda) stays in place, and any other is hoisted ahead of the
+;; temporary in written order, like a scalar.  Each line released nothing
+;; before (the live count rose by one); it is 0 now, and `(ctr 2)` still
+;; reads the count at its written position.
+;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
+(defn ctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+(defopaque ^affine Widget :int)
+(defn mk [] : Widget (ctr 0) (:: 1 Widget))
+(defn rel [w : Widget] : void (ctr 1) (:: w int) nil)
+(definstance Drop [Widget] (drop [x] : void (rel x)))
+(defn live [] : nil (println (- (ctr 2) (ctr 3))))
+(defn peekf [f : (fn [int] int) k : int ^borrow w : Widget] : int (f k))
+(defn peekd [^borrow d : Widget k : int ^borrow w : Widget] : int k)
+(defn taked [d : Widget k : int ^borrow w : Widget] : int k)
+(defn taked2 [k : int d : Widget ^borrow w : Widget] : int k)
+(defn take-mut [k : int d : int ^borrow w : Widget] : int (+ k d))
+
+(defn main [] : int
+  (let [m 10
+        f (fn [x : int] : int (+ x m))]
+    (println (peekf f (ctr 2) (mk))) (live)                            ; 10 0  a let-bound closure
+    (println (peekf (fn [x : int] : int (+ x m)) (ctr 2) (mk))) (live)) ; 11 0  a capturing lambda
+  (let [d (mk)]
+    (println (peekd d (ctr 2) (mk))) (live))                           ; 3 1   a Drop value (d still live)
+  (println (taked (mk) (ctr 2) (mk))) (live)                           ; 5 0   a fresh one, consumed
+  (println (taked2 (ctr 2) (mk) (mk))) (live)                          ; 6 0   ... after the effect
+  (let [^mut x 1]
+    (println (take-mut x (do (set! x 7) (ctr 2)) (mk))) (live))        ; 9 0   x read before the set!
+  0)

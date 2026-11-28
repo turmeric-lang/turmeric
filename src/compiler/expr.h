@@ -245,6 +245,15 @@ struct Binding {
     struct FnfieldTaker *fnfield_takers;
     bool          fnfield_ret_stamped;
     bool          fnfield_ret_owned;
+    /* let-bound-closure-shared-with-fnfield-struct-leaks: on a defn whose
+     * result is a by-value struct with boxed fn-fields, bit i is set when
+     * closure parameter i reaches nothing but that result -- stored in a
+     * fn-field of the struct the function returns (`(defn wrap [f] (H 2 f))`,
+     * or through a local that is only returned) and invoked.  A caller that
+     * binds the result to a local the scope confines then knows the closure
+     * it passed is dead when that local is (binding_escapes_impl's holder
+     * relaxation).  Set by elab_stamp_fnfield_ret. */
+    uint32_t      fnfield_ret_param_mask;
     /* async-capturing-body-env-never-freed: this let-bound fresh capturing
      * closure's only use is as the body of one `async` spawn, so the SPAWN
      * owns its env box (tur_async_owns_env, dropped when the body settles)

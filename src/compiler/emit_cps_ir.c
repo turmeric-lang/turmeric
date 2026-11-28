@@ -13750,6 +13750,221 @@ static bool serial_k_use_ok(const Expr *x, const Binding *k, SerialKRole role,
     }
 }
 
+/* ---- cloneable-cont-escaped-chain-leaks: an owner for an escaped `k` ----
+ *
+ * A cloneable shift whose receiver hands `k` back -- `(defn k-id [k] : int k)`
+ * -- makes the enclosing reset's value the continuation itself: a fresh
+ * wrapper plus its chain copy, which nothing frees (the shift drops `k` only
+ * when the receiver confines it, serial_recv_confines_k).  A `let` that binds
+ * such a value and then only READS it -- resumes, clones, snapshots, or hands
+ * it to a callee that does (the K_CLONE walk) -- is its last holder, so the
+ * let drops it: at scope exit on the direct path, through the outermost DK
+ * entry's reap list on the CPS path (a resume of a continuation captured in
+ * the let can re-run its tail; the reap runs after every one).
+ *
+ * Fresh sources (ccont_fresh_source): such a reset; `tur_cloneable_cont_clone`
+ * or `tur_continuation_snapshot` of anything (a new wrapper and chain copy);
+ * and a call to a function whose every result is one (`(make 5)`).  A
+ * program that drops the value itself (`tur_cloneable_cont_drop`) is not a
+ * K_CLONE reader, so its let keeps its hands off. */
+static const FnDef *ccont_fn_def(const Binding *b) {
+    if (!b) return NULL;
+    if (b->source_binding) b = b->source_binding;
+    if (b->source_fn_def) return b->source_fn_def;
+    return g_prog ? fd_for_binding(g_prog, b) : NULL;
+}
+
+/* The receiver of a shift: a named function or a lambda literal. */
+static const FnDef *ccont_receiver_fd(const Expr *f) {
+    while (f) {
+        if (f->kind == EX_ASCRIBE) f = f->as.ascribe_.inner;
+        else if (f->kind == EX_FN_TO_FAT) f = f->as.fn_to_fat_.inner;
+        else if (f->kind == EX_POLY_WRAP) f = f->as.poly_wrap_.inner;
+        else if (f->kind == EX_POLY_TO_FAT) f = f->as.poly_to_fat_.inner;
+        else break;
+    }
+    if (!f) return NULL;
+    if (f->kind == EX_CLOSURE && f->as.closure_.closure) return f->as.closure_.closure->fn;
+    if (f->kind == EX_FN) return f->as.fn_.fn;
+    if (f->kind == EX_VAR) return ccont_fn_def(f->as.var.binding);
+    return NULL;
+}
+
+/* Count the uses of `k` in `x` that are tail values of `x` (`*tails`) and
+ * those that are anything else (`*others`). */
+typedef struct { const Binding *k; uint32_t n; } CcontMentionUd;
+static bool ccont_mention_visit(const Expr *x, void *ud);
+static void ccont_count_mentions(const Expr *x, CcontMentionUd *u) {
+    if (!x) return;
+    if (x->kind == EX_VAR && x->as.var.binding == u->k) { u->n++; return; }
+    if (x->kind == EX_CALL && x->as.call_.fn_binding == u->k) u->n++;
+    if (x->kind == EX_CLOSURE && x->as.closure_.closure) {
+        const struct Closure *c = x->as.closure_.closure;
+        for (uint32_t i = 0; i < c->n_captures; i++)
+            if (c->captures[i] == u->k) u->n++;
+        return;
+    }
+    cps_visit_children(x, ccont_mention_visit, u);
+}
+static bool ccont_mention_visit(const Expr *x, void *ud) {
+    ccont_count_mentions(x, (CcontMentionUd *)ud);
+    return false;
+}
+/* Is every value `x` can end with the bare `k`?  `*n_tails` counts them. */
+static bool ccont_tails_are_k(const Expr *x, const Binding *k, uint32_t *n_tails) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x) return false;
+    switch (x->kind) {
+        case EX_VAR:
+            if (x->as.var.binding != k) return false;
+            (*n_tails)++;
+            return true;
+        case EX_LET:
+            return ccont_tails_are_k(x->as.let_.body, k, n_tails);
+        case EX_DO:
+            return x->as.do_.n > 0 &&
+                   ccont_tails_are_k(x->as.do_.items[x->as.do_.n - 1], k, n_tails);
+        case EX_IF:
+            return x->as.if_.else_or_null &&
+                   ccont_tails_are_k(x->as.if_.then_, k, n_tails) &&
+                   ccont_tails_are_k(x->as.if_.else_or_null, k, n_tails);
+        default:
+            return false;
+    }
+}
+
+/* A receiver that returns its `k` on every path and names it nowhere else. */
+static bool ccont_receiver_returns_k(const FnDef *fd) {
+    if (!fd || !fd->body || fd->n_params < 1 || !fd->params) return false;
+    if (fd->body->kind == EX_INLINE_C || (fd->binding && fd->binding->body_is_inline_c))
+        return false;
+    const Binding *k = fd->params[fd->n_params - 1];
+    if (!k) return false;
+    uint32_t n_tails = 0;
+    if (!ccont_tails_are_k(fd->body, k, &n_tails)) return false;
+    CcontMentionUd u = { k, 0 };
+    ccont_count_mentions(fd->body, &u);
+    return u.n == n_tails;
+}
+
+/* The shifts in a reset body, and whether anything else could capture or
+ * leave first: a lambda (it could shift when called), a `return`. */
+typedef struct { const Expr *shift; uint32_t n_shifts; bool bad; } CcontShiftUd;
+static bool ccont_shift_visit(const Expr *x, void *ud) {
+    CcontShiftUd *u = (CcontShiftUd *)ud;
+    if (!x || u->bad) return u->bad;
+    switch (x->kind) {
+        case EX_CLONEABLE_SHIFT:
+            u->shift = x;
+            u->n_shifts++;
+            /* its receiver is resolved apart; its default is walked */
+            if (x->as.cloneable_shift_.body)
+                ccont_shift_visit(x->as.cloneable_shift_.body, ud);
+            return u->bad;
+        case EX_CLOSURE: case EX_FN: case EX_FN_DEF: case EX_RETURN:
+        case EX_CLONEABLE_RESET: case EX_RESET: case EX_SHIFT: case EX_CALLCC:
+        case EX_PERFORM: case EX_HANDLE: case EX_INLINE_C:
+            u->bad = true;
+            return true;
+        default:
+            return cps_visit_children(x, ccont_shift_visit, ud);
+    }
+}
+/* Does evaluating `x` reach `shift` on every path, before `x` yields? */
+static bool ccont_always_reaches(const Expr *x, const Expr *shift) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x) return false;
+    if (x == shift) return true;
+    switch (x->kind) {
+        case EX_CALL:
+            if (x->as.call_.fn_expr && ccont_always_reaches(x->as.call_.fn_expr, shift))
+                return true;
+            for (uint32_t i = 0; i < x->as.call_.n_args; i++)
+                if (ccont_always_reaches(x->as.call_.args[i], shift)) return true;
+            return false;
+        case EX_BUILTIN:
+            if (!x->as.builtin.spec || x->as.builtin.spec->shape == BS_AND_SC ||
+                x->as.builtin.spec->shape == BS_OR_SC)
+                return false;
+            for (uint32_t i = 0; i < x->as.builtin.n; i++)
+                if (ccont_always_reaches(x->as.builtin.args[i], shift)) return true;
+            return false;
+        case EX_LET:
+            for (uint32_t i = 0; i < x->as.let_.n; i++)
+                if (ccont_always_reaches(x->as.let_.bindings[i].init, shift)) return true;
+            return ccont_always_reaches(x->as.let_.body, shift);
+        case EX_DO:
+            for (uint32_t i = 0; i < x->as.do_.n; i++)
+                if (ccont_always_reaches(x->as.do_.items[i], shift)) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
+static bool ccont_reset_yields_k(const Expr *reset) {
+    const Expr *body = reset->as.cloneable_reset_.body;
+    CcontShiftUd u = { NULL, 0, false };
+    ccont_shift_visit(body, &u);
+    if (u.bad || u.n_shifts != 1 || !u.shift) return false;
+    if (!ccont_always_reaches(body, u.shift)) return false;
+    return ccont_receiver_returns_k(ccont_receiver_fd(u.shift->as.cloneable_shift_.k_fn));
+}
+
+static bool ccont_fresh_source_d(const Expr *x, int depth);
+static bool ccont_tails_fresh(const Expr *x, int depth) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x) return false;
+    switch (x->kind) {
+        case EX_LET:
+            return ccont_tails_fresh(x->as.let_.body, depth);
+        case EX_DO:
+            return x->as.do_.n > 0 &&
+                   ccont_tails_fresh(x->as.do_.items[x->as.do_.n - 1], depth);
+        default:
+            return ccont_fresh_source_d(x, depth);
+    }
+}
+static bool ccont_fresh_source_d(const Expr *x, int depth) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || depth > 4) return false;
+    switch (x->kind) {
+        case EX_CLONEABLE_RESET:
+            return ccont_reset_yields_k(x);
+        case EX_BUILTIN: {
+            const BuiltinSpec *sp = x->as.builtin.spec;
+            return sp && sp->name &&
+                   (strcmp(sp->name, "tur_cloneable_cont_clone") == 0 ||
+                    strcmp(sp->name, "tur_continuation_snapshot") == 0);
+        }
+        case EX_CALL: {
+            if (x->as.call_.fn_expr || x->as.call_.dict_arg || x->as.call_.ctor)
+                return false;
+            const FnDef *fd = ccont_fn_def(x->as.call_.fn_binding);
+            if (!fd || !fd->body || fd->body->kind == EX_INLINE_C ||
+                (fd->binding && fd->binding->body_is_inline_c))
+                return false;
+            return ccont_tails_fresh(fd->body, depth + 1);
+        }
+        default:
+            return false;
+    }
+}
+bool emit_ccont_fresh_source(const Expr *x) { return ccont_fresh_source_d(x, 0); }
+
+/* Binding `idx` of `let` holds a fresh cloneable continuation the let only
+ * reads, so the let is its owner. */
+bool emit_let_binding_ccont_owned(const Expr *let, uint32_t idx) {
+    if (!let || let->kind != EX_LET || idx >= let->as.let_.n) return false;
+    const Binding *b = let->as.let_.bindings[idx].binding;
+    if (!b || b->is_mut || b->is_global) return false;
+    if (!emit_ccont_fresh_source(let->as.let_.bindings[idx].init)) return false;
+    if (!serial_k_use_ok(let->as.let_.body, b, K_CLONE, 0)) return false;
+    for (uint32_t j = idx + 1; j < let->as.let_.n; j++)
+        if (!serial_k_use_ok(let->as.let_.bindings[j].init, b, K_CLONE, 0)) return false;
+    return true;
+}
+
 static bool serial_recv_confines_k(const CTerm *t, SerialKRole role) {
     const FnDef *fd = NULL;
     if (t->as.cloneable.receiver_expr) {

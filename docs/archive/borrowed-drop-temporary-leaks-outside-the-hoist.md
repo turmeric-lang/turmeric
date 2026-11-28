@@ -1,5 +1,30 @@
 # A fresh Drop temporary passed to a `^borrow` parameter still leaks outside the hoist's two conditions
 
+> **RESOLVED 2026-11-28: the last shape, an OWNING earlier argument beside an
+> EFFECTFUL one.** `hoist_borrowed_closure_args` (`src/compiler/elab_call.c`)
+> no longer gives up on it:
+>
+> - an argument whose value is the same whenever it is read -- an immutable
+>   variable (only a `^mut` binding can be assigned, and a `^mut` local is read
+>   through its cell), a lambda (building one has no effect; it captures a
+>   `^mut` as its cell), a literal -- stays where it is, read after the hoisted
+>   effect and temporary (`arg_reads_same_later`): `(peekf f (ctr 2) (mk))`,
+>   `(peekd d (ctr 2) (mk))`;
+> - any other is hoisted into a `__borrowa` temp ahead of the temporary, in
+>   written order, as a scalar already was (`arg_hoistable_owner`): `(taked
+>   (mk) (ctr 2) (mk))` with `taked` consuming its first argument. The hoist
+>   builds its `let` directly, so the elaborator attaches no scope-exit drop to
+>   the temp, and the emitter's own let frees ask the same escape walk they ask
+>   of a let the program wrote. Only a value of no runtime type (`never`,
+>   unknown) is left in place, and its temporary with it.
+>
+> Pinned by `borrowed-drop-temporary-owning-earlier-arg` (leak-checked; a
+> let-bound closure, a capturing lambda, a Drop value, a fresh value consumed
+> before and after the effect, and a `^mut` scalar still read before its
+> `set!`): every line left its temporary live on `main`, none does now.
+
+## As filed
+
 **Severity: low (a leak, one value per evaluation; binding it with `let` avoids it).**
 
 **Narrowed 2026-11-07: a fn-typed earlier argument with no effect beside it

@@ -6,6 +6,9 @@
 
 /* emit_core.c: is `b` used as a value, not only called, within `e`? */
 bool closure_binding_escapes(const Expr *e, const Binding *b);
+uint32_t elab_fnfield_result_param_mask(const Expr *body, Binding *const *params,
+                                        uint32_t n_params);   /* emit_core.c */
+bool expr_subtree_has_inline_c(const Expr *e);                 /* emit_core.c */
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -637,6 +640,13 @@ void elab_stamp_fnfield_ret(Elab *e, Binding *b, const Expr *body) {
         return;
     b->fnfield_ret_owned = body && fnfield_value_owned(e, body, ad, NULL, true, 0);
     b->fnfield_ret_stamped = true;
+    /* let-bound-closure-shared-with-fnfield-struct-leaks: the closure
+     * parameters the result holds and nothing else does. */
+    if (body && b->source_fn_def && b->source_fn_def->params &&
+        !b->body_is_inline_c && !expr_subtree_has_inline_c(body))
+        b->fnfield_ret_param_mask =
+            elab_fnfield_result_param_mask(body, b->source_fn_def->params,
+                                           b->source_fn_def->n_params);
 }
 
 /* ---- internal define splicing ---- */

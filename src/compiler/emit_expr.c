@@ -2961,7 +2961,7 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     if (closure_binding_escapes(e->as.let_.body, b)) return false;
     for (uint32_t j = 0; j < e->as.let_.n; j++) {
         if (j == idx) continue;
-        if (closure_binding_escapes(e->as.let_.bindings[j].init, b)) return false;
+        if (closure_binding_escapes_let_init(e, j, b)) return false;
     }
     return true;
 }
@@ -4943,6 +4943,9 @@ void let_binding_push_scope_frees(EmitCtx *ctx, const Expr *e, uint32_t i,
         char *mn = mangle_adt_name(b->type.as.adt_.def->name);
         buf_printf(&st, "drop_fnfields_tur_adt_%s((void *)&%s)", mn, bn);
         free(mn);
+    } else if (emit_let_binding_ccont_owned(e, i)) {
+        /* cloneable-cont-escaped-chain-leaks */
+        buf_printf(&st, "tur_cloneable_cont_drop((int64_t)(intptr_t)(%s))", bn);
     }
     if (st.len) {
         buf_putc(&st, '\0');
@@ -5030,6 +5033,10 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* catch-unwind-thunk-closure-leak (Part 2): C names of let-bound,
      * non-escaping caught Result boxes to tur_result_box_free at scope exit. */
     char **box_free_names = NULL;
+    /* cloneable-cont-escaped-chain-leaks: let-bound fresh cloneable
+     * continuations the body only read (emit_let_binding_ccont_owned). */
+    char **ccont_free_names = NULL;
+    uint32_t n_ccont_free = 0;
     /* any-struct-box-leak-per-widen: `any` locals whose payload box dies here. */
     char **any_free_names = NULL;
     /* RM1 (reclamation-plan): C names of let-bound erased sum-carrier boxes
@@ -5148,6 +5155,11 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 box_free_names = (char **)realloc(box_free_names,
                                                   (n_box_free + 1) * sizeof(char *));
                 box_free_names[n_box_free++] =
+                    name_for_binding(ctx, e->as.let_.bindings[i].binding);
+            } else if (emit_let_binding_ccont_owned(e, i)) {
+                ccont_free_names = (char **)realloc(ccont_free_names,
+                                                    (n_ccont_free + 1) * sizeof(char *));
+                ccont_free_names[n_ccont_free++] =
                     name_for_binding(ctx, e->as.let_.bindings[i].binding);
             } else {
                 const Binding *sb = e->as.let_.bindings[i].binding;
@@ -5347,6 +5359,16 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(box_free_names[i]);
     }
     free(box_free_names);
+
+    /* cloneable-cont-escaped-chain-leaks: drop the fresh continuations this
+     * let owned -- the wrapper and its chain copy. */
+    for (uint32_t i = 0; i < n_ccont_free; i++) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "tur_cloneable_cont_drop((int64_t)(intptr_t)(%s));\n",
+                   ccont_free_names[i]);
+        free(ccont_free_names[i]);
+    }
+    free(ccont_free_names);
 
     /* RM1: release non-escaping erased sum-carrier boxes -- the body was their
      * last use.  Null-guarded (the None carrier is NULL, slice A); shallow

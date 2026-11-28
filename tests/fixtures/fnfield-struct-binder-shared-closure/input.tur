@@ -5,8 +5,10 @@
 ;; scope end while the closure was still in use: a use-after-free or double
 ;; free.  None of them frees it now.
 ;;
-;; Those closures have no owner at all, so they leak (`known-leak`): see
-;; docs/reported/let-bound-closure-shared-with-fnfield-struct-leaks.md.
+;; The closure's own scope frees it instead (the caller's, for a parameter):
+;; every struct holding it here is a local that is only read, so it is dead
+;; when that scope is (let-bound-closure-shared-with-fnfield-struct-leaks).
+;; Leak-checked.
 (defdata Ev (Start int) (End))
 (defstruct H [raw : int handler : (fn [int] int)])
 (defstruct E [raw : int handler : (fn [Ev] int)])

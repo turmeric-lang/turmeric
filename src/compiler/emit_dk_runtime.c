@@ -1447,10 +1447,25 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    }\n"
 "    return false;\n"
 "}\n"
+/* cloneable-cont-escaped-chain-leaks: reap kind 4, a cloneable continuation
+ * a colored function's `let` owned (emit_let_binding_ccont_owned), dropped
+ * through the cloneable runtime's own tur_cloneable_cont_drop.  The drop is
+ * reached through a pointer the registration supplies, because this runtime
+ * is emitted without the cloneable one wherever no continuation is cloned. */
+"typedef void (*__dk_ccont_drop_t)(int64_t);\n"
+"static __dk_ccont_drop_t __dk_ccont_drop_fn = 0;\n"
+"__attribute__((unused)) static int64_t __dk_reap_ccont_with(int64_t c, __dk_ccont_drop_t drop) {\n"
+"    if (!c) return 0;\n"
+"    __dk_ccont_drop_fn = drop;\n"
+"    __dk_reap_push((void *)(intptr_t)c, 4);\n"
+"    return 0;\n"
+"}\n"
+"#define __dk_reap_ccont(c) __dk_reap_ccont_with((c), tur_cloneable_cont_drop)\n"
 "static void __dk_reap_run(void) {\n"
 "    for (size_t i = 0; i < __dk_reap_n && !tur_dk_pinned; i++) {\n"
 "        if (__dk_reap_kind[i] == 1) dk_free((DK *)__dk_reap_v[i]);\n"
 "        else if (__dk_reap_kind[i] == 2) TUR_CLOSURE_DROP(__dk_reap_v[i]);\n"
+"        else if (__dk_reap_kind[i] == 4) { if (__dk_ccont_drop_fn) __dk_ccont_drop_fn((int64_t)(intptr_t)__dk_reap_v[i]); }\n"
 "        else free(__dk_reap_v[i]);\n"
 "    }\n"
 "    free(__dk_reap_v); free(__dk_reap_kind);\n"

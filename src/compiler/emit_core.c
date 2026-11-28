@@ -1234,6 +1234,289 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
     return binding_escapes_impl_x(e, b, allow_box_accessors, ignore, false);
 }
 
+/* ---- let-bound-closure-shared-with-fnfield-struct-leaks -------------------
+ *
+ * Two uses of a closure `b` that hand it to something else, and that are
+ * nonetheless not escapes, because the something else is dead no later than
+ * the scope that frees `b`:
+ *
+ *   - HOLDER: a `let` binds `h` to a by-value struct built with `b` in a boxed
+ *     fn-field -- `(let [h (H 1 b)] ((.handler h) 2))` -- or to the result of a
+ *     call that only puts `b` into the struct it returns
+ *     (Binding.fnfield_ret_param_mask: `(let [w (wrap b)] ...)`).  When `h` is
+ *     only read -- its fn-fields called, its scalar fields read -- and never
+ *     used as a value, the struct and the copy of `b` in it die with h's `let`.
+ *     `h` must not free its fn-fields itself (drops_fn_fields): then it owns
+ *     `b`, and a second free here would be a double free.
+ *
+ *   - CAPTURE: a `let` binds `c` to a lambda that captures `b`, `c` does not
+ *     escape the `let`, and c's body does not let `b` escape.  Closure envs
+ *     never release a captured closure (emit_fns.c's drop glue), except a
+ *     `^fat` one moved into the env, which is refused here.
+ *
+ * Both hold only where the walk sees the whole `let` -- its body as well as
+ * the init -- and only for a closure `b` under the plain closure walk: not the
+ * box-accessor walks, and not the self-tail-call one, whose free runs at the
+ * loop's backedge.  Like every relaxation here, each only ever GREENLIGHTS a
+ * free; the escape walks it starts are the ordinary conservative ones. */
+static const Binding *g_esc_fieldcall_binding = NULL;
+/* While elab_fnfield_result_param_mask runs: the function's result values,
+ * and the parameter whose walk may treat a holder there as the result. */
+static const Expr **g_esc_tail_nodes = NULL;
+static uint32_t g_esc_n_tail_nodes = 0;
+static const Binding *g_esc_tail_param = NULL;
+static int g_esc_relax_depth = 0;
+
+static bool esc_is_tail_node(const Expr *x) {
+    for (uint32_t i = 0; i < g_esc_n_tail_nodes; i++)
+        if (g_esc_tail_nodes[i] == x) return true;
+    return false;
+}
+
+static const Expr *esc_peel_fn_value(const Expr *a) {
+    while (a) {
+        if (a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        else if (a->kind == EX_FN_TO_FAT) a = a->as.fn_to_fat_.inner;
+        else if (a->kind == EX_POLY_TO_FAT) a = a->as.poly_to_fat_.inner;
+        else if (a->kind == EX_POLY_WRAP) a = a->as.poly_wrap_.inner;
+        else break;
+    }
+    return a;
+}
+
+/* A by-value single-constructor product: the struct a holder may be. */
+static const AdtDef *esc_byvalue_struct_def(Type t) {
+    const AdtDef *def = NULL;
+    if (t.kind == TY_ADT) {
+        def = t.as.adt_.def;
+        if (!def || !adt_is_byvalue_product(def)) return NULL;
+    } else if (t.kind == TY_APP) {
+        def = type_adt_app_def(&t);
+        if (!def || !adt_app_is_byvalue_product(t)) return NULL;
+    } else {
+        return NULL;
+    }
+    if (def->is_heap || def->n_ctors != 1 || !def->ctors[0]) return NULL;
+    return def;
+}
+
+/* A field read of this type copies out a word that cannot be a closure. */
+static bool esc_field_read_is_plain(Type t) {
+    switch (t.kind) {
+        case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_SYM:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64: case TY_CSTR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool esc_field_is_boxed_fn(const CtorDef *c, uint32_t fi) {
+    return fi < c->n_fields && c->fields[fi].kind == TY_FN &&
+           c->fields[fi].full_type && c->fields[fi].full_type->kind == TY_FN &&
+           c->fields[fi].full_type->as.fn.boxed;
+}
+
+/* Bit i set: argument i of `x` is `b`, and x's value keeps it in a boxed
+ * fn-field of the by-value struct x builds or returns.  0 when x is no
+ * holder of `b`.  `*direct`, when asked, gets the bits where the field holds
+ * `b` itself rather than a fresh box over it -- the field's drop then frees
+ * `b`.  A poly-carrier argument is boxed fresh at the constructor ({shim, fn,
+ * env} with a NULL drop header, whose drop frees the box and never the env),
+ * and a callee whose result the caller owns (fnfield_ret_owned) can only have
+ * put a parameter there through such a box. */
+static uint32_t esc_holder_mask_x(const Expr *x, const Binding *b, uint32_t *direct);
+static uint32_t esc_holder_mask(const Expr *x, const Binding *b) {
+    return esc_holder_mask_x(x, b, NULL);
+}
+static uint32_t esc_holder_mask_x(const Expr *x, const Binding *b, uint32_t *direct) {
+    if (direct) *direct = 0;
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || !b) return 0;
+    const AdtDef *def = esc_byvalue_struct_def(x->type);
+    if (!def) return 0;
+    const CtorDef *c = def->ctors[0];
+    Expr *const *args = NULL;
+    uint32_t n = 0, ret_mask = 0;
+    bool by_field = false, ret_owned = false;
+    if (x->kind == EX_MAKE_STRUCT) {
+        args = x->as.make_struct_.field_values;
+        n = x->as.make_struct_.n_fields;
+        by_field = true;
+    } else if (x->kind == EX_CALL && !x->as.call_.fn_expr && !x->as.call_.dict_arg) {
+        args = x->as.call_.args;
+        n = x->as.call_.n_args;
+        if (x->as.call_.ctor) {
+            if (x->as.call_.ctor != c) return 0;
+            by_field = true;
+        } else {
+            const Binding *fb = x->as.call_.fn_binding;
+            if (!fb) return 0;
+            ret_mask = fb->fnfield_ret_param_mask;
+            ret_owned = fb->fnfield_ret_stamped && fb->fnfield_ret_owned;
+            if (!ret_mask && fb->source_binding) {
+                ret_mask = fb->source_binding->fnfield_ret_param_mask;
+                ret_owned = fb->source_binding->fnfield_ret_stamped &&
+                            fb->source_binding->fnfield_ret_owned;
+            }
+            if (!ret_mask) return 0;
+        }
+    } else {
+        return 0;
+    }
+    uint32_t m = 0;
+    for (uint32_t i = 0; i < n && i < 32; i++) {
+        if (by_field ? !esc_field_is_boxed_fn(c, i) : !(ret_mask & (1u << i)))
+            continue;
+        const Expr *a = esc_peel_fn_value(args[i]);
+        if (!(a && a->kind == EX_VAR && a->as.var.binding == b)) continue;
+        m |= 1u << i;
+        const Expr *w = args[i];
+        while (w && w->kind == EX_ASCRIBE) w = w->as.ascribe_.inner;
+        bool boxed = by_field ? (w && w->kind == EX_POLY_TO_FAT) : ret_owned;
+        if (direct && !boxed) *direct |= 1u << i;
+    }
+    return m;
+}
+
+typedef struct {
+    bool call_head_only, allow_sum, copying_match;
+    uint32_t self_apply;
+    const Binding *fieldcall;
+} EscFlags;
+static EscFlags esc_flags_enter(const Binding *fieldcall) {
+    EscFlags s = { g_esc_call_head_only, g_esc_allow_sum_accessors,
+                   g_esc_copying_match_ok, g_esc_self_apply_mask,
+                   g_esc_fieldcall_binding };
+    g_esc_call_head_only = false;
+    g_esc_allow_sum_accessors = false;
+    g_esc_copying_match_ok = false;
+    g_esc_self_apply_mask = 0;
+    g_esc_fieldcall_binding = fieldcall;
+    g_esc_relax_depth++;
+    return s;
+}
+static void esc_flags_leave(EscFlags s) {
+    g_esc_call_head_only = s.call_head_only;
+    g_esc_allow_sum_accessors = s.allow_sum;
+    g_esc_copying_match_ok = s.copying_match;
+    g_esc_self_apply_mask = s.self_apply;
+    g_esc_fieldcall_binding = s.fieldcall;
+    g_esc_relax_depth--;
+}
+
+/* May the walk for `b` use the HOLDER and CAPTURE relaxations? */
+/* A binding holding a closure value: a fn type, or the poly / fat carrier a
+ * closure parameter or a let-bound lambda may be typed as (a `ptr<void>`). */
+static bool esc_binding_is_closure(const Binding *b) {
+    return b && (b->type.kind == TY_FN || b->is_poly_fn || b->is_fat ||
+                 (b->type.kind == TY_PTR_VOID &&
+                  (b->closure_fn_binding || b->hoist_closure_fn_binding)));
+}
+
+static bool esc_relax_ok(const Binding *b, bool allow_box_accessors) {
+    return esc_binding_is_closure(b) && !b->is_mut && !allow_box_accessors &&
+           !g_esc_call_head_only && g_esc_relax_depth < 8;
+}
+
+/* Is the holder bound by binding `i` of let `L` only read -- its fn-fields
+ * called, its scalar fields read -- in the rest of the let?  `direct`: some
+ * field holds `b` itself, so a holder that frees its fn-fields
+ * (drops_fn_fields) owns `b` and is refused. */
+static bool esc_holder_confined(const Expr *L, uint32_t i, bool direct) {
+    const Binding *h = L->as.let_.bindings[i].binding;
+    if (!h || h->is_mut || h->is_global || (direct && h->drops_fn_fields) ||
+        !esc_byvalue_struct_def(h->type))
+        return false;
+    EscFlags s = esc_flags_enter(h);
+    bool esc = binding_escapes_impl(L->as.let_.body, h, false, NULL);
+    for (uint32_t k = i + 1; !esc && k < L->as.let_.n; k++)
+        if (L->as.let_.bindings[k].init)
+            esc = binding_escapes_impl(L->as.let_.bindings[k].init, h, false, NULL);
+    esc_flags_leave(s);
+    return !esc;
+}
+
+/* Is binding `i` of let `L` a read of one of holder h's fields, bound to a
+ * local the let never lets out? */
+static bool esc_field_alias_confined(const Expr *L, uint32_t i, const Binding *h) {
+    const Expr *init = esc_peel_fn_value(L->as.let_.bindings[i].init);
+    const Binding *ci = L->as.let_.bindings[i].binding;
+    if (!init || init->kind != EX_GET_FIELD || !ci || ci->is_mut) return false;
+    const Expr *so = init->as.get_field_.struct_expr;
+    while (so && so->kind == EX_ASCRIBE) so = so->as.ascribe_.inner;
+    if (!so || so->kind != EX_VAR || so->as.var.binding != h) return false;
+    EscFlags s = esc_flags_enter(NULL);
+    bool esc = binding_escapes_impl(L->as.let_.body, ci, false, NULL);
+    for (uint32_t k = i + 1; !esc && k < L->as.let_.n; k++)
+        if (L->as.let_.bindings[k].init)
+            esc = binding_escapes_impl(L->as.let_.bindings[k].init, ci, false, NULL);
+    esc_flags_leave(s);
+    return !esc;
+}
+
+/* Does `x` name `b` -- a read, a call of it, or a capture? */
+static bool esc_mentions_visit(const Expr *x, void *ud);
+static bool esc_mentions(const Expr *x, const Binding *b) {
+    if (!x) return false;
+    switch (x->kind) {
+        case EX_VAR: return x->as.var.binding == b;
+        case EX_CALL:
+            if (x->as.call_.fn_binding == b) return true;
+            break;
+        case EX_CLOSURE: {
+            const struct Closure *c = x->as.closure_.closure;
+            if (c)
+                for (uint32_t i = 0; i < c->n_captures; i++)
+                    if (c->captures[i] == b) return true;
+            return false;
+        }
+        default: break;
+    }
+    return cps_visit_children(x, esc_mentions_visit, (void *)b);
+}
+static bool esc_mentions_visit(const Expr *x, void *ud) {
+    return esc_mentions(x, (const Binding *)ud);
+}
+
+/* Is binding `i` of let `L` a lambda capturing `b` that dies with the let and
+ * keeps nothing of `b` past its own calls? */
+static bool esc_capture_confined(const Expr *L, uint32_t i, const Binding *b) {
+    const Expr *init = L->as.let_.bindings[i].init;
+    const Binding *ci = L->as.let_.bindings[i].binding;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init || init->kind != EX_CLOSURE || !ci || ci->is_mut || b->is_fat)
+        return false;
+    const struct Closure *c = init->as.closure_.closure;
+    if (!c || !c->fn || !c->fn->body || c->is_shift_receiver || c->is_effect_payload)
+        return false;
+    bool captured = false;
+    for (uint32_t k = 0; k < c->n_captures; k++) {
+        if (c->captures[k] != b) continue;
+        if (c->capture_drop_insts && c->capture_drop_insts[k]) return false;
+        captured = true;
+    }
+    /* The body must read `b` through the same Binding, or the walk below would
+     * not see its uses. */
+    if (!captured || !esc_mentions(c->fn->body, b)) return false;
+    EscFlags s = esc_flags_enter(NULL);
+    bool esc = binding_escapes_impl(c->fn->body, b, false, NULL) ||
+               binding_escapes_impl(L->as.let_.body, ci, false, NULL);
+    for (uint32_t k = 0; !esc && k < L->as.let_.n; k++)
+        if (k != i && L->as.let_.bindings[k].init)
+            esc = binding_escapes_impl(L->as.let_.bindings[k].init, ci, false, NULL);
+    esc_flags_leave(s);
+    return !esc;
+}
+
+/* The arguments of `x` the walk skips because they are `b` held confined. */
+typedef struct { const Expr *node; uint32_t mask; } EscSkip;
+/* A skip the next walk starts with (closure_binding_escapes_let_init). */
+static const Expr *g_esc_seed_node = NULL;
+static uint32_t g_esc_seed_mask = 0;
+
 /* any-struct-box-leak-per-widen: `allow_any_cast` additionally treats
  * `(cast b T)` on a bare `b` as a non-escape.  Sound for THIS decision and only
  * this one: the box is freed only when the tag says a widen heap-boxed the
@@ -1250,6 +1533,17 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
     if (!stack) { fprintf(stderr, "tur: oom\n"); abort(); }
     int sp = 0;
     bool escapes = false;
+    /* let-bound-closure-shared-with-fnfield-struct-leaks: holder nodes whose
+     * `b` arguments the EX_LET arm below vouched for. */
+    EscSkip skips[16];
+    uint32_t n_skips = 0;
+    if (g_esc_seed_node) {
+        skips[n_skips].node = g_esc_seed_node;
+        skips[n_skips].mask = g_esc_seed_mask;
+        n_skips++;
+        g_esc_seed_node = NULL;
+        g_esc_seed_mask = 0;
+    }
 
 #define ESC_PUSH(x) do {                                                       \
         const Expr *_x = (x);                                                  \
@@ -1271,7 +1565,14 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
         if (cur == ignore) continue;
         switch (cur->kind) {
             case EX_VAR:
-                if (cur->as.var.binding == b) { escapes = true; goto esc_done; }
+                if (cur->as.var.binding == b) {
+                    /* elab_fnfield_result_param_mask: a holder handed back as
+                     * the function's result is the caller's to confine. */
+                    if (b == g_esc_fieldcall_binding && g_esc_n_tail_nodes &&
+                        esc_is_tail_node(cur))
+                        break;
+                    escapes = true; goto esc_done;
+                }
                 break;
             /* any-struct-box-leak-per-widen: `(type-of b)` and `(is? b T)` READ
              * the tag and yield something that cannot alias the payload -- a
@@ -1311,8 +1612,26 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
              * (args, dict arg, a non-`b` callee) is walked normally. */
             case EX_CALL: {
                 const Expr *fe = cur->as.call_.fn_expr;
-                if (fe && !(fe->kind == EX_VAR && fe->as.var.binding == b))
+                /* A holder's fn-field called: `((.handler h) 2)` invokes the
+                 * closure h holds, as `(b 2)` invokes b. */
+                bool fe_is_field_call = false;
+                if (fe && b == g_esc_fieldcall_binding) {
+                    const Expr *pf = esc_peel_fn_value(fe);
+                    if (pf && pf->kind == EX_GET_FIELD) {
+                        const Expr *so = pf->as.get_field_.struct_expr;
+                        while (so && so->kind == EX_ASCRIBE) so = so->as.ascribe_.inner;
+                        fe_is_field_call = so && so->kind == EX_VAR &&
+                                           so->as.var.binding == b;
+                    }
+                }
+                if (fe && !fe_is_field_call &&
+                    !(fe->kind == EX_VAR && fe->as.var.binding == b))
                     ESC_PUSH(fe);
+                uint32_t held_skip = 0;
+                for (uint32_t si = 0; si < n_skips; si++)
+                    if (skips[si].node == cur) held_skip |= skips[si].mask;
+                if (b == g_esc_tail_param && g_esc_n_tail_nodes && esc_is_tail_node(cur))
+                    held_skip |= esc_holder_mask(cur, b);
                 /* Box-accessor whitelist: a direct call to `ok?`/`err?`/`ok-val`
                  * reads its Result argument without retaining the box, so a `b`
                  * argument there is not an escape -- skip pushing it. */
@@ -1359,6 +1678,8 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                                     barg->as.var.binding == b;
                     if (box_accessor && arg_is_b)
                         continue;
+                    if (i < 32 && (held_skip & (1u << i)))
+                        continue;   /* held by a confined holder (EX_LET arm) */
                     /* closure-env-capturing-closures-not-released: `b` is a
                      * hoisted fresh closure handed to the combinator whose
                      * result env holds it, and that result dies at the same
@@ -1496,11 +1817,37 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
 
             /* ---- container kinds: walk every sub-expression ---- */
             case EX_LET:
-            case EX_LETREC:
-                for (uint32_t i = 0; i < cur->as.let_.n; i++)
-                    ESC_PUSH(cur->as.let_.bindings[i].init);
+            case EX_LETREC: {
+                /* let-bound-closure-shared-with-fnfield-struct-leaks: a holder
+                 * or capturing lambda the let confines is not an escape of
+                 * `b` (see esc_holder_confined / esc_capture_confined). */
+                bool relax = cur->kind == EX_LET &&
+                             esc_relax_ok(b, allow_box_accessors || allow_any_cast);
+                for (uint32_t i = 0; i < cur->as.let_.n; i++) {
+                    const Expr *init = cur->as.let_.bindings[i].init;
+                    /* A holder's fn-field bound to a local that the let only
+                     * calls -- the elaborator binds the head of
+                     * `((.handler h) 2)` that way. */
+                    if (b == g_esc_fieldcall_binding && cur->kind == EX_LET &&
+                        esc_field_alias_confined(cur, i, b))
+                        continue;
+                    if (relax && init) {
+                        if (esc_capture_confined(cur, i, b)) continue;
+                        uint32_t hd = 0;
+                        uint32_t hm = esc_holder_mask_x(init, b, &hd);
+                        if (hm && n_skips < 16 && esc_holder_confined(cur, i, hd != 0)) {
+                            const Expr *hn = init;
+                            while (hn && hn->kind == EX_ASCRIBE) hn = hn->as.ascribe_.inner;
+                            skips[n_skips].node = hn;
+                            skips[n_skips].mask = hm;
+                            n_skips++;
+                        }
+                    }
+                    ESC_PUSH(init);
+                }
                 ESC_PUSH(cur->as.let_.body);
                 break;
+            }
             case EX_IF:
                 ESC_PUSH(cur->as.if_.cond);
                 ESC_PUSH(cur->as.if_.then_);
@@ -1566,10 +1913,18 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 for (uint32_t i = 0; i < cur->as.builtin.n; i++)
                     ESC_PUSH(cur->as.builtin.args[i]);
                 break;
-            case EX_MAKE_STRUCT:
-                for (uint32_t i = 0; i < cur->as.make_struct_.n_fields; i++)
+            case EX_MAKE_STRUCT: {
+                uint32_t held_skip = 0;
+                for (uint32_t si = 0; si < n_skips; si++)
+                    if (skips[si].node == cur) held_skip |= skips[si].mask;
+                if (b == g_esc_tail_param && g_esc_n_tail_nodes && esc_is_tail_node(cur))
+                    held_skip |= esc_holder_mask(cur, b);
+                for (uint32_t i = 0; i < cur->as.make_struct_.n_fields; i++) {
+                    if (i < 32 && (held_skip & (1u << i))) continue;
                     ESC_PUSH(cur->as.make_struct_.field_values[i]);
+                }
                 break;
+            }
             case EX_SET_LIT:
                 for (uint32_t i = 0; i < cur->as.set_lit_.n; i++)
                     ESC_PUSH(cur->as.set_lit_.items[i]);
@@ -1578,9 +1933,19 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 for (uint32_t i = 0; i < cur->as.cons_list_.n; i++)
                     ESC_PUSH(cur->as.cons_list_.items[i]);
                 break;
-            case EX_GET_FIELD:
+            case EX_GET_FIELD: {
+                /* A holder's scalar field read copies a word that cannot be
+                 * the closure it holds. */
+                if (b == g_esc_fieldcall_binding) {
+                    const Expr *so = cur->as.get_field_.struct_expr;
+                    while (so && so->kind == EX_ASCRIBE) so = so->as.ascribe_.inner;
+                    if (so && so->kind == EX_VAR && so->as.var.binding == b &&
+                        esc_field_read_is_plain(cur->type))
+                        break;
+                }
                 ESC_PUSH(cur->as.get_field_.struct_expr);
                 break;
+            }
             case EX_SET_FIELD:
                 ESC_PUSH(cur->as.set_field_.receiver);
                 ESC_PUSH(cur->as.set_field_.value);
@@ -1762,6 +2127,94 @@ esc_done:
 
 bool closure_binding_escapes(const Expr *e, const Binding *b) {
     return binding_escapes_impl(e, b, /*allow_box_accessors=*/false, NULL);
+}
+
+/* let-bound-closure-shared-with-fnfield-struct-leaks: closure_binding_escapes
+ * over the init of binding `j` of let `L` -- a SIBLING of `b`'s own binding,
+ * walked apart from the let's body by let_binding_env_freeable.  The HOLDER
+ * and CAPTURE relaxations need the rest of the let, which a walk over the init
+ * alone cannot see, so they are decided here: `(let [f (fn ...) h (H 1 f)]
+ * ...)` stores f in h, and h dies with this let. */
+bool closure_binding_escapes_let_init(const Expr *L, uint32_t j, const Binding *b) {
+    const Expr *init = L->as.let_.bindings[j].init;
+    if (!init) return false;
+    if (L->kind == EX_LET && esc_relax_ok(b, false)) {
+        if (esc_capture_confined(L, j, b)) return false;
+        uint32_t hd = 0;
+        uint32_t hm = esc_holder_mask_x(init, b, &hd);
+        if (hm && esc_holder_confined(L, j, hd != 0)) {
+            const Expr *hn = init;
+            while (hn && hn->kind == EX_ASCRIBE) hn = hn->as.ascribe_.inner;
+            g_esc_seed_node = hn;
+            g_esc_seed_mask = hm;
+        }
+    }
+    return binding_escapes_impl(init, b, /*allow_box_accessors=*/false, NULL);
+}
+
+/* The values a function body hands back: its tail positions, through `let`,
+ * `do`, `if` and `match`.  An ascription that changes the type stops the walk
+ * (the value is converted there), and so does running out of room. */
+static bool esc_collect_tails(const Expr *x, const Expr **out, uint32_t *n,
+                              uint32_t cap) {
+    while (x && x->kind == EX_ASCRIBE && x->as.ascribe_.inner &&
+           type_eq(x->type, x->as.ascribe_.inner->type))
+        x = x->as.ascribe_.inner;
+    if (!x) return true;
+    switch (x->kind) {
+        case EX_ASCRIBE:
+            return false;
+        case EX_LET:
+        case EX_LETREC:
+            return esc_collect_tails(x->as.let_.body, out, n, cap);
+        case EX_DO:
+            return x->as.do_.n == 0 ||
+                   esc_collect_tails(x->as.do_.items[x->as.do_.n - 1], out, n, cap);
+        case EX_IF:
+            return esc_collect_tails(x->as.if_.then_, out, n, cap) &&
+                   esc_collect_tails(x->as.if_.else_or_null, out, n, cap);
+        case EX_MATCH:
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                if (!esc_collect_tails(x->as.match_.arms[i].body, out, n, cap))
+                    return false;
+            return true;
+        default:
+            if (*n >= cap) return false;
+            out[(*n)++] = x;
+            return true;
+    }
+}
+
+/* Binding.fnfield_ret_param_mask: the closure parameters whose only escape
+ * is into the struct the function returns -- a holder in a tail position
+ * (`(H 2 f)`, `(wrap f)`), or a local holding one that is otherwise only read
+ * and is itself the tail value (`(let [h (H 2 f)] h)`).  The caller confines
+ * the result or treats the argument as escaping, as it would without this. */
+uint32_t elab_fnfield_result_param_mask(const Expr *body, Binding *const *params,
+                                        uint32_t n_params) {
+    if (!body || !params) return 0;
+    const Expr *tails[64];
+    uint32_t nt = 0;
+    if (!esc_collect_tails(body, tails, &nt, 64) || nt == 0) return 0;
+    const Expr **save_nodes = g_esc_tail_nodes;
+    uint32_t save_n = g_esc_n_tail_nodes;
+    const Binding *save_param = g_esc_tail_param;
+    g_esc_tail_nodes = tails;
+    g_esc_n_tail_nodes = nt;
+    uint32_t mask = 0;
+    for (uint32_t i = 0; i < n_params && i < 32; i++) {
+        const Binding *p = params[i];
+        if (!p || !esc_binding_is_closure(p) || p->is_fat || p->is_mut) continue;
+        g_esc_tail_param = p;
+        EscFlags s = esc_flags_enter(NULL);
+        if (!binding_escapes_impl(body, p, /*allow_box_accessors=*/false, NULL))
+            mask |= 1u << i;
+        esc_flags_leave(s);
+    }
+    g_esc_tail_nodes = save_nodes;
+    g_esc_n_tail_nodes = save_n;
+    g_esc_tail_param = save_param;
+    return mask;
 }
 
 /* The same, for an owner that frees at the outermost DK entry's exit (the CPS

@@ -5,9 +5,9 @@
 ;; "is everything before it effect-free?" test did not look through that, so
 ;; a local closure, a named defn and a captureless lambda all read as
 ;; effectful.  Each line below released nothing before (the live count rose
-;; by one per call); it is 0 now.  Still open, and not here: an OWNING
-;; earlier argument (these closures included) beside an EFFECTFUL one keeps
-;; the old behaviour, a leak rather than a reordered closure.
+;; by one per call); it is 0 now.  An OWNING earlier argument (these
+;; closures included) beside an EFFECTFUL one is
+;; borrowed-drop-temporary-owning-earlier-arg.
 ;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
 (defn ctr [op : int] : int
   ```c
