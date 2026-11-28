@@ -1234,6 +1234,168 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
     return binding_escapes_impl_x(e, b, allow_box_accessors, ignore, false);
 }
 
+/* fnfield-ctor-param-closure-leaks-in-caller: the closure `b` may sit in a
+ * by-value struct that a `let` binds -- `(let [h (H 1 b)] ((.run h) x))`.
+ * Storing a closure in a constructor used to be an escape outright, so the
+ * closure's own `let` never freed it, and a parameter stored that way made its
+ * callee "retaining", so the caller never freed what it passed in.  Nothing
+ * else frees it either: the struct only owns closures it minted
+ * (Binding.fnfield_owner).
+ *
+ * The struct is an ALIAS of `b`: the walk follows it the way it follows `b`.
+ * Reading a closure field out of it and calling it is an invocation; reading
+ * another field is a copy of a word `b` is not in (the only way `b` got in was
+ * the closure-field arguments checked here -- any other argument is walked as
+ * usual); handing that closure field to a parameter that does not retain it is
+ * what handing `b` there is.  Any other mention of the struct -- returned,
+ * passed, stored, rebound, captured, matched on, `set!` -- is an escape, as a
+ * bare `b` is.  So is a closure field read anywhere else.  A `let` bound to a
+ * closure field read (`(let [r (.run h)] ...)`, the call-head temp
+ * `((.run h) x)` elaborates to) is an alias of `b` itself.
+ *
+ * The struct cannot outlive `b`'s scope without one of those escapes, because
+ * its `let` is lexically inside it (its init names `b`).  It never frees `b`:
+ * it is not the owner, and an owner whose field holds a box wrapping `b`
+ * (EX_FN_TO_FAT / EX_POLY_TO_FAT) frees that box only -- its header owns
+ * nothing. */
+#define ESC_MAX_ALIAS 16
+typedef struct {
+    const Binding *b;
+    const Binding *cl[ESC_MAX_ALIAS];   /* hold `b`'s word itself */
+    uint32_t       n_cl;
+    const Binding *st[ESC_MAX_ALIAS];   /* by-value structs holding it */
+    uint32_t       n_st;
+} EscAlias;
+
+static bool esc_alias_is_cl(const EscAlias *a, const Binding *x) {
+    if (!x) return false;
+    if (x == a->b) return true;
+    for (uint32_t i = 0; i < a->n_cl; i++) if (a->cl[i] == x) return true;
+    return false;
+}
+static bool esc_alias_is_st(const EscAlias *a, const Binding *x) {
+    if (!x) return false;
+    for (uint32_t i = 0; i < a->n_st; i++) if (a->st[i] == x) return true;
+    return false;
+}
+static bool esc_alias_any(const EscAlias *a, const Binding *x) {
+    return esc_alias_is_cl(a, x) || esc_alias_is_st(a, x);
+}
+static const Expr *esc_peel_wraps(const Expr *x) {
+    while (x) {
+        if (x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+        else if (x->kind == EX_POLY_WRAP) x = x->as.poly_wrap_.inner;
+        else if (x->kind == EX_FN_TO_FAT) x = x->as.fn_to_fat_.inner;
+        else if (x->kind == EX_POLY_TO_FAT) x = x->as.poly_to_fat_.inner;
+        else break;
+    }
+    return x;
+}
+/* The constructor field a read names, or NULL. */
+static const CtorField *esc_field_of(const Expr *gf) {
+    if (!gf || gf->kind != EX_GET_FIELD) return NULL;
+    const Expr *se = gf->as.get_field_.struct_expr;
+    if (!se) return NULL;
+    const AdtDef *def = se->type.kind == TY_ADT ? se->type.as.adt_.def : NULL;
+    if (!def || def->n_ctors != 1 || !def->ctors[0]) return NULL;
+    const CtorDef *ctor = def->ctors[0];
+    uint32_t fi = gf->as.get_field_.field_idx;
+    return fi < ctor->n_fields ? &ctor->fields[fi] : NULL;
+}
+/* Is `gf` a read of a struct alias's field?  `*is_fn` says whether that
+ * field holds a closure (which may be `b`). */
+static bool esc_alias_field_read(const EscAlias *a, const Expr *gf, bool *is_fn) {
+    if (!gf || gf->kind != EX_GET_FIELD || a->n_st == 0) return false;
+    const Expr *se = gf->as.get_field_.struct_expr;
+    while (se && se->kind == EX_ASCRIBE) se = se->as.ascribe_.inner;
+    if (!se || se->kind != EX_VAR || !esc_alias_is_st(a, se->as.var.binding))
+        return false;
+    const CtorField *f = esc_field_of(gf);
+    *is_fn = !f || f->kind == TY_FN;   /* unknown: assume it may hold `b` */
+    return true;
+}
+/* Does `x` evaluate to `b`'s closure word: `b`, a closure alias, or a
+ * closure field of a struct alias (wraps peeled)? */
+static bool esc_alias_names_b(const EscAlias *a, const Expr *x) {
+    x = esc_peel_wraps(x);
+    if (!x) return false;
+    if (x->kind == EX_VAR) return esc_alias_is_cl(a, x->as.var.binding);
+    bool is_fn = false;
+    return esc_alias_field_read(a, x, &is_fn) && is_fn;
+}
+/* A `let` binding whose init puts `b` into a by-value struct's closure
+ * fields: register the binding as a struct alias and push the constructor's
+ * OTHER arguments (true), or leave it to the ordinary walk (false). */
+static bool esc_alias_struct_init(EscAlias *a, const Binding *lb, const Expr *init,
+                                  const Expr ***stackp, int *spp, size_t *capp) {
+    if (!lb || a->n_st >= ESC_MAX_ALIAS) return false;
+    const Expr *c = init;
+    while (c && c->kind == EX_ASCRIBE) c = c->as.ascribe_.inner;
+    if (!c || c->kind != EX_CALL || c->as.call_.fn_expr || c->as.call_.dict_arg)
+        return false;
+    const AdtDef *def = lb->type.kind == TY_ADT ? lb->type.as.adt_.def : NULL;
+    if (!def || def->is_heap || def->n_ctors != 1 || !def->ctors[0]) return false;
+    /* A constructor function -- `(defn wrap [f] (H 2 f))` -- whose result holds
+     * closure parameter i (Binding.fresh_fnfield_via_param_mask: the body names
+     * that parameter once, in the struct it returns, so it keeps it nowhere
+     * else).  `b` handed there is in the result exactly as in `(H 2 b)`.  Not
+     * a struct parameter passed through: the callee may have read a closure
+     * out of it and kept that before returning the struct. */
+    if (!c->as.call_.ctor) {
+        const Binding *fb = c->as.call_.fn_binding;
+        uint32_t m = fb ? fb->fresh_fnfield_via_param_mask : 0;
+        if (!m || fb->type.kind != TY_FN || !fb->type.as.fn.arg_kinds ||
+            !call_dispatch_is_static(c))
+            return false;
+        bool hit = false;
+        for (uint32_t i = 0; i < c->as.call_.n_args && i < 32; i++)
+            if ((m & (1u << i)) && i < fb->type.as.fn.arity &&
+                fb->type.as.fn.arg_kinds[i] == TY_FN &&
+                esc_alias_names_b(a, c->as.call_.args[i]))
+                hit = true;
+        if (!hit) return false;
+        a->st[a->n_st++] = lb;
+        for (uint32_t i = 0; i < c->as.call_.n_args; i++) {
+            const Expr *arg = c->as.call_.args[i];
+            if (i < 32 && (m & (1u << i)) && i < fb->type.as.fn.arity &&
+                fb->type.as.fn.arg_kinds[i] == TY_FN && esc_alias_names_b(a, arg))
+                continue;
+            if (!arg) continue;
+            if ((size_t)*spp >= *capp) {
+                *capp *= 2;
+                *stackp = (const Expr **)realloc((void *)*stackp, *capp * sizeof(Expr *));
+                if (!*stackp) { fprintf(stderr, "tur: oom\n"); abort(); }
+            }
+            (*stackp)[(*spp)++] = arg;
+        }
+        return true;
+    }
+    const CtorDef *ctor = c->as.call_.ctor;
+    if (def->ctors[0] != ctor || c->as.call_.n_args != ctor->n_fields)
+        return false;
+    bool any = false;
+    for (uint32_t i = 0; i < ctor->n_fields; i++) {
+        if (ctor->fields[i].kind == TY_FN && esc_alias_names_b(a, c->as.call_.args[i])) {
+            any = true;
+            break;
+        }
+    }
+    if (!any) return false;
+    a->st[a->n_st++] = lb;
+    for (uint32_t i = 0; i < ctor->n_fields; i++) {
+        const Expr *arg = c->as.call_.args[i];
+        if (ctor->fields[i].kind == TY_FN && esc_alias_names_b(a, arg)) continue;
+        if (!arg) continue;
+        if ((size_t)*spp >= *capp) {
+            *capp *= 2;
+            *stackp = (const Expr **)realloc((void *)*stackp, *capp * sizeof(Expr *));
+            if (!*stackp) { fprintf(stderr, "tur: oom\n"); abort(); }
+        }
+        (*stackp)[(*spp)++] = arg;
+    }
+    return true;
+}
+
 /* any-struct-box-leak-per-widen: `allow_any_cast` additionally treats
  * `(cast b T)` on a bare `b` as a non-escape.  Sound for THIS decision and only
  * this one: the box is freed only when the tag says a widen heap-boxed the
@@ -1250,6 +1412,12 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
     if (!stack) { fprintf(stderr, "tur: oom\n"); abort(); }
     int sp = 0;
     bool escapes = false;
+    /* fnfield-ctor-param-closure-leaks-in-caller: only for a closure; the
+     * box / `any` variants keep their exact walks. */
+    EscAlias al;
+    memset(&al, 0, sizeof al);
+    al.b = b;
+    const bool aliasing = !allow_box_accessors && !allow_any_cast;
 
 #define ESC_PUSH(x) do {                                                       \
         const Expr *_x = (x);                                                  \
@@ -1271,7 +1439,8 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
         if (cur == ignore) continue;
         switch (cur->kind) {
             case EX_VAR:
-                if (cur->as.var.binding == b) { escapes = true; goto esc_done; }
+                if (cur->as.var.binding == b ||
+                    esc_alias_any(&al, cur->as.var.binding)) { escapes = true; goto esc_done; }
                 break;
             /* any-struct-box-leak-per-widen: `(type-of b)` and `(is? b T)` READ
              * the tag and yield something that cannot alias the payload -- a
@@ -1311,7 +1480,10 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
              * (args, dict arg, a non-`b` callee) is walked normally. */
             case EX_CALL: {
                 const Expr *fe = cur->as.call_.fn_expr;
-                if (fe && !(fe->kind == EX_VAR && fe->as.var.binding == b))
+                /* ...and a call through an alias of `b` (a struct alias's
+                 * closure field, `(.run h x)`) is an invocation too. */
+                if (fe && !(fe->kind == EX_VAR && fe->as.var.binding == b) &&
+                    !(al.n_cl + al.n_st > 0 && esc_alias_names_b(&al, fe)))
                     ESC_PUSH(fe);
                 /* Box-accessor whitelist: a direct call to `ok?`/`err?`/`ok-val`
                  * reads its Result argument without retaining the box, so a `b`
@@ -1357,6 +1529,10 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                     }
                     bool arg_is_b = barg && barg->kind == EX_VAR &&
                                     barg->as.var.binding == b;
+                    /* `b`'s word under another name (see EscAlias): it may go
+                     * where `b` may, into a parameter that does not keep it. */
+                    bool arg_is_alias = !arg_is_b && al.n_cl + al.n_st > 0 &&
+                                        esc_alias_names_b(&al, arg);
                     if (box_accessor && arg_is_b)
                         continue;
                     /* closure-env-capturing-closures-not-released: `b` is a
@@ -1393,7 +1569,8 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                      * no `^borrow` annotation.  Soundness rides the same escape
                      * analysis that set the bit: if the callee let the closure
                      * escape, the bit is clear and the arg is walked as an escape. */
-                    if (arg_is_b && call_dispatch_is_static(cur) && !g_esc_call_head_only) {
+                    if ((arg_is_b || arg_is_alias) && call_dispatch_is_static(cur) &&
+                        !g_esc_call_head_only) {
                         const Binding *fb = cur->as.call_.fn_binding;
                         if (fb && fb->type.kind == TY_FN
                             && i < fb->type.as.fn.arity
@@ -1434,6 +1611,9 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                                 }
                                 if (pa && pa->kind == EX_VAR && pa->as.var.binding == b)
                                     continue; /* borrowed rest element -- no escape */
+                                if (al.n_cl + al.n_st > 0 &&
+                                    esc_alias_names_b(&al, arg->as.cons_list_.items[ci]))
+                                    continue;
                                 ESC_PUSH(arg->as.cons_list_.items[ci]);
                             }
                             continue; /* handled the cons-list arg element-wise */
@@ -1451,14 +1631,18 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 if (cur->as.closure_.closure) {
                     struct Closure *c = cur->as.closure_.closure;
                     for (uint32_t i = 0; i < c->n_captures; i++)
-                        if (c->captures[i] == b) { escapes = true; goto esc_done; }
+                        if (c->captures[i] == b || esc_alias_any(&al, c->captures[i])) {
+                            escapes = true; goto esc_done;
+                        }
                 }
                 break;
             case EX_FN_DEF:
                 if (cur->as.fn_def_.fn && cur->as.fn_def_.fn->closure) {
                     struct Closure *c = cur->as.fn_def_.fn->closure;
                     for (uint32_t i = 0; i < c->n_captures; i++)
-                        if (c->captures[i] == b) { escapes = true; goto esc_done; }
+                        if (c->captures[i] == b || esc_alias_any(&al, c->captures[i])) {
+                            escapes = true; goto esc_done;
+                        }
                 }
                 break;
             /* A defer body runs at scope exit -- the same point as the env free --
@@ -1479,7 +1663,10 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
              * greenlighting a free of an env the defer actually uses. */
             case EX_DEFER:
                 for (uint8_t i = 0; i < cur->as.defer_.n_captures; i++)
-                    if (cur->as.defer_.captures[i] == b) { escapes = true; goto esc_done; }
+                    if (cur->as.defer_.captures[i] == b ||
+                        esc_alias_any(&al, cur->as.defer_.captures[i])) {
+                        escapes = true; goto esc_done;
+                    }
                 break;
             /* Inline-C may name `b` through its capture array (__TUR_CAP_N__) in
              * addition to its evaluated sub-expressions. */
@@ -1487,7 +1674,9 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 InlineC *ic = cur->as.inline_c_.inline_c;
                 if (ic) {
                     for (uint8_t i = 0; i < ic->n_captures; i++)
-                        if (ic->captures[i] == b) { escapes = true; goto esc_done; }
+                        if (ic->captures[i] == b || esc_alias_any(&al, ic->captures[i])) {
+                            escapes = true; goto esc_done;
+                        }
                     for (uint8_t i = 0; i < ic->n_val_exprs; i++)
                         ESC_PUSH(ic->val_exprs[i]);
                 }
@@ -1497,8 +1686,27 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
             /* ---- container kinds: walk every sub-expression ---- */
             case EX_LET:
             case EX_LETREC:
-                for (uint32_t i = 0; i < cur->as.let_.n; i++)
-                    ESC_PUSH(cur->as.let_.bindings[i].init);
+                for (uint32_t i = 0; i < cur->as.let_.n; i++) {
+                    const Binding *lb = cur->as.let_.bindings[i].binding;
+                    const Expr *init = cur->as.let_.bindings[i].init;
+                    /* EscAlias: a struct built around `b`, or a closure field
+                     * read out of one.  Registered in binding order, before
+                     * the body is walked. */
+                    if (aliasing && cur->kind == EX_LET && lb) {
+                        if (esc_alias_struct_init(&al, lb, init, &stack, &sp, &cap))
+                            continue;
+                        if (al.n_st > 0 && al.n_cl < ESC_MAX_ALIAS) {
+                            bool is_fn = false;
+                            const Expr *pi = init;
+                            while (pi && pi->kind == EX_ASCRIBE) pi = pi->as.ascribe_.inner;
+                            if (esc_alias_field_read(&al, pi, &is_fn)) {
+                                if (is_fn) al.cl[al.n_cl++] = lb;
+                                continue;
+                            }
+                        }
+                    }
+                    ESC_PUSH(init);
+                }
                 ESC_PUSH(cur->as.let_.body);
                 break;
             case EX_IF:
@@ -1518,7 +1726,9 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 /* Reassigning `b` itself: the scope-exit drop would then release
                  * whatever `b` holds LAST -- possibly a value some other holder
                  * owns -- and never the one this scope minted.  Decline. */
-                if (cur->as.set_.target == b) { escapes = true; goto esc_done; }
+                if (cur->as.set_.target == b || esc_alias_any(&al, cur->as.set_.target)) {
+                    escapes = true; goto esc_done;
+                }
                 ESC_PUSH(cur->as.set_.value);
                 break;
             /* dynamic-returned-closure-env-is-never-freed: a dynamic call
@@ -1578,9 +1788,18 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 for (uint32_t i = 0; i < cur->as.cons_list_.n; i++)
                     ESC_PUSH(cur->as.cons_list_.items[i]);
                 break;
-            case EX_GET_FIELD:
+            case EX_GET_FIELD: {
+                /* EscAlias: a struct alias's other fields are words `b` is
+                 * not in; its closure field, read anywhere the cases above
+                 * did not admit, is `b` loose. */
+                bool is_fn = false;
+                if (esc_alias_field_read(&al, cur, &is_fn)) {
+                    if (is_fn) { escapes = true; goto esc_done; }
+                    break;
+                }
                 ESC_PUSH(cur->as.get_field_.struct_expr);
                 break;
+            }
             case EX_SET_FIELD:
                 ESC_PUSH(cur->as.set_field_.receiver);
                 ESC_PUSH(cur->as.set_field_.value);
@@ -1770,6 +1989,27 @@ bool closure_binding_escapes(const Expr *e, const Binding *b) {
 bool closure_binding_escapes_reaped(const Expr *e, const Binding *b) {
     g_esc_perform_ok = true;
     bool esc = binding_escapes_impl(e, b, /*allow_box_accessors=*/false, NULL);
+    g_esc_perform_ok = false;
+    return esc;
+}
+
+/* fnfield-ctor-param-closure-leaks-in-caller: does binding `idx` of the
+ * `let` (or `letrec`) `let` escape anywhere in it -- its body or a sibling's
+ * init?  The walk over the whole `let` node, the binding's own init skipped,
+ * so a sibling that builds a struct around it (`(let [cap (fn ...) h (Holder
+ * cap)] ...)`) is followed as an alias (EscAlias) instead of being walked on
+ * its own, where the constructor argument reads as an escape.  For a plain
+ * `let` the same uses as walking the body and each other init. */
+bool closure_let_binding_escapes(const Expr *let, uint32_t idx) {
+    if (!let || (let->kind != EX_LET && let->kind != EX_LETREC) || idx >= let->as.let_.n)
+        return true;
+    return binding_escapes_impl(let, let->as.let_.bindings[idx].binding,
+                                /*allow_box_accessors=*/false,
+                                let->as.let_.bindings[idx].init);
+}
+bool closure_let_binding_escapes_reaped(const Expr *let, uint32_t idx) {
+    g_esc_perform_ok = true;
+    bool esc = closure_let_binding_escapes(let, idx);
     g_esc_perform_ok = false;
     return esc;
 }

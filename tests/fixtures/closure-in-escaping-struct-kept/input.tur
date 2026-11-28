@@ -1,0 +1,39 @@
+;; fnfield-ctor-param-closure-leaks-in-caller, the other side: a closure stored
+;; in a struct is freed by its own `let` only while the struct stays in that
+;; scope.  Here each one is used AFTER its `let` has ended -- the struct handed
+;; back through a function, its closure field kept in a global, the struct
+;; captured by a lambda that is returned -- so freeing it there would be a
+;; use-after-free.  Nothing frees these closures, so they leak (see
+;; known-leak); a use-after-free still fails the leak-check gate.
+(defstruct Holder [run : (fn [int] int)  tag : int])
+(defn keep [h : Holder] : Holder h)
+(defn zero [x : int] : int 0)
+(def ^mut kept : (fn [int] int) zero)
+
+;; the struct leaves through a function that returns it
+(defn leak-out [k : int] : Holder
+  (let [cap (fn [x : int] : int (+ x k))
+        h   (Holder cap 1)]
+    (keep h)))
+
+;; its closure field is stored in a global
+(defn stash-field [k : int] : int
+  (let [cap (fn [x : int] : int (* x k))
+        h   (Holder cap 2)]
+    (set! kept (.run h))
+    (.tag h)))
+
+;; the struct is captured by a lambda that outlives the let
+(defn capture-out [k : int] : (fn [int] int)
+  (let [cap (fn [x : int] : int (- x k))
+        h   (Holder cap 3)]
+    (fn [x : int] : int ((.run h) x))))
+
+(defn main [] : int
+  (let [h (leak-out 3)]
+    (println ((.run h) 10)))
+  (println (stash-field 4))
+  (println (kept 10))
+  (let [f (capture-out 5)]
+    (println (f 10)))
+  0)

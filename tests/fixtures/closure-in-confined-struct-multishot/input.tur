@@ -1,0 +1,15 @@
+;; fnfield-ctor-param-closure-leaks-in-caller, across a multi-shot perform: a
+;; closure stored in a struct that stays in its scope is freed by its own
+;; `let` -- on the CPS path at the entry's exit, after both resumes have
+;; called through the struct.  Leak-checked.  Compiled only: the interpreter
+;; cannot take a multi-shot continuation past the let-bound lambda.
+(defstruct Holder [run : (fn [int] int)  tag : int])
+(defeffect Pick [] : bool)
+(defn chooser [k : int] : int
+  (let [cap (fn [x : int] : int (+ x k))
+        h   (Holder cap 0)]
+    (if (perform (Pick)) ((.run h) 1) ((.run h) 2))))
+(defn main [] : int
+  (println (handle (chooser 7)
+             (Pick [] ^multishot k) (+ (resume k true) (resume k false))))
+  0)

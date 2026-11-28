@@ -1,0 +1,1 @@
+the interpreter cannot take a multi-shot continuation past a let-bound lambda (falls back to the single-shot fiber runtime)

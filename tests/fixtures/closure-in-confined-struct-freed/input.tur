@@ -1,0 +1,88 @@
+;; fnfield-ctor-param-closure-leaks-in-caller: a closure stored in a by-value
+;; struct that stays in its scope -- only called through, or its other fields
+;; read -- is freed by the closure's own `let`.  Storing it in a constructor
+;; used to count as an escape, so nothing freed it; and a parameter stored that
+;; way made the callee "retaining", so the caller never freed what it passed.
+;; The escape walk now follows the struct as an alias of the closure.
+;; Leak-checked: every closure below has one owner, and the one kept in a
+;; global is still callable after the function that built it returned.
+(defdata Ev (Tick int))
+(defn tn [e : Ev] : int (match e (Tick n) n))
+(defstruct Holder [run : (fn [int] int)  tag : int])
+(defstruct P [raw : int handler : (fn [Ev] int)])
+(defn apply-it [f : (fn [int] int) x : int] : int (f x))
+
+;; same function: the struct a sibling binding, and an inner let; called in
+;; both spellings, handed to a parameter that only calls it, a field read
+(defn sibling [k : int] : int
+  (let [cap (fn [x : int] : int (+ x k))
+        h   (Holder cap 7)]
+    (+ ((.run h) 1) (.run h 2) (apply-it (.run h) 3) (.tag h))))
+(defn nested [k : int] : int
+  (let [cap (fn [x : int] : int (* x k))]
+    (let [h (Holder cap 1)]
+      ((.run h) 2))))
+
+;; the callee keeps the struct local: its parameter does not escape, so the
+;; caller frees what it passed -- a let-bound closure or a lambda literal
+(defn mk [f : (fn [Ev] int)] : int
+  (let [h (P 1 f)]
+    ((.handler h) (Tick 10))))
+(defn call-tmp [f : (fn [Ev] int)] : int ((.handler (P 1 f)) (Tick 20)))
+(defn call-tmp-m [f : (fn [Ev] int)] : int (.handler (P 1 f) (Tick 30)))
+
+;; a constructor function: its result holds the parameter and nothing else
+;; does, so a struct it returns is followed like one built in place -- even
+;; when it also calls the parameter first
+(defn wrap [f : (fn [Ev] int)] : P (P 2 f))
+(defn wrap-calls [f : (fn [Ev] int)] : P (do (f (Tick 0)) (P 3 f)))
+(defn via-wrap [f : (fn [Ev] int)] : int
+  (let [h (wrap f)] ((.handler h) (Tick 40))))
+
+;; a self tail loop, and a loop that builds one each turn
+(defn spin [n : int acc : int] : int
+  (let [cap (fn [x : int] : int (+ x n))
+        h   (Holder cap 0)]
+    (if (= n 0) acc (spin (- n 1) ((.run h) acc)))))
+(defn loop-built [n : int] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i n)
+      (let [cap (fn [x : int] : int (+ x i))
+            h   (Holder cap i)]
+        (set! acc (+ acc ((.run h) (.tag h)))))
+      (set! i (+ i 1)))
+    acc))
+
+;; NOT a plain constructor function: it also keeps the parameter, so the
+;; caller must leave it alone -- it is called again after use-keep returns
+(defn zero [e : Ev] : int 0)
+(def ^mut kept : (fn [Ev] int) zero)
+(defn p-keep [h : (fn [Ev] int)] : P
+  (do (set! kept h) (P 4 h)))
+(defn use-keep [k : int] : int
+  (let [g (fn [e : Ev] : int (+ (tn e) k))
+        p (p-keep g)]
+    ((.handler p) (Tick 1))))
+
+(defn main [] : int
+  (println (sibling 5))
+  (println (nested 4))
+  (let [n 3
+        g (fn [e : Ev] : int (+ (tn e) n))]
+    (println (mk g))
+    (println (mk g))
+    (println (call-tmp g))
+    (println (call-tmp-m g))
+    (println (via-wrap g))
+    (let [c (wrap g)
+          d (wrap-calls g)]
+      (println ((.handler c) (Tick 50)))
+      (println ((.handler d) (Tick 60))))
+    (println (g (Tick 0))))
+  (println (mk (fn [e : Ev] : int (* (tn e) 2))))
+  (println (spin 5 0))
+  (println (loop-built 4))
+  (println (use-keep 5))
+  (println (kept (Tick 100)))
+  0)

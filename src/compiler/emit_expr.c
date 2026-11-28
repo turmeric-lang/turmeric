@@ -2958,12 +2958,7 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
             default: return false;
         }
     }
-    if (closure_binding_escapes(e->as.let_.body, b)) return false;
-    for (uint32_t j = 0; j < e->as.let_.n; j++) {
-        if (j == idx) continue;
-        if (closure_binding_escapes(e->as.let_.bindings[j].init, b)) return false;
-    }
-    return true;
+    return !closure_let_binding_escapes(e, idx);
 }
 
 /* async-capturing-body-env-never-freed: is binding `idx` of this let a fresh

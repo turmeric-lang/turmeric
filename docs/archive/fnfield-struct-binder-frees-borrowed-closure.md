@@ -177,7 +177,7 @@ frees:
   48 -> 24 B): the call-head receiver below.
 
 The second and third are in
-[fnfield-ctor-param-closure-leaks-in-caller](../reported/fnfield-ctor-param-closure-leaks-in-caller.md).
+[closure-stored-beyond-its-let-has-no-owner](../reported/closure-stored-beyond-its-let-has-no-owner.md).
 
 **Forward references.** The answers are read as each `let` and each `defn` is
 elaborated, so a caller written above its callee saw "not fresh" and leaked.
@@ -199,8 +199,9 @@ now, and frees only when the call's result is a plain scalar.
 **Repro 3's other half.** The struct built from a closure parameter no longer
 frees it, and the caller's own closure is not freed by the caller either. The
 callee's parameter counts as retained because it is stored in a constructor.
-That leak (24 B per closure) is
-[fnfield-ctor-param-closure-leaks-in-caller](../reported/fnfield-ctor-param-closure-leaks-in-caller.md).
+That leak (24 B per closure) was
+[fnfield-ctor-param-closure-leaks-in-caller](fnfield-ctor-param-closure-leaks-in-caller.md),
+fixed the same day: the escape walk follows a struct that stays in its scope.
 
 **Regression checks.**
 

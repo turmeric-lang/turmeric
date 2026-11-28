@@ -1334,6 +1334,8 @@ static bool indirect_callee_ok(const Expr *fe) {
  * PROVES the binding does not escape `e`. */
 bool closure_binding_escapes(const Expr *e, const Binding *b);
 bool closure_binding_escapes_reaped(const Expr *e, const Binding *b);
+bool closure_let_binding_escapes(const Expr *let, uint32_t idx);
+bool closure_let_binding_escapes_reaped(const Expr *let, uint32_t idx);
 /* An inline-C block in the closure's body names one of its captures (an
  * lvalue into the env box); defined emit-side (emit_core.c). */
 bool closure_body_inline_c_touches_env(const struct Closure *c);
@@ -1386,12 +1388,7 @@ static bool cps_closure_env_freeable(const Expr *let, uint32_t idx) {
             break;
         default: return false;   /* non-scalar result may alias the env */
     }
-    if (closure_binding_escapes_reaped(let->as.let_.body, b)) return false;
-    for (uint32_t j = 0; j < let->as.let_.n; j++) {
-        if (j == idx) continue;
-        if (closure_binding_escapes_reaped(let->as.let_.bindings[j].init, b)) return false;
-    }
-    return true;
+    return !closure_let_binding_escapes_reaped(let, idx);
 }
 
 /* Bind let-binding `idx`'s init to `bx`, then run `rest`.  A freeable capturing
@@ -1457,12 +1454,7 @@ static bool cps_fresh_call_env_freeable(CpsB *b, const Expr *let, uint32_t idx) 
     if (!init->as.call_.fn_binding || !init->as.call_.fn_binding->returns_fresh_closure)
         return false;
     if (!safe_to_delegate(b, let->as.let_.bindings[idx].init)) return false;
-    if (closure_binding_escapes(let->as.let_.body, bd)) return false;
-    for (uint32_t j = 0; j < let->as.let_.n; j++) {
-        if (j == idx) continue;
-        if (closure_binding_escapes(let->as.let_.bindings[j].init, bd)) return false;
-    }
-    return true;
+    return !closure_let_binding_escapes(let, idx);
 }
 
 bool closure_binding_only_invoked(const Expr *e, const Binding *b);

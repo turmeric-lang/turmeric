@@ -1257,6 +1257,10 @@ bool expr_tail_diverges(const Expr *e);
  * closure value) is used as a value rather than only as a direct-call callee
  * within `e`.  See emit_core.c. */
 bool closure_binding_escapes(const Expr *e, const Binding *b);
+/* ...binding `idx` of a `let`, over its body and every sibling init at once
+ * (fnfield-ctor-param-closure-leaks-in-caller). */
+bool closure_let_binding_escapes(const Expr *let, uint32_t idx);
+bool closure_let_binding_escapes_reaped(const Expr *let, uint32_t idx);
 /* Does any inline-C block occur under `e`?  (emit_core.c) */
 bool expr_subtree_has_inline_c(const Expr *e);
 /* catch-unwind-thunk-closure-leak scoped-free escape analysis: like

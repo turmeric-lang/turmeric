@@ -6,6 +6,8 @@
 
 /* emit_core.c: is `b` used as a value, not only called, within `e`? */
 bool closure_binding_escapes(const Expr *e, const Binding *b);
+/* emit_core.c: does `e` contain an inline-C block anywhere? */
+bool expr_subtree_has_inline_c(const Expr *e);
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -435,21 +437,51 @@ static bool fnfield_local_leaves_scope(const Expr *body, const Binding *b) {
  *
  * A false answer costs a leak; a wrong true is the use-after-free. */
 /* How many times `b` is named in `e` -- as a variable or a lambda's capture
- * (a lambda's body is a boundary; its capture list says what it names). */
+ * (a lambda's body is a boundary; its capture list says what it names).  A
+ * direct call `(b x)` carries `b` in the call's fn_binding, not as a variable,
+ * so an invocation is not counted: calling the closure does not keep it.
+ * Every other way a body can hold `b` counts as more than one, so the caller
+ * never trusts the answer: an inline-C block or a `defer` or nested `defn`
+ * capturing it, or a `set!` of it (the struct would then hold another word). */
 typedef struct { const Binding *b; int n; } FnfieldUseUd;
 static bool fnfield_use_visit(const Expr *x, void *ud) {
     FnfieldUseUd *u = (FnfieldUseUd *)ud;
-    if (x->kind == EX_VAR) {
-        if (x->as.var.binding == u->b) u->n++;
-        return u->n > 1;
+    switch (x->kind) {
+        case EX_VAR:
+            if (x->as.var.binding == u->b) u->n++;
+            return u->n > 1;
+        case EX_CLOSURE: {
+            const struct Closure *c = x->as.closure_.closure;
+            if (c)
+                for (uint32_t i = 0; i < c->n_captures; i++)
+                    if (c->captures[i] == u->b) u->n++;
+            return u->n > 1;
+        }
+        case EX_FN_DEF: {
+            const struct Closure *c = x->as.fn_def_.fn ? x->as.fn_def_.fn->closure : NULL;
+            if (c)
+                for (uint32_t i = 0; i < c->n_captures; i++)
+                    if (c->captures[i] == u->b) u->n += 2;
+            return u->n > 1;
+        }
+        case EX_DEFER:
+            for (uint8_t i = 0; i < x->as.defer_.n_captures; i++)
+                if (x->as.defer_.captures[i] == u->b) u->n += 2;
+            break;
+        case EX_INLINE_C: {
+            const InlineC *ic = x->as.inline_c_.inline_c;
+            if (ic)
+                for (uint8_t i = 0; i < ic->n_captures; i++)
+                    if (ic->captures[i] == u->b) u->n += 2;
+            break;
+        }
+        case EX_SET:
+            if (x->as.set_.target == u->b) u->n += 2;
+            break;
+        default:
+            break;
     }
-    if (x->kind == EX_CLOSURE) {
-        const struct Closure *c = x->as.closure_.closure;
-        if (c)
-            for (uint32_t i = 0; i < c->n_captures; i++)
-                if (c->captures[i] == u->b) u->n++;
-        return u->n > 1;
-    }
+    if (u->n > 1) return true;
     return cps_visit_children(x, fnfield_use_visit, ud);
 }
 
@@ -485,6 +517,10 @@ static bool fnfield_closure_is_fresh(const Expr *a, Binding **params,
                                      i < n_params && i < 32; i++) {
                     if (params[i] != b) continue;
                     if (b->type.kind != TY_FN) return false;
+                    /* An inline-C block can name the parameter by its C name,
+                     * which no AST walk sees (elab_infer_nonretain_masks
+                     * refuses such a body for the same reason). */
+                    if (expr_subtree_has_inline_c(fn_body)) return false;
                     FnfieldUseUd u = { b, 0 };
                     fnfield_use_visit(fn_body, &u);
                     if (u.n != 1) return false;
