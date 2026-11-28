@@ -1234,6 +1234,131 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
     return binding_escapes_impl_x(e, b, allow_box_accessors, ignore, false);
 }
 
+/* fn-value-through-if-or-match-loses-its-representation: a fn-value join
+ * (elab_fn_join_to_fat) boxes a carrier parameter `f` at its leaf --
+ * `(let [h (if c <box f> a2)] (h 10))`, which is also what a call head
+ * `((if c f a2) 10)` elaborates to.  The box holds `f`'s words for as long as
+ * `h` lives, and no longer, so `f` escapes through it only if `h` escapes.
+ * Without this, a parameter used in a join read as retained, and every caller
+ * kept the closure it passed (24 B a call).
+ *
+ * `x` is a let init of the tail shape a join has; a leaf that is a box of `b`
+ * is skipped, and everything else -- a condition, a scrutinee, a guard, a
+ * non-tail item, another leaf -- is walked as usual. */
+static bool esc_join_leaf_boxes(const Expr *x, const Binding *b) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x) return false;
+    /* A fat arm is `b` itself: the join's binding holds it as it is. */
+    if (x->kind == EX_VAR && x->as.var.binding == b) return true;
+    const Expr *in = NULL;
+    if (x->kind == EX_POLY_TO_FAT) in = x->as.poly_to_fat_.inner;
+    else if (x->kind == EX_FN_TO_FAT && !x->as.fn_to_fat_.inner_is_fat)
+        in = x->as.fn_to_fat_.inner;
+    while (in && in->kind == EX_ASCRIBE) in = in->as.ascribe_.inner;
+    return in && in->kind == EX_VAR && in->as.var.binding == b;
+}
+
+static bool esc_join_init_escapes(const Expr *x, const Binding *b,
+                                  bool allow_box_accessors, bool allow_any_cast,
+                                  int depth) {
+    if (!x) return false;
+    if (depth > 64)
+        return binding_escapes_impl_x(x, b, allow_box_accessors, NULL, allow_any_cast);
+    switch (x->kind) {
+        case EX_ASCRIBE:
+            return esc_join_init_escapes(x->as.ascribe_.inner, b, allow_box_accessors,
+                                         allow_any_cast, depth + 1);
+        case EX_DO:
+            for (uint32_t i = 0; i + 1 < x->as.do_.n; i++)
+                if (binding_escapes_impl_x(x->as.do_.items[i], b, allow_box_accessors,
+                                           NULL, allow_any_cast))
+                    return true;
+            return x->as.do_.n > 0 &&
+                   esc_join_init_escapes(x->as.do_.items[x->as.do_.n - 1], b,
+                                         allow_box_accessors, allow_any_cast, depth + 1);
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < x->as.let_.n; i++) {
+                const Expr *li = x->as.let_.bindings[i].init;
+                while (li && li->kind == EX_ASCRIBE) li = li->as.ascribe_.inner;
+                const Binding *ab = x->as.let_.bindings[i].binding;
+                /* `(let [g f] g)`: an alias of `b` reaching only the join's
+                 * leaves escapes no more than `b` would there. */
+                if (x->kind == EX_LET && ab && li && li->kind == EX_VAR &&
+                    li->as.var.binding == b) {
+                    if (esc_join_init_escapes(x->as.let_.body, ab, allow_box_accessors,
+                                              allow_any_cast, depth + 1))
+                        return true;
+                    continue;
+                }
+                if (binding_escapes_impl_x(x->as.let_.bindings[i].init, b,
+                                           allow_box_accessors, NULL, allow_any_cast))
+                    return true;
+            }
+            return esc_join_init_escapes(x->as.let_.body, b, allow_box_accessors,
+                                         allow_any_cast, depth + 1);
+        case EX_IF:
+            return binding_escapes_impl_x(x->as.if_.cond, b, allow_box_accessors,
+                                          NULL, allow_any_cast) ||
+                   esc_join_init_escapes(x->as.if_.then_, b, allow_box_accessors,
+                                         allow_any_cast, depth + 1) ||
+                   esc_join_init_escapes(x->as.if_.else_or_null, b,
+                                         allow_box_accessors, allow_any_cast, depth + 1);
+        case EX_MATCH:
+            if (binding_escapes_impl_x(x->as.match_.scrutinee, b, allow_box_accessors,
+                                       NULL, allow_any_cast))
+                return true;
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++) {
+                const MatchArm *arm = &x->as.match_.arms[i];
+                if ((arm->guard &&
+                     binding_escapes_impl_x(arm->guard, b, allow_box_accessors, NULL,
+                                            allow_any_cast)) ||
+                    esc_join_init_escapes(arm->body, b, allow_box_accessors,
+                                          allow_any_cast, depth + 1))
+                    return true;
+            }
+            return false;
+        default:
+            if (esc_join_leaf_boxes(x, b)) return false;
+            return binding_escapes_impl_x(x, b, allow_box_accessors, NULL, allow_any_cast);
+    }
+}
+
+/* Is let binding `i` of `let` a fn join (a boxed fn value built by an `if` /
+ * `match` / `do` / `let`) that never leaves the let -- invoked, at most?  Asked
+ * with the walk's mode flags cleared, since they describe the outer query's
+ * binding, not this one. */
+static bool esc_let_join_confined(const Expr *let, uint32_t i) {
+    const Binding *jb = let->as.let_.bindings[i].binding;
+    const Expr *init = let->as.let_.bindings[i].init;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!jb || !init || jb->type.kind != TY_FN || !jb->type.as.fn.boxed ||
+        jb->is_mut)
+        return false;
+    if (init->kind != EX_IF && init->kind != EX_MATCH && init->kind != EX_DO &&
+        init->kind != EX_LET)
+        return false;
+    bool s_sum = g_esc_allow_sum_accessors, s_copy = g_esc_copying_match_ok,
+         s_head = g_esc_call_head_only, s_perf = g_esc_perform_ok;
+    uint32_t s_self = g_esc_self_apply_mask;
+    g_esc_allow_sum_accessors = false;
+    g_esc_copying_match_ok = false;
+    g_esc_call_head_only = false;
+    g_esc_perform_ok = false;
+    g_esc_self_apply_mask = 0;
+    bool confined = !binding_escapes_impl_x(let->as.let_.body, jb, false, NULL, false);
+    for (uint32_t k = 0; confined && k < let->as.let_.n; k++)
+        if (k != i &&
+            binding_escapes_impl_x(let->as.let_.bindings[k].init, jb, false, NULL, false))
+            confined = false;
+    g_esc_allow_sum_accessors = s_sum;
+    g_esc_copying_match_ok = s_copy;
+    g_esc_call_head_only = s_head;
+    g_esc_perform_ok = s_perf;
+    g_esc_self_apply_mask = s_self;
+    return confined;
+}
+
 /* any-struct-box-leak-per-widen: `allow_any_cast` additionally treats
  * `(cast b T)` on a bare `b` as a non-escape.  Sound for THIS decision and only
  * this one: the box is freed only when the tag says a widen heap-boxed the
@@ -1497,8 +1622,23 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
             /* ---- container kinds: walk every sub-expression ---- */
             case EX_LET:
             case EX_LETREC:
-                for (uint32_t i = 0; i < cur->as.let_.n; i++)
-                    ESC_PUSH(cur->as.let_.bindings[i].init);
+                for (uint32_t i = 0; i < cur->as.let_.n; i++) {
+                    const Expr *li = cur->as.let_.bindings[i].init;
+                    /* fn-value-through-if-or-match-loses-its-representation:
+                     * a join's box of `b` lives as long as the let binding
+                     * holding the join (see esc_join_init_escapes). */
+                    if (cur->kind == EX_LET && li &&
+                        cur->as.let_.bindings[i].binding != b &&
+                        esc_let_join_confined(cur, i)) {
+                        if (esc_join_init_escapes(li, b, allow_box_accessors,
+                                                  allow_any_cast, 0)) {
+                            escapes = true;
+                            goto esc_done;
+                        }
+                        continue;
+                    }
+                    ESC_PUSH(li);
+                }
                 ESC_PUSH(cur->as.let_.body);
                 break;
             case EX_IF:

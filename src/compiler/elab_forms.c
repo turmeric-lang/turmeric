@@ -456,6 +456,10 @@ static bool fnfield_closure_owned(Elab *e, const Expr *a, Binding *taker,
      * box, whatever the carrier came from.  (A stack_ok box carries the
      * no-op keep header, so its drop is harmless as well.) */
     if (a && a->kind == EX_POLY_TO_FAT) return true;
+    /* fn-value-through-if-or-match-loses-its-representation: a join whose
+     * every arm the join boxed -- `(H 1 (if c f a2))` -- hands the field a
+     * fresh box (or a static one, whose drop is the no-op keep glue). */
+    if (elab_fn_join_yields_own_box(a)) return true;
     a = fnfield_peel(a);
     if (!a || depth > 32) return false;
     switch (a->kind) {
@@ -3864,6 +3868,10 @@ Expr *elab_let(Elab *e, const Form *call) {
     out->as.let_.n = n_binds;
     out->as.let_.body = body;
     any_let_move_drop_to_use(out);
+    /* fn-value-through-if-or-match-loses-its-representation: `(let [g f] g)`
+     * over a carrier parameter yields the fat box, which every consumer of a
+     * non-binding fn value can read. */
+    elab_fn_tail_carrier_to_fat(e, out);
     return out;
 }
 
@@ -3906,6 +3914,8 @@ Expr *elab_do(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_DO, items[n - 1]->type, call->span);
     out->as.do_.items = items;
     out->as.do_.n = n;
+    /* fn-value-through-if-or-match-loses-its-representation: see elab_let. */
+    elab_fn_tail_carrier_to_fat(e, out);
     return out;
 }
 
@@ -4707,6 +4717,17 @@ static bool expr_is_poly_carrier_fn_var(const Expr *x) {
            x->as.var.binding->is_poly_fn && x->as.var.binding->is_param;
 }
 
+/* Two carrier fn-parameter arms whose declared fn types differ. */
+static bool if_carrier_arms_disagree(const Expr *a, const Expr *b) {
+    if (!expr_is_poly_carrier_fn_var(a) || !expr_is_poly_carrier_fn_var(b))
+        return false;
+    while (a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    while (b->kind == EX_ASCRIBE) b = b->as.ascribe_.inner;
+    const Type *ta = a->as.var.binding->poly_type;
+    const Type *tb = b->as.var.binding->poly_type;
+    return ta && tb && ta->kind == TY_FN && tb->kind == TY_FN && !type_eq(*ta, *tb);
+}
+
 /* M2b: if-branch tyvar tolerance.
  *
  * The strict `type_eq` used for if-branch parity treats `(Option A)` (A bare
@@ -5187,6 +5208,12 @@ Expr *elab_if(Elab *e, const Form *call) {
 
         if (then_div && else_div) {
             result_t = then_->type;  /* both diverge; pick either */
+        } else if ((then_div || else_div) &&
+                   elab_fn_join_to_fat(e, (Expr **const[]){ &then_, &else_ }, 2,
+                                       &result_t)) {
+            /* fn-value-through-if-or-match-loses-its-representation: the one
+             * arm that yields a value is a carrier fn parameter, which is not
+             * a binding once it is the `if`'s value -- it was boxed. */
         } else if (then_div) {
             result_t = else_->type;
         } else if (else_div) {
@@ -5214,15 +5241,23 @@ Expr *elab_if(Elab *e, const Form *call) {
             then_ = elab_coerce_to_any(e, then_);
             else_ = elab_coerce_to_any(e, else_);
             result_t = then_->type;
+        } else if (elab_fn_join_to_fat(e, (Expr **const[]){ &then_, &else_ }, 2,
+                                       &result_t)) {
+            /* fn-value-through-if-or-match-loses-its-representation: the arms
+             * are function values of one signature in different
+             * representations -- a carrier parameter beside a defn, two
+             * carriers, a `^fat` parameter beside anything.  Each arm was
+             * converted to the fat box and the `if` is typed `boxed`, so a
+             * call, a let, an argument and a field all read one layout. */
         } else if (!type_eq(then_->type, else_->type) &&
                    ((then_->type.kind == TY_PTR_VOID &&
                      expr_is_poly_carrier_fn_var(then_) &&
-                     else_->type.kind == TY_FN &&
+                     else_->type.kind == TY_FN && else_->kind != EX_VAR &&
                      (else_->type.as.fn.boxed ||
                       fn_param_type_is_fat_normalized(&else_->type))) ||
                     (else_->type.kind == TY_PTR_VOID &&
                      expr_is_poly_carrier_fn_var(else_) &&
-                     then_->type.kind == TY_FN &&
+                     then_->type.kind == TY_FN && then_->kind != EX_VAR &&
                      (then_->type.as.fn.boxed ||
                       fn_param_type_is_fat_normalized(&then_->type))))) {
             /* fn-value-carrier-fat-seam-residuals (cell 2): one arm is a
@@ -5309,6 +5344,12 @@ Expr *elab_if(Elab *e, const Form *call) {
             result_t = then_->type;
         } else if ((!type_eq(then_->type, else_->type)
                     && !if_branches_unify_via_tyvar(then_->type, else_->type, &result_t))
+                   /* fn-value-through-if-or-match-loses-its-representation: two
+                    * carrier fn parameters are both `ptr<void>`, so `type_eq`
+                    * held for `f : (fn [int] int)` beside `g : (fn [float]
+                    * float)` and the join was refused later as "not callable".
+                    * Their declared types are what disagree. */
+                   || if_carrier_arms_disagree(then_, else_)
                    /* declared-tyvars-are-not-rigid: `(if c a b)` with `a : A`
                     * and `b : B`, or `(if c a 1)`, joined -- two variables are
                     * `type_eq` by kind and the tolerant walk reads a variable
@@ -5333,11 +5374,23 @@ Expr *elab_if(Elab *e, const Form *call) {
              * leak on every if-branch mismatch involving a function type. Print
              * into owned buffers we free here, matching the leak-clean pattern in
              * elab_call.c's arg-mismatch diagnostic. */
+            /* fn-value-through-if-or-match-loses-its-representation: a carrier
+             * fn parameter's type reads `ptr<void>`; name the function type it
+             * was declared with, which is what the user wrote and compares. */
+            const Expr *tcv = then_, *ecv = else_;
+            while (tcv && tcv->kind == EX_ASCRIBE) tcv = tcv->as.ascribe_.inner;
+            while (ecv && ecv->kind == EX_ASCRIBE) ecv = ecv->as.ascribe_.inner;
+            const Type *tpt = (expr_is_poly_carrier_fn_var(then_) &&
+                               tcv->as.var.binding->poly_type)
+                                  ? tcv->as.var.binding->poly_type : &then_->type;
+            const Type *ept = (expr_is_poly_carrier_fn_var(else_) &&
+                               ecv->as.var.binding->poly_type)
+                                  ? ecv->as.var.binding->poly_type : &else_->type;
             Buf then_buf; buf_init(&then_buf);
-            type_print(&then_buf, then_->type);
+            type_print(&then_buf, *tpt);
             buf_putc(&then_buf, '\0');
             Buf else_buf; buf_init(&else_buf);
-            type_print(&else_buf, else_->type);
+            type_print(&else_buf, *ept);
             buf_putc(&else_buf, '\0');
             diag_emit(DIAG_ERROR, call->span,
                       "if branches have mismatched types: then=%s else=%s",

@@ -2896,10 +2896,88 @@ static bool letrec_members_confined(const Expr *e) {
     return true;
 }
 
+/* fn-value-through-if-or-match-loses-its-representation: is every value an
+ * `if` / `match` (through `do` / `let` tails) can yield a fat box the join
+ * itself made, so the binding holding the join owns whichever one it got?
+ *
+ *   EX_POLY_TO_FAT  a fresh { shim, fn, env } box with a NULL drop header:
+ *                   TUR_CLOSURE_DROP frees the box and leaves the carrier's
+ *                   env (the caller's) alone;
+ *   EX_FN_TO_FAT    over a bare fn: a static box (no-op keep header) or a
+ *                   fresh { shim, fn } one -- dropped the same way;
+ *   EX_CLOSURE      a capturing lambda written in the arm, nobody else holds
+ *                   it; admitted under the env-safe-result gate a let-bound
+ *                   closure gets (closure_init_result_env_safe).
+ *
+ * A fat parameter, a let alias or a call result is somebody else's, and makes
+ * the answer no.  `any_box` reports that some arm was boxed at the join. */
+static bool fn_join_leaves_fresh(const Expr *x, const Binding *b, int depth,
+                                 bool *any_box) {
+    if (!x || depth > 64) return false;
+    if (x->type.kind == TY_NEVER || x->kind == EX_RETURN ||
+        x->kind == EX_PANIC || x->kind == EX_PANIC_WITH)
+        return true;   /* yields nothing */
+    switch (x->kind) {
+        case EX_ASCRIBE:
+            return fn_join_leaves_fresh(x->as.ascribe_.inner, b, depth + 1, any_box);
+        case EX_DO:
+            return x->as.do_.n > 0 &&
+                   fn_join_leaves_fresh(x->as.do_.items[x->as.do_.n - 1], b,
+                                        depth + 1, any_box);
+        case EX_LET:
+        case EX_LETREC:
+            return fn_join_leaves_fresh(x->as.let_.body, b, depth + 1, any_box);
+        case EX_IF:
+            return x->as.if_.else_or_null &&
+                   fn_join_leaves_fresh(x->as.if_.then_, b, depth + 1, any_box) &&
+                   fn_join_leaves_fresh(x->as.if_.else_or_null, b, depth + 1, any_box);
+        case EX_MATCH:
+            if (x->as.match_.n_arms == 0) return false;
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                if (!fn_join_leaves_fresh(x->as.match_.arms[i].body, b, depth + 1,
+                                          any_box))
+                    return false;
+            return true;
+        case EX_POLY_TO_FAT:
+            *any_box = true;
+            return true;
+        case EX_FN_TO_FAT:
+            if (x->as.fn_to_fat_.inner_is_fat) return false;
+            *any_box = true;
+            return true;
+        case EX_CLOSURE: {
+            const struct Closure *c = x->as.closure_.closure;
+            if (!c || c->is_shift_receiver || c->is_effect_payload) return false;
+            Binding fb = *b;
+            fb.type = x->type;
+            return closure_init_result_env_safe(&fb, x);
+        }
+        default:
+            return false;
+    }
+}
+
 static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     const Expr *init = e->as.let_.bindings[idx].init;
     const Binding *b = e->as.let_.bindings[idx].binding;
     if (!init || !b) return false;
+    {
+        const Expr *j = init;
+        while (j && j->kind == EX_ASCRIBE) j = j->as.ascribe_.inner;
+        bool any_box = false;
+        if (j && (j->kind == EX_IF || j->kind == EX_MATCH || j->kind == EX_DO ||
+                  j->kind == EX_LET) &&
+            e->kind == EX_LET && b->type.kind == TY_FN && b->type.as.fn.boxed &&
+            fn_join_leaves_fresh(j, b, 0, &any_box) && any_box) {
+            if (closure_binding_escapes(e->as.let_.body, b)) return false;
+            for (uint32_t k = 0; k < e->as.let_.n; k++) {
+                if (k == idx) continue;
+                if (closure_binding_escapes(e->as.let_.bindings[k].init, b))
+                    return false;
+            }
+            return true;
+        }
+    }
     const Expr *pinit = init;
     while (pinit && pinit->kind == EX_ASCRIBE) pinit = pinit->as.ascribe_.inner;
     /* closure-drop-glue S1c: a call to a fresh-closure-returning fn (the

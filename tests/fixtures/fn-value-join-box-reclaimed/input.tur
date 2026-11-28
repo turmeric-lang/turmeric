@@ -1,0 +1,58 @@
+;; fn-value-through-if-or-match-loses-its-representation, ownership: a join of
+;; fn values boxes each carrier parameter arm fresh ({ shim, fn, env }, NULL
+;; drop header) and each defn arm in a static box (no-op keep header).  So
+;; whoever holds the join owns the box it yields, and releases it:
+;;
+;;   a call head or a let that is only called  -- at the let's scope exit
+;;   an argument to a non-retaining parameter   -- hoisted, then the same
+;;   a struct's (fn ...) field                  -- the struct's drop glue
+;;
+;; and the parameter boxed at the join does not escape through it, so a caller
+;; that passes a capturing closure still frees that closure after the call.
+;; (`p-ctor` takes a defn: a carrier parameter stored in a struct field, join
+;; or not, already reads as retained, so a closure passed there is kept.)
+;; requires.leak-check runs this under ASan + LeakSanitizer: a box kept is a
+;; leak per turn, and a closure freed while a box still points at it is a
+;; use-after-free.  Each shape runs in a loop, with both arms taken.
+(defstruct H [n : int h : (fn [int] int)])
+
+(defn a2 [x : int] : int (* x 2))
+(defn app [g : (fn [int] int)] : int (g 10))
+
+(defn p-call [c : bool f : (fn [int] int)] : int ((if c f a2) 10))
+(defn p-let [c : bool f : (fn [int] int)] : int
+  (let [h (if c f a2)]
+    (+ (h 1) (h 2))))
+(defn p-app [c : bool f : (fn [int] int)] : int (app (if c f a2)))
+(defn p-ctor [c : bool f : (fn [int] int)] : int
+  (let [s (H 1 (if c f a2))]
+    ((.h s) 10)))
+(defn pp-call [c : bool f : (fn [int] int) g : (fn [int] int)] : int ((if c f g) 10))
+(defn p-clo [c : bool f : (fn [int] int) k : int] : int
+  ((if c f (fn [x : int] : int (+ x k))) 10))
+(defn m-lit [n : int f : (fn [int] int)] : int ((match n 0 f _ a2) 10))
+(defn m-adt [o : (Option int) f : (fn [int] int)] : int
+  ((match o (Some _) f (None) a2) 10))
+(defn d-call [f : (fn [int] int)] : int ((let [g f] g) 10))
+
+(defn run [i : int n : int acc : int k : int] : int
+  (if (= i n)
+    acc
+    (let [cl (fn [x : int] : int (+ x k))
+          c  (= (mod i 2) 0)
+          v  (+ (p-call c cl)
+                (+ (p-let c cl)
+                   (+ (p-app c cl)
+                      (+ (p-ctor c a2)
+                         (+ (pp-call c cl a2)
+                            (+ (p-clo c cl 3)
+                               (+ (m-lit (mod i 2) cl)
+                                  (+ (m-adt (if c (Some i) (None)) cl)
+                                     (d-call cl)))))))))]
+      (run (+ i 1) n (+ acc v) k))))
+
+(defn main [] : int
+  (println (run 0 1 0 100))   ; the even arm alone
+  (println (run 0 2 0 100))   ; both arms
+  (println (run 0 50 0 100))
+  0)

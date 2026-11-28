@@ -1199,6 +1199,286 @@ Expr *elab_fn_value_to_fat(Elab *e, Expr *value) {
     return value;
 }
 
+/* fn-value-through-if-or-match-loses-its-representation: an `if` or `match`
+ * whose arms are function values of one type.
+ *
+ * A function value has one of three representations, and which one is
+ * decided per BINDING, not by the type:
+ *
+ *   carrier  a plain fn parameter (or a let alias of one) with a concrete
+ *            scalar signature: a by-value tur_poly_fn_t {env, fn}, typed
+ *            ptr<void>, `is_poly_fn` on the binding;
+ *   fat      a `^fat` parameter, a fat-normalized one, a capturing closure, a
+ *            shim, a boxed call result: a pointer to { thunk, env... };
+ *   thin     a named defn or a lambda with no captures: a bare code pointer.
+ *
+ * A consumer bridges them by asking the binding.  A join is not a binding,
+ * so all a consumer sees of one is its type -- which said `ptr<void>` (not
+ * callable) for two carriers, a thin `(fn ...)` for two `^fat` parameters
+ * (cast to a code pointer and jumped into), and a boxed fn over a thin arm
+ * for a carrier beside a defn (the defn's code read as a box).
+ *
+ * The join therefore picks ONE representation and converts every arm to it.
+ * The fat box is the one every consumer accepts: a carrier arm is boxed
+ * (EX_POLY_TO_FAT), a thin arm is shimmed (elab_fn_value_to_fat, a static
+ * box), a fat arm is left as it is, and the join is typed `boxed`.  An
+ * all-thin join is left alone: it is already uniform.
+ *
+ * The walk sees through the tail of a `do` / `let` / ascription and into a
+ * nested `if` / `match`, and converts at the leaves -- the same places
+ * elab_normalize_fn_tail_leaves converts a fn-typed defn's result -- then
+ * re-types the wrappers on the way out, because the emitter declares each
+ * one's temp from its type. */
+typedef enum {
+    FNJ_NONE = 0,    /* not a fn value this walk can classify: leave the join */
+    FNJ_SKIP,        /* diverges: contributes no value */
+    FNJ_THIN,
+    FNJ_FAT,
+    FNJ_CARRIER
+} FnJoinRepr;
+
+typedef struct {
+    bool any_thin, any_fat, any_carrier, unknown;
+    uint32_t n_values;  /* value-producing leaves seen */
+    bool have_sig;
+    Type sig;       /* the join's signature (a non-boxed copy) */
+} FnJoinScan;
+
+/* Fold one leaf's signature into the scan: a later leaf must agree. */
+static bool fn_join_take_sig(FnJoinScan *s, const Type *t) {
+    if (!t || t->kind != TY_FN) return false;
+    Type c = *t;
+    c.as.fn.boxed = false;
+    /* The fat box is built by a fixed-arity slot-0 shim and dispatched at
+     * concrete types: no effect row, no type variable, no C fn pointer.  A
+     * join is a control-form merge value, so it asks the result position --
+     * the one elab_normalize_fn_tail_leaves boxes a defn's result by. */
+    if (c.as.fn.effect_row || c.as.fn.cfnptr ||
+        repr_of(&c, REPR_POS_RESULT) != REPR_FAT_HANDLE)
+        return false;
+    if (!s->have_sig) { s->sig = c; s->have_sig = true; return true; }
+    return type_eq(s->sig, c) != 0;
+}
+
+static FnJoinRepr fn_join_leaf_repr(const Expr *x, const Type **sig) {
+    *sig = NULL;
+    if (!x) return FNJ_NONE;
+    if (x->type.kind == TY_NEVER || x->kind == EX_RETURN ||
+        x->kind == EX_PANIC || x->kind == EX_PANIC_WITH)
+        return FNJ_SKIP;
+    const Expr *p = x;
+    while (p && p->kind == EX_ASCRIBE) p = p->as.ascribe_.inner;
+    if (!p) return FNJ_NONE;
+    if (p->kind == EX_VAR && p->as.var.binding) {
+        const Binding *b = p->as.var.binding;
+        /* A plain param, or a let alias of one (which inherits is_poly_fn
+         * and poly_type, and holds the same by-value carrier). */
+        if (b->is_poly_fn && b->poly_type && b->poly_type->kind == TY_FN &&
+            !b->poly_type->as.fn.cfnptr && x->type.kind == TY_PTR_VOID) {
+            *sig = b->poly_type;
+            return FNJ_CARRIER;
+        }
+        if (x->type.kind != TY_FN || x->type.as.fn.cfnptr) return FNJ_NONE;
+        *sig = &x->type;
+        /* A `^fat` param or a fat-normalized one holds a fat handle while its
+         * type reads thin; a let alias of either carries is_fat. */
+        bool fat = b->is_param
+            ? repr_of_binding(b, REPR_POS_RESULT) == REPR_FAT_HANDLE
+            : b->is_fat;
+        if (fat || x->type.as.fn.boxed) return FNJ_FAT;
+        if (b->is_param) return FNJ_NONE;   /* some other protocol: leave it */
+        if (b->closure_fn_binding || b->returns_closure_fn_binding)
+            return FNJ_NONE;
+        /* A named defn or a lifted lambda with no captures, or a local alias
+         * of one (source_binding): a bare code pointer.  Any other local of a
+         * thin-looking fn type -- one bound to a generic call's result, say,
+         * which crossed the carrier as a fat box -- is left to the existing
+         * joins rather than shimmed a second time. */
+        const Binding *root = b->source_binding ? b->source_binding : b;
+        if (root->is_global && root->source_fn_def) return FNJ_THIN;
+        return FNJ_NONE;
+    }
+    switch (p->kind) {
+        case EX_CLOSURE:
+        case EX_FN_TO_FAT:
+        case EX_POLY_TO_FAT:
+            if (x->type.kind == TY_FN) { *sig = &x->type; return FNJ_FAT; }
+            if (p->kind == EX_POLY_TO_FAT && p->as.poly_to_fat_.sink_fn_type) {
+                *sig = p->as.poly_to_fat_.sink_fn_type;
+                return FNJ_FAT;
+            }
+            return FNJ_NONE;
+        default:
+            break;
+    }
+    /* A call whose result is already marked boxed hands back a fat handle.
+     * Any other fn-typed expression is left to the existing joins. */
+    if (x->type.kind == TY_FN && x->type.as.fn.boxed && !x->type.as.fn.cfnptr) {
+        *sig = &x->type;
+        return FNJ_FAT;
+    }
+    return FNJ_NONE;
+}
+
+/* Classify every value-producing leaf under `x` into `s`. */
+static void fn_join_scan(const Expr *x, FnJoinScan *s, int depth) {
+    if (!x || s->unknown) return;
+    if (depth > 64) { s->unknown = true; return; }
+    switch (x->kind) {
+        case EX_DO:
+            if (x->as.do_.n == 0) { s->unknown = true; return; }
+            fn_join_scan(x->as.do_.items[x->as.do_.n - 1], s, depth + 1);
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            fn_join_scan(x->as.let_.body, s, depth + 1);
+            return;
+        case EX_IF:
+            if (!x->as.if_.else_or_null) { s->unknown = true; return; }
+            fn_join_scan(x->as.if_.then_, s, depth + 1);
+            fn_join_scan(x->as.if_.else_or_null, s, depth + 1);
+            return;
+        case EX_MATCH:
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                fn_join_scan(x->as.match_.arms[i].body, s, depth + 1);
+            return;
+        default:
+            break;
+    }
+    const Type *sig = NULL;
+    FnJoinRepr r = fn_join_leaf_repr(x, &sig);
+    if (r != FNJ_SKIP && r != FNJ_NONE) s->n_values++;
+    switch (r) {
+        case FNJ_SKIP:    return;
+        case FNJ_THIN:    s->any_thin = true; break;
+        case FNJ_FAT:     s->any_fat = true; break;
+        case FNJ_CARRIER: s->any_carrier = true; break;
+        default:          s->unknown = true; return;
+    }
+    if (!fn_join_take_sig(s, sig)) s->unknown = true;
+}
+
+/* Convert every leaf under *slot to the fat box typed `bt`, re-typing the
+ * wrappers it passes through. */
+static void fn_join_box_leaves(Elab *e, Expr **slot, const Type *bt, int depth) {
+    Expr *x = *slot;
+    if (!x || depth > 64) return;
+    switch (x->kind) {
+        case EX_DO:
+            fn_join_box_leaves(e, &x->as.do_.items[x->as.do_.n - 1], bt, depth + 1);
+            x->type = *bt;
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            fn_join_box_leaves(e, &x->as.let_.body, bt, depth + 1);
+            x->type = *bt;
+            return;
+        case EX_IF:
+            fn_join_box_leaves(e, &x->as.if_.then_, bt, depth + 1);
+            fn_join_box_leaves(e, &x->as.if_.else_or_null, bt, depth + 1);
+            x->type = *bt;
+            return;
+        case EX_MATCH:
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                fn_join_box_leaves(e, &x->as.match_.arms[i].body, bt, depth + 1);
+            x->type = *bt;
+            return;
+        default:
+            break;
+    }
+    const Type *sig = NULL;
+    switch (fn_join_leaf_repr(x, &sig)) {
+        case FNJ_CARRIER: {
+            Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, *bt, x->span);
+            conv->as.poly_to_fat_.inner = x;
+            conv->as.poly_to_fat_.sink_fn_type = bt;
+            *slot = conv;
+            return;
+        }
+        case FNJ_THIN: {
+            Expr *fat = elab_fn_value_to_fat(e, x);
+            if (fat != x) {
+                fat->type = *bt;
+                /* The join's value may be stored in an owning fn field, whose
+                 * drop glue would then see the static box's address reach
+                 * tur_closure_drop's free() branch (never taken: the header is
+                 * the keep glue) -- hide its provenance, as a type-variable
+                 * slot does (fn-value-at-tyvar-slot-static-box). */
+                if (fat->kind == EX_FN_TO_FAT) fat->as.fn_to_fat_.opaque_static = true;
+            }
+            *slot = fat;
+            return;
+        }
+        default:
+            /* A fat arm is already the box; the join's type says so. */
+            return;
+    }
+}
+
+bool elab_fn_join_to_fat(Elab *e, Expr **const *slots, uint32_t n, Type *out_type) {
+    if (!slots || n < 2) return false;
+    FnJoinScan s;
+    memset(&s, 0, sizeof s);
+    uint32_t live = 0;
+    for (uint32_t i = 0; i < n && !s.unknown; i++) {
+        if (!slots[i] || !*slots[i]) { s.unknown = true; break; }
+        uint32_t before = s.n_values;
+        fn_join_scan(*slots[i], &s, 0);
+        if (s.n_values != before) live++;
+    }
+    if (s.unknown || !s.have_sig || live == 0) return false;
+    /* Uniform already: thin arms join to a thin fn, which every consumer
+     * reads correctly.  One live arm (the others diverge) is the join's value
+     * as it is -- unless it is a carrier, which no consumer can read once it
+     * is not a binding (the one-arm case below). */
+    if (!s.any_fat && !s.any_carrier) return false;
+    if (live == 1 && !s.any_carrier) return false;
+    Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *bt = s.sig;
+    bt->as.fn.boxed = true;
+    for (uint32_t i = 0; i < n; i++)
+        fn_join_box_leaves(e, slots[i], bt, 0);
+    *out_type = *bt;
+    return true;
+}
+
+/* Would elab_fn_join_to_fat accept these arm values?  A query for a join
+ * that checks its arms one at a time (the ADT `match`), before the arms are
+ * all in hand: the conversion itself is made once they are. */
+bool elab_fn_join_compatible(Expr *const *vals, uint32_t n, Type *out_type) {
+    FnJoinScan s;
+    memset(&s, 0, sizeof s);
+    for (uint32_t i = 0; i < n && !s.unknown; i++) {
+        if (!vals[i]) { s.unknown = true; break; }
+        fn_join_scan(vals[i], &s, 0);
+    }
+    if (s.unknown || !s.have_sig || (!s.any_fat && !s.any_carrier)) return false;
+    *out_type = s.sig;
+    out_type->as.fn.boxed = true;
+    return true;
+}
+
+/* The one-arm case of the same seam: a `do` or `let` whose value is a carrier
+ * parameter -- `(do (log) f)`, `(let [g f] g)`.  It is typed `ptr<void>` like
+ * the parameter, but it is not a binding, so no consumer can tell it is a
+ * carrier: a call through it is refused, a constructor field refuses it, and a
+ * `(fn ...)` argument declares a `void *` temp for the by-value struct (a cc
+ * error).  Box the carrier at its leaf and type the form `boxed`, as a join
+ * does.  Anything else is returned untouched. */
+void elab_fn_tail_carrier_to_fat(Elab *e, Expr *x) {
+    if (!x || x->type.kind != TY_PTR_VOID) return;
+    if (x->kind != EX_DO && x->kind != EX_LET && x->kind != EX_LETREC) return;
+    FnJoinScan s;
+    memset(&s, 0, sizeof s);
+    fn_join_scan(x, &s, 0);
+    if (s.unknown || !s.have_sig || !s.any_carrier) return;
+    Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *bt = s.sig;
+    bt->as.fn.boxed = true;
+    Expr *slot = x;
+    fn_join_box_leaves(e, &slot, bt, 0);
+}
+
 Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     if (!value) return NULL;
     if (value->type.kind == TY_ANY) return value;  /* already boxed */
@@ -2950,12 +3230,60 @@ static Expr *elab_call_hamt_fn(Elab *e, Span span, const Symbol *fn_name, uint32
  * returning fn (S1c -- the make-scaler shape).  Both produce a fresh env the
  * caller uniquely owns; the non-retention guarantees the callee will not keep it
  * past the call. */
+/* fn-value-through-if-or-match-loses-its-representation: a fn-value join
+ * whose every value is a box the join made (elab_fn_join_to_fat) -- the
+ * caller owns whichever one it yields, as it owns a closure literal. */
+static bool fn_join_yields_own_box(const Expr *x, int depth) {
+    if (!x || depth > 64) return false;
+    if (x->type.kind == TY_NEVER || x->kind == EX_RETURN ||
+        x->kind == EX_PANIC || x->kind == EX_PANIC_WITH)
+        return true;
+    switch (x->kind) {
+        case EX_ASCRIBE:
+            return fn_join_yields_own_box(x->as.ascribe_.inner, depth + 1);
+        case EX_DO:
+            return x->as.do_.n > 0 &&
+                   fn_join_yields_own_box(x->as.do_.items[x->as.do_.n - 1], depth + 1);
+        case EX_LET:
+            return fn_join_yields_own_box(x->as.let_.body, depth + 1);
+        case EX_IF:
+            return x->as.if_.else_or_null &&
+                   fn_join_yields_own_box(x->as.if_.then_, depth + 1) &&
+                   fn_join_yields_own_box(x->as.if_.else_or_null, depth + 1);
+        case EX_MATCH:
+            if (x->as.match_.n_arms == 0) return false;
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                if (!fn_join_yields_own_box(x->as.match_.arms[i].body, depth + 1))
+                    return false;
+            return true;
+        case EX_POLY_TO_FAT:
+            return true;
+        case EX_FN_TO_FAT:
+            return !x->as.fn_to_fat_.inner_is_fat;
+        default:
+            return false;
+    }
+}
+
+bool elab_fn_join_yields_own_box(const Expr *a);
+static bool arg_is_fn_join_box(const Expr *a) { return elab_fn_join_yields_own_box(a); }
+bool elab_fn_join_yields_own_box(const Expr *a) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    if (!a || a->type.kind != TY_FN || !a->type.as.fn.boxed) return false;
+    if (a->kind != EX_IF && a->kind != EX_MATCH && a->kind != EX_DO &&
+        a->kind != EX_LET)
+        return false;
+    return fn_join_yields_own_box(a, 0);
+}
+
 static bool arg_is_freeable_closure_source(const Binding *fb, uint32_t i,
                                            const Expr *a) {
     if (!a) return false;
     bool nonretain = FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW)
                      || (i < 32 && (fb->nonretain_param_mask & (1u << i)));
     if (!nonretain) return false;
+    if (arg_is_fn_join_box(a))
+        return true;
     if (a->kind == EX_CLOSURE && a->as.closure_.closure
         && a->as.closure_.closure->n_captures > 0)
         return true;

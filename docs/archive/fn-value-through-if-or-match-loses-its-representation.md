@@ -1,5 +1,65 @@
 # A function value chosen by an `if` or `match` loses its representation
 
+> **RESOLVED 2026-11-28.** Fix direction 1. The join picks one representation
+> and converts every arm to it: `elab_fn_join_to_fat` (`src/compiler/elab_call.c`)
+> classifies each value leaf, through `do` / `let` tails and nested `if` /
+> `match`, as carrier, fat or thin, the way `elab_normalize_fn_tail_leaves`
+> does for a defn's result. When the arms share one signature and are not all
+> thin, it boxes a carrier leaf (EX_POLY_TO_FAT), gives a thin one a static
+> box (`elab_fn_value_to_fat`), and leaves a fat one as it is. It then types
+> the join `boxed`, re-typing each wrapper on the way out. The `if` join
+> (`elab_forms.c`) calls it, and so do the union, literal and ADT `match`
+> constructions (`match_fn_join`, `elab_structs.c`). It replaces the cell-2
+> branch for every arm it can classify. Cell 2 still covers a carrier beside
+> a non-variable fat-normalized arm, the recursion case it was written for.
+>
+> Three neighbours of the same seam are covered too:
+>
+> - A `do` / `let` yielding a carrier is boxed the same way
+>   (`elab_fn_tail_carrier_to_fat`). It was refused as a call head, as a let
+>   init, and as a constructor argument, and it was a cc error as a `(fn ...)`
+>   argument.
+> - An `if` whose other arm diverges, `(if c f (panic ...))`, is boxed too.
+> - The ADT `match`'s per-arm type check consults the join
+>   (`match_arms_fn_joinable`). It used to reject a carrier arm beside a defn
+>   as "arm types are incompatible".
+>
+> Arms whose signatures differ are still a type error. The message now names a
+> carrier arm by its declared type, not `ptr<void>`. Two carriers of different
+> signatures, which `type_eq` matched as `ptr<void>`, now get that error and
+> are no longer refused later as "not callable".
+>
+> Ownership (fix direction 2): no stack box. A join's arms are emitted inside
+> the `if`'s C block, so a stack box would die before the join is read.
+> Instead, every box the join makes is fresh (NULL header) or static (the
+> keep header), so whoever holds the join owns the box it yields:
+>
+> - **Call head, or a `let` that is only called:** `let_binding_env_freeable`
+>   (`emit_expr.c`, `fn_join_leaves_fresh`) drops the box at scope exit.
+> - **Argument to a non-retaining parameter:** hoisted to a `__borrowc` temp
+>   (`arg_is_freeable_closure_source`), then freed the same way.
+> - **Constructor fn field:** owned (`fnfield_closure_owned`).
+>
+> The escape walk (`binding_escapes_impl_x`, `emit_core.c`) learned that a
+> parameter boxed at, or passed through, a join escapes only if the `let`
+> binding holding the join does. Without that, every caller of such a function
+> kept the closure it passed (24 B a call).
+>
+> Not covered:
+>
+> - A join returned from a function, or wrapped in a `Some`, still leaks its
+>   box. The declared-result path (`sel` below) did the same before this fix.
+> - In a function that performs, the CPS backend evicts a plain carrier
+>   parameter that is used as a value, which a join now does. That function
+>   is still refused, as it was on `main`. Filed as
+>   [carrier-fn-param-in-join-evicts-effectful-fn](../reported/carrier-fn-param-in-join-evicts-effectful-fn.md).
+>   A `^fat` parameter works there. On `main` it segfaulted.
+>
+> Pinned by `fn-value-through-if-or-match` (every row below, both arms, plus
+> float, cstr, two-argument, nested, diverging and ADT-`match` shapes),
+> `fn-value-join-box-reclaimed` (`requires.leak-check`) and
+> `errors/fn-value-join-signature-mismatch`.
+
 **Severity: high (miscompile: several shapes compile and then segfault).** The
 other shapes are refused with a misleading diagnostic, or fail in the C
 compiler.

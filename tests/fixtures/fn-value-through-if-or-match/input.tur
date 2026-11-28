@@ -1,0 +1,123 @@
+;; fn-value-through-if-or-match-loses-its-representation: an `if` or `match`
+;; whose arms are function values of one type, at least one of them a
+;; parameter, and whose result is then used.
+;;
+;; A fn value is in one of three representations, chosen per BINDING: a plain
+;; `(fn [int] int)` parameter is the by-value poly carrier (typed ptr<void>), a
+;; `^fat` one a pointer to a { shim, fn } box, and a named defn or a lambda
+;; with no captures a bare code pointer.  A join is not a binding, so all a
+;; consumer saw was the type: a carrier beside a defn was a box over a code
+;; pointer (SIGSEGV on the defn arm), two `^fat` parameters a thin fn (cast to
+;; a code pointer and jumped into), two carriers `ptr<void>` (refused as not
+;; callable, TUR-E0001 at a constructor, a cc error at a `(fn ...)` argument).
+;;
+;; The join now converts every arm to the fat box and is typed `boxed`; a
+;; `do` / `let` yielding a carrier does the same.  Each row is called with
+;; both arms so a wrong representation on either one shows.
+(defstruct H [n : int h : (fn [int] int)])
+
+(defn a1 [x : int] : int (+ x 1))
+(defn a2 [x : int] : int (* x 2))
+(defn a3 [x : int] : int (- x 3))
+(defn app [g : (fn [int] int)] : int (g 10))
+(defn appf [^fat g : (fn [int] int)] : int (g 10))
+
+;; plain f beside a defn: call head, let, plain arg, ^fat arg, ctor field
+(defn p-call [c : bool f : (fn [int] int)] : int ((if c f a2) 10))
+(defn p-let [c : bool f : (fn [int] int)] : int (let [h (if c f a2)] (h 10)))
+(defn p-app [c : bool f : (fn [int] int)] : int (app (if c f a2)))
+(defn p-appf [c : bool f : (fn [int] int)] : int (appf (if c f a2)))
+(defn p-ctor [c : bool f : (fn [int] int)] : int ((.h (H 1 (if c f a2))) 10))
+;; plain f beside a lambda with no captures, and beside a capturing one
+(defn p-lam [c : bool f : (fn [int] int)] : int
+  ((if c f (fn [x : int] : int (* x 3))) 10))
+(defn p-clo [c : bool f : (fn [int] int) k : int] : int
+  ((if c f (fn [x : int] : int (+ x k))) 10))
+;; ^fat f beside a defn; two ^fat params
+(defn f-def [c : bool ^fat f : (fn [int] int)] : int ((if c f a2) 10))
+(defn ff-call [c : bool ^fat f : (fn [int] int) ^fat g : (fn [int] int)] : int
+  ((if c f g) 10))
+(defn ff-let [c : bool ^fat f : (fn [int] int) ^fat g : (fn [int] int)] : int
+  (let [h (if c f g)] (h 10)))
+(defn ff-appf [c : bool ^fat f : (fn [int] int) ^fat g : (fn [int] int)] : int
+  (appf (if c f g)))
+;; two plain params
+(defn pp-call [c : bool f : (fn [int] int) g : (fn [int] int)] : int ((if c f g) 10))
+(defn pp-let [c : bool f : (fn [int] int) g : (fn [int] int)] : int
+  (let [h (if c f g)] (h 10)))
+(defn pp-ctor [c : bool f : (fn [int] int) g : (fn [int] int)] : int
+  ((.h (H 1 (if c f g))) 10))
+(defn pp-mks [c : bool f : (fn [int] int) g : (fn [int] int)] : int
+  ((.h (make-struct H 1 (if c f g))) 10))
+(defn pp-app [c : bool f : (fn [int] int) g : (fn [int] int)] : int (app (if c f g)))
+(defn pp-appf [c : bool f : (fn [int] int) g : (fn [int] int)] : int (appf (if c f g)))
+;; match: literal, ADT, three arms, a constructor field
+(defn m-lit [n : int f : (fn [int] int) g : (fn [int] int)] : int ((match n 0 f _ g) 10))
+(defn m-def [n : int f : (fn [int] int)] : int ((match n 0 f 1 a2 _ a3) 10))
+(defn m-adt [o : (Option int) f : (fn [int] int)] : int ((match o (Some _) f (None) a2) 10))
+(defn m-ctor [n : int f : (fn [int] int) g : (fn [int] int)] : int
+  ((.h (H 1 (match n 0 f _ g))) 10))
+;; a do / let yielding a plain param
+(defn d-ctor [f : (fn [int] int)] : int ((.h (H 1 (do (println "d") f))) 10))
+(defn l-ctor [f : (fn [int] int)] : int ((.h (H 1 (let [g f] g))) 10))
+(defn d-call [f : (fn [int] int)] : int ((do (println "d") f) 10))
+(defn l-app [f : (fn [int] int)] : int (app (let [g f] g)))
+;; nested, and an arm that diverges
+(defn nest [n : int f : (fn [int] int) g : (fn [int] int)] : int
+  ((if (= n 0) f (if (= n 1) g a3)) 10))
+(defn div [c : bool f : (fn [int] int)] : int ((if c f (panic "unreachable")) 10))
+;; non-int signatures dispatch at their own types
+(defn fb [x : float] : float (+ x 0.25))
+(defn sa [n : int] : cstr (if (> n 0) "pos" "neg"))
+(defn ga [a : int b : int] : int (- a b))
+(defn t-float [c : bool f : (fn [float] float)] : float ((if c f fb) 3.1))
+(defn t-cstr [c : bool f : (fn [int] cstr) g : (fn [int] cstr)] : cstr ((if c f g) 1))
+(defn t-two [c : bool f : (fn [int int] int)] : int ((if c f ga) 10 3))
+;; the declared-result position (already correct) stays correct
+(defn sel [c : bool f : (fn [int] int)] : (fn [int] int) (if c f a2))
+
+(defn both [label : cstr x : int y : int] : nil
+  (println label)
+  (println x)
+  (println y))
+
+(defn main [] : int
+  (let [k   100
+        cl  (fn [x : int] : int (+ x k))]
+    (both "p-call" (p-call true a1) (p-call false a1))
+    (both "p-let" (p-let true a1) (p-let false a1))
+    (both "p-app" (p-app true a1) (p-app false a1))
+    (both "p-appf" (p-appf true a1) (p-appf false a1))
+    (both "p-ctor" (p-ctor true cl) (p-ctor false cl))
+    (both "p-lam" (p-lam true a1) (p-lam false a1))
+    (both "p-clo" (p-clo true a1 5) (p-clo false a1 5))
+    (both "f-def" (f-def true a1) (f-def false a1))
+    (both "ff-call" (ff-call true a1 cl) (ff-call false a1 cl))
+    (both "ff-let" (ff-let true a1 cl) (ff-let false a1 cl))
+    (both "ff-appf" (ff-appf true a1 cl) (ff-appf false a1 cl))
+    (both "pp-call" (pp-call true a1 cl) (pp-call false a1 cl))
+    (both "pp-let" (pp-let true a1 cl) (pp-let false a1 cl))
+    (both "pp-ctor" (pp-ctor true a1 cl) (pp-ctor false a1 cl))
+    (both "pp-mks" (pp-mks true a1 cl) (pp-mks false a1 cl))
+    (both "pp-app" (pp-app true a1 cl) (pp-app false a1 cl))
+    (both "pp-appf" (pp-appf true a1 cl) (pp-appf false a1 cl))
+    (both "m-lit" (m-lit 0 a1 cl) (m-lit 1 a1 cl))
+    (both "m-def" (m-def 0 cl) (m-def 1 cl))
+    (println (m-def 7 cl))
+    (both "m-adt" (m-adt (Some 1) cl) (m-adt (None) cl))
+    (both "m-ctor" (m-ctor 0 a1 cl) (m-ctor 1 a1 cl))
+    (println (d-ctor cl))
+    (println (l-ctor cl))
+    (println (d-call a1))
+    (println (l-app a1))
+    (both "nest" (nest 0 a1 cl) (nest 1 a1 cl))
+    (println (nest 2 a1 cl))
+    (println (div true cl))
+    (println (t-float true (fn [x : float] : float (* x 2.5))))
+    (println (t-float false (fn [x : float] : float (* x 2.5))))
+    (println (t-cstr true sa (fn [n : int] : cstr "lam")))
+    (println (t-cstr false sa (fn [n : int] : cstr "lam")))
+    (both "t-two" (t-two true (fn [a : int b : int] : int (+ a b)))
+                  (t-two false (fn [a : int b : int] : int (+ a b))))
+    (both "sel" ((sel true cl) 10) ((sel false cl) 10)))
+  0)

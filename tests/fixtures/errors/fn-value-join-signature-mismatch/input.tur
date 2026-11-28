@@ -1,0 +1,12 @@
+;; fn-value-through-if-or-match-loses-its-representation: the fn-value join
+;; converts arms of ONE signature to the fat box.  Arms whose signatures differ
+;; are still a type error -- and a carrier parameter, whose type reads
+;; `ptr<void>`, is named by the function type it was declared with.  Two
+;; carrier parameters used to be `type_eq` (both `ptr<void>`) and were refused
+;; only later, as "not callable".
+(defn fb [x : float] : float (+ x 0.25))
+(defn pick [c : bool f : (fn [int] int) g : (fn [float] float)] : int
+  ((if c f g) 3))
+(defn main [] : int
+  (println (pick true (fn [x : int] : int x) fb))
+  0)
