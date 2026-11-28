@@ -62,6 +62,11 @@
 (defn l-ctor [f : (fn [int] int)] : int ((.h (H 1 (let [g f] g))) 10))
 (defn d-call [f : (fn [int] int)] : int ((do (println "d") f) 10))
 (defn l-app [f : (fn [int] int)] : int (app (let [g f] g)))
+;; a do / let yielding a ^fat param: typed like the param (a thin fn), so a
+;; let bound to it called the fat box as a code pointer
+(defn fd-let [^fat f : (fn [int] int)] : int (let [g (do (println "d") f)] (g 10)))
+(defn fd-call [^fat f : (fn [int] int)] : int ((do (println "d") f) 10))
+(defn fl-call [^fat f : (fn [int] int)] : int ((let [h f] h) 10))
 ;; nested, and an arm that diverges
 (defn nest [n : int f : (fn [int] int) g : (fn [int] int)] : int
   ((if (= n 0) f (if (= n 1) g a3)) 10))
@@ -110,6 +115,9 @@
     (println (l-ctor cl))
     (println (d-call a1))
     (println (l-app a1))
+    (both "fd-let" (fd-let a1) (fd-let cl))
+    (both "fd-call" (fd-call a1) (fd-call cl))
+    (both "fl-call" (fl-call a1) (fl-call cl))
     (both "nest" (nest 0 a1 cl) (nest 1 a1 cl))
     (println (nest 2 a1 cl))
     (println (div true cl))

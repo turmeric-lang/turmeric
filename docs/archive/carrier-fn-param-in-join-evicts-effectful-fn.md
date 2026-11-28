@@ -30,8 +30,8 @@
 > `fn-value-join-in-effectful-fn-fat`.
 >
 > Found on the way, pre-existing: a defn passed to a `^fat` parameter of a
-> function that performs leaks its shim, join or not. Filed as
-> [fat-shim-arg-to-performing-callee-leaks](../reported/fat-shim-arg-to-performing-callee-leaks.md).
+> function that performs leaked its shim, join or not. Filed, and since resolved, as
+> [fat-shim-arg-to-performing-callee-leaks](fat-shim-arg-to-performing-callee-leaks.md).
 
 **Severity: medium (false rejection, misleading diagnostic).** If a function
 performs an effect, a plain `(fn ...)` parameter cannot be one arm of an `if`

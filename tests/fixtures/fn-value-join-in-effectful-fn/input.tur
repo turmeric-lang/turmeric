@@ -9,11 +9,7 @@
 ;; a continuation slot as the pointer it is.  The boxes are reaped at the DK
 ;; entry boundary.  requires.leak-check runs this under ASan.
 ;;
-;; Every caller below passes named defns: a capturing closure handed from a
-;; CPS `main` into a `handle` is kept for other reasons.  The two-`^fat` row
-;; is fn-value-join-in-effectful-fn-fat: a defn passed to a `^fat` parameter
-;; of a function that performs leaks its shim, join or not
-;; (fat-shim-arg-to-performing-callee-leaks).
+;; The two-`^fat` rows are in fn-value-join-in-effectful-fn-fat.
 (defmodule m
   (defeffect Ask [] : int)
   (defn a1 [x : int] : int (+ x 1))

@@ -1465,13 +1465,25 @@ bool elab_fn_join_compatible(Expr *const *vals, uint32_t n, Type *out_type) {
  * `(fn ...)` argument declares a `void *` temp for the by-value struct (a cc
  * error).  Box the carrier at its leaf and type the form `boxed`, as a join
  * does.  Anything else is returned untouched. */
+/* The `^fat` twin: `(do ... f)` with `^fat f` is typed like `f` -- a thin
+ * `(fn ...)`, since `^fat` lives on the binding -- so a let bound to it, which
+ * inherits is_fat only from a bare variable init, called it as a code pointer
+ * and jumped into the box.  The value already IS the fat box; the form is just
+ * re-typed `boxed` (fn_join_box_leaves leaves a fat leaf alone). */
 void elab_fn_tail_carrier_to_fat(Elab *e, Expr *x) {
-    if (!x || x->type.kind != TY_PTR_VOID) return;
+    if (!x) return;
+    bool thin_typed = x->type.kind == TY_FN && !x->type.as.fn.boxed &&
+                      !x->type.as.fn.cfnptr;
+    if (x->type.kind != TY_PTR_VOID && !thin_typed) return;
     if (x->kind != EX_DO && x->kind != EX_LET && x->kind != EX_LETREC) return;
     FnJoinScan s;
     memset(&s, 0, sizeof s);
     fn_join_scan(x, &s, 0);
-    if (s.unknown || !s.have_sig || !s.any_carrier) return;
+    if (s.unknown || !s.have_sig) return;
+    /* A carrier is boxed; a fat value under a thin-looking type is re-typed.
+     * Anything thin stays as it is: a defn yielded by a `do` is a code
+     * pointer, and its type says so. */
+    if (!s.any_carrier && !(thin_typed && s.any_fat && !s.any_thin)) return;
     Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
     *bt = s.sig;
     bt->as.fn.boxed = true;
@@ -12220,9 +12232,12 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                  * below: does the callee provably neither retain nor drop
                  * this argument?  See the comment on the bare-fn shim for why
                  * a set nonretain bit implies both. */
+                /* fat-shim-arg-to-performing-callee-leaks: the box mask, which
+                 * also admits a callee that performs (see the field). */
                 bool sink_is_nonretaining =
                     fn_binding && i < 32 &&
-                    ((fn_binding->nonretain_param_mask & (1u << i)) != 0 ||
+                    (((fn_binding->nonretain_param_mask |
+                       fn_binding->nonretain_box_param_mask) & (1u << i)) != 0 ||
                      (fn_binding->type.kind == TY_FN &&
                       i < fn_binding->type.as.fn.arity &&
                       fn_binding->type.as.fn.arg_flags &&

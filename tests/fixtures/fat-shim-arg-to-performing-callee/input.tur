@@ -1,0 +1,64 @@
+;; fat-shim-arg-to-performing-callee-leaks: a fn value passed to a `^fat`
+;; parameter of a function that performs.
+;;
+;; The caller boxes a named defn into a { shim, fn } box for the call, and it
+;; may share a static box -- or, for a capturing closure, free the closure's env
+;; -- only when the callee is proven not to keep the argument.  That proof (the
+;; non-retention mask) counted the callee's own `perform` as an escape, so
+;; every such call leaked 24 B.  The box mask asks it again with a `perform`
+;; not an escape: a shim box is static, on the caller's stack, or reaped once
+;; at the DK entry boundary, and a closure the caller reaps there outlives
+;; every resume of the entry.
+;;
+;; A callee that installs a handler around its callback but performs nothing
+;; itself (`with-ask`) had no mask either: expr_subtree_has_inline_c cannot see
+;; into a `handle`, so it read as "maybe inline C".  Its strict mask is now
+;; inferred with a precise scan, and a DIRECT caller frees the closure it
+;; passed -- `direct` below, under a one-shot and a multi-shot handler.
+;;
+;; requires.leak-check runs this under ASan: a box or env kept is a leak per
+;; turn; one freed while the callee can still call it is a use-after-free.
+;; `keep` is the must-keep shape -- it stores the argument, so its bit stays
+;; clear and the closure it was handed is still callable afterwards.
+(defmodule m
+  (defeffect Ask [] : int)
+  (defn a1 [x : int] : int (+ x 1))
+  ;; calls f after the perform
+  (defn use [^fat f : (fn [int] int)] : int
+    (+ (perform (Ask)) (f 10)))
+  ;; calls f in the continuation, which a multi-shot handler runs twice
+  (defn twice [^fat f : (fn [int] int)] : int
+    (let [q (perform (Ask))]
+      (f q)))
+  (def ^mut saved (fn [x : int] : int x))
+  (defn keep [^fat f : (fn [int] int)] : int
+    (do (set! saved f)
+        (+ (perform (Ask)) (f 1))))
+  (defn turn [i : int] : int
+    (let [cl (fn [x : int] : int (+ x i))]
+      (+ (handle (use a1) (Ask [] r) (resume r 1000))
+         (+ (handle (use cl) (Ask [] r) (resume r 1000))
+            (+ (handle (twice a1) (Ask [] ^multishot r) (+ (resume r 1) (resume r 2)))
+               (handle (twice cl) (Ask [] ^multishot r) (+ (resume r 1) (resume r 2))))))))
+  ;; handlers inside the callee, which performs nothing itself
+  (defn with-ask [^fat t : (fn [] #fx{Ask} int)] : int
+    (handle (t) (Ask [] r) (resume r 7)))
+  (defn with-ask2 [^fat t : (fn [] #fx{Ask} int)] : int
+    (handle (t) (Ask [] ^multishot r) (+ (resume r 1) (resume r 2))))
+  (defn direct [i : int] : int
+    (let [plain (fn [] : int (+ i 1))
+          asks  (fn [] : int (+ i (perform (Ask))))]
+      (+ (with-ask plain)
+         (+ (with-ask asks) (with-ask2 asks)))))
+  (defn run [i : int n : int acc : int] : int
+    (if (= i n)
+      acc
+      (run (+ i 1) n (+ acc (+ (turn i) (direct i))))))
+  (defn main [] : int
+    (println (run 0 1 0))     ; 1011 + 1010 + 5 + 3, then 1 + 7 + 3 = 2040
+    (println (run 0 100 0))
+    (let [k 100
+          cl (fn [x : int] : int (+ x k))]
+      (println (handle (keep cl) (Ask [] r) (resume r 1000)))   ; 1101
+      (println (saved 5)))                                       ; 105
+    0))

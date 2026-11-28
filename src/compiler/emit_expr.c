@@ -20898,11 +20898,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "tur_poly_fn_t %s = %s;\n", pf, pv);
             char *box = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            if (e->as.poly_to_fat_.stack_ok && ensure_fatbox_keep(ctx)) {
+            if (e->as.poly_to_fat_.stack_ok && !ctx->in_cps_fn &&
+                ensure_fatbox_keep(ctx)) {
                 /* poly-to-fat-box-leaks-per-call: the ^fat sink was proven not
                  * to retain (or drop) this value, so the { shim, fn, env } box
                  * is dead the moment the call returns -- give it the call's
                  * own stack frame, exactly as the bare-fn shim above does.
+                 * Not in a DK body, where the frame can be gone before a
+                 * continuation reads the box (the reap below, as the bare-fn
+                 * shim does: fat-shim-arg-to-performing-callee-leaks).
                  * Header is the no-op keep glue, so a drop through any path is
                  * harmless rather than a free() of the stack. */
                 char *pbase = fresh_tmp(ctx);
@@ -20926,6 +20930,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "int64_t *%s = (int64_t *)((char *)%s + sizeof(void *));\n",
                            box, pbase);
+                /* A non-retaining sink in a DK body: dead once every
+                 * continuation of this entry has run -- the entry's reaper. */
+                if (e->as.poly_to_fat_.stack_ok && ctx->in_cps_fn) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "(void)__dk_reap_ptr((intptr_t)%s);\n", pbase);
+                }
                 free(pbase);
             }
             /* poly-to-fat-typed-shim-plan + multiarg fix: pick the slot-0 shim

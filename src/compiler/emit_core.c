@@ -1326,8 +1326,11 @@ static bool esc_join_init_escapes(const Expr *x, const Binding *b,
 
 /* Is let binding `i` of `let` a fn join (a boxed fn value built by an `if` /
  * `match` / `do` / `let`) that never leaves the let -- invoked, at most?  Asked
- * with the walk's mode flags cleared, since they describe the outer query's
- * binding, not this one. */
+ * with the walk's binding-specific mode flags cleared, since they describe the
+ * outer query's binding, not this one.  g_esc_perform_ok is kept: it describes
+ * WHEN the outer owner frees (at the DK entry boundary, after every resume),
+ * which bounds how long the join's binding may live just the same
+ * (fat-shim-arg-to-performing-callee-leaks). */
 static bool esc_let_join_confined(const Expr *let, uint32_t i) {
     const Binding *jb = let->as.let_.bindings[i].binding;
     const Expr *init = let->as.let_.bindings[i].init;
@@ -1339,12 +1342,11 @@ static bool esc_let_join_confined(const Expr *let, uint32_t i) {
         init->kind != EX_LET)
         return false;
     bool s_sum = g_esc_allow_sum_accessors, s_copy = g_esc_copying_match_ok,
-         s_head = g_esc_call_head_only, s_perf = g_esc_perform_ok;
+         s_head = g_esc_call_head_only;
     uint32_t s_self = g_esc_self_apply_mask;
     g_esc_allow_sum_accessors = false;
     g_esc_copying_match_ok = false;
     g_esc_call_head_only = false;
-    g_esc_perform_ok = false;
     g_esc_self_apply_mask = 0;
     bool confined = !binding_escapes_impl_x(let->as.let_.body, jb, false, NULL, false);
     for (uint32_t k = 0; confined && k < let->as.let_.n; k++)
@@ -1354,7 +1356,6 @@ static bool esc_let_join_confined(const Expr *let, uint32_t i) {
     g_esc_allow_sum_accessors = s_sum;
     g_esc_copying_match_ok = s_copy;
     g_esc_call_head_only = s_head;
-    g_esc_perform_ok = s_perf;
     g_esc_self_apply_mask = s_self;
     return confined;
 }
@@ -1528,6 +1529,13 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                         if (fb && i < 32 &&
                             (fb->nonretain_param_mask & (1u << i)))
                             continue;
+                        /* fat-shim-arg-to-performing-callee-leaks: for an owner
+                         * that frees at the DK entry boundary (the reaped walk),
+                         * a callee whose only "escape" is its own `perform` keeps
+                         * nothing past that boundary -- the box mask. */
+                        if (fb && i < 32 && g_esc_perform_ok &&
+                            (fb->nonretain_box_param_mask & (1u << i)))
+                            continue;
                     }
                     /* closure-drop-glue (mw-compose-of): a `^borrow & rest` callee
                      * reads/invokes each rest element but retains none.  The rest
@@ -1627,7 +1635,7 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                     /* fn-value-through-if-or-match-loses-its-representation:
                      * a join's box of `b` lives as long as the let binding
                      * holding the join (see esc_join_init_escapes). */
-                    if (cur->kind == EX_LET && li &&
+                    if (cur->kind == EX_LET && li && !g_esc_call_head_only &&
                         cur->as.let_.bindings[i].binding != b &&
                         esc_let_join_confined(cur, i)) {
                         if (esc_join_init_escapes(li, b, allow_box_accessors,

@@ -9695,9 +9695,88 @@ static bool fn_join_returns_fresh_box(const Expr *body, Binding **params,
     return true;
 }
 
+/* fat-shim-arg-to-performing-callee-leaks: is there a real inline-C block in
+ * `x` (not inside a nested fn, which is its own body)?  expr_subtree_has_inline_c
+ * answers "maybe" for any form it does not list -- a `perform` among them -- so
+ * a performing body never had a mask at all.  This walks the shared operand
+ * enumeration, which covers every evaluated form. */
+static bool nr_has_inline_c(const Expr *x);
+static bool nr_has_inline_c_visit(const Expr *c, void *ud) {
+    (void)ud;
+    return nr_has_inline_c(c);
+}
+static bool nr_has_inline_c(const Expr *x) {
+    if (!x) return false;
+    if (x->kind == EX_INLINE_C) return true;
+    return cps_visit_children(x, nr_has_inline_c_visit, NULL);
+}
+
+/* fat-shim-arg-to-performing-callee-leaks: the box mask (see the field).  The
+ * fn-param bits nonretain_param_mask did not set are re-asked with a `perform`
+ * not an escape, as a greatest fixed point over self-calls like the main one:
+ * every candidate starts set (visible to the walk through `b`'s own mask while
+ * it runs), and a bit the body contradicts clears. */
+bool closure_binding_escapes_reaped(const Expr *e, const Binding *b);
+/* The strict fn-param fixed point itself, for a body the inline-C gate above
+ * refused only because expr_subtree_has_inline_c could not see into a form --
+ * a `handle`, a `resume` -- while nr_has_inline_c finds no inline C in it.  Same
+ * walk (closure_binding_escapes, a `perform` still an escape), same candidates
+ * the main pass starts from for a fn, same greatest fixed point: what the main
+ * pass would have answered with a precise scan.  A helper that installs a
+ * handler around a callback, `(handle (f 10) ...)`, then lets its caller free
+ * the closure it passed instead of keeping it (24 B a call). */
+static void elab_infer_nonretain_fn_mask_precise(Binding *b, Binding *const *params,
+                                                 uint32_t n_params, const Expr *body) {
+    if (!body || b->body_is_inline_c || !expr_subtree_has_inline_c(body) ||
+        nr_has_inline_c(body))
+        return;
+    uint32_t m = 0;
+    for (uint32_t i = 0; i < n_params && i < 32; i++) {
+        const Binding *pb = params[i];
+        if (pb && (pb->is_fat || pb->is_poly_fn || pb->type.kind == TY_FN))
+            m |= 1u << i;
+    }
+    if (!m) return;
+    uint32_t prev;
+    do {
+        prev = m;
+        b->nonretain_param_mask = m;   /* a self-call reads the candidate */
+        for (uint32_t i = 0; i < n_params && i < 32; i++)
+            if ((m & (1u << i)) && closure_binding_escapes(body, params[i]))
+                m &= ~(1u << i);
+    } while (m != prev);
+    b->nonretain_param_mask = m;
+}
+
+static void elab_infer_nonretain_box_mask(Binding *b, Binding *const *params,
+                                          uint32_t n_params, const Expr *body) {
+    b->nonretain_box_param_mask = b->nonretain_param_mask;
+    if (!body || b->body_is_inline_c || nr_has_inline_c(body)) return;
+    uint32_t cand = 0;
+    for (uint32_t i = 0; i < n_params && i < 32; i++) {
+        const Binding *pb = params[i];
+        if (pb && (pb->is_fat || pb->is_poly_fn || pb->type.kind == TY_FN))
+            cand |= 1u << i;
+    }
+    cand &= ~b->nonretain_param_mask;
+    if (!cand) return;
+    uint32_t saved = b->nonretain_param_mask;
+    uint32_t m = saved | cand, prev;
+    do {
+        prev = m;
+        b->nonretain_param_mask = m;
+        for (uint32_t i = 0; i < n_params && i < 32; i++)
+            if ((cand & m & (1u << i)) && closure_binding_escapes_reaped(body, params[i]))
+                m &= ~(1u << i);
+    } while (m != prev);
+    b->nonretain_param_mask = saved;
+    b->nonretain_box_param_mask = m;
+}
+
 void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                                 Expr *body) {
     b->nonretain_param_mask = 0;
+    b->nonretain_box_param_mask = 0;
     /* An inline-C body can STORE a fn-param invisibly to the AST escape analysis
      * (a param is a C-visible formal, not an AST capture), so a body containing
      * any inline-C is never treated as non-retaining -- otherwise its stored
@@ -9955,6 +10034,8 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
       } while (b->nonretain_param_mask != _prev_fn_mask ||
                _adt_bits != _prev_adt_bits || _ra_bits != _prev_ra_bits);
     }
+    elab_infer_nonretain_fn_mask_precise(b, params, n_params, body);
+    elab_infer_nonretain_box_mask(b, params, n_params, body);
     b->nonretain_inferred = true;
 }
 

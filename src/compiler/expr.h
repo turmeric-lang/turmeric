@@ -870,6 +870,16 @@ struct Binding {
      * beyond bit 31 are left unset (conservative -- no free).  0 for non-fns and
      * fns with no non-retaining fn-param. */
     uint32_t            nonretain_param_mask;
+    /* fat-shim-arg-to-performing-callee-leaks: the same question for a CALLER'S
+     * shim box only -- answered with a `perform` in the body not counted as an
+     * escape (closure_binding_escapes_reaped).  nonretain_param_mask has to
+     * count it, because a scope-exit free inside a captured continuation could
+     * run once per resume; a shim box is static, on the caller's stack (the
+     * callee's direct entry finishes every resume before it returns), or reaped
+     * once at the DK entry boundary, so the perform is not a hazard for it.
+     * Always a superset of nonretain_param_mask's fn bits.  Read only by the
+     * `^fat` argument shim decision in elab_call.c. */
+    uint32_t            nonretain_box_param_mask;
     /* fat-shim-arg-to-mutual-cps-pair-leaks: elab_infer_nonretain_masks has
      * run for this function (a forward reference's mask is still 0 because it
      * is not known yet, not because its body retains). */
