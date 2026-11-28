@@ -42,7 +42,7 @@
 > copies are refused and leak instead -- pinned by
 > `byval-recursive-adt-shared-copy-not-freed` (`known-leak`, which still fails
 > on a use-after-free) and filed as
-> [byvalue-recursive-shared-copies-leak](../reported/byvalue-recursive-shared-copies-leak.md),
+> [byvalue-recursive-shared-copies-leak](byvalue-recursive-shared-copies-leak.md),
 > along with the same hole for an rc-field struct copied out of a `^borrow`,
 > which this analysis does not cover.
 >

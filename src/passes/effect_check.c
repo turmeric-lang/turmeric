@@ -840,6 +840,8 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         return collect_effects_in_expr(a, e->as.rc_of_.expr, row, idx, env, subst);
     case EX_RC_CLONE:
         return collect_effects_in_expr(a, e->as.rc_clone_.expr, row, idx, env, subst);
+    case EX_BYVAL_CLONE:
+        return collect_effects_in_expr(a, e->as.byval_clone_.expr, row, idx, env, subst);
     case EX_RC_DROP:
         return collect_effects_in_expr(a, e->as.rc_drop_.expr, row, idx, env, subst);
     case EX_RC_PTR:

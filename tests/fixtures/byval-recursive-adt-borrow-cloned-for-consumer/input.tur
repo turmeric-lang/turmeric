@@ -1,0 +1,113 @@
+;; byvalue-recursive-shared-copies-leak, item 1: clone at the borrow.
+;;
+;; A SHARED VIEW of a by-value recursive ADT -- a ^borrow, a global, a binder
+;; of one -- handed to a parameter that CONSUMES it gets a deep copy of its
+;; own (clone_localowned_<T>).  Before, the ownership provenance made the
+;; consuming parameter unowned for EVERY caller once one call site passed a
+;; view, so the owning callers leaked what the callee would have discharged,
+;; and the borrowing caller's own local leaked too (the hand-off read as an
+;; escape).  Leak-checked: each shape below 100 times.
+;;
+;;   via-borrow  -- a ^borrow handed to `tail2`, which owning callers also
+;;                  call: the copy keeps `tail2`'s parameter owned, and the
+;;                  borrowed list's owner frees it at scope exit.
+;;   from-global -- a global handed to `tail2`: copied, the global unchanged.
+;;   via-binder  -- a match binder of a ^borrow handed on.
+;;   rc payload  -- `RLst` carries an `rc` field: the copy takes a count, so
+;;                  the original and the copy each release their own.
+;;   forward     -- `tail-fwd` is defined after its caller, so the call is
+;;                  judged after Pass 2: the global's copy still keeps the
+;;                  parameter owned, and the owning call frees its spine.
+;;
+;; Expected output:
+;;   1
+;;   0
+;;   2
+;;   7
+;;   2
+;;   2
+;;   2
+;;   2
+;;   1
+;;   1
+;;   2
+;;   700
+;;   3
+
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn llen [xs : Lst] : int
+  (match xs
+    (Cons h t) (+ 1 (llen t))
+    (Nil)      0))
+
+(defn tail2 [xs : Lst] : Lst
+  (match xs
+    (Cons h t) t
+    (Nil)      (Nil)))
+
+(defn via-borrow [^borrow xs : Lst] : int (llen (tail2 xs)))
+
+(defn via-binder [^borrow xs : Lst] : int
+  (match xs
+    (Cons h t) (llen (tail2 t))
+    (Nil)      0))
+
+(def g (Cons 1 (Cons 2 (Cons 3 (Nil)))))
+
+(defn from-global [] : int (llen (tail2 g)))
+
+(defn head-or [xs : Lst d : int] : int
+  (match xs
+    (Cons h t) h
+    (Nil)      d))
+
+(defn from-global-fwd [] : int (llen (tail-fwd g)))
+
+(defn tail-fwd [xs : Lst] : Lst
+  (match xs
+    (Cons h t) t
+    (Nil)      (Nil)))
+
+(defdata RLst [] (RCons [r : rc<int> tl : RLst]) (RNil))
+
+(defn rlen [xs : RLst] : int
+  (match xs
+    (RCons r t) (+ 1 (rlen t))
+    (RNil)      0))
+
+(defn rtail [xs : RLst] : RLst
+  (match xs
+    (RCons r t) t
+    (RNil)      (RNil)))
+
+(defn rvia [^borrow xs : RLst] : int (rlen (rtail xs)))
+
+(defn turns [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (let [ys (Cons 1 (Cons 2 (Nil)))
+          zs (RCons (rc/of 4) (RCons (rc/of 5) (RNil)))]
+      (turns (- n 1)
+             (+ acc (+ (via-borrow ys) (+ (via-binder ys) (+ (from-global)
+                (+ (from-global-fwd) (+ (llen (tail-fwd (Cons 1 (Cons 2 (Nil)))))
+                   (rvia zs)))))))))))
+
+(defn main [] : int
+  (let [ys (Cons 5 (Cons 6 (Nil)))]
+    (println (via-borrow ys))
+    (println (via-binder ys))
+    ;; owning callers of the same consuming callee
+    (println (llen (tail2 (Cons 1 (Cons 2 (Cons 3 (Nil)))))))
+    (println (head-or (tail2 (Cons 6 (Cons 7 (Nil)))) 0))
+    (println (llen ys)))
+  (println (from-global))
+  (println (from-global))
+  (println (from-global-fwd))
+  (println (llen (tail-fwd (Cons 8 (Cons 9 (Nil))))))
+  (let [zs (RCons (rc/of 9) (RCons (rc/of 10) (RNil)))]
+    (println (rvia zs))
+    (println (rlen zs)))
+  (println (turns 100 0))
+  (println (llen g))
+  0)

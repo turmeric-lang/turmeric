@@ -404,9 +404,13 @@ case 0: {
 A move into a tail call is declined because a free after the call costs the
 C compiler the jump a recursive walker relies on.
 
-What still leaks -- a consuming callee reached through a borrow, and spines in
-a container -- is
-[byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-recursive-shared-copies-leak.md).
+A shared view -- a `^borrow`, a global, a container element, a binder of one
+-- handed to a consuming callee is deep-copied at the call
+(`clone_localowned_<T>`), so the callee's parameter stays owned for every
+caller
+([byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/byvalue-recursive-shared-copies-leak.md)).
+What still leaks -- spines in a container -- is
+[container-elements-have-no-owner](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/container-elements-have-no-owner.md).
 
 ---
 
@@ -517,8 +521,10 @@ drops.
 | a closure widened to `any` by a `returns_fresh_any_closure` producer | `__tur_any_closure_drop` |
 
 The `{shim, orig}` fat box a bare named `defn` is wrapped in is allocated once
-at file scope; per-call shim boxes are the subject of
-[fn-param-at-type-variable-slot-boxed-per-call](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fn-param-at-type-variable-slot-boxed-per-call.md).
+at file scope; per-call shim boxes were the subject of
+[fn-param-at-type-variable-slot-boxed-per-call](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/fn-param-at-type-variable-slot-boxed-per-call.md),
+and the one a container keeps is
+[container-elements-have-no-owner](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/container-elements-have-no-owner.md).
 Which fn representation crosses which boundary is in
 [value-representations-guide.md](value-representations-guide.md#representations-fn-typed-values).
 The design history is
@@ -658,8 +664,8 @@ Check [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/doc
 
 **By-value recursive spines**
 
-- [byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-recursive-shared-copies-leak.md) --
-  a spine reaching a consuming callee through a borrow, or held in a container.
+- [container-elements-have-no-owner](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/container-elements-have-no-owner.md) --
+  a spine held in a container (and a fn parameter's box a container keeps).
 
 **Option/Result boxes**
 
@@ -678,8 +684,6 @@ Check [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/doc
 
 - [async-capturing-body-env-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/async-capturing-body-env-never-freed.md) --
   a capturing `async` body's env in the shapes the spawn cannot own.
-- [fn-param-at-type-variable-slot-boxed-per-call](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fn-param-at-type-variable-slot-boxed-per-call.md) --
-  a fn parameter boxed into a type-variable slot per call.
 
 **Continuations (DK)**
 

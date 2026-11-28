@@ -237,6 +237,45 @@ Expr *elab_clone_shared_rc_product(Elab *e, Expr *v, bool *had_shared) {
     }
 }
 
+/* byvalue-recursive-shared-copies-leak: clone at the borrow.
+ *
+ * A SHARED VIEW of a by-value recursive ADT -- a ^borrow, a global, a
+ * container element, a binder of one -- handed to a parameter that CONSUMES
+ * it (by value, not proven non-retaining) is a move out of something that
+ * keeps owning it; Rust refuses it.  Before this the ownership provenance
+ * (emit_core.c) answered by making the callee's parameter unowned for EVERY
+ * caller, so one borrowing call site cost every owning caller the spine the
+ * callee would have discharged, and the borrowing caller's own local leaked
+ * too, since the hand-off read as an escape.
+ *
+ * So the argument becomes a deep copy: `(let [__shs v] <clone __shs>)`.  The
+ * copy is a fresh owner -- the provenance calls an EX_BYVAL_CLONE owned -- so
+ * the parameter stays owned, and the confinement walks read the operand
+ * (box_uses_confined, the strict escape walk), so the view's owner is no
+ * longer refused its free.  The `let` hands the operand's representation to
+ * the let-init machinery, so the clone node only ever names a plain local.
+ * The binding is built here, not through elab_let, so it carries no
+ * scope-exit drop: it is a view, and its owner frees what it points at. */
+Expr *elab_clone_shared_spine(Elab *e, Expr *v) {
+    LetBinding *lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+    char nm[48];
+    snprintf(nm, sizeof nm, "__shs_%u", elab_fresh_id(e));
+    const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+    Binding *tb = binding_new(e, sym, v->type, false, false, v->span);
+    memset(lb, 0, sizeof(*lb));
+    lb->binding = tb;
+    lb->init = v;
+    Expr *tv = expr_new(e->arena, EX_VAR, v->type, v->span);
+    tv->as.var.binding = tb;
+    Expr *cl = expr_new(e->arena, EX_BYVAL_CLONE, v->type, v->span);
+    cl->as.byval_clone_.expr = tv;
+    Expr *let = expr_new(e->arena, EX_LET, v->type, v->span);
+    let->as.let_.bindings = lb;
+    let->as.let_.n = 1;
+    let->as.let_.body = cl;
+    return let;
+}
+
 /* The first value position of `v` that produces a shared view, or NULL.  (The
  * ref-field question: a `ref` cannot be cloned, so a value that may hold one
  * it does not own must leave that field to its owner.) */

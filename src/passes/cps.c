@@ -401,6 +401,7 @@ bool cps_expr_contains_cloneable_shift(const Expr *e) {
         case EX_CAST:         return cps_expr_contains_cloneable_shift(e->as.cast_.expr);
         case EX_FN_TO_FAT:    return cps_expr_contains_cloneable_shift(e->as.fn_to_fat_.inner);
         case EX_POLY_TO_FAT:  return cps_expr_contains_cloneable_shift(e->as.poly_to_fat_.inner);
+        case EX_BYVAL_CLONE:  return cps_expr_contains_cloneable_shift(e->as.byval_clone_.expr);
         case EX_POLY_WRAP:    return cps_expr_contains_cloneable_shift(e->as.poly_wrap_.inner);
         default:
             return false;
@@ -623,6 +624,7 @@ bool cps_visit_children(const Expr *e,
         case EX_POLY_WRAP:   V(e->as.poly_wrap_.inner);   return false;
         case EX_FN_TO_FAT:   V(e->as.fn_to_fat_.inner);   return false;
         case EX_POLY_TO_FAT: V(e->as.poly_to_fat_.inner); return false;
+        case EX_BYVAL_CLONE: V(e->as.byval_clone_.expr);  return false;
 
         /* --- existentials ------------------------------------------------ */
         case EX_EXISTS_PACK:     V(e->as.exists_pack_.value); return false;

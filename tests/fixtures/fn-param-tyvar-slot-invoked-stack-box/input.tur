@@ -4,7 +4,7 @@
 ;; argument back -- `ident`, `pick`'s second argument, `unwrap-or`'s default --
 ;; and the call's value is invoked on the spot, the box is dead once that call
 ;; returns, so it lives on the caller's stack instead of a malloc nothing
-;; freed (docs/reported/fn-param-at-type-variable-slot-boxed-per-call.md).
+;; freed (docs/archive/fn-param-at-type-variable-slot-boxed-per-call.md).
 ;; Leak-checked: 32 B a call before, over 100 turns of each.
 (defn ident [A] [a : A] : A a)
 (defn pick [A] [a : A b : A] : A b)

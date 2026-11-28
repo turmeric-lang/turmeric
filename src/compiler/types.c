@@ -4315,6 +4315,35 @@ bool adt_is_fixpoint_partner_of(const AdtDef *arg_def, const AdtDef *functor_def
  * (See adt_field_is_inline_byval_d.)  Codegen sites that emit the field type,
  * construct the product, read a field, or bind a match pattern consult this to
  * choose the inline-aggregate path over the int64-carrier path. */
+bool adt_byval_spine_clonable(const AdtDef *def) {
+    if (!def || def->is_heap || !def->needs_drop_glue || def->n_type_params != 0)
+        return false;
+    bool self_box = false;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+            const CtorField *f = &c->fields[fi];
+            if (f->drop_inner_def) {
+                if (f->drop_inner_def != def) return false;
+                self_box = true;
+                continue;
+            }
+            switch (f->kind) {
+                case TY_REF: case TY_LREF: case TY_ANY:
+                    return false;
+                case TY_FN:
+                    if (f->full_type && f->full_type->kind == TY_FN &&
+                        f->full_type->as.fn.boxed)
+                        return false;
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+    return self_box;
+}
+
 bool adt_field_is_inline_byval(const CtorField *f) {
     return adt_field_is_inline_byval_d(f, 16);
 }

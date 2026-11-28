@@ -147,6 +147,7 @@ static void audit_expr(const Expr *e, bool is_top,
     case EX_DEREF:         REC(e->as.deref_.expr); return;
     case EX_RC_OF:         REC(e->as.rc_of_.expr); return;
     case EX_RC_CLONE:      REC(e->as.rc_clone_.expr); return;
+    case EX_BYVAL_CLONE:   REC(e->as.byval_clone_.expr); return;
     case EX_RC_DROP:       REC(e->as.rc_drop_.expr); return;
     case EX_RC_PTR:        REC(e->as.rc_ptr_.expr); return;
     case EX_RC_COUNT:      REC(e->as.rc_count_.expr); return;

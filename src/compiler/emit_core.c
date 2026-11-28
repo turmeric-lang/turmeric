@@ -1057,6 +1057,9 @@ bool expr_subtree_has_inline_c(const Expr *e) {
          * for every body holding an rc-field struct local -- the same missing
          * arm this function has grown three times before. */
         case EX_RC_CLONE: return expr_subtree_has_inline_c(e->as.rc_clone_.expr);
+        /* byvalue-recursive-shared-copies-leak: the spine copy is generated
+         * glue around its operand, no user C. */
+        case EX_BYVAL_CLONE: return expr_subtree_has_inline_c(e->as.byval_clone_.expr);
         case EX_RC_DROP:  return expr_subtree_has_inline_c(e->as.rc_drop_.expr);
         case EX_DEFER:    return expr_subtree_has_inline_c(e->as.defer_.body);
         /* struct-param-closure-env-never-freed: an assignment and a loop are
@@ -1597,6 +1600,20 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
              * and a capturing closure leaked the closure env. */
             case EX_RC_OF:       ESC_PUSH(cur->as.rc_of_.expr);       break;
             case EX_RC_CLONE:    ESC_PUSH(cur->as.rc_clone_.expr);    break;
+            /* byvalue-recursive-shared-copies-leak: a deep copy READS its
+             * operand and hands back a spine that shares nothing with it, so a
+             * bare `b` (or a field read of it) underneath one is not an escape.
+             * Anything else in the operand -- a container read's arguments --
+             * is walked as usual. */
+            case EX_BYVAL_CLONE: {
+                const Expr *op = cur->as.byval_clone_.expr;
+                while (op && (op->kind == EX_ASCRIBE || op->kind == EX_GET_FIELD))
+                    op = op->kind == EX_ASCRIBE ? op->as.ascribe_.inner
+                                                : op->as.get_field_.struct_expr;
+                if (!(op && op->kind == EX_VAR))
+                    ESC_PUSH(cur->as.byval_clone_.expr);
+                break;
+            }
             case EX_RC_DROP:     ESC_PUSH(cur->as.rc_drop_.expr);     break;
             case EX_RC_PTR:      ESC_PUSH(cur->as.rc_ptr_.expr);      break;
             case EX_RC_COUNT:    ESC_PUSH(cur->as.rc_count_.expr);    break;
@@ -1733,9 +1750,20 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 ESC_PUSH(cur->as.await_.fut_expr);
                 break;
             }
-            case EX_ASYNC:
+            case EX_ASYNC: {
+                /* async-capturing-body-env-never-freed: a spawn of a closure
+                 * whose spawns each run a copy of its box
+                 * (Binding.spawn_copy_closure) retains nothing of `b`. */
+                const Expr *fe = cur->as.async_.fn_expr;
+                while (fe && (fe->kind == EX_ASCRIBE || fe->kind == EX_FN_TO_FAT))
+                    fe = fe->kind == EX_ASCRIBE ? fe->as.ascribe_.inner
+                                                : fe->as.fn_to_fat_.inner;
+                if (fe && fe->kind == EX_VAR && fe->as.var.binding == b &&
+                    b->spawn_copy_closure)
+                    break;
                 ESC_PUSH(cur->as.async_.fn_expr);   /* a bare `b` here escapes */
                 break;
+            }
 
             /* ---- leaves: cannot reference `b` ---- */
             case EX_NIL_LIT:
@@ -2783,6 +2811,11 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
          * its operand and hands the same control block back -- transparent,
          * like a widen, in the position it occupies. */
         case EX_RC_CLONE: return box_uses_confined(e->as.rc_clone_.expr, b, confined);
+        /* byvalue-recursive-shared-copies-leak: a deep spine copy reads its
+         * operand -- the copy it yields shares no box with it -- so the
+         * operand is confined whatever this expression's position is. */
+        case EX_BYVAL_CLONE:
+            return box_uses_confined(e->as.byval_clone_.expr, b, /*confined=*/true);
         /* ... and a count DROP, or the scope-exit defer the rc field auto-drop
          * wraps it in, keeps nothing: its operand is read and released, its
          * value discarded. */
@@ -3000,7 +3033,9 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
                      * call's result is confined (or, at a let, tracked). */
                     if (g_bc_strict_handoff && fb_static && i < 32 &&
                         (fb->resalias_param_mask & (1u << i))) {
-                        if (!confined) return false;
+                        /* A non-pointer scalar result cannot be that alias:
+                         * `(+ acc (via-borrow ys))` keeps nothing of `ys`. */
+                        if (!confined && bc_kind_can_alias(e->type.kind)) return false;
                         continue;
                     }
                     /* Residue 1 (strict mode): a hand-off to a callee not
@@ -7523,6 +7558,7 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
             }
             case EX_REF: { PUSH_EXPR(cur->as.ref_.expr); break; }
             case EX_DEREF: { PUSH_EXPR(cur->as.deref_.expr); break; }
+            case EX_BYVAL_CLONE: { PUSH_EXPR(cur->as.byval_clone_.expr); break; }
             /* Owning-value ops (rc/of, rc/clone, rc/drop, rc->ptr,
              * rc/strong-count, rc/from-ref, ref/from-rc, weak, upgrade, weak?,
              * ref?): each wraps a single operand `.expr` whose free variables
@@ -9154,6 +9190,10 @@ static bool own_expr(const Expr *e) {
         case EX_LET:
         case EX_LETREC:
             return own_expr(e->as.let_.body);
+        /* byvalue-recursive-shared-copies-leak: a deep copy of a shared view
+         * is a fresh spine that nothing else points into. */
+        case EX_BYVAL_CLONE:
+            return true;
         default:
             return false;
     }
