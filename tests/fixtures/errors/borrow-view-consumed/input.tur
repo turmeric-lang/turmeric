@@ -1,0 +1,10 @@
+;; The result of a (defn ^borrow f ...) is a view of a handle another owner
+;; holds; handing it to a parameter that consumes it would release what the
+;; view does not own.  TUR-E0109.
+(defopaque ^linear H :int)
+(defn h-free [h : H] : void ```c (void)h; ```)
+(defn ^borrow h-view [raw : int] : H ```c return (int64_t)raw; ```)
+
+(defn main [] : int
+  (h-free (h-view 7))
+  0)

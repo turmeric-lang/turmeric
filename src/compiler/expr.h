@@ -469,6 +469,13 @@ struct Binding {
      * carrier-return contexts where the call site genuinely wants an int64
      * handle. Generalizes the by-name `ok`/`err` synthesis from Prereq 6. */
     bool          is_construct_template;
+    /* linear-values-without-a-binding-are-not-checked: `(defn ^borrow f ...)`
+     * -- a call of f yields a borrowed VIEW of something another owner holds
+     * (a handle re-wrapped to the linear type a borrower wants), not a fresh
+     * owner.  So it carries no exactly-once obligation of its own: it may be
+     * lent to a `^borrow` parameter as a temporary, or let-bound and lent
+     * repeatedly, but never consumed (TUR-E0109), and it is never dropped. */
+    bool          returns_borrowed_view;
     /* M5 residual-straddle retirement (docs/artifacts/m5-residual-straddle-
      * retirement.md): true if this binding's defn was annotated with
      * `(defn ^byval ...)` (formerly `^byval`). Forces emit_abi_intern_spec

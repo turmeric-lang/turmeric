@@ -1077,8 +1077,9 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         /* Mark the synthesized AdtDef as struct-origin so consumers that must
          * keep the lowering invisible (runtime type-of/cast/is?) can treat it
          * as the struct it came from. */
-        if (dd_out && dd_out->kind == EX_DEFDATA && dd_out->as.defdata_.def)
+        if (dd_out && dd_out->kind == EX_DEFDATA && dd_out->as.defdata_.def) {
             dd_out->as.defdata_.def->from_struct_lowering = true;
+        }
         return dd_out;
     }
 
@@ -2585,8 +2586,43 @@ data_ctor_parse_error:
     return NULL;
 }
 
+/* linear-values-without-a-binding-are-not-checked (2): a `^linear` value
+ * stored in a field of a type that is not itself linear escapes the checker.
+ * Dropping the aggregate is allowed, so the field is never released; reading
+ * it twice hands out two owners.  A field whose declared type is concretely
+ * linear therefore needs the type to be declared `^linear` too.  A type
+ * variable instantiated at a linear type -- `(Result H E)` -- is not
+ * reached here (linear-value-in-a-generic-container-is-not-checked). */
+static void adt_check_linear_fields(const AdtDef *def, const Form *call) {
+    if (!def || def->is_linear || def->is_opaque) return;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+            const Type *ft = c->fields[fi].full_type;
+            if (!ft || !ty_is_linear(*ft) || ft->kind == TY_TYVAR) continue;
+            Span sp = (c->field_forms && c->field_forms[fi])
+                      ? c->field_forms[fi]->span : call->span;
+            char fbuf[32];
+            if (!c->fields[fi].name) snprintf(fbuf, sizeof fbuf, "%u", fi);
+            diag_emit_with_code(DIAG_ERROR, sp, TUR_E0100_LINEAR_DROPPED,
+                                "field '%s' of '%s' has linear type %s, but '%s' "
+                                "is not declared ^linear, so dropping a value of "
+                                "it would drop the field unconsumed -- declare "
+                                "the type ^linear",
+                                c->fields[fi].name ? c->fields[fi].name : fbuf,
+                                def->name ? def->name : "?",
+                                type_name(*ft),
+                                def->name ? def->name : "?");
+            return;
+        }
+    }
+}
+
 Expr *elab_defdata(Elab *e, const Form *call) {
-    return elab_adt_def(e, call, false);
+    Expr *r = elab_adt_def(e, call, false);
+    if (r && r->kind == EX_DEFDATA) adt_check_linear_fields(r->as.defdata_.def, call);
+    return r;
 }
 
 /* Phase G1: defgadt -- a defdata whose every constructor carries its result

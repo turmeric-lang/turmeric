@@ -89,11 +89,38 @@ let [^mut acc start()]
 Overwriting a value nobody consumed -- `(set! acc (start))` on a live `acc` --
 is `TUR-E0100`.
 
-Two shapes are still not followed, and leak without a diagnostic: a fresh
-linear value passed straight to a `^borrow` parameter, and a linear value
-stored in a field of a struct that is not itself `^linear`. Bind the first.
-The open report is
-`docs/reported/linear-values-without-a-binding-are-not-checked.md`.
+**A value with no name is held to the rule too.** A fresh linear value
+passed straight to a `^borrow` parameter has no owner -- the callee only
+borrows it -- so `(h-peek (h-new 7))` is `TUR-E0100`; bind it, lend it, then
+consume it. (An `^affine` type with a `Drop` instance is dropped after the
+call instead.) A re-wrap that is not a fresh owner is declared
+`(defn ^borrow ...)`; see [Borrowed views](#borrowed-views-defn-borrow).
+
+**A struct with a linear field is linear.** Dropping a struct would drop its
+field unconsumed, so a field whose declared type is linear needs the type to
+be declared `^linear` as well (`TUR-E0100` at the field otherwise). The struct
+is then consumed by a `match` or a field read:
+
+```turmeric
+(defstruct ^linear Box [h : H n : int])
+
+(defn box-take [b : Box] : int
+  (match b
+    (Box h n) (do (h-free h) n)))
+```
+
+```sweet-exp
+defstruct ^linear Box [h : H n : int]
+
+defn box-take [b : Box] : int
+  (match b
+    (Box h n) (do (h-free h) n))
+```
+
+A linear value inside a *generic* container -- `(some h)`, a vector literal,
+a struct whose field is a type variable -- is not followed yet and leaks
+without a diagnostic:
+`docs/reported/linear-value-in-a-generic-container-is-not-checked.md`.
 
 **A linear value may be bound at module level.** Linearity constrains how many
 times a value is *used*, not where it may live, so a top-level `def` holding
@@ -288,6 +315,32 @@ Rules:
   it, so that consumption would be a second one (a double close).
 - `^borrow` is a no-op for non-linear arguments, so the same accessor works
   whether or not the handle's type is under a linear discipline.
+
+### Borrowed views: `(defn ^borrow ...)`
+
+A typed wrapper that keeps its handle as a raw word has to re-wrap it to the
+linear type before it can lend it to a `^borrow` accessor. Such a call is not
+a fresh owner -- the wrapper still owns the handle -- so it must not be held
+to "consume exactly once". `^borrow` before a defn's name says so: the
+function's result is a **borrowed view**.
+
+```turmeric
+(defn ^borrow raw->rows-view [h : int] : Rows ```c return (int64_t)h; ```)
+(defn raw->rows [h : int] : Rows ```c return (int64_t)h; ```)   ;; owning
+
+(defn trows-count [r : TRows] : int
+  (rows-count (raw->rows-view (.handle r))))   ;; lent: fine
+(defn trows-free [r : TRows] : void
+  (rows-free (raw->rows (.handle r))))         ;; the release takes ownership
+```
+
+- A view may be lent to a `^borrow` parameter as a temporary, discarded, or
+  bound and lent repeatedly; a local bound to one is a borrow, like a
+  `^borrow` parameter, and owes no consume.
+- Passing a view, or a local holding one, to a parameter that consumes it is
+  `TUR-E0109`: another owner still holds the handle. Re-wrap with a function
+  that is not `^borrow` where the handle is released.
+- A view is never dropped, even when its type has a `Drop` instance.
 
 ---
 

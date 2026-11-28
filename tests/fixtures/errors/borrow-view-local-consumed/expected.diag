@@ -1,0 +1,2 @@
+TUR-E0109
+borrowed value 'v' cannot be consumed here -- it is a (defn ^borrow ...) view

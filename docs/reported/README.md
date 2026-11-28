@@ -97,7 +97,7 @@ Four reports filed with this one were resolved the same day and are in
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [linear-values-without-a-binding-are-not-checked](linear-values-without-a-binding-are-not-checked.md) | medium (silent leaks) | A fresh `^linear` value passed straight to a `^borrow` parameter, or stored in a field of a non-linear struct, is dropped with no TUR-E0100. The borrowed-temporary check was tried and taken out: it cannot tell an allocation from a handle re-wrap, and turmeric-spices has three files of the latter. The discarded-result, `^linear` + `Drop` and `set!` findings filed with it are fixed |
+| [linear-value-in-a-generic-container-is-not-checked](linear-value-in-a-generic-container-is-not-checked.md) | medium (silent leaks) | A `^linear` value in a vector literal, `(some h)`, or a generic struct instantiated at a linear type is dropped with no TUR-E0100: the container's type is not linear. The concrete-field and borrowed-temporary shapes filed with it are fixed (`defn ^borrow` views, archived as linear-values-without-a-binding-are-not-checked) |
 
 ## Found executing sepcomp-cross-module-effect-unhandled (filed 2026-11-24)
 

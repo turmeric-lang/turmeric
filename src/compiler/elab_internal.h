@@ -2051,12 +2051,13 @@ bool elab_tail_leaves(const Expr *x);
  * first `n` items of a sequence (TUR-E0100); the diagnostic fails the build
  * without unwinding the caller.
  *
- * The same value handed straight to a `^borrow` parameter is NOT reported,
- * though it has no consumer either: a call cannot be told from a re-wrap.
- * `(rows-count (__int->rows h))` casts a handle it does not own to the linear
- * type the borrower wants, and `(set-Pos! (make-write-cap id) ...)` mints a
- * capability token; both are in turmeric-spices, and neither has a consumer
- * to name.  The open report has the measurements. */
+ * The same value handed straight to a `^borrow` parameter is reported too
+ * (elab_call's argument loop).  A re-wrap -- `(rows-count (__int->rows h))`,
+ * casting a handle it does not own to the linear type the borrower wants --
+ * is spelled `(defn ^borrow __int->rows ...)`: elab_expr_is_borrowed_view
+ * answers whether `x` is a call of such a function, a view that is neither
+ * fresh nor consumable. */
+bool elab_expr_is_borrowed_view(const Expr *x);
 bool elab_fresh_linear_unowned(Elab *e, const Expr *x);
 void elab_note_discarded_linear(Elab *e, Expr *const *items, uint32_t n);
 uint32_t linear_state_snapshot_bindings(const Scope *scope,

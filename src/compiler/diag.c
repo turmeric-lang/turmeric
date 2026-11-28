@@ -1386,6 +1386,17 @@ static const DiagExplanation diag_explanations_[] = {
       "Enable with: tur -Xlinear myfile.tur\n"
       "         or: tur -Xsubstructural myfile.tur\n"
       "\n"
+      "A linear value that never gets a name is held to the same rule.  Each\n"
+      "of these is TUR-E0100, because nothing could consume the value:\n"
+      "  (h-new 7)                       ; a call result discarded as a statement\n"
+      "  (h-peek (h-new 7))              ; a fresh value lent to a ^borrow slot\n"
+      "  (defstruct Box [h : H n : int]) ; a linear field in a type that is not\n"
+      "                                  ; ^linear: dropping a Box drops h\n"
+      "Bind the value, lend it, then consume it; declare the struct\n"
+      "(defstruct ^linear Box ...).  A call that re-wraps a handle another owner\n"
+      "holds -- not a fresh owner -- is declared (defn ^borrow f ...): its result\n"
+      "is a borrowed view, which may be lent but never consumed (TUR-E0109).\n"
+      "\n"
       "In effect handler clauses:\n"
       "A ^linear continuation k must be resumed or discontinued exactly once.\n"
       "If the handler body exits without calling (resume k ...) or\n"
@@ -1646,7 +1657,14 @@ static const DiagExplanation diag_explanations_[] = {
       "    (do (h-close h) 0))                ; ERROR: h-close consumes h\n"
       "\n"
       "Fix: drop ^borrow so the function owns (and must consume) the value, or\n"
-      "leave the consumption to the caller and only read the value here.\n",
+      "leave the consumption to the caller and only read the value here.\n"
+      "\n"
+      "The same holds for the result of a (defn ^borrow f ...) -- a borrowed view\n"
+      "of a handle another owner holds -- and for a local bound to one:\n"
+      "  (defn ^borrow h-view [raw : int] : H ...)\n"
+      "  (h-peek (h-view raw))            ; OK: lent to a ^borrow parameter\n"
+      "  (h-close (h-view raw))           ; ERROR: the owner still holds it\n"
+      "Re-wrap with a function that is not ^borrow where the handle is released.\n",
     },
     /* ST1: Substructural type explanations */
     { TUR_E0150_AFFINE_USED_TWICE,

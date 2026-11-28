@@ -10304,6 +10304,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     uint32_t name_idx = 1;  /* index of name in items (after 'defn') */
     bool no_unwind = false;
     bool retain_c_linkage = false;
+    bool borrowed_view_result = false;   /* ^borrow: the result is a view */
     const char *c_export_name = NULL;
     Form *name_f = call->as.list.items[name_idx];
 
@@ -10394,6 +10395,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
             defn_has_construct_attr = true;
         } else if (as == e->sym_caret_byval && !defn_has_byval_attr) {
             defn_has_byval_attr = true;
+        } else if (as == e->sym_caret_borrow && !borrowed_view_result) {
+            borrowed_view_result = true;
         } else if (as == e->sym_caret_deprecated && !is_deprecated_attr) {
             is_deprecated_attr = true;
             name_idx++;
@@ -10425,8 +10428,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * named `^contruct` and the real name became its parameters. */
             diag_emit(DIAG_ERROR, name_f->span,
                       "defn: '%s' is not an attribute a defn takes before its name "
-                      "(those are ^construct, ^byval, ^deprecated, ^reflect, "
-                      "^no-unwind, ^used and ^export-as, each at most once)", as->name);
+                      "(those are ^construct, ^byval, ^borrow, ^deprecated, "
+                      "^reflect, ^no-unwind, ^used and ^export-as, each at most once)", as->name);
             return NULL;
         } else {
             break;
@@ -14736,6 +14739,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     b->deprecation_message = deprecation_msg;
     /* M2a: propagate ^construct marker */
     b->is_construct_template = defn_has_construct_attr;
+    b->returns_borrowed_view = borrowed_view_result;
     /* M5 residual-straddle: propagate ^byval marker */
     b->prefer_byvalue_spec = defn_has_byval_attr;
 

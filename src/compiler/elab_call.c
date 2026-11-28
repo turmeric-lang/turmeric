@@ -12112,6 +12112,47 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             }
         }
 
+        /* linear-values-without-a-binding-are-not-checked: a fresh ^linear
+         * value written straight into a `^borrow` (or `^unique ^mut`) slot has
+         * no owner -- the callee only borrows it and no binding holds it -- so
+         * nothing can be held to "exactly once" and it is dropped unreleased.
+         * (A Drop type is hoisted and dropped after the call instead; see
+         * hoist_borrowed_closure_args.)  A call of a `(defn ^borrow f ...)` is
+         * not fresh: it is a view of a handle someone else owns, the shape a
+         * re-wrap to the borrower's linear type needs.  The converse holds for
+         * that view: a slot that consumes it would release what it does not
+         * own. */
+        if (fn_type.kind == TY_FN && fn_binding && args[i]) {
+            uint32_t slot = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (slot < fn_type.as.fn.arity) {
+                bool slot_borrows =
+                    FN_ARG_FLAG(fn_type.as.fn, slot, FA_BORROW) ||
+                    FN_ARG_FLAG(fn_type.as.fn, slot, FA_UNIQUE_MUT);
+                if (slot_borrows && elab_fresh_linear_unowned(e, args[i])) {
+                    diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                                        TUR_E0100_LINEAR_DROPPED,
+                                        "linear value of type %s is lent to a "
+                                        "^borrow parameter of '%s' and then dropped "
+                                        "without being consumed -- bind it, lend "
+                                        "it, then consume it (or, if this call "
+                                        "re-wraps a handle another owner holds, "
+                                        "declare the callee (defn ^borrow ...))",
+                                        type_name(args[i]->type),
+                                        fn_binding->name ? fn_binding->name->name : "?");
+                } else if (!slot_borrows && elab_expr_is_borrowed_view(args[i]) &&
+                           args[i]->type.copy_kind == CK_LINEAR) {
+                    diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                                        TUR_E0109_BORROW_PARAM_CONSUMED,
+                                        "borrowed view of type %s cannot be "
+                                        "consumed here -- its function is declared "
+                                        "(defn ^borrow ...), so another owner still "
+                                        "holds the handle; pass it only to a "
+                                        "^borrow parameter",
+                                        type_name(args[i]->type));
+                }
+            }
+        }
+
         /* borrow-param-consumed-in-own-body: a `^borrow` PARAMETER holding a
          * linear or affine value cannot be handed to a slot that consumes it.
          * The caller kept the value (the LB1 rollback below is what lets it),
@@ -12140,9 +12181,12 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     diag_emit_with_code(DIAG_ERROR, args[i]->span,
                                         TUR_E0109_BORROW_PARAM_CONSUMED,
                                         "borrowed value '%s' cannot be consumed here -- "
-                                        "it is a ^borrow parameter, so the caller still "
-                                        "owns it; pass it only to a ^borrow parameter",
-                                        arg_bb->name->name);
+                                        "it is %s, so %s still owns it; pass it only "
+                                        "to a ^borrow parameter",
+                                        arg_bb->name->name,
+                                        arg_bb->is_param ? "a ^borrow parameter"
+                                                         : "a (defn ^borrow ...) view",
+                                        arg_bb->is_param ? "the caller" : "another owner");
                     return NULL;
                 }
             }

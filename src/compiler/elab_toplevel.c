@@ -2512,6 +2512,7 @@ static const Symbol *fgo_defn_name(const Elab *e, const Form *f, bool *lossy) {
                                 a->as.sym == e->sym_used_attr ||
                                 a->as.sym == e->sym_caret_no_unwind ||
                                 a->as.sym == e->sym_caret_used ||
+                                a->as.sym == e->sym_caret_borrow ||
                                 a->as.sym == e->sym_caret_reflect)) {
             k++;
         } else if (a->tag == F_SYM && (a->as.sym == e->sym_caret_deprecated ||
