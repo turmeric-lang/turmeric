@@ -1494,8 +1494,40 @@ static bool cps_local_closure_env_freeable(const Expr *let, uint32_t idx) {
     return local_closure_shape(let, idx) != NULL;
 }
 
+/* cloneable-cont-escaped-chain-leaks (the CPS half): a let-bound fresh
+ * cloneable continuation the let only reads (emit_let_binding_ccont_owned)
+ * has no scope exit to drop it at here, so it is registered on the outermost
+ * DK entry's reap list (reap kind 4) as soon as it is bound -- after every
+ * resume the entry sees, as a captured continuation re-running the let's tail
+ * would otherwise drop it twice.  The registration is a raw let of a builtin
+ * the user cannot spell, so it is emitted by the direct emitter like any
+ * other leaf. */
+bool emit_let_binding_ccont_owned(const Expr *let, uint32_t idx);
+static const BuiltinSpec g_ccont_reap_spec = {
+    "__dk_reap_ccont", NULL, 1, 1, {.kind = TY_INT}, {.kind = TY_INT},
+    BS_FUNC_CALL, "__dk_reap_ccont", NULL
+};
+static CTerm *ccont_reap_after(CpsB *b, const Expr *let, uint32_t idx, CTerm *rest) {
+    const Binding *bd = let->as.let_.bindings[idx].binding;
+    Span sp = let->as.let_.bindings[idx].init ? let->as.let_.bindings[idx].init->span
+                                               : let->span;
+    Expr *v = expr_new(b->a, EX_VAR, bd->type, sp);
+    v->as.var.binding = (Binding *)bd;
+    Expr **args = (Expr **)arena_alloc(b->a, sizeof(Expr *));
+    args[0] = v;
+    Type it = TYPE_INT;
+    Expr *call = expr_new(b->a, EX_BUILTIN, it, sp);
+    call->as.builtin.spec = &g_ccont_reap_spec;
+    call->as.builtin.args = args;
+    call->as.builtin.n = 1;
+    return build_letraw(b, call, fresh_cvar(b, NULL), rest);
+}
+
 static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx, CTerm *rest) {
     Expr *init = (Expr *)let->as.let_.bindings[idx].init;
+    if (let->kind == EX_LET && let->as.let_.bindings[idx].binding &&
+        emit_let_binding_ccont_owned(let, idx))
+        rest = ccont_reap_after(b, let, idx, rest);
     if (cps_closure_env_freeable(let, idx) || cps_fresh_call_env_freeable(b, let, idx)
         || cps_local_closure_env_freeable(let, idx)) {
         CTerm *t = build_letraw(b, init, bx, rest);

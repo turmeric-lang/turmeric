@@ -3149,6 +3149,55 @@ static bool hoist_arg_is_plain_copy(Elab *e, const Expr *a) {
     return elab_fresh_sole_owner_drop_inst(e, &a->type, a) == NULL;
 }
 
+/* borrowed-drop-temporary-leaks-outside-the-hoist, the owning earlier
+ * argument: one whose value is the same whenever it is read, so it may stay in
+ * place, read after the hoisted effect and temporary, without anything
+ * observing the move -- an immutable variable (only a `^mut` binding can be
+ * assigned, and a `^mut` local is read through its cell, never as a bare
+ * variable), or a lambda (building one has no effect, and it captures a
+ * `^mut` as its cell).  `(peekf f (ctr 2) (mk))` keeps `f` where it is; the
+ * call reads it as it would have. */
+static bool arg_reads_same_later(const Expr *a) {
+    for (;;) {
+        if (!a) return false;
+        if (a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        else if (a->kind == EX_POLY_WRAP) a = a->as.poly_wrap_.inner;
+        else if (a->kind == EX_FN_TO_FAT) a = a->as.fn_to_fat_.inner;
+        else if (a->kind == EX_POLY_TO_FAT) a = a->as.poly_to_fat_.inner;
+        else break;
+    }
+    switch (a->kind) {
+    case EX_VAR:
+        return a->as.var.binding && !a->as.var.binding->is_mut;
+    case EX_FN: case EX_CLOSURE:
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* ... and one that must be evaluated where it was written may still be
+ * hoisted into a `__borrowa` temp ahead of the temporary, as a plain scalar
+ * is: the temp is then its holder in the call's place.  The hoist builds its
+ * `let` directly, so nothing in the elaborator attaches a scope-exit drop to
+ * the temp, and the emitter's own let frees (a closure env, a sum box, an
+ * `any`) ask the same escape walk they ask of a let the program wrote -- a
+ * callee that keeps or consumes the value is an escape, and the temp then
+ * frees nothing.  A value of no runtime type (`never`, unknown) is left where
+ * it is, and so the temporary is too. */
+static bool arg_hoistable_owner(const Expr *a) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    if (!a) return false;
+    switch (a->type.kind) {
+    case TY_NEVER: case TY_UNKNOWN: case TY_FORALL:
+        return false;
+    default:
+        return true;
+    }
+}
+
 /* Bind a plain-scalar argument (or a plain-copy one, above) to a `__borrowa`
  * temp ahead of a hoisted borrowed temporary, so the two keep their written
  * evaluation order. */
@@ -3322,7 +3371,9 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
                         continue;                 /* already a hoist temp */
                     if (!arg_is_literal(args[j]) &&
                         !type_kind_is_plain_scalar(args[j]->type.kind) &&
-                        !hoist_arg_is_plain_copy(e, args[j]))
+                        !hoist_arg_is_plain_copy(e, args[j]) &&
+                        !arg_reads_same_later(args[j]) &&
+                        !arg_hoistable_owner(args[j]))
                         order_ok = false;
                 }
             }
@@ -3337,6 +3388,13 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
                         if (arg_is_literal(aj)) continue;
                         if (aj->kind == EX_VAR && aj->as.var.binding &&
                             strncmp(aj->as.var.binding->name->name, "__borrow", 8) == 0)
+                            continue;
+                        /* An owning value that reads the same later stays
+                         * put (a plain scalar variable is still hoisted, as
+                         * before, so its spelling does not move). */
+                        if (!type_kind_is_plain_scalar(args[j]->type.kind) &&
+                            !hoist_arg_is_plain_copy(e, args[j]) &&
+                            arg_reads_same_later(args[j]))
                             continue;
                         hoist_ordered_arg_temp(e, &args[j], span, &hl);
                     }
@@ -7481,6 +7539,28 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     out->as.builtin.spec = spec;
     out->as.builtin.args = args;
     out->as.builtin.n = n_args;
+    /* cloneable-cont-escaped-chain-leaks: `(tur_cloneable_cont_resume
+     * (tur_cloneable_cont_clone k) v)` -- or `(... (make) v)` -- resumes a
+     * fresh continuation nothing else holds, and nothing freed it.  Bind the
+     * handle -- `(let [c (clone k)] (resume c v))` is the same program -- and
+     * the emitter drops it when that let owns it: a fresh source its scope
+     * only reads (emit_let_binding_ccont_owned).  Any other handle is bound
+     * just the same and left alone. */
+    if (spec->name && strcmp(spec->name, "tur_cloneable_cont_resume") == 0 &&
+        n_args == 2) {
+        const Expr *a0 = args[0];
+        while (a0 && a0->kind == EX_ASCRIBE) a0 = a0->as.ascribe_.inner;
+        if (a0 && (a0->kind == EX_BUILTIN || a0->kind == EX_CALL ||
+                   a0->kind == EX_CLONEABLE_RESET)) {
+            LetBinding *lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+            args[0] = elab_bind_control_temp(e, args[0], lb);
+            Expr *let = expr_new(e->arena, EX_LET, result_type, call->span);
+            let->as.let_.bindings = lb;
+            let->as.let_.n = 1;
+            let->as.let_.body = out;
+            return let;
+        }
+    }
     return out;
 }
 

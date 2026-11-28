@@ -103,10 +103,11 @@ cloneable-reset
 A cloneable continuation is a heap object: a small wrapper and a copy of the
 captured chain, about 500 bytes. When the receiver only calls `k` -- as above
 -- the compiler frees it once the receiver returns. When `k` leaves the
-receiver (returned, stored, captured by a closure), the compiler cannot see
-its last use, and **the program owns it**: drop it with
-`tur_cloneable_cont_drop` when you are done, and drop every clone
-`tur_cloneable_cont_clone` made. Undropped, it leaks; nothing else frees it.
+receiver, the `let` that binds it is its owner, as long as the let only
+**reads** it: resumes it, clones it, or hands it to a function that does. The
+let drops it when it ends (in a function the CPS backend lowers, once the
+outermost DK entry returns, after every resume). A clone, or a continuation
+passed straight to a resume, is dropped the same way:
 
 ```turmeric
 (defn k-id [k] : int k)                ; the receiver hands k back
@@ -115,10 +116,9 @@ its last use, and **the program owns it**: drop it with
 
 (defn main [] : int
   (let [c (make 5)]
-    (println (tur_cloneable_cont_resume c 1))   ; 6
-    (println (tur_cloneable_cont_resume c 2))   ; 7
-    (tur_cloneable_cont_drop c))
-  0)
+    (println (tur_cloneable_cont_resume c 1))                             ; 6
+    (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone c) 2))) ; 7
+  0)                                                                      ; c and the clone are dropped
 ```
 ```sweet-exp
 defn k-id [k] : int k
@@ -127,16 +127,24 @@ defn make [base : int] : int
 
 defn main [] : int
   let [c make(5)]
-    println $ tur_cloneable_cont_resume c 1   ; 6
-    println $ tur_cloneable_cont_resume c 2   ; 7
-    tur_cloneable_cont_drop(c)
+    println $ tur_cloneable_cont_resume c 1
+    println $ tur_cloneable_cont_resume tur_cloneable_cont_clone(c) 2
   0
 ```
 
+Everywhere else **the program owns it**: a continuation that is returned,
+stored, captured, or dropped by the program itself -- drop it with
+`tur_cloneable_cont_drop` when you are done, and drop every clone you keep.
+The let also leaves alone a reset whose shift it cannot prove always fires
+(a shift under an `if`: the reset's value may be a plain `int`), a
+continuation read inside a `handle`, and one produced through a local lambda;
+drop those yourself, or they leak. Writing the drop when the let would have
+owned the value is fine: a let never drops a continuation the program drops.
+
 The same holds for `call/cc*`, which is built on `cloneable-shift`. Pinned by
-the leak-checked `cloneable-cont-escaped-dropped` fixture; giving an escaped
-`k` an automatic owner is open in
-[cloneable-cont-escaped-chain-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cloneable-cont-escaped-chain-leaks.md).
+the leak-checked `cloneable-cont-escaped-owned` and `cloneable-cont-escaped-dropped`
+fixtures; see
+[cloneable-cont-escaped-chain-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cloneable-cont-escaped-chain-leaks.md).
 
 Either way, the delimiter is static:
 

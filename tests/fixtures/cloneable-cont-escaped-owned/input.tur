@@ -1,0 +1,38 @@
+;; cloneable-cont-escaped-chain-leaks: a cloneable continuation that leaves
+;; its receiver (k-id returns it) is owned by the `let` that binds it, when
+;; the let only reads it -- resumes, clones, hands it to a callee that does.
+;; The let drops it at scope exit (direct path) or registers it with the
+;; outermost DK entry's reap list (colored path, where a multi-shot resume
+;; re-runs the let's tail: cloneable-cont-escaped-owned-multishot).  A fresh clone or a fresh continuation passed
+;; straight to a resume is bound, and dropped, the same way.  Leak-checked:
+;; each continuation below leaked its wrapper and chain copy (488 B) before.
+;; A program that drops the continuation itself, or lets it escape, keeps
+;; that job: the let leaves it alone.
+(defn k-id [k] : int k)
+(defn make [base : int] : int
+  (cloneable-reset (+ base (cloneable-shift k-id 0))))
+(defn use-twice [c] : int
+  (+ (tur_cloneable_cont_resume c 1) (tur_cloneable_cont_resume c 2)))
+(def ^mut kept : int 0)
+
+(defn main [] : int
+  (let [c (make 5)]
+    (println (tur_cloneable_cont_resume c 1)))                            ; 6
+  (let [c (make 5)]
+    (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone c) 10)) ; 15
+    (let [d (tur_cloneable_cont_clone c)]
+      (println (tur_cloneable_cont_resume d 20)))                         ; 25
+    (println (use-twice c)))                                              ; 13
+  (println (tur_cloneable_cont_resume (make 7) 1))                        ; 8
+  (let [k (call/cc* k-id)]
+    (println (tur_cloneable_cont_resume k 4)))                            ; 4
+  ;; the program's own drop: not dropped twice
+  (let [c (make 2)]
+    (println (tur_cloneable_cont_resume c 2))                             ; 4
+    (tur_cloneable_cont_drop c))
+  ;; escapes into a global: kept alive, then dropped by the program
+  (let [c (make 3)]
+    (set! kept c))
+  (println (tur_cloneable_cont_resume kept 3))                            ; 6
+  (tur_cloneable_cont_drop kept)
+  0)
