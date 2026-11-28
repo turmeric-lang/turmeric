@@ -1,5 +1,57 @@
 # A capturing `async` body's closure env is never freed
 
+**Narrowed a ninth time 2026-11-28 (later the same day): any box-only env,
+and the CPS backend's let.** The per-spawn copy below no longer needs plain
+numbers: any env whose drop glue frees the box and nothing else
+(`closure_env_drop_frees_box_only` -- a struct capture is a copy in the box, a
+`cstr`, pointer or `any` capture a word no glue frees) is copied, except one
+capturing a `^mut` cell: `mut_cell_escapes` frees the cell once every closure
+capturing it is freeable by its let, which the mark makes true while a copy
+may still read the cell (`closure_env_spawn_copyable`,
+`src/compiler/emit_expr.c`). And a let the CPS backend lowers takes the same
+mark (`emit_let_try_spawn_copy`, asked by `cps_let_mark_spawn_owned` with
+that backend's own reap rule, `cps_closure_env_freeable`), which also covers
+a single unawaited spawn in a CPS let whose scope can capture a continuation:
+a resumed continuation re-runs the spawn on a copy of its own, and the reap
+runs after every resume the entry sees. `async-let-bound-body-env-copied-per-spawn`
+gained a struct capture, a `cstr` capture, and three performing functions;
+`async-let-bound-body-env-kept` gained a `^mut` cell spawned twice (both
+spawns must update the same cell).
+
+**Narrowed an eighth time 2026-11-28: a let-bound lambda spawned more than
+once, some spawn NOT awaited -- when its captures are plain numbers.**
+`(let [body (fn [] ...)] (+ (drive (async body)) (drive (async body))))`, and
+the same from a `while`, kept its box: no one spawn may own a box the next
+spawn runs, and the let could not drop it while a spawned body may still be
+parked. When every capture is a non-pointer scalar (no `^mut` cell, no drop
+instance, no inline C: `closure_env_spawn_copyable`, `src/compiler/emit_expr.c`),
+a byte copy of the box is a whole, independent env, so each spawn now runs a
+COPY it owns (`tur_async_owns_env`, dropped when the body settles) and the
+let drops the original at its scope exit. The direct emitter's let marks such
+a binding (`Binding.spawn_copy_closure`, `let_mark_spawn_owned`) only when
+that is what makes its drop fire; the escape walk then reads a spawn of it as
+no escape (`EX_ASYNC`, `binding_escapes_impl_x`, `src/compiler/emit_core.c`);
+the spawn copies the box, header included, from the env struct the closure's
+own emission names. Pinned by
+`tests/fixtures/async-let-bound-body-env-copied-per-spawn` (leak-checked:
+twice in sequence, from a `while`, spawned and called, two futures held at
+once, the let exited while its body is parked, a `bool` body through the
+typed spawn; 100 turns of each). `async-let-bound-body-env-kept`'s `twice`
+and `in-while` take this path now; its `captured` still keeps the box.
+
+**Checked 2026-11-28: a non-scalar result.** The first shape "What is left"
+listed -- a capture whose drop releases something, under a NON-scalar result
+-- was closed for the most part by
+[sum-closure-payload-never-dropped](sum-closure-payload-never-dropped.md)'s
+2026-11-07 narrowing: `async_spawn_owns_env` asks the same
+`closure_env_drop_ok_under_scalar_result`, which admits a non-scalar result
+when no tail value can view a capture (`closure_result_may_view_capture`).
+An async body capturing a Drop value and returning a `cstr` literal drops
+both; pinned by `tests/fixtures/async-drop-capturing-nonscalar-result-dropped`
+(leak-checked, with the live count). The predicate is syntactic: a tail CALL
+whose arguments name a capture -- `(size-of (peek w))` -- still keeps the
+env, though `size-of` returns a literal.
+
 **Narrowed a seventh time 2026-11-07: a let-bound lambda spawned more than
 once, each spawn awaited where it is written.** `(let [body (fn [] ...)]
 (+ (await (async body)) (await (async body))))` -- and the same from a
@@ -138,14 +190,17 @@ settles. Pinned by `tests/fixtures/async-capturing-body-env-dropped`
 (leak-checked: inline, parking every turn, and 200 spawns in a loop -- 4848 B
 in 202 allocations before, 0 now).
 
-**What is left:** a capture whose drop glue releases something -- an owned
-`^fat` closure, a Drop instance -- under a NON-scalar result, since that
-result may still reference it (a scalar result admits them since 2026-11-06,
-below; an `rc` cannot be captured by an async body at all, TUR-E0010); a
-lambda bound to a local and spawned more than once where some spawn is NOT
-awaited where it is written -- its future held or driven by the program --
-or spawned once, unawaited, in a let the CPS backend lowers whose scope can
-capture a continuation; a local captured by another lambda that spawns it;
+**What is left (2026-11-28, after the ninth narrowing):** a capture whose
+drop glue releases something -- an owned `^fat` closure, a Drop instance --
+under a result that may view a capture: the capture itself, a let-bound local
+or match binder, a constructor, or a call whose arguments name a capture, in
+tail position (an `rc` cannot be captured by an async body at all,
+TUR-E0010); a let-bound lambda spawned more than once with some spawn not
+awaited whose env is not box-only (a Drop or owned `^fat` capture: a copy
+would need the capture's own clone) or that captures a `^mut` cell (copies
+would need the cell refcounted); a local captured by another lambda that
+spawns it (`async-let-bound-body-env-kept`'s `captured`: the capture reads as
+an escape, and proving otherwise needs the capturing lambda's own lifetime);
 an inline-C block in the body that names a capture.
 
 **Narrowed 2026-11-06: a scalar result admits a capture whose drop releases

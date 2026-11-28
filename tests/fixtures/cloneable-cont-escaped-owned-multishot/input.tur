@@ -1,0 +1,19 @@
+;; cloneable-cont-escaped-chain-leaks, the colored path: a let in a CPS
+;; function owns a fresh cloneable continuation it only resumes, and a
+;; ^multishot handler resumes the let's tail twice.  The let registers the
+;; continuation with the outermost DK entry's reap list instead of dropping it
+;; at a scope exit, which the second resume would reach again: one drop, after
+;; both.  Leak-checked (488 B leaked before; a double free would fail it).
+;; Compiled only: the interpreter cannot take this handler multi-shot (its
+;; perform is under a cloneable-reset's let), on main as well.
+(defn k-id [k] : int k)
+(defeffect Pick [] : int)
+(defn picked [] : int
+  (let [c (cloneable-reset (* 10 (cloneable-shift k-id 0)))]
+    (let [x (perform (Pick))]
+      (+ x (tur_cloneable_cont_resume c x)))))
+(defn run-picked [] : int
+  (handle (picked) (Pick [] ^multishot k) (+ (k 1) (k 2))))
+(defn main [] : int
+  (println (run-picked))   ; (1 + 10) + (2 + 20) = 33
+  0)

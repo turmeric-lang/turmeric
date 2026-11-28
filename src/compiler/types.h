@@ -526,6 +526,13 @@ size_t adt_byval_value_size_bytes(const AdtDef *def);
  * carrier.  adt_field_inline_c_name returns its inline C type name. */
 bool adt_field_is_inline_byval(const CtorField *f);
 const char *adt_field_inline_c_name(const CtorField *f);
+/* byvalue-recursive-shared-copies-leak: true when a by-value recursive ADT's
+ * spine can be deep-copied by the generated `clone_localowned_<T>` glue --
+ * every field its drop glue releases is an `rc` / `weak` (a count is taken) or
+ * a box of the type itself (copied box by box).  A `ref`, an `any`, a boxed fn
+ * field or a box of another owning aggregate has no clone glue, so the type
+ * is refused and a shared view of it is handed on uncloned, as before. */
+bool adt_byval_spine_clonable(const AdtDef *def);
 
 /* structdef-retirement DS-D: the `StructField` / `StructDef` type descriptors
  * are deleted.  Every `defstruct` lowers to a single-variant record `AdtDef`

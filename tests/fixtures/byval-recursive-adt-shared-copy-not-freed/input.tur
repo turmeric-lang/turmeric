@@ -11,14 +11,16 @@
 ;;   id-b     -- a copy of a ^borrow, let-bound, dropped, then the owner read.
 ;;   get-g    -- a copy of a global, twice.
 ;;   vec-get  -- a copy of a container element, twice.
-;;   tail2    -- a consuming callee reached from a ^borrow: its parameter is
-;;               NOT owned (one caller passes a borrow), so it must not
-;;               discharge the spine it was handed.
+;;   tail2    -- a consuming callee reached from a ^borrow: it must not
+;;               discharge the borrowed spine.  Since 2026-11-28 the call
+;;               hands it a deep copy instead (clone at the borrow), which
+;;               it does discharge, and `ys` is freed by its own scope.
 ;;
 ;; Both consumers now ask the ownership provenance in emit_core.c, which
-;; refuses all four.  The spines they decline to free leak instead
-;; (known-leak), which is the safe side; this fixture pins the absence of the
-;; use-after-free, which a known-leak run still fails on.
+;; refuses the first three.  The spines they decline to free leak instead
+;; (known-leak: the `Vec` and its element, item 2 of the report), which is the
+;; safe side; this fixture pins the absence of the use-after-free, which a
+;; known-leak run still fails on.
 ;;
 ;; Expected output:
 ;;   2

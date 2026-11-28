@@ -615,6 +615,7 @@ static void register_nested_lenses(const Expr *e, const MonoSpecKey *abs,
         case EX_ASCRIBE: register_nested_lenses(e->as.ascribe_.inner, abs, prog, seen, n_seen, depth); break;
         case EX_FN_TO_FAT:   register_nested_lenses(e->as.fn_to_fat_.inner, abs, prog, seen, n_seen, depth); break;
         case EX_POLY_TO_FAT: register_nested_lenses(e->as.poly_to_fat_.inner, abs, prog, seen, n_seen, depth); break;
+        case EX_BYVAL_CLONE: register_nested_lenses(e->as.byval_clone_.expr, abs, prog, seen, n_seen, depth); break;
         case EX_POLY_WRAP:   register_nested_lenses(e->as.poly_wrap_.inner, abs, prog, seen, n_seen, depth); break;
         case EX_MATCH:
             register_nested_lenses(e->as.match_.scrutinee, abs, prog, seen, n_seen, depth);
@@ -841,6 +842,9 @@ static void resolve_walk(const Expr *e, const ResolveCtx *rc) {
         case EX_POLY_TO_FAT:
             resolve_walk(e->as.poly_to_fat_.inner, rc);
             break;
+        case EX_BYVAL_CLONE:
+            resolve_walk(e->as.byval_clone_.expr, rc);
+            break;
         case EX_POLY_WRAP:
             resolve_walk(e->as.poly_wrap_.inner, rc);
             break;
@@ -1063,6 +1067,7 @@ static void register_forwarding_walk(const Expr *e, FwdCtx *fc) {
         case EX_ASCRIBE: register_forwarding_walk(e->as.ascribe_.inner, fc); break;
         case EX_FN_TO_FAT:   register_forwarding_walk(e->as.fn_to_fat_.inner, fc); break;
         case EX_POLY_TO_FAT: register_forwarding_walk(e->as.poly_to_fat_.inner, fc); break;
+        case EX_BYVAL_CLONE: register_forwarding_walk(e->as.byval_clone_.expr, fc); break;
         case EX_POLY_WRAP:   register_forwarding_walk(e->as.poly_wrap_.inner, fc); break;
         case EX_MATCH:
             register_forwarding_walk(e->as.match_.scrutinee, fc);

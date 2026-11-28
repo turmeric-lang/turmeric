@@ -3489,6 +3489,55 @@ static bool hoist_arg_is_plain_copy(Elab *e, const Expr *a) {
     return elab_fresh_sole_owner_drop_inst(e, &a->type, a) == NULL;
 }
 
+/* borrowed-drop-temporary-leaks-outside-the-hoist, the owning earlier
+ * argument: one whose value is the same whenever it is read, so it may stay in
+ * place, read after the hoisted effect and temporary, without anything
+ * observing the move -- an immutable variable (only a `^mut` binding can be
+ * assigned, and a `^mut` local is read through its cell, never as a bare
+ * variable), or a lambda (building one has no effect, and it captures a
+ * `^mut` as its cell).  `(peekf f (ctr 2) (mk))` keeps `f` where it is; the
+ * call reads it as it would have. */
+static bool arg_reads_same_later(const Expr *a) {
+    for (;;) {
+        if (!a) return false;
+        if (a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        else if (a->kind == EX_POLY_WRAP) a = a->as.poly_wrap_.inner;
+        else if (a->kind == EX_FN_TO_FAT) a = a->as.fn_to_fat_.inner;
+        else if (a->kind == EX_POLY_TO_FAT) a = a->as.poly_to_fat_.inner;
+        else break;
+    }
+    switch (a->kind) {
+    case EX_VAR:
+        return a->as.var.binding && !a->as.var.binding->is_mut;
+    case EX_FN: case EX_CLOSURE:
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* ... and one that must be evaluated where it was written may still be
+ * hoisted into a `__borrowa` temp ahead of the temporary, as a plain scalar
+ * is: the temp is then its holder in the call's place.  The hoist builds its
+ * `let` directly, so nothing in the elaborator attaches a scope-exit drop to
+ * the temp, and the emitter's own let frees (a closure env, a sum box, an
+ * `any`) ask the same escape walk they ask of a let the program wrote -- a
+ * callee that keeps or consumes the value is an escape, and the temp then
+ * frees nothing.  A value of no runtime type (`never`, unknown) is left where
+ * it is, and so the temporary is too. */
+static bool arg_hoistable_owner(const Expr *a) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    if (!a) return false;
+    switch (a->type.kind) {
+    case TY_NEVER: case TY_UNKNOWN: case TY_FORALL:
+        return false;
+    default:
+        return true;
+    }
+}
+
 /* Bind a plain-scalar argument (or a plain-copy one, above) to a `__borrowa`
  * temp ahead of a hoisted borrowed temporary, so the two keep their written
  * evaluation order. */
@@ -3662,7 +3711,9 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
                         continue;                 /* already a hoist temp */
                     if (!arg_is_literal(args[j]) &&
                         !type_kind_is_plain_scalar(args[j]->type.kind) &&
-                        !hoist_arg_is_plain_copy(e, args[j]))
+                        !hoist_arg_is_plain_copy(e, args[j]) &&
+                        !arg_reads_same_later(args[j]) &&
+                        !arg_hoistable_owner(args[j]))
                         order_ok = false;
                 }
             }
@@ -3677,6 +3728,13 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
                         if (arg_is_literal(aj)) continue;
                         if (aj->kind == EX_VAR && aj->as.var.binding &&
                             strncmp(aj->as.var.binding->name->name, "__borrow", 8) == 0)
+                            continue;
+                        /* An owning value that reads the same later stays
+                         * put (a plain scalar variable is still hoisted, as
+                         * before, so its spelling does not move). */
+                        if (!type_kind_is_plain_scalar(args[j]->type.kind) &&
+                            !hoist_arg_is_plain_copy(e, args[j]) &&
+                            arg_reads_same_later(args[j]))
                             continue;
                         hoist_ordered_arg_temp(e, &args[j], span, &hl);
                     }
@@ -7821,6 +7879,28 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     out->as.builtin.spec = spec;
     out->as.builtin.args = args;
     out->as.builtin.n = n_args;
+    /* cloneable-cont-escaped-chain-leaks: `(tur_cloneable_cont_resume
+     * (tur_cloneable_cont_clone k) v)` -- or `(... (make) v)` -- resumes a
+     * fresh continuation nothing else holds, and nothing freed it.  Bind the
+     * handle -- `(let [c (clone k)] (resume c v))` is the same program -- and
+     * the emitter drops it when that let owns it: a fresh source its scope
+     * only reads (emit_let_binding_ccont_owned).  Any other handle is bound
+     * just the same and left alone. */
+    if (spec->name && strcmp(spec->name, "tur_cloneable_cont_resume") == 0 &&
+        n_args == 2) {
+        const Expr *a0 = args[0];
+        while (a0 && a0->kind == EX_ASCRIBE) a0 = a0->as.ascribe_.inner;
+        if (a0 && (a0->kind == EX_BUILTIN || a0->kind == EX_CALL ||
+                   a0->kind == EX_CLONEABLE_RESET)) {
+            LetBinding *lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+            args[0] = elab_bind_control_temp(e, args[0], lb);
+            Expr *let = expr_new(e->arena, EX_LET, result_type, call->span);
+            let->as.let_.bindings = lb;
+            let->as.let_.n = 1;
+            let->as.let_.body = out;
+            return let;
+        }
+    }
     return out;
 }
 
@@ -9049,6 +9129,68 @@ static bool fn_sig_kinds_match(const Type *a, const Type *b) {
     for (uint32_t k = 0; k < a->as.fn.arity; k++)
         if (a->as.fn.arg_kinds[k] != b->as.fn.arg_kinds[k]) return false;
     return true;
+}
+
+/* byvalue-recursive-shared-copies-leak: clone at the borrow.  Does argument
+ * `i` of a call to `fn_binding` need a deep copy of its spine?  A shared view
+ * -- a ^borrow, a global, a container element, a binder of one -- of a
+ * clonable by-value recursive ADT, handed to a parameter that CONSUMES it.
+ * The copy (elab_clone_shared_spine) keeps the callee's parameter owned for
+ * every caller and leaves the view's owner its spine, so the call is not a
+ * move of the view either.  A parameter already proven non-retaining is only
+ * lent and needs none.  The callee must be inferred already
+ * (call_arg_may_need_spine_clone defers the rest).  Only a top-level,
+ * statically dispatched callee whose parameter is declared at this very type:
+ * the ownership provenance tracks no other. */
+static bool call_arg_needs_spine_clone(const Binding *fn_binding, const Type *fn_type,
+                                       uint32_t i, const Expr *a) {
+    if (!fn_binding || fn_binding->closure_fn_binding || fn_binding->is_instance_method ||
+        fn_binding->is_param || !fn_binding->is_global || fn_binding->is_extern_c)
+        return false;
+    if (!fn_type || fn_type->kind != TY_FN || i >= 32 || i >= fn_type->as.fn.arity)
+        return false;
+    if (!a || a->type.kind != TY_ADT) return false;
+    if (FN_ARG_FLAG(fn_type->as.fn, i, FA_BORROW) ||
+        FN_ARG_FLAG(fn_type->as.fn, i, FA_UNIQUE_MUT))
+        return false;
+    const AdtDef *ad = elab_byval_localowned_adt(a->type);
+    if (!ad || !adt_byval_spine_clonable(ad)) return false;
+    /* The parameter is declared at this ADT.  A callee defined further down
+     * the file is seen through its forward signature, which carries only the
+     * argument KIND; the call's own type check has already matched an ADT
+     * parameter to this argument's type.  A type variable is never cloned
+     * for: the provenance tracks no generic parameter. */
+    const Type *pt = fn_type->as.fn.arg_full_types ? fn_type->as.fn.arg_full_types[i] : NULL;
+    if (pt ? (pt->kind != TY_ADT || pt->as.adt_.def != ad)
+           : fn_type->as.fn.arg_kinds[i] != TY_ADT)
+        return false;
+    if (fn_binding->nonretain_ptr_param_mask & (1u << i)) return false;
+    return elab_expr_is_shared_view(a);
+}
+
+/* Could argument `i` need the copy once its callee is known?  The callee is
+ * not inferred yet -- a forward call, whose signature carries no parameter
+ * types, or a recursive one -- so the call is recorded and judged after Pass
+ * 2 (elab_resolve_pending_spine_clones).  Only the shape of the argument and
+ * the callee's kind are asked here. */
+static bool call_arg_may_need_spine_clone(const Binding *fn_binding, const Expr *a) {
+    if (!fn_binding || fn_binding->nonretain_inferred) return false;
+    if (fn_binding->closure_fn_binding || fn_binding->is_instance_method ||
+        fn_binding->is_param || !fn_binding->is_global || fn_binding->is_extern_c)
+        return false;
+    if (!a || a->type.kind != TY_ADT) return false;
+    const AdtDef *ad = elab_byval_localowned_adt(a->type);
+    return ad && adt_byval_spine_clonable(ad) && elab_expr_is_shared_view(a);
+}
+
+void elab_resolve_pending_spine_clones(Elab *e) {
+    for (uint32_t k = 0; k < e->n_pending_spine_clones; k++) {
+        PendingSpineClone *p = &e->pending_spine_clones[k];
+        if (!p->slot || !p->fn || !p->fn->nonretain_inferred) continue;
+        if (call_arg_needs_spine_clone(p->fn, &p->fn->type, p->param, *p->slot))
+            *p->slot = elab_clone_shared_spine(e, *p->slot);
+    }
+    e->n_pending_spine_clones = 0;
 }
 
 static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
@@ -12622,7 +12764,19 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 if (fn_borrow_idx < fn_type.as.fn.arity)
                     param_is_borrow = FN_ARG_FLAG(fn_type.as.fn, fn_borrow_idx, FA_BORROW);
             }
-            if (!param_is_unique_mut && !arg_is_unique_mut && !param_is_borrow) {
+            /* byvalue-recursive-shared-copies-leak: a shared view the call
+             * deep-copies (call_arg_needs_spine_clone) is read, not moved --
+             * the callee consumes the copy.  So is one handed to a callee not
+             * inferred yet (call_arg_may_need_spine_clone), whose copy is
+             * decided after Pass 2: if it is not copied then, the parameter
+             * borrows it, lends it, or is one the ownership provenance does
+             * not track -- and nothing frees a view's spine but its owner. */
+            bool spine_cloned = fn_binding &&
+                (fn_binding->nonretain_inferred
+                     ? call_arg_needs_spine_clone(fn_binding, &fn_type, i, args[i])
+                     : call_arg_may_need_spine_clone(fn_binding, args[i]));
+            if (!param_is_unique_mut && !arg_is_unique_mut && !param_is_borrow &&
+                !spine_cloned) {
                 /* byvalue-recursive-adt-boxes-are-never-freed (Residue 1): a
                  * by-value recursive ADT local passed to a callee whose mask
                  * says it does not retain the parameter is LENT, not moved:
@@ -13569,6 +13723,33 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                              pcf->body);
                     elab_fresh_pin_clone_set(pin_prev);
                 }
+            }
+        }
+    }
+
+    /* byvalue-recursive-shared-copies-leak: clone at the borrow -- see
+     * call_arg_needs_spine_clone.  The arguments sit after the dictionary
+     * arguments when the call was redirected to a dict clone. */
+    if (fn_binding && fwd_nargs >= n_args) {
+        uint32_t off = fwd_nargs - n_args;
+        for (uint32_t i = 0; i < n_args && i < 32; i++) {
+            if (fn_binding->nonretain_inferred) {
+                if (call_arg_needs_spine_clone(fn_binding, &fn_type, i, args[i]))
+                    fwd_args[off + i] = elab_clone_shared_spine(e, args[i]);
+            } else if (fwd_bound == fn_binding &&
+                       call_arg_may_need_spine_clone(fn_binding, args[i])) {
+                if (e->n_pending_spine_clones == e->cap_pending_spine_clones) {
+                    e->cap_pending_spine_clones = e->cap_pending_spine_clones
+                        ? e->cap_pending_spine_clones * 2 : 16;
+                    e->pending_spine_clones = (PendingSpineClone *)realloc(
+                        e->pending_spine_clones,
+                        e->cap_pending_spine_clones * sizeof(PendingSpineClone));
+                    if (!e->pending_spine_clones) { fprintf(stderr, "tur: oom\n"); abort(); }
+                }
+                PendingSpineClone *pc = &e->pending_spine_clones[e->n_pending_spine_clones++];
+                pc->slot = &fwd_args[off + i];
+                pc->fn = fn_binding;
+                pc->param = i;
             }
         }
     }

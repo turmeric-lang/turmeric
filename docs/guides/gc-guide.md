@@ -749,9 +749,11 @@ dialect fixture under frequent collections, plus bounded-memory loops).
   x)`) makes the result an alias the caller tracks, so `(let [w (id-b zs)]
   ...)` frees `zs` once `w` is dead. A FRESH spine handed straight to a
   non-retaining callee -- `(llen (build 3))` -- is freed right after the call
-  (`tests/fixtures/byval-recursive-adt-lent-temporary-freed`). What still
-  leaks is a consuming callee reached from a borrow and a container's
-  elements; see `docs/reported/byvalue-recursive-shared-copies-leak.md`.
+  (`tests/fixtures/byval-recursive-adt-lent-temporary-freed`). A shared
+  view handed to a consuming callee is deep-copied first (clone at the
+  borrow, `tests/fixtures/byval-recursive-adt-borrow-cloned-for-consumer`).
+  What still leaks is a container's elements; see
+  `docs/reported/container-elements-have-no-owner.md`.
   One shape still leaks by design rather than by accident:
   - A **`^copy` recursive ADT** -- `Term`, `Subst`, `Stream` in
     `stdlib/logic.tur`, the `Regex` family -- is never freed per value. This

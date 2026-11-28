@@ -1,0 +1,68 @@
+;; let-bound-closure-shared-with-fnfield-struct-leaks: a closure stored in a
+;; struct that does not own it -- because the closure is used again, or is a
+;; parameter -- is freed by the closure's own scope when every struct holding
+;; it is a local that is only read (its fn-field called, its scalar fields
+;; read) and dies with that scope.  Leak-checked: each closure below leaked
+;; 24 B before.  The globals at the end are the negative half: a struct or
+;; field that really leaves keeps its closure alive (reachable, not leaked),
+;; and the program still calls it correctly afterwards.  The parameter cases
+;; run through the poly carrier (the field holds a fresh box over the
+;; caller's closure), which the struct frees without touching the closure.
+(defstruct H [raw : int handler : (fn [int] int)])
+(def held : (Vec H) (vec-new))
+
+;; a constructor function: the result is the only thing holding f
+(defn wrap [f : (fn [int] int)] : H (H 2 f))
+(defn wrap-let [f : (fn [int] int)] : H
+  (let [h (H 3 f)]
+    h))
+(defn wrap-wrap [f : (fn [int] int)] : H (wrap f))
+;; a parameter stored in a local struct that is only called
+(defn use-param [f : (fn [int] int)] : int
+  (let [h (H 1 f)]
+    ((.handler h) 10)))
+
+(defn main [] : int
+  ;; sibling binding, closure used again
+  (let [n 1
+        f (fn [x : int] : int (+ x n))
+        h (H 1 f)]
+    (println ((.handler h) 1))
+    (println (f 1)))
+  ;; single use: the struct owns the closure and frees it (no double free)
+  (let [n 2
+        f (fn [x : int] : int (+ x n))]
+    (let [h (H 1 f)]
+      (println ((.handler h) 1))))
+  ;; a closure captured by another closure that dies with the let
+  (let [n 3
+        f (fn [x : int] : int (+ x n))
+        g (fn [y : int] : int (f (f y)))]
+    (println (g 1)))
+  ;; a parameter stored in a struct, twice
+  (let [n 4
+        f (fn [x : int] : int (+ x n))]
+    (println (use-param f))
+    (println (use-param f)))
+  ;; constructor functions, the result only called
+  (let [n 5
+        f (fn [x : int] : int (+ x n))]
+    (let [a (wrap f)
+          b (wrap-let f)
+          c (wrap-wrap f)]
+      (println (+ ((.handler a) 1) ((.handler b) 2) ((.handler c) 3))))
+    (println (f 0)))
+  ;; negatives: each closure leaves through a global
+  (let [n 6
+        f (fn [x : int] : int (+ x n))]
+    (let [h (H 1 f)]
+      (vec-push! held h))
+    (println (f 0)))
+  (println ((.handler (vec-get held 0)) 1))
+  (let [n 8
+        f (fn [x : int] : int (+ x n))
+        g (fn [y : int] : int (do (vec-push! held (H 2 f)) y))]
+    (println (g 0))
+    (println (f 0)))
+  (println ((.handler (vec-get held 1)) 1))
+  0)

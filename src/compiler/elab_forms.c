@@ -6,6 +6,12 @@
 
 /* emit_core.c: is `b` used as a value, not only called, within `e`? */
 bool closure_binding_escapes(const Expr *e, const Binding *b);
+uint32_t elab_fnfield_result_param_mask(const Expr *body, Binding *const *params,
+                                        uint32_t n_params);   /* emit_core.c */
+bool elab_fnfield_fields_escape(const Expr *body, Expr *const *later_inits,
+                                uint32_t n_later, const Binding *h,
+                                bool is_copy);                 /* emit_core.c */
+bool expr_subtree_has_inline_c(const Expr *e);                 /* emit_core.c */
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -235,6 +241,45 @@ Expr *elab_clone_shared_rc_product(Elab *e, Expr *v, bool *had_shared) {
             if (had_shared) *had_shared = true;
             return elab_clone_rc_fields(e, v, ad);
     }
+}
+
+/* byvalue-recursive-shared-copies-leak: clone at the borrow.
+ *
+ * A SHARED VIEW of a by-value recursive ADT -- a ^borrow, a global, a
+ * container element, a binder of one -- handed to a parameter that CONSUMES
+ * it (by value, not proven non-retaining) is a move out of something that
+ * keeps owning it; Rust refuses it.  Before this the ownership provenance
+ * (emit_core.c) answered by making the callee's parameter unowned for EVERY
+ * caller, so one borrowing call site cost every owning caller the spine the
+ * callee would have discharged, and the borrowing caller's own local leaked
+ * too, since the hand-off read as an escape.
+ *
+ * So the argument becomes a deep copy: `(let [__shs v] <clone __shs>)`.  The
+ * copy is a fresh owner -- the provenance calls an EX_BYVAL_CLONE owned -- so
+ * the parameter stays owned, and the confinement walks read the operand
+ * (box_uses_confined, the strict escape walk), so the view's owner is no
+ * longer refused its free.  The `let` hands the operand's representation to
+ * the let-init machinery, so the clone node only ever names a plain local.
+ * The binding is built here, not through elab_let, so it carries no
+ * scope-exit drop: it is a view, and its owner frees what it points at. */
+Expr *elab_clone_shared_spine(Elab *e, Expr *v) {
+    LetBinding *lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+    char nm[48];
+    snprintf(nm, sizeof nm, "__shs_%u", elab_fresh_id(e));
+    const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+    Binding *tb = binding_new(e, sym, v->type, false, false, v->span);
+    memset(lb, 0, sizeof(*lb));
+    lb->binding = tb;
+    lb->init = v;
+    Expr *tv = expr_new(e->arena, EX_VAR, v->type, v->span);
+    tv->as.var.binding = tb;
+    Expr *cl = expr_new(e->arena, EX_BYVAL_CLONE, v->type, v->span);
+    cl->as.byval_clone_.expr = tv;
+    Expr *let = expr_new(e->arena, EX_LET, v->type, v->span);
+    let->as.let_.bindings = lb;
+    let->as.let_.n = 1;
+    let->as.let_.body = cl;
+    return let;
 }
 
 /* The first value position of `v` that produces a shared view, or NULL.  (The
@@ -545,6 +590,9 @@ static bool fnfield_value_owned(Elab *e, const Expr *v, const AdtDef *ad,
         case EX_VAR: {
             const Binding *src = v->as.var.binding;
             if (!src || src->is_global) return false;
+            /* fnfield-read-out-of-owning-struct-freed-with-it: a local whose
+             * closure was read out and kept owns nothing it may free */
+            if (src->fnfield_fields_escape) return false;
             if (src->is_param)
                 /* a by-value move-only parameter was moved in by the caller;
                  * a ^copy or ^borrow one is still the caller's */
@@ -641,6 +689,13 @@ void elab_stamp_fnfield_ret(Elab *e, Binding *b, const Expr *body) {
         return;
     b->fnfield_ret_owned = body && fnfield_value_owned(e, body, ad, NULL, true, 0);
     b->fnfield_ret_stamped = true;
+    /* let-bound-closure-shared-with-fnfield-struct-leaks: the closure
+     * parameters the result holds and nothing else does. */
+    if (body && b->source_fn_def && b->source_fn_def->params &&
+        !b->body_is_inline_c && !expr_subtree_has_inline_c(body))
+        b->fnfield_ret_param_mask =
+            elab_fnfield_result_param_mask(body, b->source_fn_def->params,
+                                           b->source_fn_def->n_params);
 }
 
 /* ---- internal define splicing ---- */
@@ -3582,6 +3637,23 @@ Expr *elab_let(Elab *e, const Form *call) {
     for (uint32_t k = 0; k < n_binds; k++) {
         const AdtDef *ad = elab_byval_drop_adt(binds[k].binding->type);
         if (!ad) continue;
+        /* fnfield-read-out-of-owning-struct-freed-with-it: a closure read out
+         * of a field and kept -- `(set! saved (.handler h))` -- outlives the
+         * local, so the local must not free it; nor may a function returning
+         * the local hand its caller the job (fnfield_value_owned).  Asked
+         * before the guards below, since a local that leaves the scope is
+         * exactly the one the second question is about. */
+        if (body && elab_type_owns_boxed_fnfield(binds[k].binding->type)) {
+            Expr *later[64];
+            uint32_t nl = 0;
+            for (uint32_t j = k + 1; j < n_binds && nl < 64; j++)
+                later[nl++] = binds[j].init;
+            if (n_binds - k - 1 > 64 ||
+                elab_fnfield_fields_escape(body, later, nl, binds[k].binding,
+                                           ad->is_copy))
+                binds[k].binding->fnfield_fields_escape = true;
+        }
+        if (binds[k].binding->fnfield_fields_escape) continue;
         if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
             is_binding_consumed(body, binds[k].binding))
             continue;
@@ -5980,6 +6052,36 @@ Expr *elab_set(Elab *e, const Form *call) {
      * compare the call's carrier `int` against the cell's `A` and refuse it. */
     if (b->type.kind == TY_TYVAR)
         value = let_bridge_sig_tyvar_result(e, value);
+    /* fn-param-set-into-fn-global-fails-cc: a closure parameter rides the
+     * two-word poly carrier (`tur_poly_fn_t`), and a fn-typed global or
+     * closure cell holds the one-word fat handle, so `(set! keep f)` emitted a
+     * struct-to-pointer assignment cc refused.  Box it into a fat handle, as a
+     * constructor's fn-field argument is (EX_POLY_TO_FAT, typed with the
+     * target's signature): the box's drop header is NULL, so it holds the
+     * caller's closure without owning it. */
+    if (b->type.kind == TY_FN && b->type.as.fn.boxed && !b->type.as.fn.cfnptr &&
+        !b->is_poly_fn) {
+        const Expr *pv = value;
+        while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+        const Binding *pb = (pv && pv->kind == EX_VAR) ? pv->as.var.binding : NULL;
+        if (pb && pb->is_poly_fn && pb->poly_type && pb->poly_type->kind == TY_FN &&
+            !pb->poly_type->as.fn.cfnptr &&
+            pb->poly_type->as.fn.arity <= TUR_FAT_SHIM_MAX_ARITY &&
+            pb->poly_type->as.fn.arity == b->type.as.fn.arity &&
+            pb->poly_type->as.fn.result_kind == b->type.as.fn.result_kind) {
+            bool kinds_ok = true;
+            for (uint32_t k = 0; k < b->type.as.fn.arity && kinds_ok; k++)
+                kinds_ok = b->type.as.fn.arg_kinds[k] == pb->poly_type->as.fn.arg_kinds[k];
+            if (kinds_ok) {
+                Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *bt = b->type;
+                Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, *bt, value->span);
+                conv->as.poly_to_fat_.inner = value;
+                conv->as.poly_to_fat_.sink_fn_type = bt;
+                value = conv;
+            }
+        }
+    }
     if (!type_eq(value->type, b->type)) {
         diag_emit(DIAG_ERROR, value->span,
                   "set!: value type %s does not match binding type %s",

@@ -896,6 +896,9 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 case EX_POLY_TO_FAT:
                     if (cur->as.poly_to_fat_.inner) fv_push(&ls, &lsp, &ls_cap, cur->as.poly_to_fat_.inner);
                     break;
+                case EX_BYVAL_CLONE:
+                    if (cur->as.byval_clone_.expr) fv_push(&ls, &lsp, &ls_cap, cur->as.byval_clone_.expr);
+                    break;
                 case EX_POLY_WRAP:
                     if (cur->as.poly_wrap_.inner) fv_push(&ls, &lsp, &ls_cap, cur->as.poly_wrap_.inner);
                     break;
@@ -1360,6 +1363,9 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 break;
             case EX_RC_CLONE:
                 fv_push(&stack, &sp, &stack_cap, cur->as.rc_clone_.expr);
+                break;
+            case EX_BYVAL_CLONE:
+                fv_push(&stack, &sp, &stack_cap, cur->as.byval_clone_.expr);
                 break;
             case EX_RC_PTR:
                 fv_push(&stack, &sp, &stack_cap, cur->as.rc_ptr_.expr);
@@ -2304,6 +2310,7 @@ void elab_set_rc_release(Arena *arena, Expr *body, Binding *binding) {
             case EX_RC_OF:     stack[sp++] = cur->as.rc_of_.expr;    break;
             case EX_RC_DROP:   stack[sp++] = cur->as.rc_drop_.expr;  break;
             case EX_RC_CLONE:  stack[sp++] = cur->as.rc_clone_.expr; break;
+            case EX_BYVAL_CLONE: stack[sp++] = cur->as.byval_clone_.expr; break;
             case EX_REINTERPRET:   stack[sp++] = cur->as.reinterpret_.expr; break;
             case EX_ASCRIBE:   stack[sp++] = cur->as.ascribe_.inner; break;
             case EX_RETURN:

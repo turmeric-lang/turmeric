@@ -1,0 +1,93 @@
+;; async-capturing-body-env-never-freed: an async body that captures a
+;; Drop-instance value and returns a NON-scalar result.  The spawn owns such an
+;; env when nothing the body can return was reached from a capture -- every
+;; tail value here is a string literal or a capture-free call
+;; (closure_env_drop_ok_under_scalar_result, which since 2026-11-07 asks
+;; closure_result_may_view_capture of a non-scalar result) -- and drops it,
+;; capture included, when the body settles, inline or after parking.  The
+;; report listed this shape as open; it was closed by the predicate the
+;; spawn shares with sum-closure-payload-never-dropped.  Leak-checked, and
+;; the live count pins that each `Res` is released exactly once.
+(load "stdlib/cstr.tur")
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+;; ctr -- alloc/free counters (0 bump alloc, 1 bump free, 2 read alloc, 3 read free)
+(defn ctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+(defopaque ^affine Res :int)
+(defn mk [v : int] : Res (ctr 0) (:: v Res))
+(defn rel [r : Res] : void (ctr 1) (:: r int) nil)
+(definstance Drop [Res] (drop [x] : void (rel x)))
+(defn peek [^borrow r : Res] : int (:: r int))
+(defn live [] : int (- (ctr 2) (ctr 3)))
+
+(defn tag-inline [k : int] : cstr
+  (let [w (mk k)]
+    (await (async (fn [] : cstr (if (> (peek w) 2) "big" "small"))))))
+
+(defn tag-parking [k : int] : cstr
+  (let [w (mk k)]
+    (await (async (fn [] : cstr
+                    (let [n (+ (peek w) (sum-values 0 1 0))]
+                      (if (> n 2) "big" "small")))))))
+
+(defn turns [i : int acc : int] : int
+  (if (= i 0)
+    acc
+    (turns (- i 1) (+ acc (cstr-len (tag-inline i))))))
+
+(defn main [] : nil
+  (cur-cell true)
+  (println (tag-inline 4))       ; big
+  (println (tag-inline 1))       ; small
+  (println (drive (async (fn [] : int (cstr-len (tag-parking 1))))))  ; 3
+  (println (turns 100 0))        ; 304
+  (println (live))               ; 0
+  (free-future (cur-cell false)))

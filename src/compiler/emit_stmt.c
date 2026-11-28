@@ -111,6 +111,23 @@ void emit_set_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             tgt_c = type_c_name(emit_resolve_type(ctx, e->as.set_.target->type));
         char *bv = emit_store_int_ptr_bridge(ctx, tgt_c, v, e->as.set_.value);
         if (bv) { free(v); v = bv; }
+        /* fn-param-set-into-fn-global-fails-cc: a closure stored into a fat
+         * (`void *`) global arrives as the int64 carrier when it is read out
+         * of a lambda's env (`__env->f`), which the bridge above cannot see
+         * past -- `-Wint-conversion`, an error under GCC 14.  Spell the store
+         * through intptr_t: a no-op for a value that is already the pointer. */
+        else if (e->as.set_.target && e->as.set_.target->is_global &&
+                 e->as.set_.target->type.kind == TY_FN &&
+                 e->as.set_.target->type.as.fn.boxed &&
+                 tgt_c && strcmp(tgt_c, "void *") == 0 &&
+                 e->as.set_.value && e->as.set_.value->type.kind == TY_FN &&
+                 strncmp(v, "(void *)", 8) != 0) {
+            size_t n = strlen(v) + 32;
+            char *cv = (char *)malloc(n);
+            if (!cv) { fprintf(stderr, "tur: oom\n"); abort(); }
+            snprintf(cv, n, "(void *)(intptr_t)(%s)", v);
+            free(v); v = cv;
+        }
         /* global-mut-cell-of-byvalue-adt-or-fn-emits-bad-c (repro 1): the value
          * is a pass-by-pointer binder -- a match arm binds a recursive-field
          * link as `const T *` (the SR4 borrow) -- and the target is the
@@ -1655,6 +1672,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         /* Phase 9: rc<T> + weak<T> as statements */
         case EX_RC_OF:
         case EX_RC_CLONE:
+        case EX_BYVAL_CLONE:
         case EX_RC_PTR:
         case EX_RC_COUNT:
         case EX_RC_FROM_REF:

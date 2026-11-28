@@ -65,12 +65,13 @@
 >
 > What still leaks is not specific to joins, and is tracked elsewhere:
 >
-> - A caller keeps the closure it passed when the callee stores the parameter
->   in a struct
->   ([let-bound-closure-shared-with-fnfield-struct-leaks](../reported/let-bound-closure-shared-with-fnfield-struct-leaks.md))
->   or in a `let`-bound `Some`
->   ([fn-param-at-type-variable-slot-boxed-per-call](../reported/fn-param-at-type-variable-slot-boxed-per-call.md)),
->   or hands it back in a result
+> - A caller keeps the closure it passed when the callee boxes the parameter
+>   into a local holder: a `let`-bound `Some`, or a join stored in a struct
+>   field
+>   ([fn-param-boxed-into-local-holder-kept](../reported/fn-param-boxed-into-local-holder-kept.md)).
+>   The bare parameter stored in a struct was fixed on `main`
+>   ([let-bound-closure-shared-with-fnfield-struct-leaks](let-bound-closure-shared-with-fnfield-struct-leaks.md)).
+>   The same happens when the callee hands the closure back in a result
 >   ([closure-arg-captured-by-factory-result-kept](../reported/closure-arg-captured-by-factory-result-kept.md)).
 >   A closure factory that captures the parameter does the same on `main`.
 > - A function returning `(Some <fn value>)` leaks the payload, lambda or join

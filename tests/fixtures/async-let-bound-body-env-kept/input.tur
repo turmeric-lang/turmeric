@@ -2,11 +2,19 @@
 ;; NOT hand to the spawn (async-let-bound-body-env-dropped has the one it
 ;; does) -- each spawns the same closure value more than once, so a spawn
 ;; that dropped the box would leave the next spawn a freed env.  Not
-;; leak-checked: these keep the box, as before.  The answers must be right.
+;; leak-checked.  The answers must be right.
 ;;
 ;;   twice     -- the same local spawned twice in sequence
 ;;   in-while  -- spawned from a `while` body
 ;;   captured  -- spawned inside a lambda that captured it, called twice
+;;   cell      -- a closure capturing a `^mut` cell, spawned twice: both
+;;                spawns must update the SAME cell (11, then 12)
+;;
+;; Since 2026-11-28 `twice` and `in-while`, whose captures are plain numbers,
+;; give each spawn a COPY of the box to own and drop the original at the
+;; let's scope exit (async-let-bound-body-env-copied-per-spawn, leak-checked).
+;; `captured` still keeps its box: the capture by `go` reads as an escape.
+;; So does `cell`: a copy may not outlive the cell its let would then free.
 ;;
 ;; Each hands its future to `drive`, so the body may still be parked when the
 ;; let exits.  A spawn awaited where it is written, `(await (async body))`,
@@ -46,7 +54,13 @@
         go   (fn [] : int (drive (async body)))]
     (+ (go) (go))))
 
+(defn cell [k : int] : int
+  (let [^mut c k
+        body (fn [] : int (do (set! c (+ c 1)) c))]
+    (+ (drive (async body)) (drive (async body)))))
+
 (defn main [] : nil
   (println (twice 5))
   (println (in-while 10))
-  (println (captured 7)))
+  (println (captured 7))
+  (println (cell 10)))

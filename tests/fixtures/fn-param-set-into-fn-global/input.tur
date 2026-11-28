@@ -1,0 +1,31 @@
+;; fn-param-set-into-fn-global-fails-cc: `(set! keep f)` with `f` a closure
+;; parameter assigned the two-word poly carrier (`tur_poly_fn_t`) to the
+;; one-word fat global -- a cc error.  The store boxes it into a fat handle
+;; now, as a constructor's fn-field argument is.  A closure read out of a
+;; lambda's env and stored into such a global (the int64 carrier) warned
+;; `-Wint-conversion`, an error under GCC 14; it is spelled through intptr_t.
+(def ^mut keep : (fn [int] int) (fn [x : int] : int x))
+(def ^mut keep2 : (fn [int] int) (fn [x : int] : int x))
+
+(defn stash [f : (fn [int] int)] : int
+  (set! keep f)
+  0)
+(defn stash-alias [f : (fn [int] int)] : int
+  (let [g f]
+    (set! keep2 g))
+  0)
+
+(defn main [] : int
+  (stash (fn [x : int] : int (+ x 1)))
+  (println (keep 1))                                  ; 2
+  (let [n 5]
+    (stash (fn [x : int] : int (* x n))))
+  (println (keep 3))                                  ; 15
+  (stash-alias (fn [x : int] : int (- x 1)))
+  (println (keep2 10))                                ; 9
+  (let [n 8
+        f (fn [x : int] : int (+ x n))
+        g (fn [y : int] : int (do (set! keep f) y))]
+    (println (g 0)))                                  ; 0
+  (println (keep 1))                                  ; 9
+  0)

@@ -11,10 +11,11 @@
 ;;
 ;; and the parameter boxed at the join does not escape through it, so a caller
 ;; that passes a capturing closure still frees that closure after the call.
-;; (`p-ctor`, `s-par` and the returned joins take a defn: a carrier parameter
-;; stored in a struct field or a `Some`, or handed back in a result, join or
-;; not, reads as retained -- as a closure factory's captured parameter does --
-;; so a closure passed there is kept.)
+;; (`p-ctor`, `s-par` and the returned joins take a defn: a parameter boxed
+;; into a local holder -- a join in a struct field, a `Some` -- or handed back
+;; in a result reads as retained, as a closure factory's captured parameter
+;; does, so a closure passed there is kept: fn-param-boxed-into-local-holder-kept,
+;; closure-arg-captured-by-factory-result-kept.)
 ;; requires.leak-check runs this under ASan + LeakSanitizer: a box kept is a
 ;; leak per turn, and a closure freed while a box still points at it is a
 ;; use-after-free.  Each shape runs in a loop, with both arms taken.

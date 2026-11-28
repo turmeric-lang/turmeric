@@ -1,0 +1,62 @@
+;; byval-adt-masks-blind-to-forward-callees: a caller elaborated before a
+;; callee with a by-value recursive ADT parameter saw that callee's forward
+;; declaration, whose non-retaining / result-alias mask is 0.  So:
+;;
+;;   owner     -- an owned local lent to `len-later` (which retains nothing)
+;;                was MOVED instead: the caller did not free it, and the
+;;                callee, which only lends, did not either -- 48 B a call;
+;;   borrower  -- a ^borrow handed to `len-later` read as an escape, so the
+;;                borrowed local's owner was refused its free -- 24 B a call;
+;;   consumer  -- a ^borrow handed to `tail-later`, which CONSUMES: the deep
+;;                copy (clone at the borrow) was decided after Pass 2, and the
+;;                borrowed local's owner still leaked.
+;;
+;; Pass 2 now elaborates such a callee before its callers, as it does a
+;; generic one (fwd_gen_order, elab_toplevel.c), so every caller sees the
+;; inferred mask.  Leak-checked, 100 turns of each; the same program with the
+;; callees defined first was already clean.
+;;
+;; Expected output:
+;;   2
+;;   1
+;;   1
+;;   600
+
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn owner [n : int] : int
+  (let [ys (Cons n (Cons 2 (Nil)))]
+    (len-later ys)))
+
+(defn via-borrow [^borrow xs : Lst] : int (len-later xs))
+(defn borrower [n : int] : int
+  (let [ys (Cons n (Nil))]
+    (+ (via-borrow ys) 0)))
+
+(defn via-consumer [^borrow xs : Lst] : int (len-later (tail-later xs)))
+(defn consumer [n : int] : int
+  (let [ys (Cons n (Cons 3 (Nil)))]
+    (+ (via-consumer ys) 0)))
+
+(defn len-later [xs : Lst] : int
+  (match xs
+    (Cons h t) (+ 1 (len-later t))
+    (Nil)      0))
+
+(defn tail-later [xs : Lst] : Lst
+  (match xs
+    (Cons h t) t
+    (Nil)      (Nil)))
+
+(defn turns [i : int acc : int] : int
+  (if (= i 0)
+    acc
+    (turns (- i 1) (+ acc (+ (owner i) (+ (borrower i) (+ (consumer i)
+                                                         (len-later (tail-later (Cons i (Cons i (Cons i (Nil)))))))))))))
+
+(defn main [] : int
+  (println (owner 1))
+  (println (borrower 1))
+  (println (consumer 1))
+  (println (turns 100 0))
+  0)

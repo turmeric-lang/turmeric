@@ -3,7 +3,7 @@
 ;; `(fn ...)`-typed parameter boxed for a generic's type-variable slot, by a
 ;; callee that only hands it back, held by a local that is only ever invoked.
 ;; The box is dead when the let ends, so it lives on the stack
-;; (docs/reported/fn-param-at-type-variable-slot-boxed-per-call.md).
+;; (docs/archive/fn-param-at-type-variable-slot-boxed-per-call.md).
 ;; Leak-checked: 32 B a call before, over 100 turns of each.
 (defn ident [A] [a : A] : A a)
 (defn pick [A] [a : A b : A] : A b)

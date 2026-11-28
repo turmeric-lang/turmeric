@@ -3051,7 +3051,7 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     if (closure_binding_escapes(e->as.let_.body, b)) return false;
     for (uint32_t j = 0; j < e->as.let_.n; j++) {
         if (j == idx) continue;
-        if (closure_binding_escapes(e->as.let_.bindings[j].init, b)) return false;
+        if (closure_binding_escapes_let_init(e, j, b)) return false;
     }
     return true;
 }
@@ -3148,13 +3148,77 @@ void emit_let_mark_spawn_owned_one(const Expr *e, uint32_t i) {
         let_sole_use_is_spawn_impl(e, i, true))
         b->spawn_owns_env = true;
 }
+/* async-capturing-body-env-never-freed: may each spawn of this closure run a
+ * COPY of its env box (Binding.spawn_copy_closure)?  When the env's drop
+ * glue frees the box and nothing else (closure_env_drop_frees_box_only: no
+ * rc, owned `^fat` or Drop-instance capture, no inline C naming a capture),
+ * a byte copy shares only what the original shares -- a struct capture is a
+ * copy in the box, a pointer or `any` capture is a word nobody's glue frees
+ * -- so each spawn may own its copy.  The one capture refused is a `^mut`
+ * cell: mut_cell_escapes frees the cell once every closure capturing it is
+ * freeable by its let, which this mark makes true while a spawned copy may
+ * still be reading the cell. */
+static bool closure_env_spawn_copyable(const struct Closure *c) {
+    if (!c || !c->fn || c->n_captures == 0) return false;
+    if (c->is_shift_receiver || c->is_effect_payload) return false;
+    if (!closure_env_drop_frees_box_only(c)) return false;
+    for (uint32_t i = 0; i < c->n_captures; i++) {
+        const Binding *cap = c->captures[i];
+        if (!cap) return false;
+        if (cap->is_global) continue;
+        if (cap->is_mut || cap->is_mut_cell) return false;
+    }
+    return true;
+}
+
+/* The CPS translator's half of the mark below (cps_let_mark_spawn_owned):
+ * set binding `i`'s spawn_copy_closure when its env may be copied per spawn,
+ * keep it only when `freeable` -- that backend's own reap rule -- then holds,
+ * and say whether it was kept. */
+bool emit_let_try_spawn_copy(const Expr *e, uint32_t i,
+                             bool (*freeable)(const Expr *, uint32_t)) {
+    if (!e || e->kind != EX_LET || i >= e->as.let_.n || !freeable) return false;
+    Binding *b = e->as.let_.bindings[i].binding;
+    if (!b || b->spawn_owns_env || b->spawn_copy_closure) return false;
+    const Expr *init = e->as.let_.bindings[i].init;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init || init->kind != EX_CLOSURE) return false;
+    if (b->type.kind != TY_FN || !b->type.as.fn.boxed) return false;
+    const struct Closure *c = init->as.closure_.closure;
+    if (!closure_env_spawn_copyable(c)) return false;
+    if (freeable(e, i)) return false;
+    b->spawn_copy_closure = c;
+    if (!freeable(e, i)) { b->spawn_copy_closure = NULL; return false; }
+    return true;
+}
+
 static void let_mark_spawn_owned(const Expr *e) {
     if (!e || e->kind != EX_LET) return;
     for (uint32_t i = 0; i < e->as.let_.n; i++) {
         Binding *b = e->as.let_.bindings[i].binding;
         if (b && !b->spawn_owns_env && !let_binding_env_freeable(e, i) &&
-            let_sole_use_is_spawn(e, i))
+            let_sole_use_is_spawn(e, i)) {
             b->spawn_owns_env = true;
+            continue;
+        }
+        /* async-capturing-body-env-never-freed: spawned more than once with
+         * some spawn not awaited where it is written (async-let-bound-body-
+         * env-kept's `twice` / `in-while`), so no one spawn may own the box
+         * and the let could not drop it -- a spawned body may still be
+         * running, parked, when the let exits.  When a byte copy is a whole
+         * env, each spawn runs a copy of its own instead, and the spawns are
+         * then no escape of the original: keep the mark only when that is
+         * what makes the let's drop fire. */
+        if (!b || b->spawn_owns_env || b->spawn_copy_closure) continue;
+        const Expr *init = e->as.let_.bindings[i].init;
+        while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+        if (!init || init->kind != EX_CLOSURE) continue;
+        if (b->type.kind != TY_FN || !b->type.as.fn.boxed) continue;
+        const struct Closure *c = init->as.closure_.closure;
+        if (!closure_env_spawn_copyable(c)) continue;
+        if (let_binding_env_freeable(e, i)) continue;
+        b->spawn_copy_closure = c;
+        if (!let_binding_env_freeable(e, i)) b->spawn_copy_closure = NULL;
     }
 }
 
@@ -5087,6 +5151,9 @@ void let_binding_push_scope_frees(EmitCtx *ctx, const Expr *e, uint32_t i,
         char *mn = mangle_adt_name(b->type.as.adt_.def->name);
         buf_printf(&st, "drop_fnfields_tur_adt_%s((void *)&%s)", mn, bn);
         free(mn);
+    } else if (emit_let_binding_ccont_owned(e, i)) {
+        /* cloneable-cont-escaped-chain-leaks */
+        buf_printf(&st, "tur_cloneable_cont_drop((int64_t)(intptr_t)(%s))", bn);
     }
     if (st.len) {
         buf_putc(&st, '\0');
@@ -5174,6 +5241,10 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* catch-unwind-thunk-closure-leak (Part 2): C names of let-bound,
      * non-escaping caught Result boxes to tur_result_box_free at scope exit. */
     char **box_free_names = NULL;
+    /* cloneable-cont-escaped-chain-leaks: let-bound fresh cloneable
+     * continuations the body only read (emit_let_binding_ccont_owned). */
+    char **ccont_free_names = NULL;
+    uint32_t n_ccont_free = 0;
     /* any-struct-box-leak-per-widen: `any` locals whose payload box dies here. */
     char **any_free_names = NULL;
     /* RM1 (reclamation-plan): C names of let-bound erased sum-carrier boxes
@@ -5292,6 +5363,11 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 box_free_names = (char **)realloc(box_free_names,
                                                   (n_box_free + 1) * sizeof(char *));
                 box_free_names[n_box_free++] =
+                    name_for_binding(ctx, e->as.let_.bindings[i].binding);
+            } else if (emit_let_binding_ccont_owned(e, i)) {
+                ccont_free_names = (char **)realloc(ccont_free_names,
+                                                    (n_ccont_free + 1) * sizeof(char *));
+                ccont_free_names[n_ccont_free++] =
                     name_for_binding(ctx, e->as.let_.bindings[i].binding);
             } else {
                 const Binding *sb = e->as.let_.bindings[i].binding;
@@ -5491,6 +5567,16 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(box_free_names[i]);
     }
     free(box_free_names);
+
+    /* cloneable-cont-escaped-chain-leaks: drop the fresh continuations this
+     * let owned -- the wrapper and its chain copy. */
+    for (uint32_t i = 0; i < n_ccont_free; i++) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "tur_cloneable_cont_drop((int64_t)(intptr_t)(%s));\n",
+                   ccont_free_names[i]);
+        free(ccont_free_names[i]);
+    }
+    free(ccont_free_names);
 
     /* RM1: release non-escaping erased sum-carrier boxes -- the body was their
      * last use.  Null-guarded (the None carrier is NULL, slice A); shallow
@@ -18006,6 +18092,38 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(inner);
             return result;
         }
+        case EX_BYVAL_CLONE: {
+            /* byvalue-recursive-shared-copies-leak: deep-copy a shared view's
+             * spine (`clone_localowned_<T>`, emit_adt_byval_drop_glue) so the
+             * consuming callee it is handed to owns what it frees.  The
+             * elaborator binds the view to a local first
+             * (elab_clone_shared_spine), so the operand is that local; it is
+             * still spilled when its recorded spelling is not the aggregate. */
+            const AdtDef *cd = e->type.kind == TY_ADT ? e->type.as.adt_.def : NULL;
+            char *src = emit_value(ctx, body, e->as.byval_clone_.expr);
+            if (!cd) return src;
+            char *mn = mangle_adt_name(cd->name);
+            size_t tl = strlen(mn) + 16;
+            char *tn = (char *)malloc(tl);
+            snprintf(tn, tl, "tur_adt_%s", mn);
+            const char *srcref = src;
+            char *spill = NULL;
+            if (!emit_value_is_recorded_as(src, tn)) {
+                spill = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s;\n", tn, spill, src);
+                srcref = spill;
+            }
+            char *out = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s %s = clone_localowned_%s(&%s);\n", tn, out, tn, srcref);
+            emit_localvar_record_ctype(out, tn);
+            free(spill);
+            free(src);
+            free(tn);
+            free(mn);
+            return out;
+        }
         case EX_RC_DROP: {
             /* (rc/drop r) - decrement strong count */
             char *inner = emit_value(ctx, body, e->as.rc_drop_.expr);
@@ -18140,6 +18258,41 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * Route it to the env-taking spawn, which reads the thunk out of
                  * the box and invokes it with the box as its env. */
                 char *fn_val = emit_value(ctx, body, fn_expr);
+                /* async-capturing-body-env-never-freed: a closure whose spawns
+                 * each run a copy of its box (Binding.spawn_copy_closure) --
+                 * copy it here, header included, and hand the copy to the
+                 * spawn to own; the let drops the original. */
+                bool spawn_copy = false;
+                {
+                    const Expr *sv = fn_expr;
+                    while (sv && (sv->kind == EX_ASCRIBE || sv->kind == EX_FN_TO_FAT))
+                        sv = sv->kind == EX_ASCRIBE ? sv->as.ascribe_.inner
+                                                    : sv->as.fn_to_fat_.inner;
+                    const Binding *svb = (sv && sv->kind == EX_VAR) ? sv->as.var.binding : NULL;
+                    if (svb && svb->spawn_copy_closure && fn_expr->type.as.fn.boxed) {
+                        const struct Closure *sc = svb->spawn_copy_closure;
+                        const Symbol *en = sc->env_name;
+                        const EmitAbiSpecialization *_isp =
+                            emit_inner_closure_spec_for_binding(
+                                ctx, ctx->current_abi_specialization, sc->fn->binding);
+                        if (_isp && _isp->env_name_override) en = _isp->env_name_override;
+                        char *cbase = fresh_tmp(ctx);
+                        char *ccopy = fresh_tmp(ctx);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "void *%s = malloc(sizeof(void *) + sizeof(struct %s));\n",
+                                   cbase, en->name);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "memcpy(%s, (char *)(void *)(intptr_t)(%s) - sizeof(void *), "
+                                         "sizeof(void *) + sizeof(struct %s));\n",
+                                   cbase, fn_val, en->name);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "void *%s = (char *)%s + sizeof(void *);\n", ccopy, cbase);
+                        free(cbase);
+                        free(fn_val);
+                        fn_val = ccopy;
+                        spawn_copy = true;
+                    }
+                }
                 if (apl_typed) {
                     /* Typed spawn: a file-scope wrapper at the thunk's real
                      * prototype, converting the result to its slot bits. */
@@ -18182,7 +18335,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_puts(pbuf, "}\n\n");
                     }
                     indent_buf(body, ctx->indent);
-                    if (async_spawn_owns_env(fn_expr)) {
+                    if (spawn_copy || async_spawn_owns_env(fn_expr)) {
                         buf_puts(body, "tur_async_owns_env = 1;\n");
                         indent_buf(body, ctx->indent);
                     }
@@ -18196,7 +18349,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * The thread drops the box the spawn owns once the body
                      * has settled (tur_async_thread_main). */
                     indent_buf(body, ctx->indent);
-                    if (async_spawn_owns_env(fn_expr)) {
+                    if (spawn_copy || async_spawn_owns_env(fn_expr)) {
                         buf_puts(body, "tur_async_owns_env = 1;\n");
                         indent_buf(body, ctx->indent);
                     }
@@ -18205,7 +18358,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 } else {
                     indent_buf(body, ctx->indent);
                     if (fn_expr->type.as.fn.boxed) {
-                        if (async_spawn_owns_env(fn_expr)) {
+                        if (spawn_copy || async_spawn_owns_env(fn_expr)) {
                             buf_puts(body, "tur_async_owns_env = 1;\n");
                             indent_buf(body, ctx->indent);
                         }

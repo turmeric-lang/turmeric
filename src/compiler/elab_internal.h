@@ -1021,6 +1021,13 @@ typedef struct Elab {
      * (elab_nonretain_resolve_forward). */
     struct NonretainPending *nonretain_pending;
     uint32_t          n_nonretain_pending, cap_nonretain_pending;
+    /* byvalue-recursive-shared-copies-leak: call arguments that may need a
+     * deep spine copy but whose callee was not elaborated yet (a forward or
+     * recursive call: the forward signature carries no parameter types and
+     * the non-retaining mask is not inferred), decided after Pass 2
+     * (elab_resolve_pending_spine_clones). */
+    struct PendingSpineClone *pending_spine_clones;
+    uint32_t          n_pending_spine_clones, cap_pending_spine_clones;
     uint64_t          borrow_clock;
     uint64_t         *borrow_loop_marks;
     uint32_t          n_borrow_loop_marks, cap_borrow_loop_marks;
@@ -2209,6 +2216,9 @@ Expr *elab_coerce_to_any_return(Elab *e, Expr *value);
  * holds); clone a shared view's rc fields where it becomes an owner. */
 const AdtDef *elab_rc_product_adt(Type t);
 bool elab_expr_is_shared_view(const Expr *x);
+/* byvalue-recursive-shared-copies-leak: `(let [__shs v] <deep copy of __shs>)`
+ * for a shared view `v` of a clonable by-value recursive ADT (elab_forms.c). */
+Expr *elab_clone_shared_spine(Elab *e, Expr *v);
 Expr *elab_clone_shared_rc_product(Elab *e, Expr *v, bool *had_shared);
 Expr *elab_own_byval_copy(Elab *e, Expr *v, Binding *local);
 /* cps-coloring-walk-has-no-arm-for-union-inject: hoist a control-bearing
@@ -2418,6 +2428,15 @@ typedef struct BorrowPendingWrite {
     Span           span;
     const char    *what;        /* "`x`" or "`.f` of `x`" (arena) */
 } BorrowPendingWrite;
+typedef struct PendingSpineClone {
+    Expr          **slot;      /* the argument's slot in the call node */
+    Binding        *fn;        /* the callee */
+    uint32_t        param;     /* the callee's parameter index */
+} PendingSpineClone;
+/* byvalue-recursive-shared-copies-leak: the forward half of clone at the
+ * borrow (elab_call.c). */
+void elab_resolve_pending_spine_clones(Elab *e);
+
 typedef struct NonretainPending {
     Binding        *fn;        /* the function whose bits may be too low */
     Binding *const *params;
