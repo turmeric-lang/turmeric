@@ -62,6 +62,27 @@ buffer, and the element's spine) and by
 
 ## Fix directions
 
+**Why an element-drop bit alone is unsound (checked 2026-11-28).** `vec-free-o`'s
+bit 0 already assumes each wide element's box is the Vec's alone, and that
+holds because the escaping bridge mallocs a fresh box at every push. A spine
+drop would assume the box's SPINE is the Vec's alone too, and nothing makes
+that so. Three ways a shared spine gets in:
+
+- `(vec-push! w (vec-get v i))` -- `vec-get` hands back a shallow copy of
+  the element (a shared view), and the push boxes that copy: two Vecs, one
+  spine, and both `vec-free`s would free it.
+- a `^borrow`, a global or a binder of one passed to a GENERIC by-value
+  parameter -- `(defn add [A] [v : (Vec A) x : A] (vec-push! v x))` called
+  as `(add v xs)` -- crosses into code where the value is only an `A`.
+  Clone at the borrow (`call_arg_needs_spine_clone`, `src/compiler/elab_call.c`)
+  refuses a type-variable parameter, because the provenance tracks none.
+- generic code moving `A` values between containers: the emitter specializes
+  a generic body after elaboration (`mono_specs.c`, ABI specialization), so
+  no elaboration-time copy can be inserted in the `T` instance.
+
+So the element drop needs the push to receive an owner on EVERY path,
+generic ones included, before it may run.
+
 - **Spines: drop at `vec-free`, own at the push.** Bit 2 of `owned` for an
   element type `emit_own_adt_of` accepts: `vec-free-o` runs
   `drop_localowned_<T>` on each element box before freeing it, and
