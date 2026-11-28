@@ -1,0 +1,10 @@
+;; A local bound to a (defn ^borrow f ...) view is a borrow, like a ^borrow
+;; parameter: it may be lent, never consumed.  TUR-E0109.
+(defopaque ^linear H :int)
+(defn h-free [h : H] : void ```c (void)h; ```)
+(defn ^borrow h-view [raw : int] : H ```c return (int64_t)raw; ```)
+
+(defn main [] : int
+  (let [v (h-view 7)]
+    (h-free v))
+  0)

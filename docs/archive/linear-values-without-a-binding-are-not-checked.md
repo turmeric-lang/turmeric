@@ -1,5 +1,11 @@
 # A fresh `^linear` value lent to a `^borrow` parameter, or stored in a non-linear aggregate, is dropped without a diagnostic
 
+> Status: resolved 2026-11-28. Both shapes are TUR-E0100 now, and a re-wrap
+> has a spelling, `(defn ^borrow f ...)`. A linear value inside a *generic*
+> container -- `(some h)`, a vector literal, a struct whose field is a type
+> variable -- is the part left open, filed as
+> [linear-value-in-a-generic-container-is-not-checked](linear-value-in-a-generic-container-is-not-checked.md).
+
 **Severity:** medium (silent leaks from programs the linearity check accepted).
 `^linear` promises "used exactly once". That holds for a value bound with
 `let` or passed as a parameter, and -- since 2026-11-26 -- for a call result
@@ -123,6 +129,49 @@ taken back out.
   itself, or reject a linear field in a type that is not declared `^linear`.
   stdlib has `^linear` handles in non-linear containers today (a `Result`
   payload is the common one), so this needs its own sweep.
+
+## Resolved 2026-11-28
+
+**Borrowed views.** `(defn ^borrow f ...)` -- `^borrow` among the attributes
+before a defn's name -- declares that f's result is a view of a handle another
+owner holds, not a fresh owner (`Binding.returns_borrowed_view`, read by
+`elab_expr_is_borrowed_view` in `src/compiler/elab_forms.c`). A view:
+
+- is not fresh: `init_yields_fresh_owner` and `elab_fresh_linear_unowned` say
+  no, so it is never discarded-as-statement TUR-E0100 and never dropped, even
+  with a `Drop` instance;
+- may be lent to a `^borrow` slot as a temporary, and a local bound to one is
+  a borrow (`is_borrow`, as a `^borrow` parameter is), owing no consume;
+- may not be consumed: a view, or a local holding one, in a consuming slot is
+  TUR-E0109.
+
+**The borrowed temporary.** With the re-wrap spelled, the check that was
+taken out is back: a fresh linear call with no `Drop` instance in a `^borrow`
+or `^unique ^mut` slot is TUR-E0100, "lent to a ^borrow parameter of 'f' and
+then dropped without being consumed" (`src/compiler/elab_call.c`, the
+argument loop beside borrow-param-consumed-in-own-body). The
+turmeric-spices sweep (989 files) found exactly the three files above:
+
+- `postgres/typed.tur` and `sqlite/typed.tur` gained `__int->rows-view` /
+  `__int->stmt-view`, `^borrow` re-wraps, for every accessor; the owning
+  re-wrap stays on the release (`rows-free`, `stmt-finalize`).
+- `ecs/tests/sized-defsystem.tur` binds its write capability, lends it to
+  `set-Pos!`, and spends it with `use-cap!` -- a capability token is linear
+  whether or not it has anything to release.
+
+**The struct field.** A field whose declared type is concretely linear, in a
+`defstruct` or `defdata` not declared `^linear`, is TUR-E0100 at the field
+(`adt_check_linear_fields`, `src/compiler/elab_structs.c`). A `^linear`
+struct is then consumed by a `match` or a field read. The sweep found no
+instance in turmeric-spices or stdlib; three fixtures in this repo had one,
+all a `Session` endpoint in a struct field (`defstruct-field-session`,
+`-project`, `-role`), now `defstruct ^linear`. A type variable instantiated
+at a linear type is not reached by this check -- that is the open report.
+
+Pinned by `tests/fixtures/borrow-view-result` (counted allocations, also
+under `run-leak-check.sh`), `errors/linear-temp-lent-to-borrow`,
+`errors/linear-field-in-nonlinear-struct`, `errors/borrow-view-consumed` and
+`errors/borrow-view-local-consumed`.
 
 ## Resolved 2026-11-26
 

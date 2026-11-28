@@ -18,7 +18,9 @@
   (-> A B int)
   (-> B A int))
 
-(defstruct AEnd [ch : (project Ping A)])
+;; The field is linear, so the struct is declared ^linear too (a linear field
+;; in a non-linear type is TUR-E0100: dropping the struct would drop it).
+(defstruct ^linear AEnd [ch : (project Ping A)])
 
 (defn role-b [^linear ch : (project Ping B)] : nil
   (let [[v ch] (recv ch)]

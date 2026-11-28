@@ -1,0 +1,13 @@
+;; A ^linear field in a struct that is not ^linear: dropping the struct drops
+;; the field unconsumed, and reading the field twice hands out two owners.
+;; The struct must be declared ^linear too.
+;; (linear-values-without-a-binding-are-not-checked)
+(defopaque ^linear H :int)
+(defn h-new [n : int] : H ```c return (int64_t)n; ```)
+
+(defstruct Box [h : H n : int])
+
+(defn main [] : int
+  (let [b (Box (h-new 7) 3)]
+    (println (.n b)))
+  0)

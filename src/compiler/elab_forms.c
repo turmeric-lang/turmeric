@@ -643,7 +643,8 @@ static bool init_yields_fresh_owner(const Expr *init, const LetBinding *locals,
     if (!init) return false;
     switch (init->kind) {
     case EX_CALL:
-        return true;
+        /* A `(defn ^borrow f ...)` call is a view, owned elsewhere. */
+        return !elab_expr_is_borrowed_view(init);
     case EX_DO: {
         /* The block's value is its last item before the drop glue a let
          * appends for its other locals (`(defer (<Drop.drop> u))`). */
@@ -998,9 +999,19 @@ bool elab_tail_leaves(const Expr *x) {
     return false;
 }
 
+bool elab_expr_is_borrowed_view(const Expr *x) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || x->kind != EX_CALL) return false;
+    const Binding *fb = x->as.call_.fn_binding;
+    for (int hop = 0; fb && hop < 4; hop++, fb = fb->source_binding)
+        if (fb->returns_borrowed_view) return true;
+    return false;
+}
+
 bool elab_fresh_linear_unowned(Elab *e, const Expr *x) {
     while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
-    if (!x || x->kind != EX_CALL || x->type.copy_kind != CK_LINEAR) return false;
+    if (!x || x->kind != EX_CALL || !ty_carries_linear(x->type)) return false;
+    if (elab_expr_is_borrowed_view(x)) return false;
     return elab_fresh_sole_owner_drop_inst(e, &x->type, x) == NULL;
 }
 
@@ -1734,7 +1745,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                     elem_type = (vi == 0) ? init_v->type : type_from_kind(TY_INT);
                 }
                 Binding *vb = binding_new(e, vname_f->as.sym, elem_type, false, false, vname_f->span);
-                if (elem_type.copy_kind == CK_LINEAR) {
+                if (ty_carries_linear(elem_type)) {
                     vb->is_linear = true;
                 }
                 scope_add(&inner, vb);
@@ -2355,6 +2366,15 @@ Expr *elab_let(Elab *e, const Form *call) {
             b->is_linear = true;
             /* Upgrade copy_kind to CK_LINEAR on the binding's type */
             b->type.copy_kind = CK_LINEAR;
+        } else if (ty_carries_linear(init->type)) {
+            /* A container holding a linear value: `(Option H)`, `(Duo H)`. */
+            b->is_linear = true;
+        }
+        {
+            char what[160];
+            snprintf(what, sizeof what, "'%s'", name->name);
+            if (!elab_check_linear_phantom_slot(&init->type, init->span, what))
+                rc = -1;
         }
         /* UT0: Mark binding as unique if annotated with ^unique.
          *
@@ -2680,6 +2700,10 @@ Expr *elab_let(Elab *e, const Form *call) {
         /* byvalue-recursive-shared-copies-leak: a local is an owner, so a
          * shared view it is initialised from gets its own counts. */
         init = elab_own_byval_copy(e, init, b);
+        /* linear-values-without-a-binding-are-not-checked: a local holding a
+         * `(defn ^borrow f ...)` view is a borrow, as a `^borrow` parameter is
+         * -- lent freely, never consumed (TUR-E0109), never owed a consume. */
+        if (elab_expr_is_borrowed_view(init)) b->is_borrow = true;
         if (pending_pap_n) {
             if (n_pap_recs < 8) {
                 pap_recs[n_pap_recs].idx = n_binds;
@@ -3539,7 +3563,8 @@ Expr *elab_let(Elab *e, const Form *call) {
     if (rc == 0) {
         for (uint32_t k = 0; k < n_binds; k++) {
             Binding *lb = binds[k].binding;
-            if (lb->is_linear && !lb->is_linear_consumed && !lb->is_moved) {
+            if (lb->is_linear && !lb->is_linear_consumed && !lb->is_moved &&
+                !lb->is_borrow) {
                 diag_emit_with_code(DIAG_ERROR, lb->span,
                                     TUR_E0100_LINEAR_DROPPED,
                                     "linear value '%s' dropped without being consumed",

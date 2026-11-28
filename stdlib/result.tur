@@ -58,7 +58,8 @@
 ;;; ok? -- check whether a Result[A B] is ok.
 ;;;
 ;;; Parameters:
-;;;   r -- Result[A B]
+;;;   r -- Result[A B]; borrowed, not consumed, so a value holding a linear
+;;;        payload can still be taken apart afterwards
 ;;;
 ;;; Returns:
 ;;;   true if r is ok, false if r is err.
@@ -75,11 +76,13 @@
 ;;; monomorph flows BY VALUE an `:int` parameter is a straddle the caller has to
 ;;; spill across rather than a harmless erasure.  A match body specializes per
 ;;; monomorph and still accepts a carrier value through the generic base.
-(defn ok? [A B] [r : (Result A B)] : bool (match r (Ok _) true (Err _) false))
+(defn ok? [A B] [^borrow r : (Result A B)] : bool
+  (match r (Ok _) true (Err _) false))
 ;;; err? -- check whether a Result[A B] is err.
 ;;;
 ;;; Parameters:
-;;;   r -- Result[A B]
+;;;   r -- Result[A B]; borrowed, not consumed, so a value holding a linear
+;;;        payload can still be taken apart afterwards
 ;;;
 ;;; Returns:
 ;;;   true if r is err, false if r is ok.
@@ -89,7 +92,8 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn err? [A B] [r : (Result A B)] : bool (match r (Ok _) false (Err _) true))
+(defn err? [A B] [^borrow r : (Result A B)] : bool
+  (match r (Ok _) false (Err _) true))
 ;;; ok-val -- extract the ok value from a typed Result[A B].
 ;;;
 ;;; Parameters:

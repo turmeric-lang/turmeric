@@ -14,7 +14,9 @@
 
 (load "stdlib/session.tur")
 
-(defstruct Chan [s : (Session (Send int Close))])
+;; The field is linear, so the struct is declared ^linear too (a linear field
+;; in a non-linear type is TUR-E0100: dropping the struct would drop it).
+(defstruct ^linear Chan [s : (Session (Send int Close))])
 
 (defn main [] : int
   (let [[s r] (make-session (Send int Close))]

@@ -1,0 +1,11 @@
+;; A fresh ^linear value lent straight to a ^borrow parameter has no owner:
+;; the callee only borrows it and no binding holds it, so it is dropped
+;; unreleased.  TUR-E0100, as binding it first and never consuming it is.
+;; (linear-values-without-a-binding-are-not-checked)
+(defopaque ^linear H :int)
+(defn h-new [n : int] : H ```c return (int64_t)n; ```)
+(defn h-peek [^borrow h : H] : int ```c return (int64_t)h; ```)
+
+(defn main [] : int
+  (println (h-peek (h-new 7)))
+  0)

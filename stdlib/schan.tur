@@ -123,7 +123,8 @@
   ;;;
   ;;; Returns:
   ;;;   A `(Pair T (SChan R))`: the received value and the channel advanced to
-  ;;;   protocol R, together. Read them with `pair-fst` / `pair-snd`.
+  ;;;   protocol R, together. The pair holds a linear channel, so take it
+  ;;;   apart with a `match`; `pair-fst` then `pair-snd` would consume it twice.
   ;;;
   ;;;   This used to take a caller-allocated cell as an out-parameter and
   ;;;   return only the channel, because a generic function could not return a
@@ -137,10 +138,8 @@
   ;;;   `-get` / `-free` existed only to serve the workaround and are gone.
   ;;;
   ;;; Example:
-  ;;;   (let [p  (schan-recv c)               ; c : SChan<SRecv int R>
-  ;;;         v  (pair-fst p)                 ; : int
-  ;;;         c2 (pair-snd p)]                ; : SChan<R>
-  ;;;     ...)
+  ;;;   (match (schan-recv c)                 ; c : SChan<SRecv int R>
+  ;;;     (Pair v c2) ...)                    ; v : int, c2 : SChan<R>
   ;;;
   ;;; Since: S1 (pair signature: 2026-08-20)
   ;;; schan-recv-value -- internal: block for the next value, leave the channel.

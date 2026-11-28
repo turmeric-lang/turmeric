@@ -1,0 +1,10 @@
+;; A Vec keeps its elements behind a ptr<void>: its parameter reaches no
+;; field, so vec-get could copy a linear element out and vec-free drop them
+;; all.  A linear element type is refused.  TUR-E0110.
+;; (linear-value-in-a-generic-container-is-not-checked)
+(defopaque ^linear H :int)
+(defn h-new [n : int] : H ```c return (int64_t)n; ```)
+
+(defn main [] : int
+  (let [v [(h-new 1) (h-new 2)]]
+    0))

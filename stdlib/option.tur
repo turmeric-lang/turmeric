@@ -47,7 +47,8 @@
 ;;; some? -- check whether an Option[A] contains a value.
 ;;;
 ;;; Parameters:
-;;;   o -- Option[A]
+;;;   o -- Option[A]; borrowed, not consumed, so a value holding a linear
+;;;        payload can still be taken apart afterwards
 ;;;
 ;;; Returns:
 ;;;   true if o is some, false if o is none.
@@ -58,7 +59,8 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn some? [A] [o : (Option A)] : bool (match o (Some _) true (None) false))
+(defn some? [A] [^borrow o : (Option A)] : bool
+  (match o (Some _) true (None) false))
 ;;; none? -- check whether an Option[A] is empty.
 ;;;
 ;;; The complement of `some?`. It existed in the compiler's pure-builtin list
@@ -70,7 +72,8 @@
 ;;; docs/archive/quickstart-tutorial-fictional-option-api.md.
 ;;;
 ;;; Parameters:
-;;;   o -- Option[A]
+;;;   o -- Option[A]; borrowed, not consumed, so a value holding a linear
+;;;        payload can still be taken apart afterwards
 ;;;
 ;;; Returns:
 ;;;   true if o is none, false if o is some.
@@ -81,7 +84,8 @@
 ;;;
 ;;; Since: 2026-08-20
 
-(defn none? [A] [o : (Option A)] : bool (match o (Some _) false (None) true))
+(defn none? [A] [^borrow o : (Option A)] : bool
+  (match o (Some _) false (None) true))
 ;;; unwrap -- extract the value from a typed Option[A].
 ;;;
 ;;; Parameters:

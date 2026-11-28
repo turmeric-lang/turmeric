@@ -367,6 +367,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER: return "TUR-E0107";
         case TUR_E0108_REF_FIELD_MOVED_OUT_OF_BORROW: return "TUR-E0108";
         case TUR_E0109_BORROW_PARAM_CONSUMED:      return "TUR-E0109";
+        case TUR_E0110_LINEAR_IN_PHANTOM_SLOT:     return "TUR-E0110";
         /* ST0: Substructural type errors */
         case TUR_E0150_AFFINE_USED_TWICE:          return "TUR-E0150";
         case TUR_E0151_RELEVANT_DROPPED:           return "TUR-E0151";
@@ -581,6 +582,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0107") == 0) return TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER;
     if (strcmp(s, "TUR-E0108") == 0) return TUR_E0108_REF_FIELD_MOVED_OUT_OF_BORROW;
     if (strcmp(s, "TUR-E0109") == 0) return TUR_E0109_BORROW_PARAM_CONSUMED;
+    if (strcmp(s, "TUR-E0110") == 0) return TUR_E0110_LINEAR_IN_PHANTOM_SLOT;
     /* ST0: Substructural type errors */
     if (strcmp(s, "TUR-E0150") == 0) return TUR_E0150_AFFINE_USED_TWICE;
     if (strcmp(s, "TUR-E0151") == 0) return TUR_E0151_RELEVANT_DROPPED;
@@ -1386,6 +1388,20 @@ static const DiagExplanation diag_explanations_[] = {
       "Enable with: tur -Xlinear myfile.tur\n"
       "         or: tur -Xsubstructural myfile.tur\n"
       "\n"
+      "A linear value that never gets a name is held to the same rule.  Each\n"
+      "of these is TUR-E0100, because nothing could consume the value:\n"
+      "  (h-new 7)                       ; a call result discarded as a statement\n"
+      "  (h-peek (h-new 7))              ; a fresh value lent to a ^borrow slot\n"
+      "  (defstruct Box [h : H n : int]) ; a linear field in a type that is not\n"
+      "                                  ; ^linear: dropping a Box drops h\n"
+      "  (let [o (some (h-new 7))] 0)    ; a container holding one: (Option H),\n"
+      "                                  ; (Result H E), (Pair H B) are linear\n"
+      "  (.n box)                        ; a field read that leaves box's h behind\n"
+      "Bind the value, lend it, then consume it; declare the struct\n"
+      "(defstruct ^linear Box ...).  A call that re-wraps a handle another owner\n"
+      "holds -- not a fresh owner -- is declared (defn ^borrow f ...): its result\n"
+      "is a borrowed view, which may be lent but never consumed (TUR-E0109).\n"
+      "\n"
       "In effect handler clauses:\n"
       "A ^linear continuation k must be resumed or discontinued exactly once.\n"
       "If the handler body exits without calling (resume k ...) or\n"
@@ -1646,7 +1662,36 @@ static const DiagExplanation diag_explanations_[] = {
       "    (do (h-close h) 0))                ; ERROR: h-close consumes h\n"
       "\n"
       "Fix: drop ^borrow so the function owns (and must consume) the value, or\n"
-      "leave the consumption to the caller and only read the value here.\n",
+      "leave the consumption to the caller and only read the value here.\n"
+      "\n"
+      "The same holds for the result of a (defn ^borrow f ...) -- a borrowed view\n"
+      "of a handle another owner holds -- and for a local bound to one:\n"
+      "  (defn ^borrow h-view [raw : int] : H ...)\n"
+      "  (h-peek (h-view raw))            ; OK: lent to a ^borrow parameter\n"
+      "  (h-close (h-view raw))           ; ERROR: the owner still holds it\n"
+      "Re-wrap with a function that is not ^borrow where the handle is released.\n",
+    },
+    { TUR_E0110_LINEAR_IN_PHANTOM_SLOT,
+      "TUR-E0110: A linear type argument to a container that cannot follow it\n"
+      "\n"
+      "A struct or data type holding a linear value is linear itself: (Option H),\n"
+      "(Result H E) or a generic (Pair H) must be consumed, by a match or by a\n"
+      "function that takes it, so the value inside is consumed in turn.  That\n"
+      "works because the type parameter reaches a field the checker can see.\n"
+      "\n"
+      "A parameter that reaches no field is different.  (Vec A) keeps its\n"
+      "elements behind a ptr<void>, so A is only a label: vec-get copies an\n"
+      "element out, and vec-free drops them all, with nothing for the checker to\n"
+      "hold to \"exactly once\".  A linear type in such a slot is refused.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (defopaque ^linear H :int)\n"
+      "  (let [v [(h-new 1) (h-new 2)]]   ; ERROR: (Vec H)\n"
+      "    0)\n"
+      "\n"
+      "Fix: keep linear handles in a ^linear struct or a typed list you consume\n"
+      "element by element, or store their raw words in the Vec and re-wrap them\n"
+      "with a (defn ^borrow ...) view to lend them.\n",
     },
     /* ST1: Substructural type explanations */
     { TUR_E0150_AFFINE_USED_TWICE,

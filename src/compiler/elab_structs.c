@@ -1077,8 +1077,9 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         /* Mark the synthesized AdtDef as struct-origin so consumers that must
          * keep the lowering invisible (runtime type-of/cast/is?) can treat it
          * as the struct it came from. */
-        if (dd_out && dd_out->kind == EX_DEFDATA && dd_out->as.defdata_.def)
+        if (dd_out && dd_out->kind == EX_DEFDATA && dd_out->as.defdata_.def) {
             dd_out->as.defdata_.def->from_struct_lowering = true;
+        }
         return dd_out;
     }
 
@@ -2585,8 +2586,162 @@ data_ctor_parse_error:
     return NULL;
 }
 
+/* linear-values-without-a-binding-are-not-checked (2): a `^linear` value
+ * stored in a field of a type that is not itself linear escapes the checker.
+ * Dropping the aggregate is allowed, so the field is never released; reading
+ * it twice hands out two owners.  A field whose declared type is concretely
+ * linear therefore needs the type to be declared `^linear` too.  A type
+ * variable instantiated at a linear type -- `(Result H E)` -- is not
+ * reached here (linear-value-in-a-generic-container-is-not-checked). */
+/* linear-value-in-a-generic-container-is-not-checked: does type parameter
+ * `pi` of `def` reach a field -- is a value of the parameter's type stored in
+ * the aggregate, where a match can hand it back?  A bare tyvar field or one
+ * nested in an application (`(Option A)`) does; a function type mentioning it
+ * does not hold one.  `Vec`'s A, stored behind `data : ptr<void>`, does not. */
+static bool form_mentions_sym(const Form *f, const char *name, int depth) {
+    if (!f || depth > 32) return false;
+    if ((f->tag == F_SYM || f->tag == F_KEYWORD) && f->as.sym &&
+        strcmp(f->as.sym->name, name) == 0)
+        return true;
+    if (f->tag == F_LIST || f->tag == F_VEC || f->tag == F_TYPE_ANN) {
+        for (uint32_t k = 0; k < f->as.list.len; k++)
+            if (form_mentions_sym(f->as.list.items[k], name, depth + 1)) return true;
+    }
+    return false;
+}
+
+static bool type_holds_tyvar(const Type *t, const char *name, int depth) {
+    if (!t || depth > 32) return false;
+    if (t->kind == TY_TYVAR)
+        return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
+    if (t->kind == TY_APP)
+        return type_holds_tyvar(t->as.app.fn, name, depth + 1) ||
+               type_holds_tyvar(t->as.app.arg, name, depth + 1);
+    return false;
+}
+
+static bool adt_param_reaches_field(const AdtDef *def, uint32_t pi) {
+    if (!def || pi >= def->n_type_params || !def->type_params[pi]) return false;
+    const char *name = def->type_params[pi];
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+            const Type *ft = c->fields[fi].full_type;
+            if (ft) {
+                if (type_holds_tyvar(ft, name, 0)) return true;
+            } else if (c->field_forms && c->field_forms[fi] &&
+                       form_mentions_sym(c->field_forms[fi], name, 0)) {
+                return true;   /* no full type recorded: read the declaration */
+            }
+        }
+    }
+    return false;
+}
+
+/* Split an application spine `(((T a0) a1) a2)` into its head and arguments
+ * (in declaration order).  Returns the argument count, or -1 past `cap`. */
+static int type_app_spine(const Type *t, const Type **head, const Type **args,
+                          int cap) {
+    int n = 0;
+    const Type *rev[32];
+    while (t && t->kind == TY_APP) {
+        if (n == cap || n == 32 || !t->as.app.arg) return -1;
+        rev[n++] = t->as.app.arg;
+        t = t->as.app.fn;
+    }
+    for (int i = 0; i < n; i++) args[i] = rev[n - 1 - i];
+    *head = t;
+    return n;
+}
+
+static bool ty_carries_linear_d(const Type *t, int depth) {
+    if (!t || depth > 32) return false;
+    if (t->copy_kind == CK_LINEAR) return true;
+    if (t->kind != TY_APP) return false;
+    const Type *head = NULL, *args[16];
+    int n = type_app_spine(t, &head, args, 16);
+    if (n <= 0 || !head) return false;
+    const AdtDef *def = head->kind == TY_ADT ? head->as.adt_.def : NULL;
+    if (def && def->is_opaque) return false;       /* phantom by definition */
+    bool by_param = def && def->n_type_params == (uint32_t)n;
+    for (int i = 0; i < n; i++) {
+        if (!ty_carries_linear_d(args[i], depth + 1)) continue;
+        /* An unknown head (a type-constructor variable) is read as holding
+         * its argument; a struct or data type only where the parameter
+         * reaches a field. */
+        if (!by_param || adt_param_reaches_field(def, (uint32_t)i)) return true;
+    }
+    return false;
+}
+
+bool ty_carries_linear(Type t) {
+    return ty_carries_linear_d(&t, 0);
+}
+
+static const AdtDef *ty_linear_phantom_d(const Type *t, const Type **arg_out,
+                                         int depth) {
+    if (!t || depth > 32 || t->kind != TY_APP) return NULL;
+    const Type *head = NULL, *args[16];
+    int n = type_app_spine(t, &head, args, 16);
+    if (n <= 0 || !head) return NULL;
+    const AdtDef *def = head->kind == TY_ADT ? head->as.adt_.def : NULL;
+    for (int i = 0; i < n; i++) {
+        const AdtDef *inner = ty_linear_phantom_d(args[i], arg_out, depth + 1);
+        if (inner) return inner;
+        if (def && !def->is_opaque && def->n_type_params == (uint32_t)n &&
+            ty_carries_linear_d(args[i], depth + 1) &&
+            !adt_param_reaches_field(def, (uint32_t)i)) {
+            *arg_out = args[i];
+            return def;
+        }
+    }
+    return NULL;
+}
+
+bool elab_check_linear_phantom_slot(const Type *t, Span span, const char *what) {
+    const Type *arg = NULL;
+    const AdtDef *def = ty_linear_phantom_d(t, &arg, 0);
+    if (!def) return true;
+    diag_emit_with_code(DIAG_ERROR, span, TUR_E0110_LINEAR_IN_PHANTOM_SLOT,
+                        "%s has type %s, but %s keeps its %s argument where the "
+                        "checker cannot follow it (the parameter reaches no field), "
+                        "so a linear %s in it could be copied or dropped",
+                        what, type_name(*t), def->name ? def->name : "?",
+                        arg ? type_name(*arg) : "?", arg ? type_name(*arg) : "value");
+    return false;
+}
+
+static void adt_check_linear_fields(const AdtDef *def, const Form *call) {
+    if (!def || def->is_linear || def->is_opaque) return;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+            const Type *ft = c->fields[fi].full_type;
+            if (!ft || !ty_carries_linear(*ft) || ft->kind == TY_TYVAR) continue;
+            Span sp = (c->field_forms && c->field_forms[fi])
+                      ? c->field_forms[fi]->span : call->span;
+            char fbuf[32];
+            if (!c->fields[fi].name) snprintf(fbuf, sizeof fbuf, "%u", fi);
+            diag_emit_with_code(DIAG_ERROR, sp, TUR_E0100_LINEAR_DROPPED,
+                                "field '%s' of '%s' has linear type %s, but '%s' "
+                                "is not declared ^linear, so dropping a value of "
+                                "it would drop the field unconsumed -- declare "
+                                "the type ^linear",
+                                c->fields[fi].name ? c->fields[fi].name : fbuf,
+                                def->name ? def->name : "?",
+                                type_name(*ft),
+                                def->name ? def->name : "?");
+            return;
+        }
+    }
+}
+
 Expr *elab_defdata(Elab *e, const Form *call) {
-    return elab_adt_def(e, call, false);
+    Expr *r = elab_adt_def(e, call, false);
+    if (r && r->kind == EX_DEFDATA) adt_check_linear_fields(r->as.defdata_.def, call);
+    return r;
 }
 
 /* Phase G1: defgadt -- a defdata whose every constructor carries its result
@@ -4265,7 +4420,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                 Binding *fb = binding_new(e, var_form->as.sym, arm_type,
                                           false, false, var_form->span);
                 fb->is_match_binding = true;
-                if (arm_type.copy_kind == CK_LINEAR) fb->is_linear = true;
+                if (ty_carries_linear(arm_type)) fb->is_linear = true;
                 pat->bindings[0] = fb;
                 Scope arm_scope;
                 scope_init(&arm_scope, e->scope);
@@ -5007,7 +5162,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                     fb->is_fat = true;
                 }
                 /* LT1: Propagate linearity from the field's type to its binding */
-                if (ftype.copy_kind == CK_LINEAR) {
+                if (ty_carries_linear(ftype)) {
                     fb->is_linear = true;
                 }
                 scope_add(&arm_scope, fb);

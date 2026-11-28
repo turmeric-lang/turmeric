@@ -1,0 +1,86 @@
+;; borrow-view-result: `(defn ^borrow f ...)` declares that f's result is a
+;; borrowed VIEW of a handle another owner holds -- the re-wrap a typed
+;; wrapper needs to lend its raw handle to a ^borrow parameter.
+;;
+;; A fresh ^linear value lent straight to a ^borrow parameter is TUR-E0100
+;; (linear-values-without-a-binding-are-not-checked): nothing owns it.  A view
+;; is not fresh, so it may be lent as a temporary, bound and lent repeatedly,
+;; or discarded, with no consume owed.  The owner below is a plain-data
+;; wrapper holding the raw word; it is released through the owning re-wrap.
+;;
+;; The second half is the same report's struct shape: a linear field needs a
+;; ^linear struct, and the struct is then consumed by a match or a field read.
+;;
+;; The counters prove every allocation is freed exactly once (live 0).
+(defn ctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+
+(defopaque ^linear H :int)
+
+(defn h-new [n : int] : H
+  (ctr 0)
+  (h-alloc n))
+
+(defn h-alloc [n : int] : H
+  ```c
+  #include <stdlib.h>
+  int64_t *p = malloc(sizeof *p);
+  *p = n;
+  return (intptr_t)p;
+  ```)
+
+(defn h-release [h : H] : void
+  ```c
+  #include <stdlib.h>
+  free((void *)(intptr_t)h);
+  ```)
+
+(defn h-free [h : H] : void
+  (ctr 1)
+  (h-release h))
+
+(defn h-peek [^borrow h : H] : int
+  ```c
+  return *(int64_t *)(intptr_t)h;
+  ```)
+
+;; The wrapper owns the handle as a raw word.
+(defstruct Wrap [raw : int])
+(defn h->raw [h : H] : int ```c return (int64_t)h; ```)
+;; Owning re-wrap: the one handed to the release.
+(defn raw->h [raw : int] : H ```c return (int64_t)raw; ```)
+;; Borrowed re-wrap: lent to ^borrow parameters only.
+(defn ^borrow raw->h-view [raw : int] : H ```c return (int64_t)raw; ```)
+
+(defn wrap-new [n : int] : Wrap (Wrap (h->raw (h-new n))))
+(defn wrap-peek [^borrow w : Wrap] : int (h-peek (raw->h-view (.raw w))))
+(defn wrap-twice [^borrow w : Wrap] : int
+  (let [v (raw->h-view (.raw w))]
+    (+ (h-peek v) (h-peek v))))
+(defn wrap-free [w : Wrap] : void (h-free (raw->h (.raw w))))
+
+;; A linear field: the struct is declared ^linear too.
+(defstruct ^linear Box [h : H n : int])
+
+(defn box-take [b : Box] : int
+  (match b
+    (Box h n) (do (h-free h) n)))
+
+(defn main [] : int
+  (let [w (wrap-new 7)]
+    (println (wrap-peek w))                 ;; 7
+    (println (wrap-twice w))                ;; 14
+    (raw->h-view (.raw w))                  ;; a view may be discarded
+    (wrap-free w))
+  (println (box-take (Box (h-new 8) 3)))    ;; 3
+  (let [b (Box (h-new 9) 4)]
+    (h-free (.h b)))
+  (println (ctr 2))                         ;; 3 allocated
+  (println (- (ctr 2) (ctr 3)))             ;; 0 live
+  0)

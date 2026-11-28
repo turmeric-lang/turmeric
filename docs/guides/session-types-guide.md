@@ -615,12 +615,14 @@ A round trip of `SSend int (SRecv int SClose)`:
 
 ```turmeric
 (let [c0 (:: (schan-new 2) (SChan (SSend int (SRecv int SClose))))
-      c1 (schan-send c0 7)      ;; c1 : SChan<SRecv int SClose>
-      p  (schan-recv c1)        ;; p  : Pair<int SChan<SClose>>
-      v  (pair-fst p)           ;; v  : int  (= 7)
-      c2 (pair-snd p)]          ;; c2 : SChan<SClose>
-  (schan-close c2))
+      c1 (schan-send c0 7)]     ;; c1 : SChan<SRecv int SClose>
+  (match (schan-recv c1)        ;; Pair<int SChan<SClose>>
+    (Pair v c2) (do (println v) ;; v  : int  (= 7)
+                    (schan-close c2))))
 ```
+
+The pair holds a linear channel, so it is linear too and is taken apart with a
+`match`; `pair-fst` and then `pair-snd` would consume it twice.
 
 Because the phantom advances with every step, **skipping or reordering a step is
 a compile-time type error**. Calling `schan-close` while the channel is still at
