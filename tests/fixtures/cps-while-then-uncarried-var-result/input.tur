@@ -1,0 +1,52 @@
+;; cps-while-then-uncarried-var-result-evicts: a performing `while` followed
+;; by a bare variable the loop never sets used to be refused ("this effect
+;; operation has no lowering here").  It is ordinary code after the loop and
+;; lowers through the loop's join.
+(defeffect Log [x : int] : nil)
+
+(defstruct Acc [a : int b : int])
+
+(defn feed! [r : int s : int] : (Result int int)
+  (perform (Log (+ r s)))
+  (ok 0))
+
+;; A parameter returned after the loop.
+(defn feed-n [base : int n : int] : int
+  (let [^mut i 0]
+    (while (< i n)
+      (feed! base i)
+      (set! i (+ i 1))))
+  base)
+
+;; A by-value struct parameter returned after the loop.
+(defn feed-acc [acc : Acc n : int] : Acc
+  (let [^mut i 0]
+    (while (< i n)
+      (feed! (. acc a) i)
+      (set! i (+ i 1))))
+  acc)
+
+;; A let-bound local the loop does not set, returned after the loop.
+(defn feed-local [n : int] : int
+  (let [k     7
+        ^mut i 0]
+    (while (< i n)
+      (feed! k i)
+      (set! i (+ i 1)))
+    k))
+
+;; The carried-var result shape still works: the loop's own counter.
+(defn feed-count [n : int] : int
+  (let [^mut i 0]
+    (while (< i n)
+      (feed! 50 i)
+      (set! i (+ i 1)))
+    i))
+
+(defn main [] : int
+  (handle (do (println (feed-n 100 3))
+              (println (. (feed-acc (Acc 20 9) 2) b))
+              (println (feed-local 2))
+              (println (feed-count 2)))
+    (Log [x] k) (do (println x) (resume k nil)))
+  0)
