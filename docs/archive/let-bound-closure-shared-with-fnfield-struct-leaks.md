@@ -33,10 +33,10 @@
 > gone: all five shapes are leak-clean) and `fnfield-struct-holder-closure-freed`
 > (siblings, a capture, parameters, three constructor functions, the
 > single-use owner, and negatives that keep the closure alive through a global
-> `Vec`, all under ASan). Found on the way and filed, not fixed:
-> [fnfield-read-out-of-owning-struct-freed-with-it](../reported/fnfield-read-out-of-owning-struct-freed-with-it.md)
+> `Vec`, all under ASan). Found on the way, and fixed the same day:
+> [fnfield-read-out-of-owning-struct-freed-with-it](fnfield-read-out-of-owning-struct-freed-with-it.md)
 > (a use-after-free on `main`, in the owning case this change does not touch)
-> and [fn-param-set-into-fn-global-fails-cc](../reported/fn-param-set-into-fn-global-fails-cc.md).
+> and [fn-param-set-into-fn-global-fails-cc](fn-param-set-into-fn-global-fails-cc.md).
 
 ## As filed
 

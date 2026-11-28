@@ -1,0 +1,64 @@
+;; fnfield-read-out-of-owning-struct-freed-with-it: a struct local that owns
+;; its closure freed it at scope exit although a field read had been kept --
+;; `(set! saved (.handler h))` -- so the later `(saved 1)` read freed memory.
+;; The same through a constructor function that keeps the read and returns
+;; the struct: the caller's local owned the result and freed what `saved`
+;; held.  A local whose fn-field read leaves now keeps its closures, and a
+;; function returning it hands its caller nothing to free.  Leak-checked
+;; (ASan reported the use-after-free); the closures `saved` keeps stay
+;; reachable through it.  A read that is only called, or handed to a
+;; parameter that only calls it, still lets the local free its closure.
+;;
+;; A `^copy` struct's copies carry the closure too, so its local keeps the
+;; closure when a copy leaves -- pushed into a global, handed to a function
+;; that keeps it or reads its field out, through an alias -- and frees it when
+;; every copy is only read (cps-byvalue-struct-closure-field-* pin those).
+(defstruct H [raw : int handler : (fn [int] int)])
+(defstruct ^copy C [raw : int handler : (fn [int] int)])
+(def ^mut saved : (fn [int] int) (fn [x : int] : int x))
+(def ^mut saved2 : (fn [int] int) (fn [x : int] : int x))
+(def ^mut saved3 : (fn [int] int) (fn [x : int] : int x))
+(def held : (Vec C) (vec-new))
+(defn keep-c [c : C] : int (vec-push! held c) 0)
+(defn keep-field [c : C] : int (set! saved3 (.handler c)) 0)
+
+(defn wrap-keep [f : (fn [int] int)] : H
+  (let [h (H 4 f)]
+    (set! saved2 (.handler h))
+    h))
+(defn apply-at [g : (fn [int] int) x : int] : int (g x))
+
+(defn main [] : int
+  (let [n 7]
+    (let [h (H 4 (fn [x : int] : int (+ x n)))]
+      (set! saved (.handler h))
+      (println ((.handler h) 0))))                      ; 7
+  (println (saved 1))                                   ; 8
+  (let [n 10
+        f (fn [x : int] : int (+ x n))]
+    (let [w (wrap-keep f)]
+      (println ((.handler w) 0)))                       ; 10
+    (println (f 0)))                                    ; 10
+  (println (saved2 1))                                  ; 11
+  ;; only called, or lent to a parameter that only calls it: freed as before
+  (let [n 20]
+    (let [h (H 1 (fn [x : int] : int (+ x n)))]
+      (println (apply-at (.handler h) 1))               ; 21
+      (let [g (.handler h)]
+        (println (g 2)))))                              ; 22
+  ;; ^copy: a copy that leaves keeps the closure alive
+  (let [n 30]
+    (let [c (C 1 (fn [x : int] : int (+ x n)))]
+      (vec-push! held c)
+      (println ((.handler c) 0))))                      ; 30
+  (println ((.handler (vec-get held 0)) 1))             ; 31
+  (let [n 40]
+    (let [c (C 1 (fn [x : int] : int (+ x n)))]
+      (println (keep-c c))))                            ; 0
+  (println ((.handler (vec-get held 1)) 1))             ; 41
+  (let [n 50]
+    (let [c (C 1 (fn [x : int] : int (+ x n)))
+          d c]
+      (println (keep-field d))))                        ; 0
+  (println (saved3 1))                                  ; 51
+  0)

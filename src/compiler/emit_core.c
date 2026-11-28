@@ -1260,6 +1260,11 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
  * loop's backedge.  Like every relaxation here, each only ever GREENLIGHTS a
  * free; the escape walks it starts are the ordinary conservative ones. */
 static const Binding *g_esc_fieldcall_binding = NULL;
+/* fnfield-read-out-of-owning-struct-freed-with-it: in the fieldcall walk, a
+ * bare use of the struct is not an escape -- the whole-value guards of the
+ * struct-local drop decide those (a move-only struct moves) -- only its
+ * fn-field reads are asked (elab_fnfield_fields_escape). */
+static bool g_esc_field_only = false;
 /* While elab_fnfield_result_param_mask runs: the function's result values,
  * and the parameter whose walk may treat a holder there as the result. */
 static const Expr **g_esc_tail_nodes = NULL;
@@ -1300,17 +1305,15 @@ static const AdtDef *esc_byvalue_struct_def(Type t) {
     return def;
 }
 
-/* A field read of this type copies out a word that cannot be a closure. */
-static bool esc_field_read_is_plain(Type t) {
-    switch (t.kind) {
-        case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_SYM:
-        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
-        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
-        case TY_FLOAT32: case TY_FLOAT64: case TY_CSTR:
-            return true;
-        default:
-            return false;
-    }
+
+/* Is `x` a read of a closure-carrying field of `h` -- `(.handler h)` --
+ * which the fieldcall walk tracks as it tracks a closure itself? */
+static bool esc_is_field_read_of(const Expr *x, const Binding *h) {
+    if (!x || !h || x->kind != EX_GET_FIELD || x->type.kind != TY_FN)
+        return false;
+    const Expr *so = x->as.get_field_.struct_expr;
+    while (so && so->kind == EX_ASCRIBE) so = so->as.ascribe_.inner;
+    return so && so->kind == EX_VAR && so->as.var.binding == h;
 }
 
 static bool esc_field_is_boxed_fn(const CtorDef *c, uint32_t fi) {
@@ -1382,14 +1385,15 @@ static uint32_t esc_holder_mask_x(const Expr *x, const Binding *b, uint32_t *dir
 }
 
 typedef struct {
-    bool call_head_only, allow_sum, copying_match;
+    bool call_head_only, allow_sum, copying_match, field_only;
     uint32_t self_apply;
     const Binding *fieldcall;
 } EscFlags;
 static EscFlags esc_flags_enter(const Binding *fieldcall) {
     EscFlags s = { g_esc_call_head_only, g_esc_allow_sum_accessors,
-                   g_esc_copying_match_ok, g_esc_self_apply_mask,
-                   g_esc_fieldcall_binding };
+                   g_esc_copying_match_ok, g_esc_field_only,
+                   g_esc_self_apply_mask, g_esc_fieldcall_binding };
+    g_esc_field_only = false;
     g_esc_call_head_only = false;
     g_esc_allow_sum_accessors = false;
     g_esc_copying_match_ok = false;
@@ -1402,6 +1406,7 @@ static void esc_flags_leave(EscFlags s) {
     g_esc_call_head_only = s.call_head_only;
     g_esc_allow_sum_accessors = s.allow_sum;
     g_esc_copying_match_ok = s.copying_match;
+    g_esc_field_only = s.field_only;
     g_esc_self_apply_mask = s.self_apply;
     g_esc_fieldcall_binding = s.fieldcall;
     g_esc_relax_depth--;
@@ -1454,6 +1459,131 @@ static bool esc_field_alias_confined(const Expr *L, uint32_t i, const Binding *h
         if (L->as.let_.bindings[k].init)
             esc = binding_escapes_impl(L->as.let_.bindings[k].init, ci, false, NULL);
     esc_flags_leave(s);
+    return !esc;
+}
+
+/* ---- a `^copy` holder's whole-value copies (elab_fnfield_fields_escape) --
+ * A `^copy` struct local's copies carry its closure pointers, so the strict
+ * walk follows them where it can see their end: an alias the let confines, a
+ * lambda capturing it that the let confines and whose body only reads it, and
+ * a callee parameter that only reads its copy (CONFINED) or reads it and hands
+ * it back (RESULT), the result then confined in turn.  A callee whose status
+ * is still being asked (recursion) counts as escaping. */
+enum { ESC_COPY_ESCAPES = 0, ESC_COPY_CONFINED = 1, ESC_COPY_RESULT = 2 };
+static bool esc_mentions(const Expr *x, const Binding *b);
+static bool esc_collect_tails(const Expr *x, const Expr **out, uint32_t *n,
+                              uint32_t cap);
+static bool esc_strict_confined(const Expr *body, Expr *const *later, uint32_t n_later,
+                                const Binding *h, const Expr **tails, uint32_t nt);
+static int esc_copy_param_status(const Binding *fb, uint32_t pi) {
+    static struct { const FnDef *fd; uint32_t pi; } busy[8];
+    static uint32_t n_busy = 0;
+    if (fb && fb->source_binding) fb = fb->source_binding;
+    const FnDef *fd = fb ? fb->source_fn_def : NULL;
+    if (!fd || !fd->body || !fd->params || pi >= fd->n_params || !fd->params[pi])
+        return ESC_COPY_ESCAPES;
+    const Binding *p = fd->params[pi];
+    /* A body that IS inline C names its parameters in C text the walk cannot
+     * read; an inline-C block inside one reaches a local only through its
+     * capture array, which the walk reads as an escape. */
+    if (p->is_mut || fb->body_is_inline_c || fd->body->kind == EX_INLINE_C)
+        return ESC_COPY_ESCAPES;
+    for (uint32_t k = 0; k < n_busy; k++)
+        if (busy[k].fd == fd && busy[k].pi == pi) return ESC_COPY_ESCAPES;
+    if (n_busy == sizeof busy / sizeof busy[0]) return ESC_COPY_ESCAPES;
+    busy[n_busy].fd = fd; busy[n_busy].pi = pi; n_busy++;
+    int st = ESC_COPY_ESCAPES;
+    if (esc_strict_confined(fd->body, NULL, 0, p, NULL, 0)) {
+        st = ESC_COPY_CONFINED;
+    } else {
+        const Expr *tails[64];
+        uint32_t nt = 0;
+        if (esc_collect_tails(fd->body, tails, &nt, 64) && nt &&
+            esc_strict_confined(fd->body, NULL, 0, p, tails, nt))
+            st = ESC_COPY_RESULT;
+    }
+    n_busy--;
+    return st;
+}
+
+/* Bit i set: argument i of static call `x` is the bare `b`, at a parameter
+ * that keeps nothing of its copy -- CONFINED, or, when `result_ok`, RESULT.
+ * 0 unless every bare `b` argument qualifies. */
+static uint32_t esc_copy_call_mask(const Expr *x, const Binding *b, bool result_ok) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || x->kind != EX_CALL || x->as.call_.fn_expr || !call_dispatch_is_static(x))
+        return 0;
+    uint32_t m = 0;
+    for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
+        const Expr *a = x->as.call_.args[i];
+        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        if (!(a && a->kind == EX_VAR && a->as.var.binding == b)) continue;
+        if (i >= 32) return 0;
+        int st = esc_copy_param_status(x->as.call_.fn_binding, i);
+        if (st == ESC_COPY_CONFINED || (result_ok && st == ESC_COPY_RESULT))
+            m |= 1u << i;
+        else
+            return 0;
+    }
+    return m;
+}
+
+/* Binding `i` of let `L` copies `^copy` holder `b` into a local the let
+ * confines: 1 = an alias or a capturing lambda (skip the init), 2 = a call
+ * handing it back (skip its `b` arguments), 0 = no. */
+static int esc_copy_into_local_confined(const Expr *L, uint32_t i, const Binding *b) {
+    const Expr *init = L->as.let_.bindings[i].init;
+    const Binding *li = L->as.let_.bindings[i].binding;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init || !li || li->is_mut) return 0;
+    uint32_t nl = 0;
+    Expr *lat[64];
+    for (uint32_t k = i + 1; k < L->as.let_.n && nl < 64; k++)
+        lat[nl++] = L->as.let_.bindings[k].init;
+    if (L->as.let_.n - i - 1 > 64) return 0;
+    if (init->kind == EX_VAR && init->as.var.binding == b)
+        return esc_strict_confined(L->as.let_.body, lat, nl, li, NULL, 0) ? 1 : 0;
+    if (init->kind == EX_CLOSURE && init->as.closure_.closure) {
+        const struct Closure *c = init->as.closure_.closure;
+        bool captured = false;
+        for (uint32_t k = 0; k < c->n_captures; k++) {
+            if (c->captures[k] != b) continue;
+            if (c->capture_drop_insts && c->capture_drop_insts[k]) return 0;
+            captured = true;
+        }
+        if (!captured || !c->fn || !c->fn->body || c->is_shift_receiver ||
+            c->is_effect_payload || !esc_mentions(c->fn->body, b))
+            return 0;
+        if (!esc_strict_confined(c->fn->body, NULL, 0, b, NULL, 0)) return 0;
+        EscFlags s = esc_flags_enter(NULL);
+        bool esc = binding_escapes_impl(L->as.let_.body, li, false, NULL);
+        for (uint32_t k = 0; !esc && k < nl; k++)
+            if (lat[k]) esc = binding_escapes_impl(lat[k], li, false, NULL);
+        esc_flags_leave(s);
+        return esc ? 0 : 1;
+    }
+    if (init->kind == EX_CALL && esc_copy_call_mask(init, b, true) &&
+        esc_byvalue_struct_def(li->type))
+        return esc_strict_confined(L->as.let_.body, lat, nl, li, NULL, 0) ? 2 : 0;
+    return 0;
+}
+
+/* The strict fieldcall walk for holder `h` over `body` and `later`: no fn-field
+ * read, and no whole-value use of `h`, leaves -- a bare `h` at one of `tails`
+ * excepted. */
+static bool esc_strict_confined(const Expr *body, Expr *const *later, uint32_t n_later,
+                                const Binding *h, const Expr **tails, uint32_t nt) {
+    const Expr **save_nodes = g_esc_tail_nodes;
+    uint32_t save_n = g_esc_n_tail_nodes;
+    g_esc_tail_nodes = tails;
+    g_esc_n_tail_nodes = tails ? nt : 0;
+    EscFlags s = esc_flags_enter(h);
+    bool esc = binding_escapes_impl(body, h, false, NULL);
+    for (uint32_t k = 0; !esc && k < n_later; k++)
+        if (later[k]) esc = binding_escapes_impl(later[k], h, false, NULL);
+    esc_flags_leave(s);
+    g_esc_tail_nodes = save_nodes;
+    g_esc_n_tail_nodes = save_n;
     return !esc;
 }
 
@@ -1571,6 +1701,8 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                     if (b == g_esc_fieldcall_binding && g_esc_n_tail_nodes &&
                         esc_is_tail_node(cur))
                         break;
+                    if (b == g_esc_fieldcall_binding && g_esc_field_only)
+                        break;
                     escapes = true; goto esc_done;
                 }
                 break;
@@ -1676,7 +1808,28 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                     }
                     bool arg_is_b = barg && barg->kind == EX_VAR &&
                                     barg->as.var.binding == b;
+                    /* fnfield-read-out-of-owning-struct-freed-with-it: the
+                     * closure a holder's field read yields gets the same
+                     * non-retaining-parameter relaxations below as `b`. */
+                    bool arg_is_field = !arg_is_b && b == g_esc_fieldcall_binding &&
+                                        esc_is_field_read_of(barg, b);
+                    if (arg_is_field && call_dispatch_is_static(cur) &&
+                        !g_esc_call_head_only && !fe) {
+                        const Binding *ffb = cur->as.call_.fn_binding;
+                        if (ffb && ffb->type.kind == TY_FN &&
+                            i < ffb->type.as.fn.arity && ffb->type.as.fn.arg_flags &&
+                            FN_ARG_FLAG(ffb->type.as.fn, i, FA_BORROW))
+                            continue;
+                        if (ffb && i < 32 && (ffb->nonretain_param_mask & (1u << i)))
+                            continue;
+                    }
                     if (box_accessor && arg_is_b)
+                        continue;
+                    /* A `^copy` holder passed by value to a callee that only
+                     * reads its copy (esc_copy_param_status). */
+                    if (arg_is_b && b == g_esc_fieldcall_binding && !g_esc_field_only &&
+                        !fe && call_dispatch_is_static(cur) && i < 32 &&
+                        esc_copy_param_status(cur->as.call_.fn_binding, i) == ESC_COPY_CONFINED)
                         continue;
                     if (i < 32 && (held_skip & (1u << i)))
                         continue;   /* held by a confined holder (EX_LET arm) */
@@ -1831,6 +1984,21 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                     if (b == g_esc_fieldcall_binding && cur->kind == EX_LET &&
                         esc_field_alias_confined(cur, i, b))
                         continue;
+                    /* A `^copy` holder copied into a local -- an alias, a
+                     * lambda's capture, the result of a callee that hands
+                     * it back -- that the let confines in turn. */
+                    if (b == g_esc_fieldcall_binding && !g_esc_field_only &&
+                        cur->kind == EX_LET && init) {
+                        int ck = esc_copy_into_local_confined(cur, i, b);
+                        if (ck == 1) continue;
+                        if (ck == 2 && n_skips < 16) {
+                            const Expr *cn = init;
+                            while (cn && cn->kind == EX_ASCRIBE) cn = cn->as.ascribe_.inner;
+                            skips[n_skips].node = cn;
+                            skips[n_skips].mask = esc_copy_call_mask(cn, b, true);
+                            n_skips++;
+                        }
+                    }
                     if (relax && init) {
                         if (esc_capture_confined(cur, i, b)) continue;
                         uint32_t hd = 0;
@@ -1939,9 +2107,27 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 if (b == g_esc_fieldcall_binding) {
                     const Expr *so = cur->as.get_field_.struct_expr;
                     while (so && so->kind == EX_ASCRIBE) so = so->as.ascribe_.inner;
-                    if (so && so->kind == EX_VAR && so->as.var.binding == b &&
-                        esc_field_read_is_plain(cur->type))
-                        break;
+                    if (so && so->kind == EX_VAR && so->as.var.binding == b) {
+                        /* Only a fn-field holds a closure (the struct-local
+                         * drop frees the direct boxed fn-fields and nothing
+                         * else), so any other field read is a plain copy. */
+                        if (cur->type.kind != TY_FN) break;
+                        /* the closure itself, somewhere the parents above
+                         * did not vouch for */
+                        escapes = true; goto esc_done;
+                    }
+                    /* A `^copy` holder handed to a callee that only reads it
+                     * or hands it back, the result read for a non-fn field:
+                     * `(.raw (ident h))`. */
+                    if (!g_esc_field_only && cur->type.kind != TY_FN && so &&
+                        so->kind == EX_CALL && n_skips < 16) {
+                        uint32_t m = esc_copy_call_mask(so, b, true);
+                        if (m) {
+                            skips[n_skips].node = so;
+                            skips[n_skips].mask = m;
+                            n_skips++;
+                        }
+                    }
                 }
                 ESC_PUSH(cur->as.get_field_.struct_expr);
                 break;
@@ -2052,6 +2238,13 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 ESC_PUSH(cur->as.poly_wrap_.inner);
                 break;
             case EX_MATCH:
+                if (b == g_esc_fieldcall_binding && g_esc_field_only) {
+                    const Expr *so = cur->as.match_.scrutinee;
+                    while (so && so->kind == EX_ASCRIBE) so = so->as.ascribe_.inner;
+                    if (so && so->kind == EX_VAR && so->as.var.binding == b) {
+                        escapes = true; goto esc_done;   /* a binder may take a field */
+                    }
+                }
                 if (!(g_esc_copying_match_ok && match_copies_out_of_b(cur, b)))
                     ESC_PUSH(cur->as.match_.scrutinee);
                 for (uint32_t i = 0; i < cur->as.match_.n_arms; i++) {
@@ -2183,6 +2376,48 @@ static bool esc_collect_tails(const Expr *x, const Expr **out, uint32_t *n,
             out[(*n)++] = x;
             return true;
     }
+}
+
+/* fnfield-read-out-of-owning-struct-freed-with-it: can a closure held by
+ * by-value struct local `h` outlive h's `let` -- `body` and the inits after
+ * h's own?  A fn-field read that is called (or bound to a local only called,
+ * the elaborator's call-head hoist) or handed to a non-retaining parameter
+ * keeps it; any other -- `(set! saved (.handler h))`, a field read returned,
+ * stored or passed on, a `match` on h, a capture of h -- lets it out.  For a
+ * `^copy` struct every whole-value use but a `^borrow` argument and the let's
+ * own result counts as well, since a copy carries the closure pointer; a
+ * move-only one moves, which the struct-local drop's own guards see. */
+bool elab_fnfield_fields_escape(const Expr *body, Expr *const *later_inits,
+                                uint32_t n_later, const Binding *h, bool is_copy) {
+    if (!body || !h) return true;
+    const Expr *tails[64];
+    uint32_t nt = 0;
+    if (is_copy && !esc_collect_tails(body, tails, &nt, 64)) nt = 0;
+    const Expr **save_nodes = g_esc_tail_nodes;
+    uint32_t save_n = g_esc_n_tail_nodes;
+    if (is_copy) {
+        g_esc_tail_nodes = tails;
+        g_esc_n_tail_nodes = nt;
+    } else {
+        g_esc_tail_nodes = NULL;
+        g_esc_n_tail_nodes = 0;
+    }
+    EscFlags s = esc_flags_enter(h);
+    g_esc_field_only = !is_copy;
+    /* A `perform` is no escape here: what a resume re-runs is the drop's
+     * concern (a frame delivers a struct's closure to the reap list once,
+     * cps-byvalue-struct-with-closure-field), not where the closure goes. */
+    bool save_perform_ok = g_esc_perform_ok;
+    g_esc_perform_ok = true;
+    bool esc = binding_escapes_impl(body, h, /*allow_box_accessors=*/false, NULL);
+    for (uint32_t k = 0; !esc && k < n_later; k++)
+        if (later_inits[k])
+            esc = binding_escapes_impl(later_inits[k], h, false, NULL);
+    g_esc_perform_ok = save_perform_ok;
+    esc_flags_leave(s);
+    g_esc_tail_nodes = save_nodes;
+    g_esc_n_tail_nodes = save_n;
+    return esc;
 }
 
 /* Binding.fnfield_ret_param_mask: the closure parameters whose only escape

@@ -254,6 +254,12 @@ struct Binding {
      * it passed is dead when that local is (binding_escapes_impl's holder
      * relaxation).  Set by elab_stamp_fnfield_ret. */
     uint32_t      fnfield_ret_param_mask;
+    /* fnfield-read-out-of-owning-struct-freed-with-it: on a by-value struct
+     * local with boxed fn-fields, a closure it holds can outlive its `let` --
+     * a field read stored, returned or passed on (elab_fnfield_fields_escape).
+     * Such a local never frees its fn-fields, and a function returning it
+     * hands its caller nothing to free (fnfield_value_owned). */
+    bool          fnfield_fields_escape;
     /* async-capturing-body-env-never-freed: this let-bound fresh capturing
      * closure's only use is as the body of one `async` spawn, so the SPAWN
      * owns its env box (tur_async_owns_env, dropped when the body settles)

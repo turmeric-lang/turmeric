@@ -1,5 +1,36 @@
 # A struct that owns its closure frees it although a field read was stored
 
+> **RESOLVED 2026-11-28.** Before a struct local is let free its fn-fields,
+> `elab_let` asks `elab_fnfield_fields_escape` (`src/compiler/emit_core.c`)
+> whether a closure it holds can outlive the `let`, and records the answer
+> (`Binding.fnfield_fields_escape`). A fn-field read that is called -- also
+> through the local the elaborator binds a call head to -- or lent to a
+> `^borrow` / inferred non-retaining parameter keeps it; any other read lets
+> it out: stored, returned, passed on, a `match` on the struct, a capture of
+> it. Such a local frees nothing, and `fnfield_value_owned` no longer calls a
+> function that returns it an owner, so `wrap-keep`'s caller frees nothing
+> either. A `perform` is not an escape here -- what a resume re-runs is the
+> drop's own business.
+>
+> A `^copy` struct had the same hole one level up: every copy carries the
+> closure pointers, and the struct-local drop's guards only see moves, so
+> `(vec-push! held c)` or `(keep-field c)` left a dangling copy. Its walk is
+> strict -- a whole-value use is an escape too -- and follows the copies it
+> can see the end of: an alias the let confines, a lambda capturing it that
+> the let confines and whose body only reads it, and a callee parameter that
+> only reads its copy, or reads it and hands it back to a local that is
+> confined in turn (`esc_copy_param_status`; recursion counts as escaping).
+> Those are the shapes `cps-byvalue-struct-closure-field-param` / `-value`
+> and `fnfield-struct-binder-borrowed-closure` free, and still do.
+>
+> Pinned by `fnfield-read-kept-not-freed` (leak-checked, both engines): the
+> local and constructor-function shapes above, a read only called or lent
+> to a calling parameter (still freed), and three `^copy` copies that leave
+> (through a global `Vec`, a callee that keeps its copy, a callee that keeps
+> its field read through an alias).
+
+## As filed
+
 **Severity: high (use-after-free).** Found 2026-11-28 fixing
 [let-bound-closure-shared-with-fnfield-struct-leaks](../archive/let-bound-closure-shared-with-fnfield-struct-leaks.md);
 reproduces on `main` before that change, and is not touched by it.
